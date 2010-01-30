@@ -1,0 +1,5 @@
+suricata (0.8.0-1) unstable; urgency=low
+
+  * Initial release (Closes: #563422)
+
+ -- Pierre Chifflier <pollux@debian.org>  Sat, 30 Jan 2010 18:25:05 +0100

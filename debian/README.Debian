@@ -1,0 +1,25 @@
+suricata for Debian
+-------------------
+
+The engine is an Open Source Next Generation Intrusion Detection and
+Prevention Tool, not intended to just replace or emulate the existing tools in
+the industry, but to bring new ideas and technologies to the field.
+
+This is considered as a beta release.
+
+To run the engine with default configuration on interface eth0 (in live mode),
+run the following command (as root):
+
+ suricata -c /etc/suricata/suricata.yaml -i eth0
+
+To run in live NFQUEUE mode, use (as root):
+ suricata -c /etc/suricata/suricata.yaml -q $QUEUE_ID
+
+You can also run suricata on a PCAP file:
+ suricata -c /etc/suricata/suricata.yaml -r file.pcap
+
+The default configuration use the snort-rules-default package (with all rules loaded),
+and all logging modules activated.
+You should edit /etc/suricata/suricata.yaml and adjust it to fit your needs.
+
+ -- Pierre Chifflier <pollux@debian.org>  Sat, 30 Jan 2010 18:25:05 +0100

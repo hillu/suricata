@@ -1,0 +1,68 @@
+.\"                                      Hey, EMACS: -*- nroff -*-
+.\" First parameter, NAME, should be all caps
+.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
+.\" other parameters are allowed: see man(7), man(1)
+.TH SURICATA 8 "February 2010"
+.\" Please adjust this date whenever revising the manpage.
+.\"
+.\" Some roff macros, for reference:
+.\" .nh        disable hyphenation
+.\" .hy        enable hyphenation
+.\" .ad l      left justify
+.\" .ad b      justify to both left and right margins
+.\" .nf        disable filling
+.\" .fi        enable filling
+.\" .br        insert line break
+.\" .sp <n>    insert n+1 empty lines
+.\" for manpage-specific macros, see man(7)
+.SH NAME
+suricata \- Next Generation Intrusion Detection and Prevention Tool
+.SH SYNOPSIS
+.B suricata
+.RI [ options ]
+.br
+.SH DESCRIPTION
+.B suricata
+is a network Intrusion Detection System (IDS). It is based on
+rules (and is fully compatible with snort rules) to detect a variety of
+attacks / probes by searching packet content.
+
+This new Engine supports Multi-Threading, Automatic Protocol Detection
+(IP, TCP, UDP, ICMP, HTTP, TLS, FTP and SMB), Gzip Decompression, Fast
+IP Matching and coming soon hardware acceleration on CUDA and OpenCL GPU
+cards.
+
+It supports acquiring packets through NFQUEUE, PCAP (live or offline) etc.
+.PP
+.SH OPTIONS
+.IP "-c config_file"
+Use configuration file
+.I config_file
+.IP "-i interface"
+Sniff packets on
+.I interface.
+.IP "-r file"
+Read the tcpdump-formatted file
+.I tcpdump-file.
+This will cause Suricata to read and process the file fed to it.  This is
+useful for offline analysis.
+.IP "-q queue_id"
+Sniff packets sent by the kernel through NFQUEUE. This allows running
+Suricata in inline mode (IPS) for packets captured by iptables using
+the NFQUEUE target.
+.IP "-s signatures"
+Path to the signatures file.
+.IP "-l log_dir"
+Path to the default log directory.
+.IP "-D"
+Run as daemon
+.IP "--init-errors-fatal"
+Enable fatal failure on signature init error.
+.SH SEE ALSO
+.BR tcpdump (1),
+.BR pcap (3).
+.SH AUTHOR
+suricata was written by the Open Information Security Foundation.
+.PP
+This manual page was written by Pierre Chifflier <pollux@debian.org>,
+for the Debian project (and may be used by others).
