@@ -1,0 +1,176 @@
+# The default logging directory.  Any log or output file will be
+# placed here if its not specified with a full path name.  This can be
+# overridden with the -l command line parameter.
+default-log-dir: /var/log/suricata
+
+defrag:
+  max-frags: 65535
+  prealloc: yes
+  timeout: 60
+
+# Logging configuration.  This is not about logging IDS alerts, but
+# IDS output about what its doing, errors, etc.
+logging:
+
+  # The default log level, can be overridden in an output section.
+  default-log-level: debug
+
+  # The default output format.  Optional parameter, should default to
+  # something reasonable if not provided.  Can be overriden in an
+  # output section.
+  default-format: "<%t> - <%l>"
+
+  # Default startup message.  Optional parameter, should default to
+  # something reasonable if not provided.  Can be overridden in an
+  # output section.
+  default-startup-message: Your IDS has started.
+
+  # A regex to filter output.  Can be overridden in an output section.
+  # Defaults to empty (no filter).
+  default-output-filter:
+
+  # Configure the outputs.  If no outputs are specified the engine
+  # will log to the console with an error log level.
+  output:
+
+  # Enable logging to the console.  Be a little more verbose than
+  # default, log info and more critical.
+  - interface: console
+    log-level: error
+
+  # Log to a file as well.  No log level specified so level will be
+  # set to the default-log-level.
+  - interface: file
+    filename: /var/log/suricata.log
+
+  # Log to syslog with facility local5.  Again, no level specified so
+  # will level will be set to default-log-level.  We also override the
+  # format as we don't want to log a timestamp, syslog will do that
+  # for us.
+  - interface: syslog
+    facility: local5
+    format: "%l"
+
+# PF_RING configuration. for use with native PF_RING support
+# for more info see http://www.ntop.org/PF_RING.html
+pfring:
+
+  # Default interface we will listen on.
+  interface: eth0
+
+  # Default clusterid.  PR_RING will load balance packets based on flow.
+  # All threads/processes that will participate need to have the same
+  # clusterid.
+  clusterid: 99
+
+  #Set the default rule path here to search for the files.
+  #if not set, it will look at the current working dir
+default-rule-path: /etc/suricata/
+rule-files:
+ - attack-responses.rules
+ - backdoor.rules
+ - bad-traffic.rules
+ - chat.rules
+ - ddos.rules
+ - deleted.rules
+ - dns.rules
+ - dos.rules
+ - experimental.rules
+ - exploit.rules
+ - finger.rules
+ - ftp.rules
+ - icmp-info.rules
+ - icmp.rules
+ - imap.rules
+ - info.rules
+ - local.rules
+ - misc.rules
+ - multimedia.rules
+ - mysql.rules
+ - netbios.rules
+ - nntp.rules
+ - oracle.rules
+ - other-ids.rules
+ - p2p.rules
+ - policy.rules
+ - pop2.rules
+ - pop3.rules
+ - porn.rules
+ - rpc.rules
+ - rservices.rules
+ - scada.rules
+ - scan.rules
+ - shellcode.rules
+ - smtp.rules
+ - snmp.rules
+ - specific-threats.rules
+ - spyware-put.rules
+ - sql.rules
+ - telnet.rules
+ - tftp.rules
+ - virus.rules
+ - voip.rules
+ - web-activex.rules
+ - web-attacks.rules
+ - web-cgi.rules
+ - web-client.rules
+ - web-coldfusion.rules
+ - web-frontpage.rules
+ - web-iis.rules
+ - web-misc.rules
+ - web-php.rules
+ - x11.rules
+ - emerging-attack_response.rules
+ - emerging-dos.rules
+ - emerging-exploit.rules
+ - emerging-game.rules
+ - emerging-inappropriate.rules
+ - emerging-malware.rules
+ - emerging-p2p.rules
+ - emerging-policy.rules
+ - emerging-scan.rules
+ - emerging-virus.rules
+ - emerging-voip.rules
+ - emerging-web.rules
+ - emerging-web_client.rules
+ - emerging-web_server.rules
+ - emerging-web_specific_apps.rules
+ - emerging-user_agents.rules
+ - emerging-current_events.rules
+
+classification-file: /etc/suricata/classification.config
+
+# Holds variables that would be used by the engine.
+vars:
+
+  # Holds the address group vars that would be passed in a Signature.
+  # These would be retrieved during the Signature address parsing stage.
+  address-groups:
+
+    HOME_NET: "[192.168.0.0/16,10.0.0.0/8,172.16.0.0/12]"
+
+    EXTERNAL_NET: any
+
+    HTTP_SERVERS: "$HOME_NET"
+
+    SMTP_SERVERS: "$HOME_NET"
+
+    SQL_SERVERS: "$HOME_NET"
+
+    DNS_SERVERS: "$HOME_NET"
+
+    TELNET_SERVERS: "$HOME_NET"
+
+    AIM_SERVERS: any
+
+  # Holds the port group vars that would be passed in a Signature.
+  # These would be retrieved during the Signature port parsing stage.
+  port-groups:
+
+    HTTP_PORTS: "80"
+
+    SHELLCODE_PORTS: "!80"
+
+    ORACLE_PORTS: 1521
+
+    SSH_PORTS: 22
