@@ -22,6 +22,7 @@
 #include "detect.h"
 #include "detect-engine.h"
 #include "detect-content.h"
+#include "detect-engine-mpm.h"
 
 #include "util-print.h"
 #include "util-pool.h"
@@ -29,58 +30,80 @@
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
+#include "stream-tcp.h"
 #include "stream.h"
 
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
+#include "app-layer-detect-proto.h"
 
+#include "util-cuda.h"
+#include "util-cuda-handlers.h"
+#include "util-mpm-b2g-cuda.h"
 #include "util-debug.h"
 
 #define INSPECT_BYTES  32
 #define ALP_DETECT_MAX 256
 
-typedef struct AlpProtoDetectDirectionThread_ {
-    MpmThreadCtx mpm_ctx;
-    PatternMatcherQueue pmq;
-} AlpProtoDetectDirectionThread;
+/* undef __SC_CUDA_SUPPORT__.  We will get back to this later.  Need to
+ * analyze the performance of cuda support for app layer */
+#undef __SC_CUDA_SUPPORT__
 
 typedef struct AlpProtoDetectDirection_ {
     MpmCtx mpm_ctx;
     uint32_t id;
-    /** a mapping between condition id's and protocol */
-    uint16_t map[ALP_DETECT_MAX];
+    uint16_t map[ALP_DETECT_MAX];   /**< a mapping between condition id's and
+                                         protocol */
+    uint16_t max_len;              /**< max length of all patterns, so we can
+                                         limit the search */
+    uint16_t min_len;              /**< min length of all patterns, so we can
+                                         tell the stream engine to feed data
+                                         to app layer as soon as it has min
+                                         size data */
 } AlpProtoDetectDirection;
-
-typedef struct AlpProtoDetectThreadCtx_ {
-    AlpProtoDetectDirectionThread toserver;
-    AlpProtoDetectDirectionThread toclient;
-} AlpProtoDetectThreadCtx;
 
 typedef struct AlpProtoDetectCtx_ {
     AlpProtoDetectDirection toserver;
     AlpProtoDetectDirection toclient;
+
+    int alp_content_module_handle;
 } AlpProtoDetectCtx;
 
+/** global app layer detection context */
 static AlpProtoDetectCtx alp_proto_ctx;
-static AlpProtoDetectThreadCtx alp_proto_tctx;
 
-
+/** \brief Initialize the app layer proto detection */
 void AlpProtoInit(AlpProtoDetectCtx *ctx) {
     memset(ctx, 0x00, sizeof(AlpProtoDetectCtx));
 
-    MpmInitCtx(&ctx->toserver.mpm_ctx, MPM_B2G);
-    MpmInitCtx(&ctx->toclient.mpm_ctx, MPM_B2G);
+#ifndef __SC_CUDA_SUPPORT__
+    MpmInitCtx(&ctx->toserver.mpm_ctx, MPM_B2G, -1);
+    MpmInitCtx(&ctx->toclient.mpm_ctx, MPM_B2G, -1);
+#else
+    ctx->alp_content_module_handle = SCCudaHlRegisterModule("SC_ALP_CONTENT_B2G_CUDA");
+    MpmInitCtx(&ctx->toserver.mpm_ctx, MPM_B2G_CUDA, ctx->alp_content_module_handle);
+    MpmInitCtx(&ctx->toclient.mpm_ctx, MPM_B2G_CUDA, ctx->alp_content_module_handle);
+#endif
 
     memset(&ctx->toserver.map, 0x00, sizeof(ctx->toserver.map));
     memset(&ctx->toclient.map, 0x00, sizeof(ctx->toclient.map));
 
     ctx->toserver.id = 0;
     ctx->toclient.id = 0;
+    ctx->toclient.min_len = INSPECT_BYTES;
+    ctx->toserver.min_len = INSPECT_BYTES;
 }
 
-void AlpProtoDestroy(AlpProtoDetectCtx *ctx) {
+void AlpProtoTestDestroy(AlpProtoDetectCtx *ctx) {
     mpm_table[ctx->toserver.mpm_ctx.mpm_type].DestroyCtx(&ctx->toserver.mpm_ctx);
     mpm_table[ctx->toclient.mpm_ctx.mpm_type].DestroyCtx(&ctx->toclient.mpm_ctx);
+}
+
+void AlpProtoDestroy() {
+    SCEnter();
+    mpm_table[alp_proto_ctx.toserver.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toserver.mpm_ctx);
+    mpm_table[alp_proto_ctx.toclient.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toclient.mpm_ctx);
+    SCReturn;
 }
 
 /** \brief Add a proto detection string to the detection ctx.
@@ -109,10 +132,18 @@ void AlpProtoAdd(AlpProtoDetectCtx *ctx, uint16_t ip_proto, uint16_t al_proto, c
         dir = &ctx->toserver;
     }
 
-    mpm_table[dir->mpm_ctx.mpm_type].AddScanPattern(&dir->mpm_ctx, cd->content, cd->content_len,
+    mpm_table[dir->mpm_ctx.mpm_type].AddPattern(&dir->mpm_ctx, cd->content, cd->content_len,
                                 cd->offset, cd->depth, dir->id, dir->id, 0);
     dir->map[dir->id] = al_proto;
     dir->id++;
+
+    if (depth > dir->max_len)
+        dir->max_len = depth;
+
+    /* set the min_len for the stream engine to set the min smsg size for app
+       layer*/
+    if (depth < dir->min_len)
+        dir->min_len = depth;
 
     /* no longer need the cd */
     DetectContentFree(cd);
@@ -134,12 +165,45 @@ void AlpProtoFinalizeThread(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx *tct
     }
 }
 
+void AlpProtoDeFinalize2Thread(AlpProtoDetectThreadCtx *tctx) {
+    if (alp_proto_ctx.toclient.id > 0) {
+        mpm_table[alp_proto_ctx.toclient.mpm_ctx.mpm_type].DestroyThreadCtx
+                    (&alp_proto_ctx.toclient.mpm_ctx, &tctx->toclient.mpm_ctx);
+        /* XXX GS any idea why it is invalid free ?*/
+        //PmqFree(&tctx->toclient.pmq);
+    }
+    if (alp_proto_ctx.toserver.id > 0) {
+        mpm_table[alp_proto_ctx.toserver.mpm_ctx.mpm_type].DestroyThreadCtx
+                    (&alp_proto_ctx.toserver.mpm_ctx, &tctx->toserver.mpm_ctx);
+        //PmqFree(&tctx->toserver.pmq);
+    }
+
+}
+/** \brief to be called by ReassemblyThreadInit
+ *  \todo this is a hack, we need a proper place to store the global ctx */
+void AlpProtoFinalize2Thread(AlpProtoDetectThreadCtx *tctx) {
+    return AlpProtoFinalizeThread(&alp_proto_ctx, tctx);
+}
+
 void AlpProtoFinalizeGlobal(AlpProtoDetectCtx *ctx) {
     if (ctx == NULL)
         return;
 
     mpm_table[ctx->toclient.mpm_ctx.mpm_type].Prepare(&ctx->toclient.mpm_ctx);
     mpm_table[ctx->toserver.mpm_ctx.mpm_type].Prepare(&ctx->toserver.mpm_ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    CUcontext context;
+    if (SCCudaCtxPopCurrent(&context) == -1)
+        exit(EXIT_FAILURE);
+    if (B2gCudaStartDispatcherThreadAPC("SC_ALP_CONTENT_B2G_CUDA") == -1)
+        exit(EXIT_FAILURE);
+#endif
+
+    /* tell the stream reassembler, that initially we only want chunks of size
+       min_len */
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOCLIENT, ctx->toclient.min_len);
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOSERVER, ctx->toserver.min_len);
 }
 
 void AppLayerDetectProtoThreadInit(void) {
@@ -153,6 +217,7 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "POST", 4, 0, STREAM_TOSERVER);
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "TRACE", 5, 0, STREAM_TOSERVER);
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS", 7, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "CONNECT", 7, 0, STREAM_TOSERVER);
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "HTTP", 4, 0, STREAM_TOCLIENT);
 
     /** SSH */
@@ -201,8 +266,8 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_MSN, "MSNP", 10, 6, STREAM_TOSERVER);
 
     /** Jabber */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_JABBER, "xmlns='jabber|3A|client'", 74, 53, STREAM_TOCLIENT);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_JABBER, "xmlns='jabber|3A|client'", 74, 53, STREAM_TOSERVER);
+    //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_JABBER, "xmlns='jabber|3A|client'", 74, 53, STREAM_TOCLIENT);
+    //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_JABBER, "xmlns='jabber|3A|client'", 74, 53, STREAM_TOSERVER);
 
     /** SMB */
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOCLIENT);
@@ -221,15 +286,20 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0, STREAM_TOSERVER);
 
     AlpProtoFinalizeGlobal(&alp_proto_ctx);
-    AlpProtoFinalizeThread(&alp_proto_ctx, &alp_proto_tctx);
 }
 
+/** \brief Get the app layer proto based on a buffer
+ *
+ *  \param ctx Global app layer detection context
+ *  \param tctx Thread app layer detection context
+ *  \param buf Pointer to the buffer to inspect
+ *  \param buflen Lenght of the buffer
+ *  \param flags Flags.
+ *
+ *  \retval proto App Layer proto, or ALPROTO_UNKNOWN if unknown
+ */
 uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx *tctx, uint8_t *buf, uint16_t buflen, uint8_t flags) {
-    //printf("AppLayerDetectGetProto: start\n");
-    //PrintRawDataFp(stdout, buf, buflen);
-
-    //if (buflen < INSPECT_BYTES)
-    //    return ALPROTO_UNKNOWN;
+    SCEnter();
 
     AlpProtoDetectDirection *dir;
     AlpProtoDetectDirectionThread *tdir;
@@ -241,12 +311,44 @@ uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx 
         tdir = &tctx->toclient;
     }
 
-    if (dir->id == 0)
-        return ALPROTO_UNKNOWN;
+    if (dir->id == 0) {
+        SCReturnUInt(ALPROTO_UNKNOWN);
+    }
 
-    uint16_t proto;
-    uint32_t cnt = mpm_table[dir->mpm_ctx.mpm_type].Scan(&dir->mpm_ctx, &tdir->mpm_ctx, &tdir->pmq, buf, buflen);
-    //printf("AppLayerDetectGetProto: scan cnt %" PRIu32 "\n", cnt);
+    /* see if we can limit the data we inspect */
+    uint16_t searchlen = buflen;
+    if (searchlen > dir->max_len)
+        searchlen = dir->max_len;
+
+    uint16_t proto = ALPROTO_UNKNOWN;
+    uint32_t cnt = 0;
+#ifndef __SC_CUDA_SUPPORT__
+    cnt = mpm_table[dir->mpm_ctx.mpm_type].Search(&dir->mpm_ctx,
+                                                &tdir->mpm_ctx,
+                                                &tdir->pmq, buf,
+                                                searchlen);
+#else
+    Packet *p = SCMalloc(sizeof(Packet));
+    if (p == NULL)
+        goto end;
+    memset(p, 0, sizeof(Packet));
+
+    p->cuda_done = 0;
+    p->cuda_free_packet = 1;
+    p->cuda_search = 0;
+    p->cuda_mpm_ctx = &dir->mpm_ctx;
+    p->cuda_mtc = &tdir->mpm_ctx;
+    p->cuda_pmq = &tdir->pmq;
+    p->payload = buf;
+    p->payload_len = searchlen;
+    B2gCudaPushPacketTo_tv_CMB2_APC(p);
+    SCMutexLock(&p->cuda_mutex_q);
+    SCondWait(&p->cuda_cond_q, &p->cuda_mutex_q);
+    p->cuda_done = 1;
+    SCMutexUnlock(&p->cuda_mutex_q);
+    cnt = p->cuda_matches;
+#endif
+    SCLogDebug("search cnt %" PRIu32 "", cnt);
     if (cnt == 0) {
         proto = ALPROTO_UNKNOWN;
         goto end;
@@ -317,24 +419,34 @@ end:
             break;
     }
 #endif
-    return proto;
+    SCReturnUInt(proto);
 }
 
-int AppLayerHandleMsg(StreamMsg *smsg, char need_lock)
+/** \brief Handle a app layer message
+ *
+ *  If the protocol is yet unknown, the proto detection code is run first.
+ *
+ *  \param dp_ctx Thread app layer detect context
+ *  \param smsg Stream message
+ *
+ *  \retval 0 ok
+ *  \retval -1 error
+ */
+int AppLayerHandleMsg(AlpProtoDetectThreadCtx *dp_ctx, StreamMsg *smsg)
 {
     SCEnter();
     uint16_t alproto = ALPROTO_UNKNOWN;
     int r = 0;
 
-    if (need_lock == TRUE) SCMutexLock(&smsg->flow->m);
     TcpSession *ssn = smsg->flow->protoctx;
     if (ssn != NULL) {
         alproto = ssn->alproto;
-    }
-    if (need_lock == TRUE) SCMutexUnlock(&smsg->flow->m);
 
-    if (ssn != NULL) {
-        if (smsg->flags & STREAM_START) {
+        /* if we don't know the proto yet and we have received a stream
+         * initializer message, we run proto detection.
+         * We receive 2 stream init msgs (one for each direction) but we
+         * only run the proto detection once. */
+        if (alproto == ALPROTO_UNKNOWN && smsg->flags & STREAM_START) {
             SCLogDebug("Stream initializer (len %" PRIu32 " (%" PRIu32 "))",
                         smsg->data.data_len, MSG_DATA_SIZE);
 
@@ -342,19 +454,30 @@ int AppLayerHandleMsg(StreamMsg *smsg, char need_lock)
             //PrintRawDataFp(stdout, smsg->init.data, smsg->init.data_len);
             //printf("=> Init Stream Data -- end\n");
 
-            alproto = AppLayerDetectGetProto(&alp_proto_ctx, &alp_proto_tctx,
+            alproto = AppLayerDetectGetProto(&alp_proto_ctx, dp_ctx,
                             smsg->data.data, smsg->data.data_len, smsg->flags);
             if (alproto != ALPROTO_UNKNOWN) {
                 /* store the proto and setup the L7 data array */
-                if (need_lock == TRUE) SCMutexLock(&smsg->flow->m);
-                StreamL7DataPtrInit(ssn,StreamL7GetStorageSize());
+                StreamL7DataPtrInit(ssn);
                 ssn->alproto = alproto;
-                if (need_lock == TRUE) SCMutexUnlock(&smsg->flow->m);
+                ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
 
                 r = AppLayerParse(smsg->flow, alproto, smsg->flags,
-                               smsg->data.data, smsg->data.data_len, need_lock);
+                               smsg->data.data, smsg->data.data_len);
             } else {
-                SCLogDebug("ALPROTO_UNKNOWN flow %p", smsg->flow);
+                if (smsg->flags & STREAM_TOSERVER) {
+                    if (smsg->data.data_len >= alp_proto_ctx.toserver.max_len) {
+                        ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
+                        SCLogDebug("ALPROTO_UNKNOWN flow %p", smsg->flow);
+                        StreamTcpSetSessionNoReassemblyFlag(ssn, 0);
+                    }
+                } else if (smsg->flags & STREAM_TOCLIENT) {
+                    if (smsg->data.data_len >= alp_proto_ctx.toclient.max_len) {
+                        ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
+                        SCLogDebug("ALPROTO_UNKNOWN flow %p", smsg->flow);
+                        StreamTcpSetSessionNoReassemblyFlag(ssn, 1);
+                    }
+                }
             }
         } else {
             SCLogDebug("stream data (len %" PRIu32 " (%" PRIu32 ")), alproto "
@@ -369,16 +492,15 @@ int AppLayerHandleMsg(StreamMsg *smsg, char need_lock)
              * a start msg should have gotten us one */
             if (alproto != ALPROTO_UNKNOWN) {
                 r = AppLayerParse(smsg->flow, alproto, smsg->flags,
-                            smsg->data.data, smsg->data.data_len, need_lock);
+                            smsg->data.data, smsg->data.data_len);
             } else {
                 SCLogDebug(" smsg not start, but no l7 data? Weird");
             }
         }
     }
 
-    if (need_lock == TRUE) SCMutexLock(&smsg->flow->m);
+    /* flow is free again */
     smsg->flow->use_cnt--;
-    if (need_lock == TRUE) SCMutexUnlock(&smsg->flow->m);
 
     /* return the used message to the queue */
     StreamMsgReturnToPool(smsg);
@@ -386,6 +508,9 @@ int AppLayerHandleMsg(StreamMsg *smsg, char need_lock)
     SCReturnInt(r);
 }
 
+/* VJ Originally I thought of having separate app layer
+ * handling threads, leaving this here in case we'll revisit that */
+#if 0
 void *AppLayerDetectProtoThread(void *td)
 {
     ThreadVars *tv = (ThreadVars *)td;
@@ -438,43 +563,67 @@ void AppLayerDetectProtoThreadSpawn()
 #endif
     return;
 }
-
+#endif
 #ifdef UNITTESTS
 
 int AlpDetectTest01(void) {
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
     AlpProtoDetectCtx ctx;
+
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
 
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
     }
 
-    buf = strdup("GET");
+    buf = SCStrdup("GET");
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOSERVER);
     if (ctx.toserver.id != 1) {
         r = 0;
     }
-    free(buf);
+    SCFree(buf);
 
-    AlpProtoDestroy(&ctx);
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest02(void) {
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
     AlpProtoDetectCtx ctx;
+
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
 
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -484,9 +633,9 @@ int AlpDetectTest02(void) {
         r = 0;
     }
 
-    buf = strdup("220 ");
+    buf = SCStrdup("220 ");
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_FTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 2) {
         r = 0;
@@ -496,21 +645,37 @@ int AlpDetectTest02(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest03(void) {
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n";
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -520,9 +685,9 @@ int AlpDetectTest03(void) {
         r = 0;
     }
 
-    buf = strdup("220 ");
+    buf = SCStrdup("220 ");
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_FTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 2) {
         r = 0;
@@ -535,27 +700,51 @@ int AlpDetectTest03(void) {
     AlpProtoFinalizeGlobal(&ctx);
     AlpProtoFinalizeThread(&ctx, &tctx);
 
-    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Scan(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, NULL, l7data, sizeof(l7data));
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Search(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, NULL, l7data, sizeof(l7data));
     if (cnt != 1) {
         printf("cnt %u != 1: ", cnt);
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest04(void) {
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n";
-    char *buf = strdup("200 ");
+    char *buf = SCStrdup("200 ");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -568,28 +757,52 @@ int AlpDetectTest04(void) {
     AlpProtoFinalizeGlobal(&ctx);
     AlpProtoFinalizeThread(&ctx, &tctx);
 
-    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Scan(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, NULL, l7data, sizeof(l7data));
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Search(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, NULL, l7data, sizeof(l7data));
     if (cnt != 0) {
         printf("cnt %u != 0: ", cnt);
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest05(void) {
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n<HTML><BODY>Blahblah</BODY></HTML>";
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
 
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -599,9 +812,9 @@ int AlpDetectTest05(void) {
         r = 0;
     }
 
-    buf = strdup("220 ");
+    buf = SCStrdup("220 ");
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_FTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 2) {
         r = 0;
@@ -620,21 +833,45 @@ int AlpDetectTest05(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest06(void) {
     uint8_t l7data[] = "220 Welcome to the OISF FTP server\r\n";
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -644,9 +881,9 @@ int AlpDetectTest06(void) {
         r = 0;
     }
 
-    buf = strdup("220 ");
+    buf = SCStrdup("220 ");
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_FTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 2) {
         r = 0;
@@ -665,21 +902,45 @@ int AlpDetectTest06(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
 int AlpDetectTest07(void) {
     uint8_t l7data[] = "220 Welcome to the OISF HTTP/FTP server\r\n";
-    char *buf = strdup("HTTP");
+    char *buf = SCStrdup("HTTP");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -698,7 +959,23 @@ int AlpDetectTest07(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
@@ -715,15 +992,23 @@ int AlpDetectTest08(void) {
         "\x20\x66\x6f\x72\x20\x57\x6f\x72\x6b\x67\x72\x6f\x75\x70\x73\x20\x33\x2e\x31\x61\x00\x02\x4c"
         "\x4d\x31\x2e\x32\x58\x30\x30\x32\x00\x02\x4c\x41\x4e\x4d\x41\x4e\x32\x2e\x31\x00\x02\x4e\x54"
         "\x20\x4c\x4d\x20\x30\x2e\x31\x32\x00";
-    char *buf = strdup("|ff|SMB");
+    char *buf = SCStrdup("|ff|SMB");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB, buf, 8, 4, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -742,7 +1027,23 @@ int AlpDetectTest08(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
@@ -756,15 +1057,23 @@ int AlpDetectTest09(void) {
         "\x24\x00\x01\x00x00\x00\x00\x00\x00\x00\x0\x00\x00\x00\x00\x00\x00\x00\x00"
         "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x02";
 
-    char *buf = strdup("|fe|SMB");
+    char *buf = SCStrdup("|fe|SMB");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB2, buf, 8, 4, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -783,7 +1092,22 @@ int AlpDetectTest09(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
     return r;
 }
 
@@ -793,15 +1117,23 @@ int AlpDetectTest10(void) {
         "\x01\x00\xb8\x4a\x9f\x4d\x1c\x7d\xcf\x11\x86\x1e\x00\x20\xaf\x6e\x7c\x57"
         "\x00\x00\x00\x00\x04\x5d\x88\x8a\xeb\x1c\xc9\x11\x9f\xe8\x08\x00\x2b\x10"
         "\x48\x60\x02\x00\x00\x00";
-    char *buf = strdup("|05 00|");
+    char *buf = SCStrdup("|05 00|");
     int r = 1;
     AlpProtoDetectCtx ctx;
     AlpProtoDetectThreadCtx tctx;
 
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
     AlpProtoInit(&ctx);
 
     AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_DCERPC, buf, 4, 0, STREAM_TOCLIENT);
-    free(buf);
+    SCFree(buf);
 
     if (ctx.toclient.id != 1) {
         r = 0;
@@ -820,10 +1152,72 @@ int AlpDetectTest10(void) {
         r = 0;
     }
 
-    AlpProtoDestroy(&ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadAPC();
+    if (SCCudaHlPushCudaContextFromModule("SC_ALP_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
+
+    AlpProtoTestDestroy(&ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        printf("Call to SCCudaCtxPopCurrent() failed\n");
+        return 0;
+    }
+#endif
+
     return r;
 }
 
+/** \test why we still get http for connect... obviously because we also match on the reply, duh */
+int AlpDetectTest11(void) {
+    uint8_t l7data[] = "CONNECT www.ssllabs.com:443 HTTP/1.0\r\n";
+    uint8_t l7data_resp[] = "HTTP/1.1 405 Method Not Allowed\r\n";
+    int r = 1;
+    AlpProtoDetectCtx ctx;
+    AlpProtoDetectThreadCtx tctx;
+
+    AlpProtoInit(&ctx);
+
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "HTTP", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "GET", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "PUT", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "POST", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "TRACE", 5, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS", 7, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "HTTP", 4, 0, STREAM_TOCLIENT);
+
+    if (ctx.toserver.id != 6) {
+        printf("ctx.toserver.id %u != 6: ", ctx.toserver.id);
+        r = 0;
+    }
+
+    if (ctx.toserver.map[ctx.toserver.id - 1] != ALPROTO_HTTP) {
+        printf("ctx.toserver.id %u != %u: ", ctx.toserver.map[ctx.toserver.id - 1],ALPROTO_HTTP);
+        r = 0;
+    }
+
+    AlpProtoFinalizeGlobal(&ctx);
+    AlpProtoFinalizeThread(&ctx, &tctx);
+
+    uint8_t proto = AppLayerDetectGetProto(&ctx, &tctx, l7data, sizeof(l7data), STREAM_TOCLIENT);
+    if (proto == ALPROTO_HTTP) {
+        printf("proto %" PRIu8 " == %" PRIu8 ": ", proto, ALPROTO_HTTP);
+        r = 0;
+    }
+
+    proto = AppLayerDetectGetProto(&ctx, &tctx, l7data_resp, sizeof(l7data_resp), STREAM_TOSERVER);
+    if (proto != ALPROTO_HTTP) {
+        printf("proto %" PRIu8 " != %" PRIu8 ": ", proto, ALPROTO_HTTP);
+        r = 0;
+    }
+
+    AlpProtoTestDestroy(&ctx);
+    return r;
+}
 
 #endif /* UNITTESTS */
 
@@ -839,5 +1233,6 @@ void AlpDetectRegisterTests(void) {
     UtRegisterTest("AlpDetectTest08", AlpDetectTest08, 1);
     UtRegisterTest("AlpDetectTest09", AlpDetectTest09, 1);
     UtRegisterTest("AlpDetectTest10", AlpDetectTest10, 1);
+    UtRegisterTest("AlpDetectTest11", AlpDetectTest11, 1);
 #endif /* UNITTESTS */
 }

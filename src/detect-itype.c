@@ -1,6 +1,6 @@
+/* Copyright (c) 2009 Open Information Security Foundation */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
- *
  * \file detect-itype.c
  * \author Gerardo Iglesias <iglesiasg@gmail.com>
  *
@@ -10,7 +10,9 @@
 #include "suricata-common.h"
 #include "debug.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
 
 #include "detect-itype.h"
 
@@ -27,7 +29,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectITypeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectITypeSetup(DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectITypeSetup(DetectEngineCtx *, Signature *, char *);
 void DetectITypeRegisterTests(void);
 void DetectITypeFree(void *);
 
@@ -49,14 +51,14 @@ void DetectITypeRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        SCLogError(SC_PCRE_COMPILE_FAILED, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        SCLogError(SC_PCRE_COMPILE_FAILED, "pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -125,7 +127,7 @@ DetectITypeData *DetectITypeParse(char *itypestr) {
 
     ret = pcre_exec(parse_regex, parse_regex_study, itypestr, strlen(itypestr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1 || ret > 4) {
-        SCLogError(SC_PCRE_MATCH_FAILED, "DetectITypeParse: parse error");
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, itypestr);
         goto error;
     }
 
@@ -134,13 +136,13 @@ DetectITypeData *DetectITypeParse(char *itypestr) {
     for (i = 1; i < ret; i++) {
         res = pcre_get_substring((char *)itypestr, ov, MAX_SUBSTRINGS, i, &str_ptr);
         if (res < 0) {
-            SCLogError(SC_PCRE_GET_SUBSTRING_FAILED, "DetectITypeParse: pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
         args[i-1] = (char *)str_ptr;
     }
 
-    itd = malloc(sizeof(DetectITypeData));
+    itd = SCMalloc(sizeof(DetectITypeData));
     if (itd == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto error;
@@ -150,10 +152,10 @@ DetectITypeData *DetectITypeParse(char *itypestr) {
     itd->mode = 0;
 
     /* we have either "<" or ">" */
-    if (strlen(args[0]) != 0) {
+    if (args[0] != NULL && strlen(args[0]) != 0) {
         /* we have a third part ("<> y"), therefore it's invalid */
         if (args[2] != NULL) {
-            SCLogInfo("itype: invalid value");
+            SCLogError(SC_ERR_INVALID_VALUE, "itype: invalid value");
             goto error;
         }
         /* we have only a comparison ("<", ">") */
@@ -180,13 +182,13 @@ DetectITypeData *DetectITypeParse(char *itypestr) {
     }
 
     for (i = 0; i < (ret-1); i++) {
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
     return itd;
 
 error:
     for (i = 0; i < (ret-1); i++) {
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
     if (itd != NULL) DetectITypeFree(itd);
     return NULL;
@@ -197,13 +199,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param itypestr pointer to the user provided itype options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectITypeSetup(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *itypestr) {
+static int DetectITypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *itypestr) {
 
     DetectITypeData *itd = NULL;
     SigMatch *sm = NULL;
@@ -217,13 +218,13 @@ int DetectITypeSetup(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *i
     sm->type = DETECT_ITYPE;
     sm->ctx = (void *)itd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
     if (itd != NULL) DetectITypeFree(itd);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 }
 
@@ -234,7 +235,7 @@ error:
  */
 void DetectITypeFree(void *ptr) {
     DetectITypeData *itd = (DetectITypeData *)ptr;
-    free(itd);
+    SCFree(itd);
 }
 
 #ifdef UNITTESTS

@@ -30,13 +30,14 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
         DECODER_SET_EVENT(p, PPPOE_PKT_TOO_SMALL);
         return;
     }
+    p->pppoedh = NULL;
 
     p->pppoedh = (PPPOEDiscoveryHdr *)pkt;
     if (p->pppoedh == NULL)
         return;
 
     /* parse the PPPOE code */
-    switch (ntohs(p->pppoedh->pppoe_code))
+    switch (p->pppoedh->pppoe_code)
     {
         case  PPPOE_CODE_PADI:
             break;
@@ -48,39 +49,43 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
             break;
         case PPPOE_CODE_PADT:
             break;
-
         default:
-            SCLogDebug("unknown PPPOE code: %" PRIx32 "",ntohs(p->pppoedh->pppoe_code));
+            SCLogDebug("unknown PPPOE code: 0x%0"PRIX8"", p->pppoedh->pppoe_code);
             DECODER_SET_EVENT(p,PPPOE_WRONG_CODE);
+            return;
     }
 
     /* parse any tags we have in the packet */
 
-    uint16_t tag_type, tag_length;
+    uint16_t tag_type = 0, tag_length = 0;
     PPPOEDiscoveryTag* pppoedt = (PPPOEDiscoveryTag*) (p->pppoedh +  PPPOE_DISCOVERY_HEADER_MIN_LEN);
 
     uint16_t pppoe_length = ntohs(p->pppoedh->pppoe_length);
     uint16_t packet_length = len - PPPOE_DISCOVERY_HEADER_MIN_LEN ;
 
-    if (pppoe_length>packet_length) {
+    SCLogDebug("pppoe_length %"PRIu16", packet_length %"PRIu16"",
+        pppoe_length, packet_length);
+
+    if (pppoe_length > packet_length) {
         SCLogDebug("malformed PPPOE tags");
         DECODER_SET_EVENT(p,PPPOE_MALFORMED_TAGS);
+        return;
     }
 
-    while (pppoe_length>=4 && packet_length>=4)
+    while (pppoedt < (PPPOEDiscoveryTag*) (pkt + (len - sizeof(PPPOEDiscoveryTag))) && pppoe_length >=4 && packet_length >=4)
     {
         tag_type = ntohs(pppoedt->pppoe_tag_type);
         tag_length = ntohs(pppoedt->pppoe_tag_length);
 
         SCLogDebug ("PPPoE Tag type %x, length %u", tag_type, tag_length);
 
-        if (pppoe_length >= 4+tag_length) {
+        if (pppoe_length >= (4 + tag_length)) {
             pppoe_length -= (4 + tag_length);
         } else {
             pppoe_length = 0; // don't want an underflow
         }
 
-        if (packet_length >= 4+tag_length) {
+        if (packet_length >= 4 + tag_length) {
             packet_length -= (4 + tag_length);
         } else {
             packet_length = 0; // don't want an underflow
@@ -89,6 +94,7 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
         pppoedt = pppoedt + (4 + tag_length);
     }
 
+    return;
 }
 
 /**
@@ -108,7 +114,7 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
         return;
 
     SCLogDebug("PPPOE VERSION %" PRIu32 " TYPE %" PRIu32 " CODE %" PRIu32 " SESSIONID %" PRIu32 " LENGTH %" PRIu32 "",
-           p->pppoesh->pppoe_version,  p->pppoesh->pppoe_type,  p->pppoesh->pppoe_code,  ntohs(p->pppoesh->session_id),  ntohs(p->pppoesh->pppoe_length));
+           PPPOE_SESSION_GET_VERSION(p->pppoesh),  PPPOE_SESSION_GET_TYPE(p->pppoesh),  p->pppoesh->pppoe_code,  ntohs(p->pppoesh->session_id),  ntohs(p->pppoesh->pppoe_length));
 
     /* can't use DecodePPP() here because we only get a single 2-byte word to indicate protocol instead of the full PPP header */
 
@@ -283,8 +289,10 @@ static int DecodePPPOEtest03 (void)   {
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     DecodePPPOEDiscovery(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    if (p.pppoedh == NULL)
+        return 0;
 
-    return 1; // TODO
+    return 1;
 }
 
 /** DecodePPPOEtest04
@@ -346,6 +354,39 @@ static int DecodePPPOEtest05 (void)   {
 
     return 0;
 }
+
+/** DecodePPPOEtest06
+ *  \brief Check that the macros work as expected. Type and version are
+ * fields of 4 bits length. So they are sharing the same var and the macros
+ * should extract the first 4 bits for version and the second 4 bits for type
+ *  \retval 1 Expected test value
+ */
+static int DecodePPPOEtest06 (void)   {
+
+    PPPOESessionHdr pppoesh;
+    PPPOEDiscoveryHdr pppoedh;
+    pppoesh.pppoe_version_type = 0xAB;
+    pppoedh.pppoe_version_type = 0xCD;
+
+    if (PPPOE_SESSION_GET_VERSION(&pppoesh) != 0x0A) {
+        printf("Error, PPPOE macro pppoe_session_get_version failed: ");
+        return 0;
+    }
+    if (PPPOE_SESSION_GET_TYPE(&pppoesh) != 0x0B) {
+        printf("Error, PPPOE macro pppoe_session_get_type failed: ");
+        return 0;
+    }
+    if (PPPOE_DISCOVERY_GET_VERSION(&pppoedh) != 0x0C) {
+        printf("Error, PPPOE macro pppoe_discovery_get_version failed: ");
+        return 0;
+    }
+    if (PPPOE_DISCOVERY_GET_TYPE(&pppoedh) != 0x0D) {
+        printf("Error, PPPOE macro pppoe_discovery_get_type failed: ");
+        return 0;
+    }
+
+    return 1;
+}
 #endif /* UNITTESTS */
 
 
@@ -361,6 +402,7 @@ void DecodePPPOERegisterTests(void) {
     UtRegisterTest("DecodePPPOEtest03", DecodePPPOEtest03, 1);
     UtRegisterTest("DecodePPPOEtest04", DecodePPPOEtest04, 1);
     UtRegisterTest("DecodePPPOEtest05", DecodePPPOEtest05, 1);
+    UtRegisterTest("DecodePPPOEtest06", DecodePPPOEtest06, 1);
 #endif /* UNITTESTS */
 }
 

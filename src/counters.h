@@ -75,8 +75,10 @@ typedef struct SCPerfCounterTypeQ_ {
 
     int total_secs;
 
-    /* timestamp to indicate the time, when the counter was last reset */
-    struct timeval ts;
+    /* the time interval that corresponds to the value stored for this counter.
+     * Used for time_based_counters(tbc).  This represents the time period over
+     * which the value in this counter was accumulated. */
+    uint8_t tbc_secs;
 } SCPerfCounterTypeQ;
 
 /**
@@ -142,6 +144,10 @@ typedef struct SCPCAElem_ {
 
     /* indicates the times syncs has overflowed */
     uint64_t wrapped_syncs;
+
+    /* timestamp to indicate the time, when the counter was last used to update
+     * the global counter.  It is used for timebased counter calculations */
+    struct timeval ts;
 } SCPCAElem;
 
 /**
@@ -223,6 +229,7 @@ inline void SCPerfCounterSetUI64(uint16_t, SCPerfCounterArray *, uint64_t);
 inline void SCPerfCounterSetDouble(uint16_t, SCPerfCounterArray *, double);
 
 int SCPerfUpdateCounterArray(SCPerfCounterArray *, SCPerfContext *, int);
+double SCPerfGetLocalCounterValue(uint16_t, SCPerfCounterArray *);
 
 void SCPerfOutputCounters(void);
 

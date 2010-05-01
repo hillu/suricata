@@ -21,9 +21,22 @@
 #include "util-error.h"
 #include "util-debug.h"
 #include "util-time.h"
+#include "util-byte.h"
+
+#include "output.h"
+#include "alert-unified2-alert.h"
+
 #ifndef IPPROTO_SCTP
 #define IPPROTO_SCTP 132
 #endif
+
+#define DEFAULT_LOG_FILENAME "unified2.alert"
+
+/**< Default log file limit in MB. */
+#define DEFAULT_LIMIT 32
+
+/**< Minimum log file limit in MB. */
+#define MIN_LIMIT 1
 
 /*prototypes*/
 TmEcode Unified2Alert (ThreadVars *, Packet *, void *, PacketQueue *);
@@ -33,7 +46,8 @@ int Unified2IPv4TypeAlert(ThreadVars *, Packet *, void *, PacketQueue *);
 int Unified2IPv6TypeAlert(ThreadVars *, Packet *, void *, PacketQueue *);
 int Unified2PacketTypeAlert(ThreadVars *, Packet *, void *);
 void Unified2RegisterTests();
-int Unified2AlertOpenFileCtx(LogFileCtx *, char *);
+int Unified2AlertOpenFileCtx(LogFileCtx *, const char *);
+static void Unified2AlertDeInitCtx(OutputCtx *);
 
 /**
  * Unified2 thread vars
@@ -42,8 +56,6 @@ int Unified2AlertOpenFileCtx(LogFileCtx *, char *);
  */
 typedef struct Unified2AlertThread_ {
     LogFileCtx *file_ctx;   /** LogFileCtx pointer */
-    uint32_t size_limit;    /**< file size limit */
-    uint32_t size_current;  /**< file current size */
 } Unified2AlertThread;
 
 /**
@@ -118,12 +130,16 @@ typedef struct AlertUnified2Packet_ {
     uint8_t packet_data[4];         /**< packet data */
 } Unified2Packet;
 
+#define MODULE_NAME "Unified2Alert"
+
 void TmModuleUnified2AlertRegister (void) {
-    tmm_modules[TMM_ALERTUNIFIED2ALERT].name = "Unified2Alert";
+    tmm_modules[TMM_ALERTUNIFIED2ALERT].name = MODULE_NAME;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].ThreadInit = Unified2AlertThreadInit;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].Func = Unified2Alert;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].ThreadDeinit = Unified2AlertThreadDeinit;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].RegisterTests = Unified2RegisterTests;
+
+    OutputRegisterModule(MODULE_NAME, "unified2-alert", Unified2AlertInitCtx);
 }
 
 /**
@@ -137,7 +153,7 @@ int Unified2AlertCloseFile(ThreadVars *t, Unified2AlertThread *aun) {
     if (aun->file_ctx->fp != NULL) {
         fclose(aun->file_ctx->fp);
     }
-    aun->size_current = 0;
+    aun->file_ctx->size_current = 0;
 
     return 0;
 }
@@ -153,12 +169,12 @@ int Unified2AlertCloseFile(ThreadVars *t, Unified2AlertThread *aun) {
 
 int Unified2AlertRotateFile(ThreadVars *t, Unified2AlertThread *aun) {
     if (Unified2AlertCloseFile(t,aun) < 0) {
-        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC_ERROR,
+        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC,
                    "Error: Unified2AlertCloseFile failed");
         return -1;
     }
-    if (Unified2AlertOpenFileCtx(aun->file_ctx,aun->file_ctx->config_file) < 0) {
-        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC_ERROR,
+    if (Unified2AlertOpenFileCtx(aun->file_ctx,aun->file_ctx->prefix) < 0) {
+        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC,
                    "Error: Unified2AlertOpenFileCtx, open new log file failed");
         return -1;
     }
@@ -186,6 +202,7 @@ TmEcode Unified2Alert (ThreadVars *t, Packet *p, void *data, PacketQueue *pq)
 
 /**
  *  \brief Function to fill unified2 packet format into the file.
+ *         No need to lock here, since it's already locked
  *
  *  \param t Thread Variable containing  input/output queue, cpu affinity etc.
  *  \param p Packet struct used to decide for ipv4 or ipv6
@@ -193,7 +210,6 @@ TmEcode Unified2Alert (ThreadVars *t, Packet *p, void *data, PacketQueue *pq)
  *  \retval 0 on succces
  *  \retval -1 on failure
  */
-
 int Unified2PacketTypeAlert (ThreadVars *t, Packet *p, void *data)
 {
     Unified2AlertThread *aun = (Unified2AlertThread *)data;
@@ -217,16 +233,6 @@ int Unified2PacketTypeAlert (ThreadVars *t, Packet *p, void *data)
 
     memcpy(write_buffer,&hdr,sizeof(Unified2AlertFileHeader));
 
-    SCMutexLock(&aun->file_ctx->fp_mutex);
-    if ((aun->size_current + (sizeof(hdr) + sizeof(phdr))) > aun->size_limit) {
-        if (Unified2AlertRotateFile(t,aun) < 0)
-        {
-            SCMutexUnlock(&aun->file_ctx->fp_mutex);
-            return -1;
-        }
-    }
-    SCMutexUnlock(&aun->file_ctx->fp_mutex);
-
     phdr.sensor_id = 0;
     phdr.linktype = htonl(p->datalink);
     phdr.event_id = 0;
@@ -242,9 +248,7 @@ int Unified2PacketTypeAlert (ThreadVars *t, Packet *p, void *data)
         SCLogError(SC_ERR_FWRITE, "Error: fwrite failed: %s", strerror(errno));
         return -1;
     }
-
-    fflush(aun->file_ctx->fp);
-    aun->size_current += len;
+    aun->file_ctx->size_current += len;
 
     return 0;
 }
@@ -291,46 +295,38 @@ int Unified2IPv6TypeAlert (ThreadVars *t, Packet *p, void *data, PacketQueue *pq
         ethh_offset = sizeof(EthernetHdr);
     }
 
-    /* check and enforce the filesize limit */
-    SCMutexLock(&aun->file_ctx->fp_mutex);
-    if ((aun->size_current +(sizeof(hdr) +  sizeof(phdr))) > aun->size_limit) {
-        if (Unified2AlertRotateFile(t,aun) < 0)
-        {
-            SCMutexUnlock(&aun->file_ctx->fp_mutex);
-            return -1;
-        }
-    }
-    SCMutexUnlock(&aun->file_ctx->fp_mutex);
-
-    /* XXX which one to add to this alert? Lets see how Snort solves this.
-     * For now just take last alert. */
-    pa = &p->alerts.alerts[p->alerts.cnt-1];
-
-    /* fill the phdr structure */
+    /* fill the phdr structure with the data of the packet */
 
     phdr.sensor_id = 0;
     phdr.event_id = 0;
-    phdr.generator_id = htonl(pa->gid);
-    phdr.signature_id = htonl(pa->sid);
-    phdr.signature_revision = htonl(pa->rev);
-    phdr.classification_id = htonl(pa->class);
-    phdr.priority_id = htonl(pa->prio);
     phdr.event_second =  htonl(p->ts.tv_sec);
     phdr.event_microsecond = htonl(p->ts.tv_usec);
     phdr.src_ip = *(struct in6_addr*)GET_IPV6_SRC_ADDR(p);
     phdr.dst_ip = *(struct in6_addr*)GET_IPV6_DST_ADDR(p);
     phdr.protocol = IPV6_GET_NH(p);
 
-    if(p->action == ACTION_DROP)
+    if(p->action & ACTION_DROP)
         phdr.packet_action = UNIFIED2_BLOCKED_FLAG;
     else
         phdr.packet_action = 0;
 
     switch(phdr.protocol)  {
+        case IPPROTO_ICMPV6:
+            if(p->icmpv6h)  {
+                phdr.sp = htons(p->icmpv6h->type);
+                phdr.dp = htons(p->icmpv6h->code);
+            } else {
+                phdr.sp = 0;
+                phdr.dp = 0;
+            }
+            break;
         case IPPROTO_ICMP:
             if(p->icmpv4h)  {
                 phdr.sp = htons(p->icmpv4h->type);
                 phdr.dp = htons(p->icmpv4h->code);
+            } else {
+                phdr.sp = 0;
+                phdr.dp = 0;
             }
             break;
         case IPPROTO_UDP:
@@ -345,18 +341,47 @@ int Unified2IPv6TypeAlert (ThreadVars *t, Packet *p, void *data, PacketQueue *pq
             break;
     }
 
-    memcpy(write_buffer+sizeof(Unified2AlertFileHeader),&phdr,sizeof(AlertIPv6Unified2));
+    uint16_t i = 0;
+    for (; i < p->alerts.cnt; i++) {
+        pa = &p->alerts.alerts[i];
 
-    ret = fwrite(write_buffer,len, 1, aun->file_ctx->fp);
-    if (ret != 1) {
-        SCLogError(SC_ERR_FWRITE, "Error: fwrite failed: %s", strerror(errno));
-        return -1;
+        /* fill the header structure with the data of the alert */
+        phdr.generator_id = htonl(pa->gid);
+        phdr.signature_id = htonl(pa->sid);
+        phdr.signature_revision = htonl(pa->rev);
+        phdr.classification_id = htonl(pa->class);
+        phdr.priority_id = htonl(pa->prio);
+
+        memcpy(write_buffer+sizeof(Unified2AlertFileHeader),&phdr,sizeof(AlertIPv6Unified2));
+
+        SCMutexLock(&aun->file_ctx->fp_mutex);
+
+        if ((aun->file_ctx->size_current +(sizeof(hdr) + sizeof(phdr))) > aun->file_ctx->size_limit) {
+            if (Unified2AlertRotateFile(t,aun) < 0) {
+                SCMutexUnlock(&aun->file_ctx->fp_mutex);
+                aun->file_ctx->alerts += i;
+                return -1;
+            }
+        }
+
+        ret = fwrite(write_buffer,len, 1, aun->file_ctx->fp);
+
+        if (ret != 1) {
+            SCLogError(SC_ERR_FWRITE, "Error: fwrite failed: %s", strerror(errno));
+            SCMutexUnlock(&aun->file_ctx->fp_mutex);
+            aun->file_ctx->alerts += i;
+            return -1;
+        }
+
+        fflush(aun->file_ctx->fp);
+
+        aun->file_ctx->size_current += len;
+        aun->file_ctx->alerts++;
+
+        Unified2PacketTypeAlert(t, p, data);
+        SCMutexUnlock(&aun->file_ctx->fp_mutex);
     }
 
-    fflush(aun->file_ctx->fp);
-    aun->size_current += len;
-
-    Unified2PacketTypeAlert(t, p, data);
 
     return 0;
 }
@@ -395,44 +420,25 @@ int Unified2IPv4TypeAlert (ThreadVars *tv, Packet *p, void *data, PacketQueue *p
     hdr.length = htonl(sizeof(AlertIPv4Unified2));
 
     memcpy(write_buffer,&hdr,sizeof(Unified2AlertFileHeader));
-
     /* if we have no ethernet header (e.g. when using nfq), we have to create
      * one ourselves. */
     if (p->ethh == NULL) {
         ethh_offset = sizeof(EthernetHdr);
     }
 
-    /* check and enforce the filesize limit */
-    SCMutexLock(&aun->file_ctx->fp_mutex);
-    if ((aun->size_current +(sizeof(hdr) +  sizeof(phdr))) > aun->size_limit) {
-        if (Unified2AlertRotateFile(tv,aun) < 0)
-        {
-            SCMutexUnlock(&aun->file_ctx->fp_mutex);
-            return -1;
-        }
-    }
-    SCMutexUnlock(&aun->file_ctx->fp_mutex);
 
-    /* XXX which one to add to this alert? Lets see how Snort solves this.
-     * For now just take last alert. */
-    pa = &p->alerts.alerts[p->alerts.cnt-1];
-
-    /* fill the hdr structure */
+    /* fill the hdr structure with the packet data */
 
     phdr.sensor_id = 0;
     phdr.event_id = 0;
-    phdr.generator_id = htonl(pa->gid);
-    phdr.signature_id = htonl(pa->sid);
-    phdr.signature_revision = htonl(pa->rev);
-    phdr.classification_id = htonl(pa->class);
-    phdr.priority_id = htonl(pa->prio);
     phdr.event_second =  htonl(p->ts.tv_sec);
     phdr.event_microsecond = htonl(p->ts.tv_usec);
     phdr.src_ip = p->ip4h->ip_src.s_addr;
     phdr.dst_ip = p->ip4h->ip_dst.s_addr;
     phdr.protocol = IPV4_GET_RAW_IPPROTO(p->ip4h);
 
-    if(p->action == ACTION_DROP)
+
+    if(p->action & ACTION_DROP)
         phdr.packet_action = UNIFIED2_BLOCKED_FLAG;
     else
         phdr.packet_action = 0;
@@ -456,18 +462,49 @@ int Unified2IPv4TypeAlert (ThreadVars *tv, Packet *p, void *data, PacketQueue *p
             break;
     }
 
-    memcpy(write_buffer+sizeof(Unified2AlertFileHeader),&phdr,sizeof(AlertIPv4Unified2));
+    uint16_t i = 0;
+    for (; i < p->alerts.cnt; i++) {
+        pa = &p->alerts.alerts[i];
+        /* fill the hdr structure with the alert data */
+        phdr.generator_id = htonl(pa->gid);
+        phdr.signature_id = htonl(pa->sid);
+        phdr.signature_revision = htonl(pa->rev);
+        phdr.classification_id = htonl(pa->class);
+        phdr.priority_id = htonl(pa->prio);
 
-    ret = fwrite(write_buffer,len, 1, aun->file_ctx->fp);
-    if (ret != 1) {
-        SCLogError(SC_ERR_FWRITE, "Error: fwrite failed: %s", strerror(errno));
-        return -1;
+        memcpy(write_buffer+sizeof(Unified2AlertFileHeader),&phdr,sizeof(AlertIPv4Unified2));
+
+        /* check and enforce the filesize limit */
+        SCMutexLock(&aun->file_ctx->fp_mutex);
+
+        if ((aun->file_ctx->size_current +(sizeof(hdr) +  sizeof(phdr))) > aun->file_ctx->size_limit) {
+            if (Unified2AlertRotateFile(tv,aun) < 0) {
+                SCMutexUnlock(&aun->file_ctx->fp_mutex);
+                aun->file_ctx->alerts += i;
+                return -1;
+            }
+        }
+
+        ret = fwrite(write_buffer,len, 1, aun->file_ctx->fp);
+        if (ret != 1) {
+            SCLogError(SC_ERR_FWRITE, "Error: fwrite failed: %s", strerror(errno));
+            SCMutexUnlock(&aun->file_ctx->fp_mutex);
+            aun->file_ctx->alerts += i;
+            return -1;
+        }
+        fflush(aun->file_ctx->fp);
+
+        aun->file_ctx->size_current += len;
+
+        /* Write the alert (it doesn't lock inside, since we
+         * already locked here for rotation check)
+         */
+        Unified2PacketTypeAlert(tv, p, data);
+
+        SCMutexUnlock(&aun->file_ctx->fp_mutex);
     }
+    aun->file_ctx->alerts += p->alerts.cnt;
 
-    fflush(aun->file_ctx->fp);
-    aun->size_current += len;
-
-    Unified2PacketTypeAlert(tv, p, data);
 
     return 0;
 }
@@ -484,22 +521,19 @@ int Unified2IPv4TypeAlert (ThreadVars *tv, Packet *p, void *data, PacketQueue *p
 
 TmEcode Unified2AlertThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    Unified2AlertThread *aun = malloc(sizeof(Unified2AlertThread));
+    Unified2AlertThread *aun = SCMalloc(sizeof(Unified2AlertThread));
     if (aun == NULL) {
         return TM_ECODE_FAILED;
     }
     memset(aun, 0, sizeof(Unified2AlertThread));
     if(initdata == NULL)
     {
-        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC_ERROR, "Error getting context for "
-                   "Unified2Alert.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for Unified2Alert.  \"initdata\" argument NULL");
+        SCFree(aun);
         return TM_ECODE_FAILED;
     }
     /** Use the Ouptut Context (file pointer and mutex) */
-    aun->file_ctx = (LogFileCtx*) initdata;
-
-    /* XXX make configurable */
-    aun->size_limit = 10 * 1024 * 1024;
+    aun->file_ctx = ((OutputCtx *)initdata)->data;
 
     *data = (void *)aun;
     return TM_ECODE_OK;
@@ -521,91 +555,131 @@ TmEcode Unified2AlertThreadDeinit(ThreadVars *t, void *data)
         goto error;
     }
 
+    if (!(aun->file_ctx->flags & LOGFILE_ALERTS_PRINTED)) {
+        SCLogInfo("Alert unified 2 module wrote %"PRIu64" alerts", aun->file_ctx->alerts);
+        /* Do not print it for each thread */
+        aun->file_ctx->flags |= LOGFILE_ALERTS_PRINTED;
+    }
+
     /* clear memory */
     memset(aun, 0, sizeof(Unified2AlertThread));
-    free(aun);
+    SCFree(aun);
     return TM_ECODE_OK;
 
 error:
-    /* clear memory */
-    if (aun != NULL) {
-        memset(aun, 0, sizeof(Unified2AlertThread));
-        free(aun);
-    }
     return TM_ECODE_FAILED;
 }
 
-/** \brief Create a new file_ctx from config_file (if specified)
- *  \param config_file for loading separate configs
+/** \brief Create a new LogFileCtx from the provided ConfNode.
+ *  \param conf The configuration node for this output.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-LogFileCtx *Unified2AlertInitCtx(char *config_file)
+OutputCtx *Unified2AlertInitCtx(ConfNode *conf)
 {
     int ret=0;
     LogFileCtx* file_ctx=LogFileNewCtx();
 
-    if(file_ctx == NULL)
-    {
-        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC_ERROR, "Unified2AlertInitCtx: "
+    if (file_ctx == NULL) {
+        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC, "Unified2AlertInitCtx: "
                    "Couldn't create new file_ctx");
         return NULL;
     }
 
-    /** fill the new LogFileCtx with the specific Unified2Alert configuration */
-    ret=Unified2AlertOpenFileCtx(file_ctx, config_file);
+    const char *filename = NULL;
+    if (conf != NULL) { /* To faciliate unit tests. */
+        filename = ConfNodeLookupChildValue(conf, "filename");
+    }
+    if (filename == NULL)
+        filename = DEFAULT_LOG_FILENAME;
+    file_ctx->prefix = SCStrdup(filename);
 
-    if(ret < 0)
+    const char *s_limit = NULL;
+    uint32_t limit = DEFAULT_LIMIT;
+    if (conf != NULL) {
+        s_limit = ConfNodeLookupChildValue(conf, "limit");
+        if (s_limit != NULL) {
+            if (ByteExtractStringUint32(&limit, 10, 0, s_limit) == -1) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                    "Fail to initialize unified2 output, invalid limit: %s",
+                    s_limit);
+                exit(EXIT_FAILURE);
+            }
+            if (limit < MIN_LIMIT) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                    "Fail to initialize unified2 output, limit less than "
+                    "allowed minimum.");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+    file_ctx->size_limit = limit * 1024 * 1024;
+
+    ret = Unified2AlertOpenFileCtx(file_ctx, filename);
+    if (ret < 0)
         return NULL;
 
-    /** In Unified2AlertOpenFileCtx the second parameter should be the configuration file to use
-    * but it's not implemented yet, so passing NULL to load the default
-    * configuration
-    */
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (output_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "Failed to allocate OutputCtx for Unified2Alert");
+        exit(EXIT_FAILURE);
+    }
+    output_ctx->data = file_ctx;
+    output_ctx->DeInit = Unified2AlertDeInitCtx;
 
-    return file_ctx;
+    SCLogInfo("Unified2-alert initialized: filename %s, limit %"PRIu32" MB",
+       filename, limit);
+
+    return output_ctx;
+}
+
+static void Unified2AlertDeInitCtx(OutputCtx *output_ctx)
+{
+    LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
+    LogFileFreeCtx(logfile_ctx);
+    free(output_ctx);
 }
 
 /** \brief Read the config set the file pointer, open the file
  *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param config_file for loading separate configs
+ *  \param prefix Prefix of the log file.
  *  \return -1 if failure, 0 if succesful
  * */
-int Unified2AlertOpenFileCtx(LogFileCtx *file_ctx, char *config_file)
+int Unified2AlertOpenFileCtx(LogFileCtx *file_ctx, const char *prefix)
 {
+    int ret = 0;
     char *filename = NULL;
     if (file_ctx->filename != NULL)
         filename = file_ctx->filename;
     else
-        filename = file_ctx->filename = malloc(PATH_MAX); /* XXX some sane default? */
+        filename = file_ctx->filename = SCMalloc(PATH_MAX); /* XXX some sane default? */
 
-    if (config_file == NULL) {
-        /** Separate config files not implemented at the moment,
-        * but it must be able to load from separate config file.
-        * Load the default configuration.
-        */
+    /** get the time so we can have a filename with seconds since epoch */
+    struct timeval ts;
+    memset(&ts, 0x00, sizeof(struct timeval));
 
-        /** get the time so we can have a filename with seconds since epoch */
-        struct timeval ts;
-        memset(&ts, 0x00, sizeof(struct timeval));
+    extern int run_mode;
+    if (run_mode == MODE_UNITTEST)
         TimeGet(&ts);
+    else
+        gettimeofday(&ts, NULL);
 
-        /* create the filename to use */
-        char *log_dir;
-        if (ConfGet("default-log-dir", &log_dir) != 1)
-            log_dir = DEFAULT_LOG_DIR;
+    /* create the filename to use */
+    char *log_dir;
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
 
-        snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, log_dir, "unified2.alert", (uint32_t)ts.tv_sec);
+    snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, log_dir, prefix, (uint32_t)ts.tv_sec);
 
-        /* XXX filename & location */
-        file_ctx->fp = fopen(filename, "wb");
-        if (file_ctx->fp == NULL) {
-            SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", filename,
-                       strerror(errno));
-            return -1;
-        }
+    /* XXX filename & location */
+    file_ctx->fp = fopen(filename, "wb");
+    if (file_ctx->fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", filename,
+            strerror(errno));
+        ret = -1;
     }
 
-    return 0;
+    return ret;
 }
 
 
@@ -623,6 +697,7 @@ static int Unified2Test01 (void)   {
     DecodeThreadVars dtv;
     PacketQueue pq;
     void *data = NULL;
+    OutputCtx *oc;
     LogFileCtx *lf;
 
     uint8_t raw_ipv4_tcp[] = {
@@ -656,10 +731,13 @@ static int Unified2Test01 (void)   {
 
     FlowShutdown();
 
-    lf=Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if(lf == NULL)
         return 0;
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if(ret == TM_ECODE_FAILED)
         return 0;
     ret = Unified2Alert(&tv, &p, data, &pq);
@@ -669,8 +747,8 @@ static int Unified2Test01 (void)   {
     if(ret == -1)
         return 0;
 
-    if(LogFileFreeCtx(lf)==0)
-        return 0;
+    Unified2AlertDeInitCtx(oc);
+
     return 1;
 }
 
@@ -686,6 +764,7 @@ static int Unified2Test02 (void)   {
     DecodeThreadVars dtv;
     PacketQueue pq;
     void *data = NULL;
+    OutputCtx *oc;
     LogFileCtx *lf;
 
     uint8_t raw_ipv6_tcp[] = {
@@ -721,10 +800,13 @@ static int Unified2Test02 (void)   {
 
     FlowShutdown();
 
-    lf=Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if(lf == NULL)
         return 0;
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if(ret == -1)
         return 0;
     ret = Unified2Alert(&tv, &p, data, &pq);
@@ -734,8 +816,7 @@ static int Unified2Test02 (void)   {
     if(ret == -1)
         return 0;
 
-    if(LogFileFreeCtx(lf)==0)
-        return 0;
+    Unified2AlertDeInitCtx(oc);
 
     return 1;
 }
@@ -748,11 +829,12 @@ static int Unified2Test02 (void)   {
  *  \retval 0 on failure
  */
 
-static int Unified2Test03 (void)   {
+static int Unified2Test03 (void) {
     ThreadVars tv;
     DecodeThreadVars dtv;
     PacketQueue pq;
     void *data = NULL;
+    OutputCtx *oc;
     LogFileCtx *lf;
 
     uint8_t raw_gre[] = {
@@ -793,10 +875,13 @@ static int Unified2Test03 (void)   {
 
     FlowShutdown();
 
-    lf=Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if(lf == NULL)
         return 0;
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if(ret == -1)
         return 0;
     ret = Unified2Alert(&tv, &p, data, &pq);
@@ -806,8 +891,13 @@ static int Unified2Test03 (void)   {
     if(ret == -1)
         return 0;
 
-    if(LogFileFreeCtx(lf)==0)
-        return 0;
+    Unified2AlertDeInitCtx(oc);
+
+    Packet *pkt = PacketDequeue(&pq);
+    while (pkt != NULL) {
+        SCFree(pkt);
+        pkt = PacketDequeue(&pq);
+    }
 
     return 1;
 }
@@ -824,6 +914,7 @@ static int Unified2Test04 (void)   {
     DecodeThreadVars dtv;
     PacketQueue pq;
     void *data = NULL;
+    OutputCtx *oc;
     LogFileCtx *lf;
 
     uint8_t raw_ppp[] = {
@@ -853,10 +944,13 @@ static int Unified2Test04 (void)   {
 
     FlowShutdown();
 
-    lf=Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if(lf == NULL)
         return 0;
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if(ret == -1)
         return 0;
     ret = Unified2Alert(&tv, &p, data, &pq);
@@ -866,8 +960,7 @@ static int Unified2Test04 (void)   {
     if(ret == -1)
         return 0;
 
-    if(LogFileFreeCtx(lf)==0)
-        return 0;
+    Unified2AlertDeInitCtx(oc);
 
     return 1;
 }
@@ -884,6 +977,7 @@ static int Unified2Test05 (void)   {
     DecodeThreadVars dtv;
     PacketQueue pq;
     void *data = NULL;
+    OutputCtx *oc;
     LogFileCtx *lf;
 
     uint8_t raw_ipv4_tcp[] = {
@@ -919,10 +1013,13 @@ static int Unified2Test05 (void)   {
 
     p.action = ACTION_DROP;
 
-    lf=Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if(lf == NULL)
         return 0;
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if(ret == -1)
         return 0;
     ret = Unified2Alert(&tv, &p, data, &pq);
@@ -932,8 +1029,7 @@ static int Unified2Test05 (void)   {
     if(ret == TM_ECODE_FAILED)
         return 0;
 
-    if(LogFileFreeCtx(lf)==0)
-        return 0;
+    Unified2AlertDeInitCtx(oc);
 
     return 1;
 }
@@ -949,22 +1045,25 @@ static int Unified2TestRotate01(void)
     int ret = 0;
     int r = 0;
     ThreadVars tv;
+    OutputCtx *oc;
     LogFileCtx *lf;
     void *data = NULL;
 
-    lf = Unified2AlertInitCtx(NULL);
+    oc = Unified2AlertInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if (lf == NULL)
         return 0;
-    char *filename = strdup(lf->filename);
+    char *filename = SCStrdup(lf->filename);
 
     memset(&tv, 0, sizeof(ThreadVars));
 
-    if (lf == NULL)
-        return 0;
-
-    ret = Unified2AlertThreadInit(&tv, lf, &data);
+    ret = Unified2AlertThreadInit(&tv, oc, &data);
     if (ret == TM_ECODE_FAILED) {
         LogFileFreeCtx(lf);
+        if (filename != NULL)
+            free(filename);
         return 0;
     }
 
@@ -975,7 +1074,7 @@ static int Unified2TestRotate01(void)
         goto error;
 
     if (strcmp(filename, lf->filename) == 0) {
-        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC_ERROR,
+        SCLogError(SC_ERR_UNIFIED2_ALERT_GENERIC,
                    "filename \"%s\" == \"%s\": ", filename, lf->filename);
         goto error;
     }
@@ -984,7 +1083,7 @@ static int Unified2TestRotate01(void)
 
 error:
     Unified2AlertThreadDeinit(&tv, data);
-    if (lf != NULL) LogFileFreeCtx(lf);
+    if (oc != NULL) Unified2AlertDeInitCtx(oc);
     if (filename != NULL) free(filename);
     return r;
 }

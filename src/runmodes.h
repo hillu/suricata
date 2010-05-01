@@ -1,18 +1,30 @@
 #ifndef __RUNMODES_H__
 #define __RUNMODES_H__
 
-int RunModeIdsPcap(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
-int RunModeIdsPcap2(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
-int RunModeIdsPcap3(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
+void RunModeInitializeOutputs(void);
 
-int RunModeIpsNFQ(DetectEngineCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
+int RunModeIdsPcap(DetectEngineCtx *, char *);
+int RunModeIdsPcap2(DetectEngineCtx *, char *);
+int RunModeIdsPcap3(DetectEngineCtx *, char *);
+int RunModeIdsPcapAuto(DetectEngineCtx *, char *);
 
-int RunModeFilePcap(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
-int RunModeFilePcap2(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
+int RunModeIpsNFQ(DetectEngineCtx *, char *);
+int RunModeIpsNFQAuto(DetectEngineCtx *, char *);
 
-int RunModeIdsPfring(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
-int RunModeIdsPfring2(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
-int RunModeIdsPfring3(DetectEngineCtx *, char *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *, LogFileCtx *);
+int RunModeFilePcap(DetectEngineCtx *, char *);
+int RunModeFilePcap2(DetectEngineCtx *, char *);
+int RunModeFilePcapAuto(DetectEngineCtx *, char *);
+
+int RunModeIdsPfring(DetectEngineCtx *, char *);
+int RunModeIdsPfring2(DetectEngineCtx *, char *);
+int RunModeIdsPfring3(DetectEngineCtx *, char *);
+int RunModeIdsPfring4(DetectEngineCtx *, char *);
+int RunModeIdsPfringAuto(DetectEngineCtx *, char *);
+
+int RunModeIpsIPFW(DetectEngineCtx *);
+int RunModeIpsIPFWAuto(DetectEngineCtx *);
+
+void RunModeShutDown(void);
 
 #endif /* __RUNMODES_H__ */
 

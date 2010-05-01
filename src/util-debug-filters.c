@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/syscall.h>
 
 #include "threads.h"
 #include "util-debug.h"
@@ -79,29 +78,29 @@ static inline void SCLogAddToFGFFileList(SCLogFGFilterFile *fgf_file,
     SCLogFGFilterFunc *fgf_func_temp = NULL;
     SCLogFGFilterLine *fgf_line_temp = NULL;
 
-    if ( (fgf_file_temp = malloc(sizeof(SCLogFGFilterFile))) == NULL) {
+    if ( (fgf_file_temp = SCMalloc(sizeof(SCLogFGFilterFile))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
     memset(fgf_file_temp, 0, sizeof(SCLogFGFilterFile));
 
-    if ( file != NULL && (fgf_file_temp->file = strdup(file)) == NULL) {
+    if ( file != NULL && (fgf_file_temp->file = SCStrdup(file)) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
 
-    if ( (fgf_func_temp = malloc(sizeof(SCLogFGFilterFunc))) == NULL) {
+    if ( (fgf_func_temp = SCMalloc(sizeof(SCLogFGFilterFunc))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
     memset(fgf_func_temp, 0, sizeof(SCLogFGFilterFunc));
 
-    if ( function != NULL && (fgf_func_temp->func = strdup(function)) == NULL) {
+    if ( function != NULL && (fgf_func_temp->func = SCStrdup(function)) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
 
-    if ( (fgf_line_temp = malloc(sizeof(SCLogFGFilterLine))) == NULL) {
+    if ( (fgf_line_temp = SCMalloc(sizeof(SCLogFGFilterLine))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -143,18 +142,18 @@ static inline void SCLogAddToFGFFuncList(SCLogFGFilterFile *fgf_file,
     SCLogFGFilterFunc *fgf_func_temp = NULL;
     SCLogFGFilterLine *fgf_line_temp = NULL;
 
-    if ( (fgf_func_temp = malloc(sizeof(SCLogFGFilterFunc))) == NULL) {
+    if ( (fgf_func_temp = SCMalloc(sizeof(SCLogFGFilterFunc))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
     memset(fgf_func_temp, 0, sizeof(SCLogFGFilterFunc));
 
-    if ( function != NULL && (fgf_func_temp->func = strdup(function)) == NULL) {
+    if ( function != NULL && (fgf_func_temp->func = SCStrdup(function)) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
 
-    if ( (fgf_line_temp = malloc(sizeof(SCLogFGFilterLine))) == NULL) {
+    if ( (fgf_line_temp = SCMalloc(sizeof(SCLogFGFilterLine))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -192,7 +191,7 @@ static inline void SCLogAddToFGFLineList(SCLogFGFilterFunc *fgf_func,
 {
     SCLogFGFilterLine *fgf_line_temp = NULL;
 
-    if ( (fgf_line_temp = malloc(sizeof(SCLogFGFilterLine))) == NULL) {
+    if ( (fgf_line_temp = SCMalloc(sizeof(SCLogFGFilterLine))) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -519,21 +518,21 @@ void SCLogReleaseFGFilters(void)
                 while(fgf_line != NULL) {
                     temp = fgf_line;
                     fgf_line = fgf_line->next;
-                    free(temp);
+                    SCFree(temp);
                 }
 
                 if (fgf_func->func != NULL)
-                    free(fgf_func->func);
+                    SCFree(fgf_func->func);
                 temp = fgf_func;
                 fgf_func = fgf_func->next;
-                free(temp);
+                SCFree(temp);
             }
 
             if (fgf_file->file != NULL)
-                free(fgf_file->file);
+                SCFree(fgf_file->file);
             temp = fgf_file;
             fgf_file = fgf_file->next;
-            free(temp);
+            SCFree(temp);
         }
 
         SCMutexUnlock(&sc_log_fg_filters_m[i]);
@@ -616,8 +615,8 @@ static inline void SCLogReleaseFDFilter(SCLogFDFilter *fdf)
 {
     if (fdf != NULL) {
         if (fdf->func != NULL)
-            free(fdf->func);
-        free(fdf);
+            SCFree(fdf->func);
+        SCFree(fdf);
     }
 
     return;
@@ -636,7 +635,8 @@ int SCLogMatchFDFilter(const char *function)
 {
     SCLogFDFilterThreadList *thread_list = NULL;
 
-    pid_t self = syscall(SYS_gettid);
+//    pid_t self = syscall(SYS_gettid);
+    pthread_t self = pthread_self();
 
 #ifndef DEBUG
     return 1;
@@ -659,7 +659,7 @@ int SCLogMatchFDFilter(const char *function)
 
     thread_list = sc_log_fd_filters_tl;
     while (thread_list != NULL) {
-        if (self == thread_list->t) {
+        if (pthread_equal(self, thread_list->t)) {
             if (thread_list->entered > 0) {
                 SCMutexUnlock(&sc_log_fd_filters_tl_m);
                 return 1;
@@ -690,10 +690,10 @@ int SCLogCheckFDFilterEntry(const char *function)
     SCLogFDFilter *curr = NULL;
 
     SCLogFDFilterThreadList *thread_list = NULL;
-    SCLogFDFilterThreadList *thread_list_prev = NULL;
     SCLogFDFilterThreadList *thread_list_temp = NULL;
 
-    pid_t self = syscall(SYS_gettid);
+    //pid_t self = syscall(SYS_gettid);
+    pthread_t self = pthread_self();
 
     if (sc_log_module_initialized != 1) {
         printf("Logging module not initialized.  Call SCLogInitLogModule() "
@@ -726,7 +726,7 @@ int SCLogCheckFDFilterEntry(const char *function)
     while (thread_list != NULL) {
         thread_list_temp = thread_list;
 
-        if (self == thread_list->t)
+        if (pthread_equal(self, thread_list->t))
             break;
 
         thread_list = thread_list->next;
@@ -738,7 +738,7 @@ int SCLogCheckFDFilterEntry(const char *function)
         return 1;
     }
 
-    if ( (thread_list_temp = malloc(sizeof(SCLogFDFilterThreadList))) == NULL) {
+    if ( (thread_list_temp = SCMalloc(sizeof(SCLogFDFilterThreadList))) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -747,10 +747,7 @@ int SCLogCheckFDFilterEntry(const char *function)
     thread_list_temp->t = self;
     thread_list_temp->entered++;
 
-    if (thread_list_prev == NULL)
-        sc_log_fd_filters_tl = thread_list_temp;
-    else
-        thread_list_prev->next = thread_list_temp;
+    sc_log_fd_filters_tl = thread_list_temp;
 
     SCMutexUnlock(&sc_log_fd_filters_tl_m);
 
@@ -771,7 +768,8 @@ void SCLogCheckFDFilterExit(const char *function)
 
     SCLogFDFilterThreadList *thread_list = NULL;
 
-    pid_t self = syscall(SYS_gettid);
+    //pid_t self = syscall(SYS_gettid);
+    pthread_t self = pthread_self();
 
     if (sc_log_module_initialized != 1) {
         printf("Logging module not initialized.  Call SCLogInitLogModule() "
@@ -801,7 +799,7 @@ void SCLogCheckFDFilterExit(const char *function)
 
     thread_list = sc_log_fd_filters_tl;
     while (thread_list != NULL) {
-        if (self == thread_list->t)
+        if (pthread_equal(self, thread_list->t))
             break;
 
         thread_list = thread_list->next;
@@ -809,7 +807,8 @@ void SCLogCheckFDFilterExit(const char *function)
 
     SCMutexUnlock(&sc_log_fd_filters_tl_m);
 
-    thread_list->entered--;
+    if (thread_list != NULL)
+        thread_list->entered--;
 
     return;
 }
@@ -855,23 +854,21 @@ int SCLogAddFDFilter(const char *function)
         curr = curr->next;
     }
 
-    if ( (temp = malloc(sizeof(SCLogFDFilter))) == NULL) {
+    if ( (temp = SCMalloc(sizeof(SCLogFDFilter))) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
     memset(temp, 0, sizeof(SCLogFDFilter));
 
-    if ( (temp->func = strdup(function)) == NULL) {
+    if ( (temp->func = SCStrdup(function)) == NULL) {
         printf("Error Allocating memory\n");
         exit(EXIT_FAILURE);
     }
 
-    if (curr == NULL) {
-        if (sc_log_fd_filters == NULL)
-            sc_log_fd_filters = temp;
-        else
-            prev->next = temp;
-    }
+    if (sc_log_fd_filters == NULL)
+        sc_log_fd_filters = temp;
+    else
+        prev->next = temp;
 
     SCMutexUnlock(&sc_log_fd_filters_m);
     sc_log_fd_filters_present = 1;

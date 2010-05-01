@@ -1,4 +1,6 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
+/* Copyright (c) 2009 Open Information Security Foundation. */
+
+/** \file
  *  \author Victor Julien <victor@inliniac.net>
  *  \author Anoop Saldanha <poonaatsoc@gmail.com>
  */
@@ -17,7 +19,7 @@
 static pcre *regex = NULL;
 static pcre_extra *regex_study = NULL;
 
-int DetectPrioritySetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *sidstr);
+static int DetectPrioritySetup (DetectEngineCtx *, Signature *, char *);
 void SCPriorityRegisterTests(void);
 
 /**
@@ -37,14 +39,14 @@ void DetectPriorityRegister (void)
 
     regex = pcre_compile(DETECT_PRIORITY_REGEX, opts, &eb, &eo, NULL);
     if (regex == NULL) {
-        SCLogDebug("Compile of \"%s\" failed at offset %" PRId32 ": %s",
+        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
                    DETECT_PRIORITY_REGEX, eo, eb);
         goto end;
     }
 
     regex_study = pcre_study(regex, 0, &eb);
     if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto end;
     }
 
@@ -52,7 +54,7 @@ void DetectPriorityRegister (void)
     return;
 }
 
-int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     const char *prio_str = NULL;
 
@@ -62,14 +64,14 @@ int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, cha
 
     ret = pcre_exec(regex, regex_study, rawstr, strlen(rawstr), 0, 0, ov, 30);
     if (ret < 0) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid Priority in Signature "
+        SCLogError(SC_ERR_PCRE_MATCH, "Invalid Priority in Signature "
                      "- %s", rawstr);
         return -1;
     }
 
     ret = pcre_get_substring((char *)rawstr, ov, 30, 1, &prio_str);
     if (ret < 0) {
-        SCLogInfo("pcre_get_substring() failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         return -1;
     }
 
@@ -117,40 +119,52 @@ int DetectPriorityTest02()
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:1; sid:1;)");
     de_ctx->sig_list = last = sig;
-    result = (sig != NULL);
-    result &= (sig->prio == 1);
+    if (sig == NULL) {
+        result = 0;
+    } else {
+        result = 1;
+        result &= (sig->prio == 1);
+    }
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:boo; sid:1;)");
-    last->next = sig;
+    if (last != NULL)
+        last->next = sig;
     result &= (sig == NULL);
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:10boo; sid:1;)");
-    last->next = sig;
+    if (last != NULL)
+        last->next = sig;
     result &= (sig == NULL);
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:b10oo; sid:1;)");
-    last->next = sig;
+    if (last != NULL)
+        last->next = sig;
     result &= (sig == NULL);
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:boo10; sid:1;)");
-    last->next = sig;
+    if (last != NULL)
+        last->next = sig;
     result &= (sig == NULL);
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; priority:-1; sid:1;)");
-    last->next = sig;
+    if (last != NULL)
+        last->next = sig;
     result &= (sig == NULL);
 
     sig = SigInit(de_ctx, "alert tcp any any -> any any "
                   "(msg:\"Priority test\"; sid:1;)");
-    last->next = sig;
-    last = sig;
-    result &= (sig != NULL);
-    result &= (sig->prio == 3);
+    if (last != NULL)
+        last->next = sig;
+    if (sig == NULL) {
+        result &= 0;
+    } else {
+        result &= (sig->prio == 3);
+    }
 
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);

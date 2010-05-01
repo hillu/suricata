@@ -4,11 +4,14 @@
 
 #include "suricata-common.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "threads.h"
 #include "pkt-var.h"
 #include "detect-pktvar.h"
-#include "util-binsearch.h"
+#include "util-spm.h"
 #include "util-debug.h"
 
 #define PARSE_REGEX         "(.*),(.*)"
@@ -16,7 +19,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectPktvarMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectPktvarSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectPktvarSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectPktvarRegister (void) {
     sigmatch_table[DETECT_PKTVAR].name = "pktvar";
@@ -34,14 +37,14 @@ void DetectPktvarRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
@@ -64,7 +67,7 @@ int DetectPktvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
 
     PktVar *pv = PktVarGet(p, pd->name);
     if (pv != NULL) {
-        uint8_t *ptr = BinSearch(pv->value, pv->value_len, pd->content, pd->content_len);
+        uint8_t *ptr = SpmSearch(pv->value, pv->value_len, pd->content, pd->content_len);
         if (ptr != NULL)
             ret = 1;
     }
@@ -72,7 +75,7 @@ int DetectPktvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
     return ret;
 }
 
-int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectPktvarData *cd = NULL;
     SigMatch *sm = NULL;
@@ -86,7 +89,7 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 3) {
-        printf("ERROR: \"%s\" is not a valid setting for pktvar.\n", rawstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "\"%s\" is not a valid setting for pktvar.", rawstr);
         return -1;
 
     }
@@ -94,7 +97,7 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     const char *str_ptr;
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        printf("DetectPcreSetup: pcre_get_substring failed\n");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         return -1;
     }
     varname = (char *)str_ptr;
@@ -102,7 +105,7 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     if (ret > 2) {
         res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
         if (res < 0) {
-            printf("DetectPcreSetup: pcre_get_substring failed\n");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             return -1;
         }
         varcontent = (char *)str_ptr;
@@ -111,18 +114,20 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     SCLogDebug("varname %s, varcontent %s", varname, varcontent);
 
     if (varcontent[0] == '\"' && varcontent[strlen(varcontent)-1] == '\"') {
-        str = strdup(varcontent+1);
+        str = SCStrdup(varcontent+1);
         str[strlen(varcontent)-2] = '\0';
         dubbed = 1;
     }
 
     len = strlen(str);
-    if (len == 0)
+    if (len == 0) {
+        if (dubbed) SCFree(str);
         return -1;
+    }
 
-    cd = malloc(sizeof(DetectPktvarData));
+    cd = SCMalloc(sizeof(DetectPktvarData));
     if (cd == NULL) {
-        printf("DetectPktvarSetup malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
 
@@ -183,11 +188,14 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
             len = x;
     }
 
-    cd->content = malloc(len);
-    if (cd->content == NULL)
+    cd->content = SCMalloc(len);
+    if (cd->content == NULL) {
+        SCFree(cd);
+        if (dubbed) SCFree(str);
         return -1;
+    }
 
-    cd->name = strdup(varname);
+    cd->name = SCStrdup(varname);
     memcpy(cd->content, str, len);
     cd->content_len = len;
     cd->flags = 0;
@@ -201,15 +209,15 @@ int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     sm->type = DETECT_PKTVAR;
     sm->ctx = (void *)cd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
-    if (dubbed) free(str);
+    if (dubbed) SCFree(str);
     return 0;
 
 error:
-    if (dubbed) free(str);
-    if (cd) free(cd);
-    if (sm) free(sm);
+    if (dubbed) SCFree(str);
+    if (cd) SCFree(cd);
+    if (sm) SCFree(sm);
     return -1;
 }
 

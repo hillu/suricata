@@ -17,24 +17,40 @@ void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *p
         return;
     }
 
-    EthernetHdr *ethh = (EthernetHdr *)pkt;
-    if (ethh == NULL)
+    p->ethh = (EthernetHdr *)pkt;
+    if (p->ethh == NULL)
         return;
 
-    SCLogDebug("p %p pkt %p ether type %04x", p, pkt, ntohs(ethh->eth_type));
+    SCLogDebug("p %p pkt %p ether type %04x", p, pkt, ntohs(p->ethh->eth_type));
 
-    if (ntohs(ethh->eth_type) == ETHERNET_TYPE_IP) {
-        //printf("DecodeEthernet ip4\n");
-        DecodeIPV4(tv, dtv, p, pkt + ETHERNET_HEADER_LEN, len - ETHERNET_HEADER_LEN, pq);
-    } else if(ntohs(ethh->eth_type) == ETHERNET_TYPE_IPV6) {
-        //printf("DecodeEthernet ip6\n");
-        DecodeIPV6(tv, dtv, p, pkt + ETHERNET_HEADER_LEN, len - ETHERNET_HEADER_LEN, pq);
-    } else if(ntohs(ethh->eth_type) == ETHERNET_TYPE_PPPOE_SESS) {
-        //printf("DecodeEthernet PPPOE Session\n");
-        DecodePPPOESession(tv, dtv, p, pkt + ETHERNET_HEADER_LEN, len - ETHERNET_HEADER_LEN, pq);
-    } else if(ntohs(ethh->eth_type) == ETHERNET_TYPE_PPPOE_DISC) {
-        //printf("DecodeEthernet PPPOE Discovery\n");
-        DecodePPPOEDiscovery(tv, dtv, p, pkt + ETHERNET_HEADER_LEN, len - ETHERNET_HEADER_LEN, pq);
+    switch (ntohs(p->ethh->eth_type)) {
+        case ETHERNET_TYPE_IP:
+            //printf("DecodeEthernet ip4\n");
+            DecodeIPV4(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                       len - ETHERNET_HEADER_LEN, pq);
+            break;
+        case ETHERNET_TYPE_IPV6:
+            //printf("DecodeEthernet ip6\n");
+            DecodeIPV6(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                       len - ETHERNET_HEADER_LEN, pq);
+            break;
+        case ETHERNET_TYPE_PPPOE_SESS:
+            //printf("DecodeEthernet PPPOE Session\n");
+            DecodePPPOESession(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                               len - ETHERNET_HEADER_LEN, pq);
+            break;
+        case ETHERNET_TYPE_PPPOE_DISC:
+            //printf("DecodeEthernet PPPOE Discovery\n");
+            DecodePPPOEDiscovery(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                                 len - ETHERNET_HEADER_LEN, pq);
+            break;
+        case ETHERNET_TYPE_VLAN:
+            DecodeVLAN(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                                 len - ETHERNET_HEADER_LEN, pq);
+            break;
+        default:
+            SCLogDebug("p %p pkt %p ether type %04x not supported", p,
+                       pkt, ntohs(p->ethh->eth_type));
     }
 
     return;

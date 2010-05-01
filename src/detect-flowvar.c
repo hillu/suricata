@@ -4,13 +4,16 @@
 
 #include "suricata-common.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "detect-content.h"
 #include "threads.h"
 #include "flow.h"
 #include "flow-var.h"
 #include "detect-flowvar.h"
-#include "util-binsearch.h"
+#include "util-spm.h"
 #include "util-var-name.h"
 #include "util-debug.h"
 
@@ -19,7 +22,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectFlowvarMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectFlowvarSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectFlowvarSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectFlowvarRegister (void) {
     sigmatch_table[DETECT_FLOWVAR].name = "flowvar";
@@ -35,14 +38,14 @@ void DetectFlowvarRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
@@ -68,7 +71,7 @@ int DetectFlowvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
 
     FlowVar *fv = FlowVarGet(p->flow, fd->idx);
     if (fv != NULL) {
-        uint8_t *ptr = BinSearch(fv->data.fv_str.value,
+        uint8_t *ptr = SpmSearch(fv->data.fv_str.value,
                                  fv->data.fv_str.value_len,
                                  fd->content, fd->content_len);
         if (ptr != NULL)
@@ -79,7 +82,7 @@ int DetectFlowvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
     return ret;
 }
 
-int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectFlowvarData *cd = NULL;
     SigMatch *sm = NULL;
@@ -93,14 +96,14 @@ int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 3) {
-        printf("ERROR: \"%s\" is not a valid setting for flowvar.\n", rawstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "\"%s\" is not a valid setting for flowvar.", rawstr);
         return -1;
     }
 
     const char *str_ptr;
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        printf("DetectPcreSetup: pcre_get_substring failed\n");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         return -1;
     }
     varname = (char *)str_ptr;
@@ -108,27 +111,27 @@ int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     if (ret > 2) {
         res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
         if (res < 0) {
-            printf("DetectPcreSetup: pcre_get_substring failed\n");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             return -1;
         }
         varcontent = (char *)str_ptr;
     }
 
-    //printf("DetectFlowvarSetup: varname %s, varcontent %s\n", varname, varcontent);
-
     if (varcontent[0] == '\"' && varcontent[strlen(varcontent)-1] == '\"') {
-        str = strdup(varcontent+1);
+        str = SCStrdup(varcontent+1);
         str[strlen(varcontent)-2] = '\0';
         dubbed = 1;
     }
 
     len = strlen(str);
-    if (len == 0)
+    if (len == 0) {
+        if (dubbed) SCFree(str);
         return -1;
+    }
 
-    cd = malloc(sizeof(DetectFlowvarData));
+    cd = SCMalloc(sizeof(DetectFlowvarData));
     if (cd == NULL) {
-        printf("DetectFlowvarSetup malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
 
@@ -189,11 +192,14 @@ int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
             len = x;
     }
 
-    cd->content = malloc(len);
-    if (cd->content == NULL)
+    cd->content = SCMalloc(len);
+    if (cd->content == NULL) {
+        if (dubbed) SCFree(str);
+        SCFree(cd);
         return -1;
+    }
 
-    cd->name = strdup(varname);
+    cd->name = SCStrdup(varname);
     cd->idx = VariableNameGetIdx(de_ctx,varname,DETECT_FLOWVAR);
     memcpy(cd->content, str, len);
     cd->content_len = len;
@@ -208,15 +214,15 @@ int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     sm->type = DETECT_FLOWVAR;
     sm->ctx = (void *)cd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
-    if (dubbed) free(str);
+    if (dubbed) SCFree(str);
     return 0;
 
 error:
-    if (dubbed) free(str);
-    if (cd) free(cd);
-    if (sm) free(sm);
+    if (dubbed) SCFree(str);
+    if (cd) SCFree(cd);
+    if (sm) SCFree(sm);
     return -1;
 }
 

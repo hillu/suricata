@@ -21,7 +21,7 @@ Flow *FlowAlloc(void)
         SCMutexUnlock(&flow_memuse_mutex);
         return NULL;
     }
-    f = malloc(sizeof(Flow));
+    f = SCMalloc(sizeof(Flow));
     if (f == NULL) {
         SCMutexUnlock(&flow_memuse_mutex);
         return NULL;
@@ -47,7 +47,8 @@ void FlowFree(Flow *f)
     flow_memuse -= sizeof(Flow);
     SCMutexUnlock(&flow_memuse_mutex);
 
-    free(f);
+    SCMutexDestroy(&f->m);
+    SCFree(f);
 }
 
 /**
@@ -56,7 +57,7 @@ void FlowFree(Flow *f)
  *  \param   proto  protocol which is needed to be mapped
  */
 
-int FlowGetProtoMapping(uint8_t proto) {
+uint8_t FlowGetProtoMapping(uint8_t proto) {
 
     switch (proto) {
         case IPPROTO_TCP:
@@ -85,9 +86,13 @@ void FlowInit(Flow *f, Packet *p)
     if (p->ip4h != NULL) { /* XXX MACRO */
         SET_IPV4_SRC_ADDR(p,&f->src);
         SET_IPV4_DST_ADDR(p,&f->dst);
+        f->src.family = AF_INET;
+        f->dst.family = AF_INET;
     } else if (p->ip6h != NULL) { /* XXX MACRO */
         SET_IPV6_SRC_ADDR(p,&f->src);
         SET_IPV6_DST_ADDR(p,&f->dst);
+        f->src.family = AF_INET6;
+        f->dst.family = AF_INET6;
     } /* XXX handle default */
     else {
         printf("FIXME: %s:%s:%" PRId32 "\n", __FILE__, __FUNCTION__, __LINE__);

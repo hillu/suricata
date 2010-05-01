@@ -5,6 +5,7 @@
 #include "debug.h"
 #include "detect.h"
 #include "flow.h"
+#include "flow-private.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
@@ -15,14 +16,20 @@
 #include "detect-engine-port.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-iponly.h"
-#include "detect-http-cookie.h"
 #include "detect-engine-threshold.h"
+
+#include "detect-engine-payload.h"
+#include "detect-engine-uri.h"
+
+#include "detect-http-cookie.h"
+#include "detect-http-method.h"
 
 #include "detect-decode-event.h"
 
 #include "detect-ipopts.h"
 #include "detect-flags.h"
 #include "detect-fragbits.h"
+#include "detect-fragoffset.h"
 #include "detect-gid.h"
 #include "detect-ack.h"
 #include "detect-seq.h"
@@ -69,13 +76,19 @@
 #include "detect-itype.h"
 #include "detect-icode.h"
 #include "detect-icmp-id.h"
+#include "detect-icmp-seq.h"
 #include "detect-dce-iface.h"
 #include "detect-dce-opnum.h"
 #include "detect-dce-stub-data.h"
+#include "detect-urilen.h"
+#include "detect-detection-filter.h"
+#include "detect-http-client-body.h"
 
 #include "util-rule-vars.h"
 
 #include "app-layer.h"
+#include "app-layer-protos.h"
+#include "app-layer-htp.h"
 #include "detect-tls-version.h"
 
 #include "action-globals.h"
@@ -88,14 +101,20 @@
 #include "conf.h"
 #include "conf-yaml-loader.h"
 
+#include "stream-tcp.h"
+
 #include "util-classification-config.h"
 #include "util-print.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-debug.h"
 #include "util-hashlist.h"
 
+#include "util-cuda-handlers.h"
+#include "util-mpm-b2g-cuda.h"
+#include "util-cuda.h"
+
 SigMatch *SigMatchAlloc(void);
-void SigMatchFree(SigMatch *sm);
 void DetectExitPrintStats(ThreadVars *tv, void *data);
 
 void DbgPrintSigs(DetectEngineCtx *, SigGroupHead *);
@@ -120,67 +139,39 @@ void DetectExitPrintStats(ThreadVars *tv, void *data) {
     if (det_ctx == NULL)
         return;
 
-    SCLogInfo("(%s) (1byte) Pkts %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->pkts, det_ctx->pkts_scanned1,
-        (float)(det_ctx->pkts_scanned1/(float)(det_ctx->pkts)*100),
-        det_ctx->pkts_searched1,
-        (float)(det_ctx->pkts_searched1/(float)(det_ctx->pkts)*100),
-        (float)(det_ctx->pkts_searched1/(float)(det_ctx->pkts_scanned1)*100));
-    SCLogInfo("(%s) (2byte) Pkts %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->pkts, det_ctx->pkts_scanned2,
-        (float)(det_ctx->pkts_scanned2/(float)(det_ctx->pkts)*100),
-        det_ctx->pkts_searched2,
-        (float)(det_ctx->pkts_searched2/(float)(det_ctx->pkts)*100),
-        (float)(det_ctx->pkts_searched2/(float)(det_ctx->pkts_scanned2)*100));
-    SCLogInfo("(%s) (3byte) Pkts %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->pkts, det_ctx->pkts_scanned3,
-        (float)(det_ctx->pkts_scanned3/(float)(det_ctx->pkts)*100),
-        det_ctx->pkts_searched3,
-        (float)(det_ctx->pkts_searched3/(float)(det_ctx->pkts)*100),
-        (float)(det_ctx->pkts_searched3/(float)(det_ctx->pkts_scanned3)*100));
-    SCLogInfo("(%s) (4byte) Pkts %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->pkts, det_ctx->pkts_scanned4,
-        (float)(det_ctx->pkts_scanned4/(float)(det_ctx->pkts)*100),
-        det_ctx->pkts_searched4,
-        (float)(det_ctx->pkts_searched4/(float)(det_ctx->pkts)*100),
-        (float)(det_ctx->pkts_searched4/(float)(det_ctx->pkts_scanned4)*100));
-    SCLogInfo("(%s) (+byte) Pkts %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->pkts, det_ctx->pkts_scanned,
-        (float)(det_ctx->pkts_scanned/(float)(det_ctx->pkts)*100),
-        det_ctx->pkts_searched,
-        (float)(det_ctx->pkts_searched/(float)(det_ctx->pkts)*100),
-        (float)(det_ctx->pkts_searched/(float)(det_ctx->pkts_scanned)*100));
+    SCLogInfo("(%s) (1byte) Pkts %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->pkts, det_ctx->pkts_searched1,
+        (float)(det_ctx->pkts_searched1/(float)(det_ctx->pkts)*100));
+    SCLogInfo("(%s) (2byte) Pkts %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->pkts, det_ctx->pkts_searched2,
+        (float)(det_ctx->pkts_searched2/(float)(det_ctx->pkts)*100));
+    SCLogInfo("(%s) (3byte) Pkts %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->pkts, det_ctx->pkts_searched3,
+        (float)(det_ctx->pkts_searched3/(float)(det_ctx->pkts)*100));
+    SCLogInfo("(%s) (4byte) Pkts %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->pkts, det_ctx->pkts_searched4,
+        (float)(det_ctx->pkts_searched4/(float)(det_ctx->pkts)*100));
+    SCLogInfo("(%s) (+byte) Pkts %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->pkts, det_ctx->pkts_searched,
+        (float)(det_ctx->pkts_searched/(float)(det_ctx->pkts)*100));
 
-    SCLogInfo("(%s) URI (1byte) Uri's %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->uris, det_ctx->pkts_uri_scanned1,
-        (float)(det_ctx->pkts_uri_scanned1/(float)(det_ctx->uris)*100),
-        det_ctx->pkts_uri_searched1,
-        (float)(det_ctx->pkts_uri_searched1/(float)(det_ctx->uris)*100),
-        (float)(det_ctx->pkts_uri_searched1/(float)(det_ctx->pkts_uri_scanned1)*100));
-    SCLogInfo("(%s) URI (2byte) Uri's %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->uris, det_ctx->pkts_uri_scanned2,
-        (float)(det_ctx->pkts_uri_scanned2/(float)(det_ctx->uris)*100),
-        det_ctx->pkts_uri_searched2,
-        (float)(det_ctx->pkts_uri_searched2/(float)(det_ctx->uris)*100),
-        (float)(det_ctx->pkts_uri_searched2/(float)(det_ctx->pkts_uri_scanned2)*100));
-    SCLogInfo("(%s) URI (3byte) Uri's %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->uris, det_ctx->pkts_uri_scanned3,
-        (float)(det_ctx->pkts_uri_scanned3/(float)(det_ctx->uris)*100),
-        det_ctx->pkts_uri_searched3,
-        (float)(det_ctx->pkts_uri_searched3/(float)(det_ctx->uris)*100),
-        (float)(det_ctx->pkts_uri_searched3/(float)(det_ctx->pkts_uri_scanned3)*100));
-    SCLogInfo("(%s) URI (4byte) Uri's %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->uris, det_ctx->pkts_uri_scanned4,
-        (float)(det_ctx->pkts_uri_scanned4/(float)(det_ctx->uris)*100),
-        det_ctx->pkts_uri_searched4,
-        (float)(det_ctx->pkts_uri_searched4/(float)(det_ctx->uris)*100),
-        (float)(det_ctx->pkts_uri_searched4/(float)(det_ctx->pkts_uri_scanned4)*100));
-    SCLogInfo("(%s) URI (+byte) Uri's %" PRIu32 ", Scanned %" PRIu32 " (%02.1f), Searched %" PRIu32 " (%02.1f): %02.1f%%.", tv->name,
-        det_ctx->uris, det_ctx->pkts_uri_scanned,
-        (float)(det_ctx->pkts_uri_scanned/(float)(det_ctx->uris)*100),
-        det_ctx->pkts_uri_searched,
-        (float)(det_ctx->pkts_uri_searched/(float)(det_ctx->uris)*100),
-        (float)(det_ctx->pkts_uri_searched/(float)(det_ctx->pkts_uri_scanned)*100));
+    SCLogInfo("(%s) URI (1byte) Uri's %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->uris, det_ctx->pkts_uri_searched1,
+        (float)(det_ctx->pkts_uri_searched1/(float)(det_ctx->uris)*100));
+    SCLogInfo("(%s) URI (2byte) Uri's %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->uris, det_ctx->pkts_uri_searched2,
+        (float)(det_ctx->pkts_uri_searched2/(float)(det_ctx->uris)*100));
+    SCLogInfo("(%s) URI (3byte) Uri's %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->uris, det_ctx->pkts_uri_searched3,
+        (float)(det_ctx->pkts_uri_searched3/(float)(det_ctx->uris)*100));
+    SCLogInfo("(%s) URI (4byte) Uri's %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->uris, det_ctx->pkts_uri_searched4,
+        (float)(det_ctx->pkts_uri_searched4/(float)(det_ctx->uris)*100));
+    SCLogInfo("(%s) URI (+byte) Uri's %" PRIu32 ", Searched %" PRIu32 " (%02.1f).",
+        tv->name, det_ctx->uris, det_ctx->pkts_uri_searched,
+        (float)(det_ctx->pkts_uri_searched/(float)(det_ctx->uris)*100));
+
+    SCLogInfo("%"PRIu64" sigs per mpm match on avg needed inspection, total mpm searches %"PRIu64", less than 25 sigs need inspect %"PRIu64", more than 100 sigs need inspect %"PRIu64", more than 1000 %"PRIu64" max %"PRIu64"", det_ctx->mpm_match ? det_ctx->mpm_sigs / det_ctx->mpm_match : 0, det_ctx->mpm_match, det_ctx->mpm_sigsmin25, det_ctx->mpm_sigsplus100, det_ctx->mpm_sigsplus1000, det_ctx->mpm_sigsmax);
 }
 
 /** \brief Create the path if default-rule-path was specified
@@ -196,44 +187,51 @@ char *DetectLoadCompleteSigPath(char *sig_file)
     if (index(sig_file, '/') == NULL) {
         if (ConfGet("default-rule-path", &defaultpath) == 1) {
             SCLogDebug("Default path: %s", defaultpath);
-            path = malloc(sizeof(char) * (strlen(defaultpath) +
-                          strlen(sig_file) + 2));
-            strcpy(path, defaultpath);
+            size_t path_len = sizeof(char) * (strlen(defaultpath) +
+                          strlen(sig_file) + 2);
+            path = SCMalloc(path_len);
+            strlcpy(path, defaultpath, path_len);
             if (path[strlen(path) - 1] != '/')
-                strcat(path, "/");
-            strcat(path, sig_file);
+                strlcat(path, "/", path_len);
+            strlcat(path, sig_file, path_len);
        } else {
-            path = strdup(sig_file);
+            path = SCStrdup(sig_file);
         }
     } else {
-        path = strdup(sig_file);
+        path = SCStrdup(sig_file);
     }
     return path;
 }
 
-/** \brief Load a file with signatures
- *  \retval -1 error
- *  \retval 0 ok
+/**
+ *  \brief Load a file with signatures
+ *  \param de_ctx Pointer to the detection engine context
+ *  \param sig_file Filename to load signatures from
+ *  \param sigs_tot Will store number of signatures processed in the file
+ *  \retval Number of rules loaded successfully, -1 on error
  */
-int DetectLoadSigFile(DetectEngineCtx *de_ctx, char *sig_file) {
+int DetectLoadSigFile(DetectEngineCtx *de_ctx, char *sig_file, int *sigs_tot) {
     Signature *sig = NULL;
     int good = 0, bad = 0;
+    char line[8192] = "";
+    size_t offset = 0;
+    int lineno = 0, multiline = 0;
 
     if (sig_file == NULL) {
-        SCLogError(SC_INVALID_ARGUMENT, "ERROR opening rule file null.");
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "ERROR opening rule file null.");
         return -1;
     }
 
     FILE *fp = fopen(sig_file, "r");
     if (fp == NULL) {
-        SCLogError(SC_ERR_OPENING_RULE_FILE, "ERROR opening rule file %s."
-                   " Check the path and perms.", sig_file);
+        SCLogError(SC_ERR_OPENING_RULE_FILE, "ERROR opening rule file %s:"
+                   " %s.", sig_file, strerror(errno));
         return -1;
     }
-    char line[8192] = "";
-    int offset = 0;
+
     while(fgets(line + offset, (int)sizeof(line) - offset, fp) != NULL) {
-        int len = strlen(line);
+        lineno++;
+        size_t len = strlen(line);
 
         /* ignore comments and empty lines */
         if (line[0] == '\n' || line[0] == ' ' || line[0] == '#' || line[0] == '\t')
@@ -242,6 +240,7 @@ int DetectLoadSigFile(DetectEngineCtx *de_ctx, char *sig_file) {
         /* Check for multiline rules. */
         while (isspace(line[--len]));
         if (line[len] == '\\') {
+            multiline++;
             offset = len;
             if (offset < sizeof(line) - 1) {
                 /* We have room for more. */
@@ -251,82 +250,62 @@ int DetectLoadSigFile(DetectEngineCtx *de_ctx, char *sig_file) {
              * to parse. */
         }
 
+        /* Check if we have a trailing newline, and remove it */
+        len = strlen(line);
+        if (len > 0 && line[len - 1] == '\n') {
+            line[len - 1] = '\0';
+        }
 
         /* Reset offset. */
         offset = 0;
 
         sig = DetectEngineAppendSig(de_ctx, line);
+        (*sigs_tot)++;
         if (sig != NULL) {
             SCLogDebug("signature %"PRIu32" loaded", sig->id);
             good++;
-        } else {
+	} else {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "Error parsing signature \"%s\" from "
+                 "file %s at line %"PRId32"", line, sig_file, lineno - multiline);
+            if (de_ctx->failure_fatal == 1) {
+                exit(EXIT_FAILURE);
+            }
             bad++;
         }
+        multiline = 0;
     }
     fclose(fp);
 
-    SCLogInfo("%" PRId32 " successfully loaded from file %s.", good, sig_file);
-    if (bad)
-        SCLogInfo("%" PRId32 " sigs failed to load from file %s.", bad, sig_file);
-    if (good == 0)
-        return 0;
-    else
-        return good;
+    return good;
 }
 
+/**
+ *  \brief Load signatures
+ *  \param de_ctx Pointer to the detection engine context
+ *  \param sig_file Filename holding signatures
+ *  \retval -1 on error
+ */
 int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
 {
     SCEnter();
 
-    Signature *prevsig = NULL, *sig;
     ConfNode *rule_files;
     ConfNode *file = NULL;
     int ret = 0;
     int r = 0;
     int cnt = 0;
     int cntf = 0;
+    int sigtotal = 0;
     char *sfile = NULL;
 
-    /* The next 3 rules handle HTTP header capture. */
-
-    /* http_uri -- for uricontent */
-    sig = SigInit(de_ctx, "alert tcp any any -> any $HTTP_PORTS (msg:\"HTTP GET URI cap\"; flow:to_server,established; content:\"GET \"; depth:4; pcre:\"/^GET (?P<pkt_http_uri>.*) HTTP\\/\\d\\.\\d\\r\\n/G\"; noalert; sid:1;)");
-    if (sig == NULL)
-        ret = -1;
-
-    prevsig = sig;
-    de_ctx->sig_list = sig;
-
-    sig = SigInit(de_ctx, "alert tcp any any -> any $HTTP_PORTS (msg:\"HTTP POST URI cap\"; flow:to_server,established; content:\"POST \"; depth:5; pcre:\"/^POST (?P<pkt_http_uri>.*) HTTP\\/\\d\\.\\d\\r\\n/G\"; noalert; sid:2;)");
-    if (sig == NULL)
-        ret = -1;
-
-    prevsig->next = sig;
-    prevsig = sig;
-
-    /* http_host -- for the log-httplog module */
-    sig = SigInit(de_ctx, "alert tcp any any -> any $HTTP_PORTS (msg:\"HTTP host cap\"; flow:to_server,established; content:\"|0d 0a|Host:\"; pcre:\"/^Host: (?P<pkt_http_host>.*)\\r\\n/m\"; noalert; sid:3;)");
-    if (sig == NULL)
-        ret = -1;
-
-    prevsig->next = sig;
-    prevsig = sig;
-
-    /* http_ua -- for the log-httplog module */
-    sig = SigInit(de_ctx, "alert tcp any any -> any $HTTP_PORTS (msg:\"HTTP UA cap\"; flow:to_server,established; content:\"|0d 0a|User-Agent:\"; pcre:\"/^User-Agent: (?P<pkt_http_ua>.*)\\r\\n/m\"; noalert; sid:4;)");
-    if (sig == NULL)
-        ret = -1;
-
-    prevsig->next = sig;
-
-    /* ok, now let's load signature files from the general config */
+    /* ok, let's load signature files from the general config */
     rule_files = ConfGetNode("rule-files");
     if (rule_files != NULL) {
         TAILQ_FOREACH(file, &rule_files->head, next) {
             sfile = DetectLoadCompleteSigPath(file->val);
-            SCLogInfo("Loading rule file: %s", sfile);
+            SCLogDebug("Loading rule file: %s", sfile);
 
-            r = DetectLoadSigFile(de_ctx, sfile);
+            r = DetectLoadSigFile(de_ctx, sfile, &sigtotal);
             cntf++;
             if (r > 0) {
                 cnt += r;
@@ -340,14 +319,14 @@ int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
                     exit(EXIT_FAILURE);
                 }
             }
-            free(sfile);
+            SCFree(sfile);
         }
     }
 
     /* If a Signature file is specified from commandline, parse it too */
     if (sig_file != NULL) {
         SCLogInfo("Loading rule file: %s", sig_file);
-        r = DetectLoadSigFile(de_ctx, sig_file);
+        r = DetectLoadSigFile(de_ctx, sig_file, &sigtotal);
         cntf++;
         if (r > 0) {
             cnt += r;
@@ -371,7 +350,8 @@ int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
         }
         ret = -1;
     } else {
-        SCLogInfo("%d rules loaded from %d files.", cnt, cntf);
+        /* we report the total of files and rules successfully loaded and failed */
+        SCLogInfo("%" PRId32 " rule files processed. %" PRId32 " rules succesfully loaded, %" PRId32 " rules failed", cntf, cnt, sigtotal-cnt);
     }
 
     if (ret < 0 && de_ctx->failure_fatal) {
@@ -408,25 +388,27 @@ int PacketAlertCheck(Packet *p, uint32_t sid)
     return match;
 }
 
-int PacketAlertAppend(Packet *p, uint32_t gid, uint32_t sid, uint8_t rev,
-                      uint8_t prio, char *msg, char *class_msg)
+int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p)
 {
     if (p->alerts.cnt == PACKET_ALERT_MAX)
         return 0;
 
-    SCLogDebug("sid %"PRIu32"", sid);
+    SCLogDebug("sid %"PRIu32"", s->id);
 
-    if (gid > 1)
-        p->alerts.alerts[p->alerts.cnt].gid = gid;
+    if (s->gid > 1)
+        p->alerts.alerts[p->alerts.cnt].gid = s->gid;
     else
         p->alerts.alerts[p->alerts.cnt].gid = 1;
 
-    p->alerts.alerts[p->alerts.cnt].sid = sid;
-    p->alerts.alerts[p->alerts.cnt].rev = rev;
-    p->alerts.alerts[p->alerts.cnt].prio = prio;
-    p->alerts.alerts[p->alerts.cnt].msg = msg;
-    p->alerts.alerts[p->alerts.cnt].class_msg = class_msg;
+    p->alerts.alerts[p->alerts.cnt].sid = s->id;
+    p->alerts.alerts[p->alerts.cnt].rev = s->rev;
+    p->alerts.alerts[p->alerts.cnt].prio = s->prio;
+    p->alerts.alerts[p->alerts.cnt].msg = s->msg;
+    p->alerts.alerts[p->alerts.cnt].class_msg = s->class_msg;
+    p->alerts.alerts[p->alerts.cnt].references = s->references;
     p->alerts.cnt++;
+
+    SCPerfCounterIncr(det_ctx->counter_alerts, det_ctx->tv->sc_perf_pca);
 
     return 0;
 }
@@ -469,10 +451,10 @@ inline SigGroupHead *SigMatchSignaturesGetSgh(ThreadVars *th_v, DetectEngineCtx 
                     if (dport != NULL) {
                         sgh = dport->sh;
                     } else {
-                        SCLogDebug("no dst port group found for the packet");
+                        SCLogDebug("no dst port group found for the packet with dp %"PRIu16"", p->dp);
                     }
                 } else {
-                    SCLogDebug("no src port group found for the packet");
+                    SCLogDebug("no src port group found for the packet with sp %"PRIu16"", p->sp);
                 }
             }
         } else {
@@ -485,248 +467,133 @@ inline SigGroupHead *SigMatchSignaturesGetSgh(ThreadVars *th_v, DetectEngineCtx 
     SCReturnPtr(sgh, "SigGroupHead");
 }
 
-/** \brief application layer detection
+/** \brief Signature match function
  *
- *  \param sgh signature group head for this proto/addrs/ports
+ *  \retval 1 one or more signatures matched
+ *  \retval 0 no matches were found
  */
-static int SigMatchSignaturesAppLayer(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, SigGroupHead *sgh, Packet *p)
-{
-    SCEnter();
-
-    int match = 0, fmatch = 0;
-    Signature *s = NULL;
-    SigMatch *sm = NULL;
-    uint32_t idx, sig;
-    uint8_t flags = 0;
-    uint16_t alproto = ALPROTO_UNKNOWN;
-    void *alstate = NULL;
-
-    /* if we didn't get a sig group head, we
-     * have nothing to do.... */
-    if (sgh == NULL) {
-        SCLogDebug("no sgh to detect");
-        SCReturnInt(0);
-    }
-
-    /* grab the protocol state we will detect on */
-    if (p->flow == NULL) {
-        SCReturnInt(0);
-    }
-
-    SCMutexLock(&p->flow->m);
-    p->flow->use_cnt++;
-    alstate = AppLayerGetProtoStateFromPacket(p);
-    alproto = AppLayerGetProtoFromPacket(p);
-    SCMutexUnlock(&p->flow->m);
-
-    if (alproto == ALPROTO_UNKNOWN) {
-        SCLogDebug("application layer state proto still unknown");
-        SCReturnInt(0);
-    }
-    if (alstate == NULL) {
-        SCLogDebug("no application layer state to detect");
-        SCReturnInt(0);
-    }
-
-    if (p->flowflags & FLOW_PKT_TOSERVER) {
-        flags |= STREAM_TOSERVER;
-    } else if (p->flowflags & FLOW_PKT_TOCLIENT) {
-        flags |= STREAM_TOCLIENT;
-    }
-
-    SCLogDebug("p->flowflags 0x%02X flags 0x%02X", p->flowflags, flags);
-
-    /* inspect the sigs against the packet */
-    for (idx = 0; idx < sgh->sig_cnt; idx++) {
-        sig = sgh->match_array[idx];
-        s = de_ctx->sig_array[sig];
-
-        SCLogDebug("s->id %"PRIu32"", s->id);
-
-        /* only inspect app layer sigs here */
-        if (!(s->flags & SIG_FLAG_APPLAYER))
-            continue;
-
-        /* filter out the sigs that inspects the payload, if packet
-           no payload inspection flag is set*/
-        if ((p->flags & PKT_NOPAYLOAD_INSPECTION) && (s->flags & SIG_FLAG_PAYLOAD)) {
-            continue;
-        }
-
-        /* check the source & dst port in the sig */
-        if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP) {
-            if (!(s->flags & SIG_FLAG_DP_ANY)) {
-                DetectPort *dport = DetectPortLookupGroup(s->dp,p->dp);
-                if (dport == NULL)
-                    continue;
-
-            }
-            if (!(s->flags & SIG_FLAG_SP_ANY)) {
-                DetectPort *sport = DetectPortLookupGroup(s->sp,p->sp);
-                if (sport == NULL)
-                    continue;
-            }
-        }
-
-        /* check the source address */
-        if (!(s->flags & SIG_FLAG_SRC_ANY)) {
-            DetectAddress *saddr = DetectAddressLookupInHead(&s->src,&p->src);
-            if (saddr == NULL)
-                continue;
-        }
-        /* check the destination address */
-        if (!(s->flags & SIG_FLAG_DST_ANY)) {
-            DetectAddress *daddr = DetectAddressLookupInHead(&s->dst,&p->dst);
-            if (daddr == NULL)
-                continue;
-        }
-
-        /* if we don't have sigmatches at this point we're a match
-         * XXX VJ can we ever get here? Applayer inspection w/o sigmatches */
-        if (s->match == NULL) {
-            fmatch = 1;
-            if (!(s->flags & SIG_FLAG_NOALERT)) {
-                PacketAlertHandle(de_ctx,s,p);
-
-                /* set verdict on packet */
-                p->action = s->action;
-            }
-        } else {
-            /* reset pkt ptr and offset */
-            det_ctx->pkt_ptr = NULL;
-            det_ctx->pkt_off = 0;
-
-            sm = s->match;
-            while (sm) {
-                if (sigmatch_table[sm->type].AppLayerMatch == NULL) {
-                    /* if no match function we assume this sm is a match */
-                    match = 1;
-                    SCLogDebug("no app layer match function, sigmatch is (pkt)Match only");
-                } else if (sigmatch_table[sm->type].alproto != alproto) {
-                    match = 0;
-                    SCLogDebug("app layer match function %s is for proto "
-                            "%"PRIu16", got proto %"PRIu16"",
-                            sigmatch_table[sm->type].name,
-                            sigmatch_table[sm->type].alproto, alproto);
-                } else {
-                    match = sigmatch_table[sm->type].AppLayerMatch(th_v, det_ctx, p->flow, flags, alstate, s, sm);
-                    SCLogDebug("sigmatch AppLayerMatch function returned match %"PRIu32"", match);
-                }
-
-                if (match) {
-                    /* okay, try the next match */
-                    sm = sm->next;
-
-                    /* only if the last matched as well, we have a hit */
-                    if (sm == NULL) {
-                        fmatch = 1;
-
-                        SCLogDebug("DE : sig %" PRIu32 " matched", s->id);
-
-                        if (!(s->flags & SIG_FLAG_NOALERT)) {
-                            /* if the sig also has a packet portion see if that has matched already */
-                            if (s->flags & SIG_FLAG_PACKET) {
-                                SCLogDebug("checking sid %"PRIu32"", s->id);
-
-                                if (FlowAlertSidIsset(p->flow, s->id) ) {
-                                    SCLogDebug("flowalertsid sid %"PRIu32", isset", s->id);
-
-                                    PacketAlertHandle(de_ctx,s,p);
-
-                                    /* set verdict on packet */
-                                    p->action = s->action;
-                                }
-                            } else {
-                                PacketAlertHandle(de_ctx,s,p);
-
-                                /* set verdict on packet */
-                                p->action = s->action;
-                            }
-                        }
-                    }
-                } else {
-                    /* done with this sig */
-                    sm = NULL;
-                }
-            }
-        }
-    }
-
-    SCMutexLock(&p->flow->m);
-    p->flow->use_cnt--;
-    SCMutexUnlock(&p->flow->m);
-    SCReturnInt(fmatch);
-}
-
 int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p)
 {
     int match = 0, fmatch = 0;
     Signature *s = NULL;
     SigMatch *sm = NULL;
     uint32_t idx,sig;
+    uint16_t alproto = ALPROTO_UNKNOWN;
+    void *alstate = NULL;
+    uint8_t flags = 0;
+    uint32_t cnt = 0;
 
     SCEnter();
 
     det_ctx->pkts++;
 
-    SCLogDebug("p->flowflags 0x%02x", p->flowflags);
+    /* grab the protocol state we will detect on */
+    if (p->flow != NULL) {
+        SCMutexLock(&p->flow->m);
+        p->flow->use_cnt++;
+        alstate = AppLayerGetProtoStateFromPacket(p);
+        alproto = AppLayerGetProtoFromPacket(p);
+        SCMutexUnlock(&p->flow->m);
+
+        if (p->flowflags & FLOW_PKT_TOSERVER) {
+            flags |= STREAM_TOSERVER;
+        } else if (p->flowflags & FLOW_PKT_TOCLIENT) {
+            flags |= STREAM_TOCLIENT;
+        }
+        SCLogDebug("p->flowflags 0x%02x", p->flowflags);
+    }
 
     /* match the ip only signatures */
     if ((p->flowflags & FLOW_PKT_TOSERVER && !(p->flowflags & FLOW_PKT_TOSERVER_IPONLY_SET)) ||
         (p->flowflags & FLOW_PKT_TOCLIENT && !(p->flowflags & FLOW_PKT_TOCLIENT_IPONLY_SET))) {
-        SCLogDebug("testing against \"ip-only\"");
+        SCLogDebug("testing against \"ip-only\" signatures");
 
-        IPOnlyMatchPacket(de_ctx, &de_ctx->io_ctx, &det_ctx->io_ctx, p);
+        IPOnlyMatchPacket(de_ctx, det_ctx, &de_ctx->io_ctx, &det_ctx->io_ctx, p);
         /* save in the flow that we scanned this direction... locking is
          * done in the FlowSetIPOnlyFlag function. */
-        if (p->flow != NULL)
+        if (p->flow != NULL) {
             FlowSetIPOnlyFlag(p->flow, p->flowflags & FLOW_PKT_TOSERVER ? 1 : 0);
+        }
+    } else if (p->flow != NULL && ((p->flowflags & FLOW_PKT_TOSERVER &&
+                                   (p->flow->flags & FLOW_TOSERVER_IPONLY_SET)) ||
+                                   (p->flowflags & FLOW_PKT_TOCLIENT &&
+                                   (p->flow->flags & FLOW_TOCLIENT_IPONLY_SET)))) {
+        /* Get the result of the first IPOnlyMatch() */
+        if (p->flow->flags & FLOW_ACTION_DROP) p->action |= ACTION_DROP;
+    } else {
+        /* Even without flow we should match the packet src/dst */
+        IPOnlyMatchPacket(de_ctx, det_ctx, &de_ctx->io_ctx, &det_ctx->io_ctx, p);
     }
 
-    /* we assume we don't have an uri when we start inspection */
-    det_ctx->de_have_httpuri = 0;
+    /* we assume we have an uri when we start inspection */
+    det_ctx->de_have_httpuri = TRUE;
 
     det_ctx->sgh = SigMatchSignaturesGetSgh(th_v, de_ctx, det_ctx, p);
     /* if we didn't get a sig group head, we
      * have nothing to do.... */
     if (det_ctx->sgh == NULL) {
         SCLogDebug("no sgh for this packet, nothing to match against");
-        SCReturnInt(0);
+        goto end;
     }
 
-    if (p->payload_len > 0 && det_ctx->sgh->mpm_ctx != NULL && !(p->flags & PKT_NOPAYLOAD_INSPECTION)) {
-        /* run the pattern matcher against the packet */
+    if (p->payload_len > 0 && det_ctx->sgh->mpm_ctx != NULL &&
+        !(p->flags & PKT_NOPAYLOAD_INSPECTION))
+    {
+        /* run the multi packet matcher against the payload of the packet */
         if (det_ctx->sgh->mpm_content_maxlen > p->payload_len) {
-            SCLogDebug("not scanning as pkt payload is smaller than the largest content length we need to match");
+            SCLogDebug("not mpm-inspecting as pkt payload is smaller than "
+                "the largest content length we need to match");
         } else {
-            uint32_t cnt = 0;
-            SCLogDebug("scan: (%p, maxlen %" PRIu32 ", sgh->sig_cnt %" PRIu32 ")", det_ctx->sgh, det_ctx->sgh->mpm_content_maxlen, det_ctx->sgh->sig_cnt);
-            /* scan, but only if the noscan flag isn't set */
+            SCLogDebug("search: (%p, maxlen %" PRIu32 ", sgh->sig_cnt %" PRIu32 ")",
+                det_ctx->sgh, det_ctx->sgh->mpm_content_maxlen, det_ctx->sgh->sig_cnt);
 
-            if (det_ctx->sgh->mpm_content_maxlen == 1)      det_ctx->pkts_scanned1++;
-            else if (det_ctx->sgh->mpm_content_maxlen == 2) det_ctx->pkts_scanned2++;
-            else if (det_ctx->sgh->mpm_content_maxlen == 3) det_ctx->pkts_scanned3++;
-            else if (det_ctx->sgh->mpm_content_maxlen == 4) det_ctx->pkts_scanned4++;
-            else                                        det_ctx->pkts_scanned++;
+            if (det_ctx->sgh->mpm_content_maxlen == 1)      det_ctx->pkts_searched1++;
+            else if (det_ctx->sgh->mpm_content_maxlen == 2) det_ctx->pkts_searched2++;
+            else if (det_ctx->sgh->mpm_content_maxlen == 3) det_ctx->pkts_searched3++;
+            else if (det_ctx->sgh->mpm_content_maxlen == 4) det_ctx->pkts_searched4++;
+            else                                            det_ctx->pkts_searched++;
 
-            cnt += PacketPatternScan(th_v, det_ctx, p);
+            cnt = PacketPatternSearch(th_v, det_ctx, p);
+            if (cnt > 0) {
+                det_ctx->mpm_match++;
+                det_ctx->mpm_sigs += det_ctx->pmq.sig_id_array_cnt;
+                if (det_ctx->pmq.sig_id_array_cnt < 25) {
+                    det_ctx->mpm_sigsmin25++;
+                } else if (det_ctx->pmq.sig_id_array_cnt > 1000) {
+                    det_ctx->mpm_sigsplus1000++;
+                } else if (det_ctx->pmq.sig_id_array_cnt > 100) {
+                    det_ctx->mpm_sigsplus100++;
+                }
 
-            //if (cnt != det_ctx->pmq.searchable)
-            SCLogDebug("post scan: cnt %" PRIu32 ", searchable %" PRIu32 "", cnt, det_ctx->pmq.searchable);
-            if (det_ctx->pmq.searchable > 0) {
-                //printf("now search\n");
-                if (det_ctx->sgh->mpm_content_maxlen == 1)      det_ctx->pkts_searched1++;
-                else if (det_ctx->sgh->mpm_content_maxlen == 2) det_ctx->pkts_searched2++;
-                else if (det_ctx->sgh->mpm_content_maxlen == 3) det_ctx->pkts_searched3++;
-                else if (det_ctx->sgh->mpm_content_maxlen == 4) det_ctx->pkts_searched4++;
-                else                                        det_ctx->pkts_searched++;
-
-                cnt += PacketPatternMatch(th_v, det_ctx, p);
-
-                // printf("RAW: cnt %" PRIu32 ", det_ctx->pmq.sig_id_array_cnt %" PRIu32 "\n", cnt, det_ctx->pmq.sig_id_array_cnt);
+                if (det_ctx->pmq.sig_id_array_cnt > det_ctx->mpm_sigsmax)
+                    det_ctx->mpm_sigsmax = det_ctx->pmq.sig_id_array_cnt;
             }
+
+            SCLogDebug("post search: cnt %" PRIu32 ", searchable %" PRIu32 ", sigs %"PRIu32" (out of %"PRIu32")", cnt, det_ctx->pmq.searchable, det_ctx->pmq.sig_id_array_cnt, det_ctx->sgh->sig_cnt);
             det_ctx->pmq.searchable = 0;
         }
+    }
+
+    /* If we have the uricontent multi pattern matcher signatures in
+       signature list, then search the received HTTP uri(s) in the htp
+       state against those patterns */
+    if (det_ctx->sgh->flags & SIG_GROUP_HAVEURICONTENT && p->flow != NULL &&
+        alproto == ALPROTO_HTTP)
+    {
+        SCMutexLock(&p->flow->m);
+        cnt = DetectUricontentInspectMpm(th_v, det_ctx, alstate);
+        SCMutexUnlock(&p->flow->m);
+
+        /* only consider uri sigs if we've seen at least one match */
+        /** \warning when we start supporting negated uri content matches
+          * we need to update this check as well */
+        if (cnt > 0) {
+            det_ctx->de_have_httpuri = TRUE;
+        }
+
+        SCLogDebug("uricontent cnt %"PRIu32"", cnt);
+    } else {
+        SCLogDebug("no uri inspection: have uri %s", det_ctx->sgh->flags & SIG_GROUP_HAVEURICONTENT ? "true":"false");
     }
 
     /* inspect the sigs against the packet */
@@ -745,22 +612,21 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             continue;
         }
 
-        /* don't inspect app layer only sigs here */
-        if (!(s->flags & SIG_FLAG_PACKET)) {
-            SCLogDebug("sig id %"PRIu32" is app layer inspecting only", s->id);
-            continue;
-        }
-
         /* filter out sigs that want pattern matches, but
          * have no matches */
         if (!(det_ctx->pmq.sig_bitarray[(sig / 8)] & (1<<(sig % 8))) &&
-            (s->flags & SIG_FLAG_MPM) && !(s->flags & SIG_FLAG_MPM_NEGCONTENT)) {
+                (s->flags & SIG_FLAG_MPM) && !(s->flags & SIG_FLAG_MPM_NEGCONTENT)) {
             SCLogDebug("mpm sig without matches.");
             continue;
         }
 
-        //printf("idx %" PRIu32 ", det_ctx->pmq.sig_id_array_cnt %" PRIu32 ", s->id %" PRIu32 " (MPM? %s)\n", idx, det_ctx->pmq.sig_id_array_cnt, s->id, s->flags & SIG_FLAG_MPM ? "TRUE":"FALSE");
-        //printf("Sig %" PRIu32 "\n", s->id);
+        /* if the sig has alproto and the session as well they should match */
+        if (s->alproto != ALPROTO_UNKNOWN && alproto != ALPROTO_UNKNOWN) {
+            if (s->alproto != alproto) {
+                continue;
+            }
+        }
+
         /* check the source & dst port in the sig */
         if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP) {
             if (!(s->flags & SIG_FLAG_DP_ANY)) {
@@ -796,6 +662,19 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             }
         }
 
+        /* Check the payload keywords. If we are a MPM sig and we've made
+         * to here, we've had at least one of the patterns match */
+        if (s->pmatch != NULL) {
+            if (DetectEngineInspectPacketPayload(de_ctx, det_ctx, s, p->flow, flags, alstate, p) != 1)
+                continue;
+        }
+
+        /* Check the uricontent keywords here. */
+        if (s->umatch != NULL) {
+            if (DetectEngineInspectPacketUris(de_ctx, det_ctx, s, p->flow, flags, alstate, p) != 1)
+                continue;
+        }
+
         /* if we get here but have no sigmatches to match against,
          * we consider the sig matched. */
         if (s->match == NULL) {
@@ -803,14 +682,13 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
 
             fmatch = 1;
             if (!(s->flags & SIG_FLAG_NOALERT)) {
-                PacketAlertHandle(de_ctx,s,p);
+                PacketAlertHandle(de_ctx, det_ctx, s, p);
                 /* set verdict on packet */
-                p->action = s->action;
+                p->action |= s->action;
             }
         } else {
-            /* reset pkt ptr and offset */
-            det_ctx->pkt_ptr = NULL;
-            det_ctx->pkt_off = 0;
+            /* reset offset */
+            det_ctx->payload_offset = 0;
 
             /* new signature, so reset indicator of checking distance and within */
             det_ctx->de_checking_distancewithin = 0;
@@ -822,13 +700,18 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                 do {
                     sm = s->match;
                     while (sm) {
-                        if (sigmatch_table[sm->type].Match == NULL) {
-                            /* if no match function we assume this sm is a match */
-                            match = 1;
-                        } else {
+                        match = 0;
+
+                        /* app layer match has preference */
+                        if (sigmatch_table[sm->type].AppLayerMatch != NULL &&
+                                alproto == sigmatch_table[sm->type].alproto &&
+                                alstate != NULL) {
+                            match = sigmatch_table[sm->type].AppLayerMatch(th_v, det_ctx, p->flow, flags, alstate, s, sm);
+                        } else if (sigmatch_table[sm->type].Match != NULL) {
                             match = sigmatch_table[sm->type].Match(th_v, det_ctx, p, s, sm);
                         }
-                        if (match) {
+
+                        if (match > 0) {
                             /* okay, try the next match */
                             sm = sm->next;
 
@@ -837,9 +720,9 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                                 if (!(s->flags & SIG_FLAG_NOALERT)) {
                                     /* only add once */
                                     if (rmatch == 0) {
-                                        PacketAlertHandle(de_ctx,s,p);
+                                        PacketAlertHandle(de_ctx, det_ctx, s, p);
                                         /* set verdict on packet */
-                                        p->action = s->action;
+                                        p->action |= s->action;
                                     }
                                 }
                                 rmatch = fmatch = 1;
@@ -861,13 +744,19 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
 
                 SCLogDebug("running match functions, sm %p", sm);
                 while (sm) {
-                    /* if this sm has no Match function we assume it's a match */
-                    if (sigmatch_table[sm->type].Match == NULL) {
-                        match = 1;
-                    } else {
+                    match = 0;
+
+                    /* app layer match has preference */
+                    if (sigmatch_table[sm->type].AppLayerMatch != NULL &&
+                        alproto == sigmatch_table[sm->type].alproto &&
+                        alstate != NULL) {
+                        SCLogDebug("App layer match function has been invoked");
+                        match = sigmatch_table[sm->type].AppLayerMatch(th_v, det_ctx, p->flow, flags, alstate, s, sm);
+                    } else if (sigmatch_table[sm->type].Match != NULL) {
                         match = sigmatch_table[sm->type].Match(th_v, det_ctx, p, s, sm);
                     }
-                    if (match) {
+
+                    if (match > 0) {
                         /* okay, try the next match */
                         sm = sm->next;
 
@@ -875,18 +764,12 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                         if (sm == NULL) {
                             fmatch = 1;
                             if (!(s->flags & SIG_FLAG_NOALERT)) {
-                                SCLogDebug("sig matched, applayer flag set ? %s", s->flags & SIG_FLAG_APPLAYER ? "yes":"no");
 
                                 /* set flowbit for this match */
-                                if (s->flags & SIG_FLAG_APPLAYER) {
-                                    SCLogDebug("setting flowalertsid for sig %"PRIu32"", s->id);
-                                    FlowAlertSidSet(p->flow, s->id);
-                                } else {
-                                    PacketAlertHandle(de_ctx,s,p);
+                                PacketAlertHandle(de_ctx, det_ctx, s, p);
 
-                                    /* set verdict on packet */
-                                    p->action = s->action;
-                                }
+                                /* set verdict on packet */
+                                p->action |= s->action;
                             }
                         }
                     } else {
@@ -902,10 +785,11 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
     /* cleanup pkt specific part of the patternmatcher */
     PacketPatternCleanup(th_v, det_ctx);
 
-    SCLogDebug("Running Application Layer match functions, sm %p", sm);
-    match = SigMatchSignaturesAppLayer(th_v, de_ctx, det_ctx, det_ctx->sgh, p);
-    if (match > 0) {
-        fmatch = 1;
+end:
+    if (p->flow != NULL) {
+        SCMutexLock(&p->flow->m);
+        p->flow->use_cnt--;
+        SCMutexUnlock(&p->flow->m);
     }
 
     SCReturnInt(fmatch);
@@ -923,7 +807,7 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
  */
 TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
 
-    /*No need to perform any detection on this packet, if the the given flag is set.*/
+    /* No need to perform any detection on this packet, if the the given flag is set.*/
     if (p->flags & PKT_NOPACKET_INSPECTION)
         return 0;
 
@@ -977,6 +861,30 @@ void SigCleanSignatures(DetectEngineCtx *de_ctx)
     de_ctx->sig_list = NULL;
 }
 
+/** \brief Find a specific signature by sid and gid
+ *  \param de_ctx detection engine ctx
+ *  \param sid the signature id
+ *  \param gid the signature group id
+ *
+ *  \retval s sig found
+ *  \retval NULL sig not found
+ */
+Signature *SigFindSignatureBySidGid(DetectEngineCtx *de_ctx, uint32_t sid, uint32_t gid)
+{
+    Signature *s = NULL;
+
+    if (de_ctx == NULL)
+        return NULL;
+
+    for (s = de_ctx->sig_list; s != NULL; s = s->next) {
+        if (s->id == sid && s->gid == gid)
+            return s;
+    }
+
+    return NULL;
+}
+
+
 int SignatureIsAppLayer(DetectEngineCtx *de_ctx, Signature *s) {
     if (s->alproto != 0)
         return 1;
@@ -1009,6 +917,12 @@ int SignatureIsIPOnly(DetectEngineCtx *de_ctx, Signature *s) {
         }
     }
 
+    if (s->pmatch != NULL)
+        return 0;
+
+    if (s->umatch != NULL)
+        return 0;
+
     SigMatch *sm = s->match;
     if (sm == NULL)
         goto iponly;
@@ -1035,7 +949,11 @@ iponly:
  */
 static int SignatureIsInspectingPayload(DetectEngineCtx *de_ctx, Signature *s) {
 
-    SigMatch *sm = s->match;
+    if (s->pmatch != NULL) {
+        return 1;
+    }
+#if 0
+    SigMatch *sm = s->pmatch;
     if (sm == NULL)
         return 0;
 
@@ -1046,7 +964,7 @@ static int SignatureIsInspectingPayload(DetectEngineCtx *de_ctx, Signature *s) {
             return 1;
         }
     }
-
+#endif
     return 0;
 }
 
@@ -1076,7 +994,7 @@ int SigAddressPrepareStage1(DetectEngineCtx *de_ctx) {
 
     de_ctx->sig_array_len = DetectEngineGetMaxSigId(de_ctx);
     de_ctx->sig_array_size = (de_ctx->sig_array_len * sizeof(Signature *));
-    de_ctx->sig_array = (Signature **)malloc(de_ctx->sig_array_size);
+    de_ctx->sig_array = (Signature **)SCMalloc(de_ctx->sig_array_size);
     if (de_ctx->sig_array == NULL)
         goto error;
     memset(de_ctx->sig_array,0,de_ctx->sig_array_size);
@@ -1393,26 +1311,6 @@ static DetectAddress *GetHeadPtr(DetectAddressHead *head, int family) {
 
     return grhead;
 }
-
-#define MAX_UNIQ_TOCLIENT_SRC_GROUPS 2
-#define MAX_UNIQ_TOCLIENT_DST_GROUPS 2
-#define MAX_UNIQ_TOCLIENT_SP_GROUPS 2
-#define MAX_UNIQ_TOCLIENT_DP_GROUPS 3
-
-#define MAX_UNIQ_TOSERVER_SRC_GROUPS 2
-#define MAX_UNIQ_TOSERVER_DST_GROUPS 4
-#define MAX_UNIQ_TOSERVER_SP_GROUPS 2
-#define MAX_UNIQ_TOSERVER_DP_GROUPS 25
-
-#define MAX_UNIQ_SMALL_TOCLIENT_SRC_GROUPS 2
-#define MAX_UNIQ_SMALL_TOCLIENT_DST_GROUPS 2
-#define MAX_UNIQ_SMALL_TOCLIENT_SP_GROUPS 2
-#define MAX_UNIQ_SMALL_TOCLIENT_DP_GROUPS 2
-
-#define MAX_UNIQ_SMALL_TOSERVER_SRC_GROUPS 2
-#define MAX_UNIQ_SMALL_TOSERVER_DST_GROUPS 2
-#define MAX_UNIQ_SMALL_TOSERVER_SP_GROUPS 2
-#define MAX_UNIQ_SMALL_TOSERVER_DP_GROUPS 8
 
 //#define SMALL_MPM(c) 0
 #define SMALL_MPM(c) ((c) == 1)
@@ -1805,8 +1703,8 @@ int SigAddressPrepareStage2(DetectEngineCtx *de_ctx) {
     for (ds = 0; ds < DSIZE_STATES; ds++) {
         for (f = 0; f < FLOW_STATES; f++) {
             for (proto = 0; proto < 256; proto++) {
-                int groups = ds ? (f ? MAX_UNIQ_TOSERVER_SRC_GROUPS : MAX_UNIQ_TOCLIENT_SRC_GROUPS) :
-                                  (f ? MAX_UNIQ_SMALL_TOSERVER_SRC_GROUPS : MAX_UNIQ_SMALL_TOCLIENT_SRC_GROUPS);
+                int groups = ds ? (f ? de_ctx->max_uniq_toserver_src_groups : de_ctx->max_uniq_toclient_src_groups) :
+                                  (f ? de_ctx->max_uniq_small_toserver_src_groups : de_ctx->max_uniq_small_toclient_src_groups);
 
                 CreateGroupedAddrList(de_ctx,
                     de_ctx->dsize_gh[ds].flow_gh[f].tmp_gh[proto]->ipv4_head, AF_INET,
@@ -2003,8 +1901,8 @@ int BuildDestinationAddressHeads(DetectEngineCtx *de_ctx, DetectAddressHead *hea
 
         /* Create the destination address list, keeping in
          * mind the limits we use. */
-        int groups = dsize ? (flow ? MAX_UNIQ_TOSERVER_DST_GROUPS : MAX_UNIQ_TOCLIENT_DST_GROUPS) :
-                             (flow ? MAX_UNIQ_SMALL_TOSERVER_DST_GROUPS : MAX_UNIQ_SMALL_TOCLIENT_DST_GROUPS);
+        int groups = dsize ? (flow ? de_ctx->max_uniq_toserver_dst_groups : de_ctx->max_uniq_toclient_dst_groups) :
+                             (flow ? de_ctx->max_uniq_small_toserver_dst_groups : de_ctx->max_uniq_small_toclient_dst_groups);
         CreateGroupedAddrList(de_ctx, tmp_gr_list, family, gr->dst_gh, groups, CreateGroupedAddrListCmpMpmMaxlen, max_idx);
 
         /* see if the sig group head of each address group is the
@@ -2177,8 +2075,8 @@ static int BuildDestinationAddressHeadsWithBothPorts(DetectEngineCtx *de_ctx, De
 
         /* Create the destination address list, keeping in
          * mind the limits we use. */
-        int groups = dsize ? (flow ? MAX_UNIQ_TOSERVER_DST_GROUPS : MAX_UNIQ_TOCLIENT_DST_GROUPS) :
-                             (flow ? MAX_UNIQ_SMALL_TOSERVER_DST_GROUPS : MAX_UNIQ_SMALL_TOCLIENT_DST_GROUPS);
+        int groups = dsize ? (flow ? de_ctx->max_uniq_toserver_dst_groups : de_ctx->max_uniq_toclient_dst_groups) :
+                             (flow ? de_ctx->max_uniq_small_toserver_dst_groups : de_ctx->max_uniq_small_toclient_dst_groups);
         CreateGroupedAddrList(de_ctx, tmp_gr_list, family, src_gr->dst_gh, groups, CreateGroupedAddrListCmpMpmMaxlen, max_idx);
 
         /* add the ports to the dst address groups and the sigs
@@ -2228,8 +2126,8 @@ static int BuildDestinationAddressHeadsWithBothPorts(DetectEngineCtx *de_ctx, De
                     }
                 }
 
-                int spgroups = dsize ? (flow ? MAX_UNIQ_TOSERVER_SP_GROUPS : MAX_UNIQ_TOCLIENT_SP_GROUPS) :
-                                       (flow ? MAX_UNIQ_SMALL_TOSERVER_SP_GROUPS : MAX_UNIQ_SMALL_TOCLIENT_SP_GROUPS);
+                int spgroups = dsize ? (flow ? de_ctx->max_uniq_toserver_sp_groups : de_ctx->max_uniq_toclient_sp_groups) :
+                                       (flow ? de_ctx->max_uniq_small_toserver_sp_groups : de_ctx->max_uniq_small_toclient_sp_groups);
                 CreateGroupedPortList(de_ctx, de_ctx->sport_hash_table, &dst_gr->port, spgroups, CreateGroupedPortListCmpMpmMaxlen, max_idx);
 
                 SCLogDebug("adding sgh %p to the hash", dst_gr->sh);
@@ -2282,8 +2180,8 @@ static int BuildDestinationAddressHeadsWithBothPorts(DetectEngineCtx *de_ctx, De
                             }
                         }
 
-                        int dpgroups = dsize ? (flow ? MAX_UNIQ_TOSERVER_DP_GROUPS : MAX_UNIQ_TOCLIENT_DP_GROUPS) :
-                                               (flow ? MAX_UNIQ_SMALL_TOSERVER_DP_GROUPS : MAX_UNIQ_SMALL_TOCLIENT_DP_GROUPS);
+                        int dpgroups = dsize ? (flow ? de_ctx->max_uniq_toserver_dp_groups : de_ctx->max_uniq_toclient_dp_groups) :
+                                               (flow ? de_ctx->max_uniq_small_toserver_dp_groups : de_ctx->max_uniq_small_toclient_dp_groups);
                         CreateGroupedPortList(de_ctx, de_ctx->dport_hash_table,
                             &sp->dst_ph, dpgroups,
                             CreateGroupedPortListCmpMpmMaxlen, max_idx);
@@ -2325,7 +2223,8 @@ static int BuildDestinationAddressHeadsWithBothPorts(DetectEngineCtx *de_ctx, De
                                     } else {
                                         /* XXX write dedicated function for this */
                                         dp->sh->mpm_ctx = mpmsh->mpm_ctx;
-                                        dp->sh->mpm_content_maxlen = mpmsh->mpm_content_maxlen;
+                                        //SCLogDebug("replacing dp->sh, so setting mpm_content_maxlen to %u", mpmsh->mpm_content_maxlen);
+                                        //dp->sh->mpm_content_maxlen = mpmsh->mpm_content_maxlen;
                                         dp->sh->flags |= SIG_GROUP_HEAD_MPM_COPY;
                                         SigGroupHeadClearContent(dp->sh);
 
@@ -2561,6 +2460,8 @@ error:
 }
 
 int SigAddressCleanupStage1(DetectEngineCtx *de_ctx) {
+    BUG_ON(de_ctx == NULL);
+
     if (!(de_ctx->flags & DE_QUIET)) {
         SCLogInfo("cleaning up signature grouping structure...");
     }
@@ -2642,7 +2543,7 @@ void DbgSghContainsSig(DetectEngineCtx *de_ctx, SigGroupHead *sgh, uint32_t sid)
 int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
     DetectAddressHead *global_dst_gh = NULL;
     DetectAddress *global_src_gr = NULL, *global_dst_gr = NULL;
-    int i;
+    uint32_t u;
 
     printf("* Building signature grouping structure, stage 5: print...\n");
 
@@ -2688,8 +2589,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ", maxlen %" PRIu32 ")", dp->sh->sig_cnt, dp->sh->mpm_content_maxlen);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2719,8 +2620,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2762,8 +2663,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2793,8 +2694,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2836,8 +2737,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2867,8 +2768,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2898,8 +2799,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                                 printf(" (sigs %" PRIu32 ")", dp->sh->sig_cnt);
 #ifdef PRINTSIGS
                                 printf(" - ");
-                                for (i = 0; i < dp->sh->sig_cnt; i++) {
-                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[i]];
+                                for (u = 0; u < dp->sh->sig_cnt; u++) {
+                                    Signature *s = de_ctx->sig_array[dp->sh->match_array[u]];
                                     printf("%" PRIu32 " ", s->id);
                                 }
 #endif
@@ -2927,9 +2828,61 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
 int SigGroupBuild (DetectEngineCtx *de_ctx) {
     SigAddressPrepareStage1(de_ctx);
     SigAddressPrepareStage2(de_ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    unsigned int cuda_total = 0;
+    unsigned int cuda_free_before_alloc = 0;
+    /* we register a module that would require cuda handler service.  This
+     * module would hold the context for all the patterns in the rules */
+    de_ctx->cuda_rc_mod_handle = SCCudaHlRegisterModule("SC_RULES_CONTENT_B2G_CUDA");
+    if (de_ctx->mpm_matcher == MPM_B2G_CUDA) {
+        CUcontext dummy_context;
+        if (SCCudaHlGetCudaContext(&dummy_context,
+                                   de_ctx->cuda_rc_mod_handle) == -1) {
+            SCLogError(SC_ERR_B2G_CUDA_ERROR, "Error getting a cuda context for the "
+                       "module SC_RULES_CONTENT_B2G_CUDA");
+        }
+        if (SCCudaMemGetInfo(&cuda_free_before_alloc, &cuda_total) == 0) {
+            SCLogInfo("Total Memory available in the CUDA context used for mpm "
+                      "with b2g: %.2f MB", cuda_total/(1024.0 * 1024.0));
+            SCLogInfo("Free Memory available in the CUDA context used for b2g "
+                      "mpm before any allocation is made on the GPU for the "
+                      "context: %.2f MB", cuda_free_before_alloc/(1024.0 * 1024.0));
+        }
+    }
+
+#endif
+
     SigAddressPrepareStage3(de_ctx);
+
+#ifdef __SC_CUDA_SUPPORT__
+    unsigned int cuda_free_after_alloc = 0;
+    /* if a user has selected some other mpm algo other than b2g_cuda, inspite of
+     * enabling cuda support, then no cuda contexts or cuda vars would be created.
+     * Pop the cuda context, only on confirming that the MPM algo selected is the
+     * CUDA mpm algo */
+    if (de_ctx->mpm_matcher == MPM_B2G_CUDA) {
+        if (SCCudaMemGetInfo(&cuda_free_after_alloc, &cuda_total) == 0) {
+            SCLogInfo("Free Memory available in the CUDA context used for b2g mpm "
+                      "after allocation is made on the GPU for the context: %.2f MB",
+                      cuda_free_after_alloc/(1024.0 * 1024.0));
+            SCLogInfo("Total memory consumed by the CUDA context for the b2g mpm: "
+                      "%.2f MB", (cuda_free_before_alloc/(1024.0 * 1024.0)) -
+                      (cuda_free_after_alloc/(1024.0 * 1024.0)));
+        }
+        /* the AddressPrepareStage3 actually handles the creation of device
+         * pointers on the gpu.  The cuda context that stage3 used would still be
+         * attached to this host thread.  We need to pop this cuda context so that
+         * the dispatcher thread that we are going to create for the above module
+         * we registered can attach to this cuda context */
+        CUcontext context;
+        if (SCCudaCtxPopCurrent(&context) == -1)
+            exit(EXIT_FAILURE);
+    }
+#endif
+
 //    SigAddressPrepareStage5(de_ctx);
-    DbgPrintScanSearchStats();
+    DbgPrintSearchStats();
 //    DetectAddressPrintMemory();
 //    DetectSigGroupPrintMemory();
 //    DetectPortPrintMemory();
@@ -2990,6 +2943,7 @@ void SigTableSetup(void) {
     DetectIpOptsRegister();
     DetectFlagsRegister();
     DetectFragBitsRegister();
+    DetectFragOffsetRegister();
     DetectGidRegister();
     DetectCsumRegister();
     DetectStreamSizeRegister();
@@ -2997,13 +2951,17 @@ void SigTableSetup(void) {
     DetectFastPatternRegister();
     DetectITypeRegister();
     DetectICodeRegister();
-    DetectHttpCookieRegister();
     DetectIcmpIdRegister();
+    DetectIcmpSeqRegister();
     DetectDceIfaceRegister();
     DetectDceOpnumRegister();
     DetectDceStubDataRegister();
-
+    DetectHttpCookieRegister();
+    DetectHttpMethodRegister();
     DetectTlsVersionRegister();
+    DetectUrilenRegister();
+    DetectDetectionFilterRegister();
+    DetectHttpClientBodyRegister();
 
     uint8_t i = 0;
     for (i = 0; i < DETECT_TBLSIZE; i++) {
@@ -3030,8 +2988,12 @@ void SigTableRegisterTests(void) {
 
 #ifdef UNITTESTS
 #include "flow-util.h"
+#include "stream-tcp-reassemble.h"
 
 static const char *dummy_conf_string =
+    "%YAML 1.1\n"
+    "---\n"
+    "\n"
     "default-log-dir: /var/log/suricata\n"
     "\n"
     "logging:\n"
@@ -3103,58 +3065,31 @@ static int SigTest01Real (int mpm_type) {
                     "Host: two.example.org\r\n"
                     "\r\n\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
     int result = 0;
 
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
-
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
-    de_ctx->mpm_matcher = mpm_type;
-
-    de_ctx->flags |= DE_QUIET;
-
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP URI cap\"; content:\"GET \"; depth:4; pcre:\"/GET (?P<pkt_http_uri>.*) HTTP\\/\\d\\.\\d\\r\\n/G\"; recursive; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
+    char sig[] = "alert tcp any any -> any any (msg:\"HTTP URI cap\"; content:\"GET \"; depth:4; pcre:\"/GET (?P<pkt_http_uri>.*) HTTP\\/\\d\\.\\d\\r\\n/G\"; recursive; sid:1;)";
+    if (UTHPacketMatchSigMpm(p, sig, mpm_type) == 0) {
         result = 0;
         goto end;
     }
-
-    SigGroupBuild(de_ctx);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1) == 0) {
-        result = 0;
-        goto end;
-    }
-
+#if 0
     //printf("URI0 \"%s\", len %" PRIu32 "\n", p.http_uri.raw[0], p.http_uri.raw_size[0]);
     //printf("URI1 \"%s\", len %" PRIu32 "\n", p.http_uri.raw[1], p.http_uri.raw_size[1]);
 
-    if (p.http_uri.raw_size[0] == 5 &&
-        memcmp(p.http_uri.raw[0], "/one/", 5) == 0 &&
-        p.http_uri.raw_size[1] == 5 &&
-        memcmp(p.http_uri.raw[1], "/two/", 5) == 0)
+    if (p->http_uri.raw_size[0] == 5 &&
+        memcmp(p->http_uri.raw[0], "/one/", 5) == 0 &&
+        p->http_uri.raw_size[1] == 5 &&
+        memcmp(p->http_uri.raw[1], "/two/", 5) == 0)
     {
         result = 1;
     }
 
-    SigGroupCleanup(de_ctx);
-
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
+#endif
+    result = 1;
 end:
+    if (p != NULL)
+        UTHFreePacket(p);
     return result;
 }
 
@@ -3177,50 +3112,13 @@ static int SigTest02Real (int mpm_type) {
                     "Host: two.example.org\r\n"
                     "\r\n\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
-    int result = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
-
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
-
-    de_ctx->mpm_matcher = mpm_type;
-    de_ctx->flags |= DE_QUIET;
-
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; content:\"Host: one.example.org\"; offset:20; depth:41; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
-
-    SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx,mpm_type);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1))
-        result = 1;
-
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
-    DetectEngineCtxFree(de_ctx);
-end:
-    return result;
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    char sig[] = "alert tcp any any -> any any (msg:\"HTTP TEST\"; content:\"Host: one.example.org\"; offset:20; depth:41; sid:1;)";
+    int ret = UTHPacketMatchSigMpm(p, sig, mpm_type);
+    UTHFreePacket(p);
+    return ret;
 }
+
 static int SigTest02B2g (void) {
     return SigTest02Real(MPM_B2G);
 }
@@ -3372,7 +3270,7 @@ static int SigTest05Real (int mpm_type) {
     uint16_t buflen = strlen((char *)buf);
     Packet p;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
@@ -3393,17 +3291,19 @@ static int SigTest05Real (int mpm_type) {
 
     de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; content:\"Host:\"; offset:20; depth:25; content:\"Host:\"; distance:48; within:52; sid:1;)");
     if (de_ctx->sig_list == NULL) {
-        result = 0;
+        printf("sig parse failed: ");
         goto end;
     }
 
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (!PacketAlertCheck(&p, 1))
+    if (!PacketAlertCheck(&p, 1)) {
         result = 1;
+    } else {
+        printf("sig matched but shouldn't have: ");
+    }
 
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
@@ -3437,15 +3337,28 @@ static int SigTest06Real (int mpm_type) {
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3460,6 +3373,7 @@ static int SigTest06Real (int mpm_type) {
         result = 0;
         goto end;
     }
+
     de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP URI test\"; uricontent:\"two\"; sid:2;)");
     if (de_ctx->sig_list->next == NULL) {
         result = 0;
@@ -3469,6 +3383,13 @@ static int SigTest06Real (int mpm_type) {
     SigGroupBuild(de_ctx);
     //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
@@ -3482,9 +3403,10 @@ static int SigTest06Real (int mpm_type) {
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 static int SigTest06B2g (void) {
@@ -3509,16 +3431,29 @@ static int SigTest07Real (int mpm_type) {
     uint16_t buflen = strlen((char *)buf);
     Packet p;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3543,19 +3478,29 @@ static int SigTest07Real (int mpm_type) {
     //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx,(void *)&det_ctx);
 
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
         result = 0;
     else
         result = 1;
 
+end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    AppLayerParserCleanupState(&ssn);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
-end:
     return result;
 }
 static int SigTest07B2g (void) {
@@ -3581,15 +3526,30 @@ static int SigTest08Real (int mpm_type) {
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
+    memset(&f, 0, sizeof(Flow));
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&ssn, 0, sizeof(ssn));
+
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    //FlowInit(&f, &p);
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3614,14 +3574,22 @@ static int SigTest08Real (int mpm_type) {
     //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx,(void *)&det_ctx);
 
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
+    if ( (PacketAlertCheck(&p, 1) || FlowAlertSidIsset(&f, 1)) && PacketAlertCheck(&p, 2))
         result = 1;
     else
         printf("sid:1 %s, sid:2 %s: ",
             PacketAlertCheck(&p, 1) ? "OK" : "FAIL",
             PacketAlertCheck(&p, 2) ? "OK" : "FAIL");
 
+    AppLayerParserCleanupState(&ssn);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
@@ -3629,6 +3597,8 @@ static int SigTest08Real (int mpm_type) {
     //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 static int SigTest08B2g (void) {
@@ -3654,15 +3624,28 @@ static int SigTest09Real (int mpm_type) {
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3687,18 +3670,28 @@ static int SigTest09Real (int mpm_type) {
     //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx,(void *)&det_ctx);
 
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
-        result = 0;
-    else
         result = 1;
+    else
+        result = 0;
 
+    AppLayerParserCleanupState(&ssn);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 static int SigTest09B2g (void) {
@@ -3719,15 +3712,28 @@ static int SigTest10Real (int mpm_type) {
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3752,18 +3758,28 @@ static int SigTest10Real (int mpm_type) {
     //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx,(void *)&det_ctx);
 
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
         result = 0;
     else
         result = 1;
 
+    AppLayerParserCleanupState(&ssn);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 static int SigTest10B2g (void) {
@@ -3784,15 +3800,30 @@ static int SigTest11Real (int mpm_type) {
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    Flow f;
+    TcpSession ssn;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+    p.flow = &f;
+
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    ssn.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3802,14 +3833,12 @@ static int SigTest11Real (int mpm_type) {
     de_ctx->mpm_matcher = mpm_type;
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Scan vs Search (1)\"; content:\"ABCDEFGHIJ\"; content:\"klmnop\"; content:\"1234\"; sid:1;)");
+    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (content:\"ABCDEFGHIJ\"; content:\"klmnop\"; content:\"1234\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
-        result = 0;
         goto end;
     }
-    de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Scan vs Search (2)\"; content:\"VWXYZabcde\"; content:\"5678\"; content:\"89\"; sid:2;)");
+    de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any any (content:\"VWXYZabcde\"; content:\"5678\"; content:\"89\"; sid:2;)");
     if (de_ctx->sig_list->next == NULL) {
-        result = 0;
         goto end;
     }
 
@@ -3819,13 +3848,14 @@ static int SigTest11Real (int mpm_type) {
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) && PacketAlertCheck(&p, 2))
         result = 1;
-    else
-        result = 0;
 
+    AppLayerParserCleanupState(&ssn);
     SigGroupCleanup(de_ctx);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 static int SigTest11B2g (void) {
@@ -3850,6 +3880,9 @@ static int SigTest12Real (int mpm_type) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    Flow f;
+    memset(&f, 0, sizeof(Flow));
+    p.flow = &f;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
@@ -3880,12 +3913,14 @@ static int SigTest12Real (int mpm_type) {
     else
         result = 0;
 
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
-    DetectEngineCtxFree(de_ctx);
+    if (det_ctx != NULL)
+            DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
 end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
     return result;
 }
 static int SigTest12B2g (void) {
@@ -3910,6 +3945,9 @@ static int SigTest13Real (int mpm_type) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
+    Flow f;
+    memset(&f, 0, sizeof(Flow));
+    p.flow = &f;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
@@ -4160,7 +4198,7 @@ static int SigTest17Real (int mpm_type) {
     uint16_t buflen = strlen((char *)buf);
     Packet p;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
@@ -4203,16 +4241,19 @@ static int SigTest17Real (int mpm_type) {
             PrintRawUriFp(stdout, pv_hn->value, pv_hn->value_len);
             printf("\" != \"one.example.org\": ");
         }
+	PktVarFree(pv_hn);
     } else {
         printf("Pkt var http_host not captured: ");
     }
 
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+        if (det_ctx != NULL)
+            DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
     ConfDeInit();
     ConfRestoreContextBackup();
     return result;
@@ -5827,6 +5868,7 @@ int SigTest34ICMPV4Keyword(void)
 
     p1.icmpv4c.comp_csum = -1;
     p1.ip4h = (IPV4Hdr *)(valid_raw_ipv4);
+    p1.ip4h->ip_verhl = 69;
     p1.icmpv4h = (ICMPV4Hdr *) (valid_raw_ipv4 + IPV4_GET_RAW_HLEN(p1.ip4h) * 4);
     p1.src.family = AF_INET;
     p1.dst.family = AF_INET;
@@ -5836,6 +5878,7 @@ int SigTest34ICMPV4Keyword(void)
 
     p2.icmpv4c.comp_csum = -1;
     p2.ip4h = (IPV4Hdr *)(invalid_raw_ipv4);
+    p2.ip4h->ip_verhl = 69;
     p2.icmpv4h = (ICMPV4Hdr *) (invalid_raw_ipv4 + IPV4_GET_RAW_HLEN(p2.ip4h) * 4);
     p2.src.family = AF_INET;
     p2.dst.family = AF_INET;
@@ -5935,6 +5978,7 @@ int SigTest35NegativeICMPV4Keyword(void)
 
     p1.icmpv4c.comp_csum = -1;
     p1.ip4h = (IPV4Hdr *)(valid_raw_ipv4);
+    p1.ip4h->ip_verhl = 69;
     p1.icmpv4h = (ICMPV4Hdr *) (valid_raw_ipv4 + IPV4_GET_RAW_HLEN(p1.ip4h) * 4);
     p1.src.family = AF_INET;
     p1.dst.family = AF_INET;
@@ -5944,6 +5988,7 @@ int SigTest35NegativeICMPV4Keyword(void)
 
     p2.icmpv4c.comp_csum = -1;
     p2.ip4h = (IPV4Hdr *)(invalid_raw_ipv4);
+    p2.ip4h->ip_verhl = 69;
     p2.icmpv4h = (ICMPV4Hdr *) (invalid_raw_ipv4 + IPV4_GET_RAW_HLEN(p2.ip4h) * 4);
     p2.src.family = AF_INET;
     p2.dst.family = AF_INET;
@@ -6271,17 +6316,16 @@ int SigTest38Real(int mpm_type)
         0x00, 0x22, 0xaa, 0x10
     };
     uint8_t buf[] = {
-        0x00, 0x00, 0x00, 0x08, 0x62, 0x6f, 0x6f,
-        0x65, 0x65, 0x6b, 0x0d, 0x0a, 0x4c, 0x45,
-        0x4e, 0x31, 0x20, 0x38, 0x0d, 0x0a, 0x66,
-        0x6f, 0x6f, 0x62, 0x61, 0x72, 0x0d, 0x0a,
-        0x4c, 0x45, 0x4e, 0x32, 0x20, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x0d, 0x0a, 0x41, 0x41,
-        0x41, 0x41, 0x41, 0x41, 0x0d, 0x0a, 0x0d,
-        0x0a, 0x0d, 0x0a
+        0x00, 0x00, 0x00, 0x08, 0x62, 0x6f, 0x6f, 0x65,
+        0x65, 0x6b, 0x0d, 0x0a, 0x4c, 0x45, 0x4e, 0x31,
+        0x20, 0x38, 0x0d, 0x0a, 0x66, 0x6f, 0x30, 0x30, /* LEN1|20| ends at 17 */
+        0x30, 0x38, 0x0d, 0x0a, 0x4c, 0x45, 0x4e, 0x32, /* "0008" at offset 5 */
+        0x20, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
+        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
+        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
+        0x39, 0x39, 0x39, 0x0d, 0x0a, 0x41, 0x41, 0x41,
+        0x41, 0x41, 0x41, 0x0d, 0x0a, 0x0d, 0x0a, 0x0d,
+        0x0a
     };
     uint16_t ethlen = sizeof(raw_eth);
     uint16_t ipv4len = sizeof(raw_ipv4);
@@ -6302,7 +6346,6 @@ int SigTest38Real(int mpm_type)
     p1.ethh = (EthernetHdr *)raw_eth;
     p1.ip4h = (IPV4Hdr *)raw_ipv4;
     p1.tcph = (TCPHdr *)raw_tcp;
-    //p1.tcpvars.hlen = TCP_GET_HLEN((&p));
     p1.tcpvars.hlen = 0;
     p1.src.family = AF_INET;
     p1.dst.family = AF_INET;
@@ -6338,7 +6381,6 @@ int SigTest38Real(int mpm_type)
     }
 
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p1);
@@ -6362,7 +6404,6 @@ cleanup:
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 
 end:
@@ -6402,17 +6443,16 @@ int SigTest39Real(int mpm_type)
         0x00, 0x22, 0xaa, 0x10
     };
     uint8_t buf[] = {
-        0x00, 0x00, 0x00, 0x08, 0x62, 0x6f, 0x6f,
-        0x65, 0x65, 0x6b, 0x0d, 0x0a, 0x4c, 0x45,
-        0x4e, 0x31, 0x20, 0x38, 0x0d, 0x0a, 0x66,
-        0x6f, 0x6f, 0x62, 0x61, 0x72, 0x0d, 0x0a,
-        0x4c, 0x45, 0x4e, 0x32, 0x20, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
-        0x39, 0x39, 0x39, 0x0d, 0x0a, 0x41, 0x41,
-        0x41, 0x41, 0x41, 0x41, 0x0d, 0x0a, 0x0d,
-        0x0a, 0x0d, 0x0a
+        0x00, 0x00, 0x00, 0x08, 0x62, 0x6f, 0x6f, 0x65,
+        0x65, 0x6b, 0x0d, 0x0a, 0x4c, 0x45, 0x4e, 0x31,
+        0x20, 0x38, 0x0d, 0x0a, 0x66, 0x30, 0x30, 0x30,
+        0x38, 0x72, 0x0d, 0x0a, 0x4c, 0x45, 0x4e, 0x32,
+        0x20, 0x39, 0x39, 0x4c, 0x45, 0x4e, 0x32, 0x39,
+        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
+        0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39, 0x39,
+        0x39, 0x39, 0x39, 0x0d, 0x0a, 0x41, 0x41, 0x41,
+        0x41, 0x41, 0x41, 0x0d, 0x0a, 0x0d, 0x0a, 0x0d,
+        0x0a
     };
     uint16_t ethlen = sizeof(raw_eth);
     uint16_t ipv4len = sizeof(raw_ipv4);
@@ -6433,7 +6473,6 @@ int SigTest39Real(int mpm_type)
     p1.ethh = (EthernetHdr *)raw_eth;
     p1.ip4h = (IPV4Hdr *)raw_ipv4;
     p1.tcph = (TCPHdr *)raw_tcp;
-    //p1.tcpvars.hlen = TCP_GET_HLEN((&p));
     p1.tcpvars.hlen = 0;
     p1.src.family = AF_INET;
     p1.dst.family = AF_INET;
@@ -6474,7 +6513,6 @@ int SigTest39Real(int mpm_type)
     }
 
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p1);
@@ -6498,7 +6536,6 @@ cleanup:
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
 
 end:
@@ -6693,14 +6730,28 @@ int SigTest37ContentAndIsdataatKeywords02Real (int mpm_type) {
     de_ctx->mpm_matcher = mpm_type;
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"SigTest36ContentAndIsdataatKeywords01 \"; content:\"HTTP\"; isdataat:500, relative; sid:101;)");
+    Signature *s = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"SigTest37ContentAndIsdataatKeywords01 \"; content:\"HTTP\"; isdataat:500, relative; sid:101;)");
     if (de_ctx->sig_list == NULL) {
+        printf("sig parse failed: ");
         result = 0;
         goto end;
     }
 
+    if (s->pmatch->type != DETECT_CONTENT) {
+        printf("type not content: ");
+        goto end;
+    }
+/*
+    if (s->pmatch->next == NULL) {
+        printf("s->pmatch->next == NULL: ");
+        goto end;
+    }
+    if (s->pmatch->next->type != DETECT_ISDATAAT) {
+        printf("type not isdataat: ");
+        goto end;
+    }
+*/
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, mpm_type);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
@@ -6708,6 +6759,7 @@ int SigTest37ContentAndIsdataatKeywords02Real (int mpm_type) {
         result = 1;
         goto end;
     } else {
+        printf("sig matched, but should not have: ");
         result=0;
     }
 
@@ -6715,7 +6767,6 @@ int SigTest37ContentAndIsdataatKeywords02Real (int mpm_type) {
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    //PatternMatchDestroy(mpm_ctx);
     DetectEngineCtxFree(de_ctx);
     FlowShutdown();
 
@@ -6731,10 +6782,8 @@ end:
     if(det_ctx)
         DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
 
-    //PatternMatchDestroy(mpm_ctx);
-
     if(de_ctx)
-             DetectEngineCtxFree(de_ctx);
+        DetectEngineCtxFree(de_ctx);
 
     FlowShutdown();
 
@@ -6868,8 +6917,8 @@ int SigTest40NoPayloadInspection02(void) {
         goto end;
     }
 
-    sigmatch_table[DETECT_CONTENT].flags |= SIGMATCH_PAYLOAD;
-    de_ctx->sig_list->match->type = DETECT_CONTENT;
+//    sigmatch_table[DETECT_CONTENT].flags |= SIGMATCH_PAYLOAD;
+//    de_ctx->sig_list->pmatch->type = DETECT_CONTENT;
 
     SigGroupBuild(de_ctx);
     //PatternMatchPrepare(mpm_ctx,MPM_B2G);
@@ -6885,7 +6934,7 @@ int SigTest40NoPayloadInspection02(void) {
     else
         result &= 1;
 
-    if (det_ctx->pkts_scanned == 1)
+    if (det_ctx->pkts_searched == 1)
         result &= 0;
 
     SigGroupCleanup(de_ctx);
@@ -7070,6 +7119,10 @@ static int SigTestSgh01 (void) {
         printf("internal id != 0: ");
         goto end;
     }
+    if (de_ctx->sig_list->mpm_content_maxlen != 3) {
+        printf("de_ctx->sig_list->mpm_content_maxlen %u, expected 3: ", de_ctx->sig_list->mpm_content_maxlen);
+        goto end;
+    }
 
     de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any 81 (msg:\"2\"; content:\"two\"; content:\"abcd\"; sid:2;)");
     if (de_ctx->sig_list->next == NULL) {
@@ -7080,6 +7133,11 @@ static int SigTestSgh01 (void) {
         printf("internal id != 1: ");
         goto end;
     }
+    if (de_ctx->sig_list->next->mpm_content_maxlen != 4) {
+        printf("de_ctx->sig_list->mpm_content_maxlen %u, expected 4: ", de_ctx->sig_list->next->mpm_content_maxlen);
+        goto end;
+    }
+
     de_ctx->sig_list->next->next = SigInit(de_ctx,"alert tcp any any -> any 80 (msg:\"3\"; content:\"three\"; sid:3;)");
     if (de_ctx->sig_list->next->next == NULL) {
         result = 0;
@@ -7087,6 +7145,10 @@ static int SigTestSgh01 (void) {
     }
     if (de_ctx->sig_list->next->next->num != 2) {
         printf("internal id != 2: ");
+        goto end;
+    }
+    if (de_ctx->sig_list->next->next->mpm_content_maxlen != 5) {
+        printf("de_ctx->sig_list->next->next->mpm_content_maxlen %u, expected 5: ", de_ctx->sig_list->next->next->mpm_content_maxlen);
         goto end;
     }
 
@@ -7104,7 +7166,6 @@ static int SigTestSgh01 (void) {
     printf("sgh->mpm_uricontent_maxlen %u\n", sgh->mpm_uricontent_maxlen);
     printf("sgh->sig_cnt %u\n", sgh->sig_cnt);
     printf("sgh->sig_size %u\n", sgh->sig_size);
-    printf("sgh->refcnt %u\n", sgh->refcnt);
 #endif
     if (sgh->mpm_content_maxlen != 3) {
         printf("sgh->mpm_content_maxlen %u, expected 3: ", sgh->mpm_content_maxlen);
@@ -7127,26 +7188,41 @@ static int SigTestSgh01 (void) {
 
     p.dp = 81;
 
-    sgh = SigMatchSignaturesGetSgh(&th_v, de_ctx, det_ctx, &p);
-    if (sgh == NULL) {
-        printf("no sgh: ");
+    SigGroupHead *sgh2 = SigMatchSignaturesGetSgh(&th_v, de_ctx, det_ctx, &p);
+    if (sgh2 == NULL) {
+        printf("no sgh2: ");
         goto end;
     }
 #if 0
-    printf("-\n");
-    printf("sgh->mpm_content_maxlen %u\n", sgh->mpm_content_maxlen);
-    printf("sgh->mpm_uricontent_maxlen %u\n", sgh->mpm_uricontent_maxlen);
-    printf("sgh->sig_cnt %u\n", sgh->sig_cnt);
-    printf("sgh->sig_size %u\n", sgh->sig_size);
-    printf("sgh->refcnt %u\n", sgh->refcnt);
+    if (!(SigGroupHeadContainsSigId(de_ctx, sgh2, 1))) {
+        printf("sgh2 doesn't have sid 1: ");
+        goto end;
+    }
 #endif
-    if (sgh->mpm_content_maxlen != 4) {
-        printf("sgh->mpm_content_maxlen %u, expected 4: ", sgh->mpm_content_maxlen);
+    if (sgh2->sig_cnt != 1) {
+        printf("expected one sig, got %u in sgh2: ", sgh2->sig_cnt);
         goto end;
     }
 
-    if (sgh->match_array[0] != 1) {
-        printf("sgh doesn't contain sid 2, should have: ");
+    if (sgh2->match_array[0] != 1) {
+        printf("sgh doesn't contain sid 2, should have (sgh2->match_array[0] %u, expected 0): ", sgh2->match_array[0]);
+        goto end;
+    }
+
+#if 0
+    printf("-\n");
+    printf("sgh2->mpm_content_maxlen %u\n", sgh2->mpm_content_maxlen);
+    printf("sgh2->mpm_uricontent_maxlen %u\n", sgh2->mpm_uricontent_maxlen);
+    printf("sgh2->sig_cnt %u\n", sgh2->sig_cnt);
+    printf("sgh2->sig_size %u\n", sgh2->sig_size);
+#endif
+    if (sgh2->mpm_content_maxlen != 4) {
+        printf("sgh2->mpm_content_maxlen %u, expected 4: ", sgh2->mpm_content_maxlen);
+        goto end;
+    }
+
+    if (sgh2->match_array[0] != 1) {
+        printf("sgh2 doesn't contain sid 2, should have: ");
         goto end;
     }
 
@@ -8001,12 +8077,13 @@ static int SigTestContent04Wm (void) {
     return SigTestContent04Real(MPM_WUMANBER);
 }
 
+/** \test sigs with patterns at the limit of the pm's size limit */
 static int SigTestContent05Real (int mpm_type) {
-    uint8_t *buf = (uint8_t *)"01234567890123456789012345678901abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    uint8_t *buf = (uint8_t *)"01234567890123456789012345678901PADabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
     uint16_t buflen = strlen((char *)buf);
     Packet p;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
@@ -8019,18 +8096,21 @@ static int SigTestContent05Real (int mpm_type) {
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
+        printf("de_ctx == NULL: ");
         goto end;
     }
 
     de_ctx->mpm_matcher = mpm_type;
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Test 32\"; content:\"01234567890123456789012345678901\"; content:\"abcdefghijklmnopqrstuvwxyzABCDEF\"; distance:0; within:31; sid:1;)");
+    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Test 32\"; content:\"01234567890123456789012345678901\"; content:\"abcdefghijklmnopqrstuvwxyzABCDEF\"; distance:0; within:32; sid:1;)");
     if (de_ctx->sig_list == NULL) {
+        printf("sig1 parse failed: ");
         goto end;
     }
-    de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Test 32\"; content:\"01234567890123456789012345678901\"; content:\"abcdefghijklmnopqrstuvwxyzABCDEF\"; distance:1; within:33; sid:2;)");
+    de_ctx->sig_list->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Test 32\"; content:\"01234567890123456789012345678901\"; content:\"abcdefghijklmnopqrstuvwxyzABCDEF\"; distance:1; within:32; sid:2;)");
     if (de_ctx->sig_list->next == NULL) {
+        printf("sig2 parse failed: ");
         goto end;
     }
 
@@ -8054,8 +8134,12 @@ end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        DetectEngineCtxFree(de_ctx);
+    }
     return result;
 }
 static int SigTestContent05B2g (void) {
@@ -8396,6 +8480,62 @@ static int SigTestDepthOffset01Wm (void) {
     return SigTestDepthOffset01Real(MPM_WUMANBER);
 }
 
+static int SigTestDetectAlertCounter(void)
+{
+    Packet p;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    int result = 0;
+
+    memset(&tv, 0, sizeof(tv));
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any (msg:\"Test counter\"; "
+                               "content:\"boo\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    tv.name = "detect_test";
+    DetectEngineThreadCtxInit(&tv, de_ctx, (void *)&det_ctx);
+
+    memset(&p, 0, sizeof(p));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = (uint8_t *)"boo";
+    p.payload_len = strlen((char *)p.payload);
+    p.proto = IPPROTO_TCP;
+    Detect(&tv, &p, det_ctx, NULL);
+    result = (SCPerfGetLocalCounterValue(det_ctx->counter_alerts, tv.sc_perf_pca) == 1);
+
+    Detect(&tv, &p, det_ctx, NULL);
+    result &= (SCPerfGetLocalCounterValue(det_ctx->counter_alerts, tv.sc_perf_pca) == 2);
+
+    p.payload = (uint8_t *)"roo";
+    p.payload_len = strlen((char *)p.payload);
+    Detect(&tv, &p, det_ctx, NULL);
+    result &= (SCPerfGetLocalCounterValue(det_ctx->counter_alerts, tv.sc_perf_pca) == 2);
+
+    p.payload = (uint8_t *)"laboosa";
+    p.payload_len = strlen((char *)p.payload);
+    Detect(&tv, &p, det_ctx, NULL);
+    result &= (SCPerfGetLocalCounterValue(det_ctx->counter_alerts, tv.sc_perf_pca) == 3);
+
+end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+
+    DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
 
 #endif /* UNITTESTS */
 
@@ -8444,9 +8584,9 @@ void SigRegisterTests(void) {
     UtRegisterTest("SigTest10B3g -- long content match, longer than pkt", SigTest10B3g, 1);
     UtRegisterTest("SigTest10Wm -- long content match, longer than pkt", SigTest10Wm, 1);
 
-    UtRegisterTest("SigTest11B2g -- scan vs search", SigTest11B2g, 1);
-    UtRegisterTest("SigTest11B3g -- scan vs search", SigTest11B3g, 1);
-    UtRegisterTest("SigTest11Wm -- scan vs search", SigTest11Wm, 1);
+    UtRegisterTest("SigTest11B2g -- mpm searching", SigTest11B2g, 1);
+    UtRegisterTest("SigTest11B3g -- mpm searching", SigTest11B3g, 1);
+    UtRegisterTest("SigTest11Wm -- mpm searching", SigTest11Wm, 1);
 
     UtRegisterTest("SigTest12B2g -- content order matching, normal", SigTest12B2g, 1);
     UtRegisterTest("SigTest12B3g -- content order matching, normal", SigTest12B3g, 1);
@@ -8596,6 +8736,8 @@ void SigRegisterTests(void) {
     UtRegisterTest("SigTestDepthOffset01B2g", SigTestDepthOffset01B2g, 1);
     UtRegisterTest("SigTestDepthOffset01B3g", SigTestDepthOffset01B3g, 1);
     UtRegisterTest("SigTestDepthOffset01Wm", SigTestDepthOffset01Wm, 1);
+
+    UtRegisterTest("SigTestDetectAlertCounter", SigTestDetectAlertCounter, 1);
 
 #endif /* UNITTESTS */
 }

@@ -59,7 +59,7 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
         goto end;
 
     /* the + 2 is for the '.' and the string termination character '\0' */
-    conf_var_full_name = (char *)malloc(strlen(conf_var_type_name) +
+    conf_var_full_name = (char *)SCMalloc(strlen(conf_var_type_name) +
                                         strlen(conf_var_name) + 2);
     if (conf_var_full_name == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
@@ -83,7 +83,7 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
 
  end:
     if (conf_var_full_name != NULL)
-        free(conf_var_full_name);
+        SCFree(conf_var_full_name);
     SCReturnCharPtr(conf_var_full_name_value);
 }
 
@@ -91,6 +91,9 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
 /**********************************Unittests***********************************/
 
 static const char *dummy_conf_string =
+    "%YAML 1.1\n"
+    "---\n"
+    "\n"
     "default-log-dir: /var/log/suricata\n"
     "\n"
     "logging:\n"

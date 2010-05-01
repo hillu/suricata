@@ -41,7 +41,7 @@ inline int ByteExtractUint64(uint64_t *res, int e, uint16_t len, const uint8_t *
     int ret;
 
     /* Uint64 is limited to 8 bytes */
-    if ((len < 0) || (len > 8)) {
+    if (len > 8) {
         /** \todo Need standard return values */
         return -1;
     }
@@ -62,7 +62,7 @@ inline int ByteExtractUint32(uint32_t *res, int e, uint16_t len, const uint8_t *
     int ret;
 
     /* Uint32 is limited to 4 bytes */
-    if ((len < 0) || (len > 4)) {
+    if (len > 4) {
         /** \todo Need standard return values */
         return -1;
     }
@@ -83,7 +83,7 @@ inline int ByteExtractUint16(uint16_t *res, int e, uint16_t len, const uint8_t *
     int ret;
 
     /* Uint16 is limited to 2 bytes */
-    if ((len < 0) || (len > 2)) {
+    if (len > 2) {
         /** \todo Need standard return values */
         return -1;
     }
@@ -128,10 +128,10 @@ int ByteExtractString(uint64_t *res, int base, uint16_t len, const char *str)
     *res = strtoull(ptr, &endptr, base);
 
     if (errno == ERANGE) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range");
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range");
         return -1;
     } else if (endptr == str) {
-        SCLogError(SC_INVALID_NUMERIC_VALUE, "Invalid numeric value");
+        SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "Invalid numeric value");
         return -1;
     /* If there is no numeric value in the given string then strtoull(), makes
        endptr equals to ptr and return 0 as result */
@@ -170,7 +170,7 @@ inline int ByteExtractStringUint32(uint32_t *res, int base, uint16_t len, const 
     *res = (uint32_t)i64;
 
     if ((uint64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")", (uint64_t)(*res), i64);
         return -1;
     }
@@ -191,7 +191,7 @@ inline int ByteExtractStringUint16(uint16_t *res, int base, uint16_t len, const 
     *res = (uint16_t)i64;
 
     if ((uint64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")", (uint64_t)(*res), i64);
         return -1;
     }
@@ -212,7 +212,7 @@ inline int ByteExtractStringUint8(uint8_t *res, int base, uint16_t len, const ch
     *res = (uint8_t)i64;
 
     if ((uint64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")", (uint64_t)(*res), i64);
         return -1;
     }
@@ -250,10 +250,10 @@ int ByteExtractStringSigned(int64_t *res, int base, uint16_t len, const char *st
     *res = strtoll(ptr, &endptr, base);
 
     if (errno == ERANGE) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range");
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range");
         return -1;
     } else if (endptr == str) {
-        SCLogError(SC_INVALID_NUMERIC_VALUE, "Invalid numeric value");
+        SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "Invalid numeric value");
         return -1;
     }
     /* This will interfere with some rules that do not know the length
@@ -289,7 +289,7 @@ inline int ByteExtractStringInt32(int32_t *res, int base, uint16_t len, const ch
     *res = (int32_t)i64;
 
     if ((int64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")\n", (int64_t)(*res), i64);
         return -1;
     }
@@ -310,7 +310,7 @@ inline int ByteExtractStringInt16(int16_t *res, int base, uint16_t len, const ch
     *res = (int16_t)i64;
 
     if ((int64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")\n", (int64_t)(*res), i64);
         return -1;
     }
@@ -331,7 +331,7 @@ inline int ByteExtractStringInt8(int8_t *res, int base, uint16_t len, const char
     *res = (int8_t)i64;
 
     if ((int64_t)(*res) != i64) {
-        SCLogError(SC_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
+        SCLogError(SC_ERR_NUMERIC_VALUE_ERANGE, "Numeric value out of range "
                    "(%" PRIx64 " != %" PRIx64 ")\n", (int64_t)(*res), i64);
         return -1;
     }

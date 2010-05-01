@@ -18,13 +18,23 @@ enum {
 
 /* prototypes */
 int SigParse(DetectEngineCtx *,Signature *, char *, uint8_t);
-Signature *SigAlloc (void);
+Signature *SigAlloc(void);
 void SigFree(Signature *s);
 Signature *SigInit(DetectEngineCtx *,char *sigstr);
-SigMatch *SigMatchGetLastSM(Signature *, uint8_t);
+SigMatch *SigMatchGetLastSM(SigMatch *, uint8_t);
+
 void SigParsePrepare(void);
 void SigParseRegisterTests(void);
 Signature *DetectEngineAppendSig(DetectEngineCtx *, char *);
-void SigMatchReplace (Signature *, SigMatch *, SigMatch *);
+void SigMatchAppendUricontent(Signature *, SigMatch *);
+
+void SigMatchReplace(Signature *, SigMatch *, SigMatch *);
+void SigMatchReplaceContent(Signature *, SigMatch *, SigMatch *);
+
+void SigMatchAppendPayload(Signature *, SigMatch *);
+void SigMatchAppendPacket(Signature *, SigMatch *);
+/** for now we have one list for app layer and packet matches */
+#define SigMatchAppendAppLayer SigMatchAppendPacket
+
 #endif /* __DETECT_PARSE_H__ */
 

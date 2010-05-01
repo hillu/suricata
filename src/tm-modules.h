@@ -40,12 +40,19 @@ enum {
     TMM_ALERTUNIFIEDLOG,
     TMM_ALERTUNIFIEDALERT,
     TMM_ALERTUNIFIED2ALERT,
+    TMM_ALERTPRELUDE,
     TMM_ALERTDEBUGLOG,
     TMM_RESPONDREJECT,
     TMM_LOGHTTPLOG,
     TMM_LOGHTTPLOG4,
     TMM_LOGHTTPLOG6,
     TMM_STREAMTCP,
+    TMM_DECODEIPFW,
+    TMM_VERDICTIPFW,
+    TMM_RECEIVEIPFW,
+#ifdef __SC_CUDA_SUPPORT__
+    TMM_CUDA_MPM_B2G,
+#endif
     TMM_SIZE,
 };
 
@@ -58,12 +65,39 @@ typedef struct LogFileCtx_ {
      * record cannot be written to the file in one call */
     SCMutex fp_mutex;
 
-    /** To know where did we read this config */
-    char *config_file;
-
     /** The name of the file */
     char *filename;
+
+    /**< Used by some alert loggers like the unified ones that append
+     * the date onto the end of files. */
+    char *prefix;
+
+    /** Generic size_limit and size_current
+     * They must be common to the threads accesing the same file */
+    uint32_t size_limit;    /**< file size limit */
+    uint32_t size_current;  /**< file current size */
+
+    /* Alerts on the module (not on the file) */
+    uint64_t alerts;
+    /* flag to avoid multiple threads printing the same stats */
+    uint8_t flags;
 } LogFileCtx;
+
+/* flags for LogFileCtx */
+#define LOGFILE_HEADER_WRITTEN 0x01
+#define LOGFILE_ALERTS_PRINTED 0x02
+
+/**
+ * Structure that output modules use to maintain private data.
+ */
+typedef struct OutputCtx_ {
+
+    /** Pointer to data private to the output. */
+    void *data;
+
+    /** Pointer to a cleanup function. */
+    void (*DeInit)(struct OutputCtx_ *);
+} OutputCtx;
 
 LogFileCtx *LogFileNewCtx();
 int LogFileFreeCtx(LogFileCtx *);

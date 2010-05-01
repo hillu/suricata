@@ -55,7 +55,7 @@ static void SCSigRegisterSignatureOrderingFunc(DetectEngineCtx *de_ctx,
     if (curr != NULL)
         return;
 
-    if ( (temp = malloc(sizeof(SCSigOrderFunc))) == NULL) {
+    if ( (temp = SCMalloc(sizeof(SCSigOrderFunc))) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -296,8 +296,10 @@ static void SCSigOrderByAction(DetectEngineCtx *de_ctx,
     }
 
     /* set the min signature for this keyword, for the next ordering function */
+    if (sw == NULL)
+        return;
     min = sw;
-    while (min != sw->min) {
+    while (min != NULL && min != sw->min) {
         if (min->sig->action != sw->sig->action)
             break;
 
@@ -306,8 +308,10 @@ static void SCSigOrderByAction(DetectEngineCtx *de_ctx,
     sw->min = min;
 
     /* set the max signature for this keyword + 1, for the next ordering func */
+    if (sw == NULL)
+        return;
     max = sw;
-    while (max != sw->max) {
+    while (max != NULL && max != sw->max) {
         if (max->sig->action != sw->sig->action)
             break;
 
@@ -346,7 +350,7 @@ static void SCSigOrderByFlowbits(DetectEngineCtx *de_ctx,
     else
         min = min->next;
 
-    while (min != max) {
+    while (min != NULL && min != max) {
         prev = min;
         /* the sorting logic */
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_FLOWBITS])) <=
@@ -397,8 +401,10 @@ static void SCSigOrderByFlowbits(DetectEngineCtx *de_ctx,
     }
 
     /* set the min signature for this keyword, for the next ordering function */
+    if (sw == NULL)
+        return;
     min = sw;
-    while (min != sw->min) {
+    while (min != NULL && min != sw->min) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_FLOWBITS])) !=
              *((int *)(min->user[SC_RADIX_USER_DATA_FLOWBITS])) )
             break;
@@ -408,8 +414,10 @@ static void SCSigOrderByFlowbits(DetectEngineCtx *de_ctx,
     sw->min = min;
 
     /* set the max signature for this keyword + 1, for the next ordering func */
+    if (sw == NULL)
+        return;
     max = sw;
-    while (max != sw->max) {
+    while (max!= NULL && max != sw->max) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_FLOWBITS])) !=
              *((int *)(max->user[SC_RADIX_USER_DATA_FLOWBITS])) )
             break;
@@ -501,8 +509,10 @@ static void SCSigOrderByFlowvar(DetectEngineCtx *de_ctx,
     }
 
     /* set the min signature for this keyword, for the next ordering function */
+    if (sw == NULL)
+        return;
     min = sw;
-    while (min != sw->min) {
+    while (min != NULL && min != sw->min) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_FLOWVAR])) !=
              *((int *)(min->user[SC_RADIX_USER_DATA_FLOWVAR])) )
             break;
@@ -512,8 +522,10 @@ static void SCSigOrderByFlowvar(DetectEngineCtx *de_ctx,
     sw->min = min;
 
     /* set the max signature for this keyword + 1, for the next ordering func */
+    if (sw == NULL)
+        return;
     max = sw;
-    while (max != sw->max) {
+    while (max != NULL && max != sw->max) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_FLOWVAR])) !=
              *((int *)(max->user[SC_RADIX_USER_DATA_FLOWVAR])) )
             break;
@@ -552,7 +564,7 @@ static void SCSigOrderByPktvar(DetectEngineCtx *de_ctx,
         min = de_ctx->sc_sig_sig_wrapper;
     else
         min = min->next;
-    while (min != max) {
+    while (min != NULL && min != max) {
         prev = min;
         /* the sorting logic */
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_PKTVAR])) <=
@@ -603,8 +615,11 @@ static void SCSigOrderByPktvar(DetectEngineCtx *de_ctx,
     }
 
     /* set the min signature for this keyword, for the next ordering function */
+    if (sw == NULL)
+        return;
+
     min = sw;
-    while (min != sw->min) {
+    while (min != NULL && min != sw->min) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_PKTVAR])) !=
              *((int *)(min->user[SC_RADIX_USER_DATA_PKTVAR])) )
             break;
@@ -614,8 +629,10 @@ static void SCSigOrderByPktvar(DetectEngineCtx *de_ctx,
     sw->min = min;
 
     /* set the max signature for this keyword + 1, for the next ordering func */
+    if (sw == NULL)
+        return;
     max = sw;
-    while (max != sw->max) {
+    while (max != NULL && max != sw->max) {
         if ( *((int *)(sw->user[SC_RADIX_USER_DATA_PKTVAR])) !=
              *((int *)(max->user[SC_RADIX_USER_DATA_PKTVAR])) )
             break;
@@ -705,8 +722,11 @@ static void SCSigOrderByPriority(DetectEngineCtx *de_ctx,
     }
 
     /* set the min signature for this keyword, for the next ordering function */
+    if (sw == NULL)
+        return;
+
     min = sw;
-    while (min != sw->min) {
+    while (min != NULL && min != sw->min) {
         if (min->sig->prio != sw->sig->prio)
             break;
 
@@ -715,8 +735,11 @@ static void SCSigOrderByPriority(DetectEngineCtx *de_ctx,
     sw->min = min;
 
     /* set the max signature for this keyword + 1, for the next ordering func */
+    if (sw == NULL)
+        return;
+
     max = sw;
-    while (max != sw->max) {
+    while (max != NULL && max != sw->max) {
         if (max->sig->prio != sw->sig->prio)
             break;
 
@@ -739,7 +762,7 @@ static inline SCSigSignatureWrapper *SCSigAllocSignatureWrapper(Signature *sig)
     SCSigSignatureWrapper *sw = NULL;
     int i = 0;
 
-    if ( (sw = malloc(sizeof(SCSigSignatureWrapper))) == NULL) {
+    if ( (sw = SCMalloc(sizeof(SCSigSignatureWrapper))) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -747,14 +770,14 @@ static inline SCSigSignatureWrapper *SCSigAllocSignatureWrapper(Signature *sig)
 
     sw->sig = sig;
 
-    if ( (sw->user = malloc(SC_RADIX_USER_DATA_MAX * sizeof(int *))) == NULL) {
+    if ( (sw->user = SCMalloc(SC_RADIX_USER_DATA_MAX * sizeof(int *))) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
     memset(sw->user, 0, SC_RADIX_USER_DATA_MAX * sizeof(int *));
 
     for (i = 0; i < SC_RADIX_USER_DATA_MAX; i++) {
-        if ( (sw->user[i] = malloc(sizeof(int))) == NULL) {
+        if ( (sw->user[i] = SCMalloc(sizeof(int))) == NULL) {
             printf("Error allocating memory\n");
             exit(EXIT_FAILURE);
         }
@@ -871,7 +894,7 @@ void SCSigSignatureOrderingModuleCleanup(DetectEngineCtx *de_ctx)
     while (funcs != NULL) {
         temp = funcs;
         funcs = funcs->next;
-        free(temp);
+        SCFree(temp);
     }
     de_ctx->sc_sig_order_funcs = NULL;
 
@@ -880,7 +903,7 @@ void SCSigSignatureOrderingModuleCleanup(DetectEngineCtx *de_ctx)
     while (sigw != NULL) {
         temp = sigw;
         sigw = sigw->next;
-        free(temp);
+        SCFree(temp);
     }
     de_ctx->sc_sig_sig_wrapper = NULL;
 
@@ -1070,8 +1093,9 @@ static int SCSigTestSignatureOrdering02(void)
         sw = sw->next;
     }
 
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1207,8 +1231,9 @@ static int SCSigTestSignatureOrdering03(void)
         sw = sw->next;
     }
 
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1308,8 +1333,9 @@ static int SCSigTestSignatureOrdering04(void)
         sw = sw->next;
     }
 
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1402,8 +1428,9 @@ static int SCSigTestSignatureOrdering05(void)
         sw = sw->next;
     }
 
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1496,8 +1523,9 @@ static int SCSigTestSignatureOrdering06(void)
         sw = sw->next;
     }
 
-    DetectEngineCtxFree(de_ctx);
 end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 

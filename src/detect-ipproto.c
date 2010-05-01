@@ -5,8 +5,6 @@
  * \author Brian Rectanus <brectanu@gmail.com>
  */
 
-#include <netdb.h>
-
 #include "suricata-common.h"
 #include "debug.h"
 #include "decode.h"
@@ -23,6 +21,7 @@
 
 #include "util-byte.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 
 #include "util-debug.h"
 
@@ -37,8 +36,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectIPProtoSetup(DetectEngineCtx *de_ctx, Signature *s,
-                        SigMatch *m, char *optstr);
+static int DetectIPProtoSetup(DetectEngineCtx *, Signature *, char *);
 static DetectIPProtoData *DetectIPProtoParse(const char *optstr);
 static void DetectIPProtoRegisterTests(void);
 
@@ -56,14 +54,14 @@ void DetectIPProtoRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("DetectIPProtoRegister: pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("DetectIPProtoRegister: pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -95,25 +93,23 @@ static DetectIPProtoData *DetectIPProtoParse(const char *optstr)
     ret = pcre_exec(parse_regex, parse_regex_study, optstr,
                     strlen(optstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 3) {
-        printf("DetectIPProtoParse: parse error, ret %" PRId32
-               ", string %s\n", ret, optstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, optstr);
         goto error;
     }
     for (i = 0; i < (ret - 1); i++) {
         res = pcre_get_substring((char *)optstr, ov, MAX_SUBSTRINGS,
                                  i + 1, &str_ptr);
         if (res < 0) {
-            printf("DetectIPProtoParse: pcre_get_substring failed "
-                   "for arg %d\n", i + 1);
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
         args[i] = (char *)str_ptr;
     }
 
     /* Initialize the data */
-    data = malloc(sizeof(DetectIPProtoData));
+    data = SCMalloc(sizeof(DetectIPProtoData));
     if (data == NULL) {
-        printf("DetectIPProtoParse: malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto error;
     }
     data->op = DETECT_IPPROTO_OP_EQ;
@@ -128,28 +124,28 @@ static DetectIPProtoData *DetectIPProtoParse(const char *optstr)
     if (!isdigit(*(args[1]))) {
         struct protoent *pent = getprotobyname(args[1]);
         if (pent == NULL) {
-            printf("DetectIPProtoParse: Malformed protocol name: %s\n", str_ptr);
+            SCLogError(SC_ERR_INVALID_VALUE, "Malformed protocol name: %s", str_ptr);
             goto error;
         }
         data->proto = (uint8_t)pent->p_proto;
     }
     else {
         if (ByteExtractStringUint8(&data->proto, 10, 0, args[1]) <= 0) {
-            printf("DetectIPProtoParse: Malformed protocol number: %s\n", str_ptr);
+            SCLogError(SC_ERR_INVALID_VALUE, "Malformed protocol number: %s", str_ptr);
             goto error;
         }
     }
 
     for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
     return data;
 
 error:
     for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
-    if (data != NULL) free(data);
+    if (data != NULL) SCFree(data);
     return NULL;
 }
 
@@ -159,13 +155,11 @@ error:
  *
  * \param de_ctx Detection engine context
  * \param s Signature
- * \param m Signature match
  * \param optstr Options string
  *
  * \return Non-zero on error
  */
-static int DetectIPProtoSetup(DetectEngineCtx *de_ctx, Signature *s,
-                        SigMatch *m, char *optstr)
+static int DetectIPProtoSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
 {
     DetectIPProtoData *data = NULL;
     int ret = 0;
@@ -216,7 +210,7 @@ static int DetectIPProtoSetup(DetectEngineCtx *de_ctx, Signature *s,
     ret = 0;
 
 cleanup:
-    if (data != NULL) free(data);
+    if (data != NULL) SCFree(data);
 
     return ret;
 }
@@ -275,7 +269,7 @@ static int DetectIPProtoTestParse01(void) {
         result = 1;
     }
 
-    if (data) free(data);
+    if (data) SCFree(data);
 
     return result;
 }
@@ -291,7 +285,7 @@ static int DetectIPProtoTestParse02(void) {
         result = 1;
     }
 
-    if (data) free(data);
+    if (data) SCFree(data);
 
     return result;
 }
@@ -336,7 +330,7 @@ static int DetectIPProtoTestSetup01(void) {
     result = 1;
 
 cleanup:
-    if (data) free(data);
+    if (data) SCFree(data);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
@@ -378,7 +372,7 @@ static int DetectIPProtoTestSetup02(void) {
     result = 1;
 
 cleanup:
-    if (data) free(data);
+    if (data) SCFree(data);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
@@ -421,7 +415,7 @@ static int DetectIPProtoTestSetup03(void) {
     result = 1;
 
 cleanup:
-    if (data) free(data);
+    if (data) SCFree(data);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
@@ -468,7 +462,7 @@ static int DetectIPProtoTestSetup04(void) {
     result = 1;
 
 cleanup:
-    if (data) free(data);
+    if (data) SCFree(data);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
@@ -512,7 +506,7 @@ static int DetectIPProtoTestSetup05(void) {
     result = 1;
 
 cleanup:
-    if (data) free(data);
+    if (data) SCFree(data);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
@@ -521,83 +515,40 @@ end:
 }
 
 static int DetectIPProtoTestSig1(void) {
+    int result = 0;
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
-    Signature *s = NULL;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
-    int result = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
-
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
+    Packet *p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+    if (p == NULL)
         goto end;
-    }
 
-    //de_ctx->flags |= DE_QUIET;
+    char *sigs[4];
+    sigs[0] = "alert ip any any -> any any (msg:\"Not tcp\"; ip_proto:!tcp; content:\"GET \"; sid:1;)";
+    sigs[1] = "alert ip any any -> any any (msg:\"Less than 7\"; content:\"GET \"; ip_proto:<7; sid:2;)";
+    sigs[2] = "alert ip any any -> any any (msg:\"Greater than 5\"; content:\"GET \"; ip_proto:>5; sid:3;)";
+    sigs[3] = "alert ip any any -> any any (msg:\"Equals tcp\"; content:\"GET \"; ip_proto:tcp; sid:4;)";
 
-    s = de_ctx->sig_list = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Not tcp\"; ip_proto:!tcp; content:\"GET \"; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    /* sids to match */
+    uint32_t sid[4] = {1, 2, 3, 4};
+    /* expected matches for each sid within this packet we are testing */
+    uint32_t results[4] = {0, 1, 1, 1};
 
-    s = s->next = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Less than 7\"; content:\"GET \"; ip_proto:<7; sid:2;)");
-    if (s == NULL) {
-        goto end;
-    }
+    /* remember that UTHGenericTest expect the first parameter
+     * as an array of packet pointers. And also a bidimensional array of results
+     * For example:
+     * results[numpacket][position] should hold the number of times
+     * that the sid at sid[position] matched that packet (should be always 1..)
+     * But here we built it as unidimensional array
+     */
+    result = UTHGenericTest(&p, 1, sigs, sid, results, 4);
 
-    s = s->next = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Greater than 5\"; content:\"GET \"; ip_proto:>5; sid:3;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    s = s->next = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Equals tcp\"; content:\"GET \"; ip_proto:tcp; sid:4;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    SigGroupBuild(de_ctx);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1)) {
-        printf("sid 1 alerted, but should not have: ");
-        goto cleanup;
-    } else if (PacketAlertCheck(&p, 2) == 0) {
-        printf("sid 2 did not alert, but should have: ");
-        goto cleanup;
-    } else if (PacketAlertCheck(&p, 3) == 0) {
-        printf("sid 3 did not alert, but should have: ");
-        goto cleanup;
-    } else if (PacketAlertCheck(&p, 4) == 0) {
-        printf("sid 4 did not alert, but should have: ");
-        goto cleanup;
-    }
-
-    result = 1;
-
-cleanup:
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
-
+    UTHFreePacket(p);
+end:
     DetectSigGroupPrintMemory();
     DetectAddressPrintMemory();
-
-end:
     return result;
 }
 

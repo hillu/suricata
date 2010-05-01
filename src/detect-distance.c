@@ -1,15 +1,19 @@
 /* DISTANCE part of the detection engine. */
 
 #include "suricata-common.h"
+
 #include "decode.h"
+
 #include "detect.h"
-#include "flow-var.h"
+#include "detect-parse.h"
 #include "detect-content.h"
 #include "detect-uricontent.h"
-#include "detect-pcre.h"
+
+#include "flow-var.h"
+
 #include "util-debug.h"
 
-int DetectDistanceSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *distancestr);
+static int DetectDistanceSetup(DetectEngineCtx *, Signature *, char *);
 
 void DetectDistanceRegister (void) {
     sigmatch_table[DETECT_DISTANCE].name = "distance";
@@ -21,75 +25,102 @@ void DetectDistanceRegister (void) {
     sigmatch_table[DETECT_DISTANCE].flags |= SIGMATCH_PAYLOAD;
 }
 
-int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *distancestr)
+static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s, char *distancestr)
 {
     char *str = distancestr;
     char dubbed = 0;
 
-    //printf("DetectDistanceSetup: s->match:%p,m:%p,distancestr:\'%s\'\n", s->match, m, distancestr);
-
     /* strip "'s */
     if (distancestr[0] == '\"' && distancestr[strlen(distancestr)-1] == '\"') {
-        str = strdup(distancestr+1);
+        str = SCStrdup(distancestr+1);
         str[strlen(distancestr)-2] = '\0';
         dubbed = 1;
     }
 
-    SigMatch *pm = m;
-    if (pm == NULL) {
-        SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content options");
-        goto error;
-    }
-
     /** Search for the first previous DetectContent
      * SigMatch (it can be the same as this one) */
-    pm = DetectContentFindPrevApplicableSM(m);
-    if (pm == NULL || DetectContentHasPrevSMPattern(pm) == NULL) {
-        SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content options");
-        return -1;
-    }
-
-    DetectContentData *cd = (DetectContentData *)pm->ctx;
-    if (cd == NULL) {
-        printf("DetectDistanceSetup: Unknown previous keyword!\n");
-        return -1;
-    }
-
-    cd->distance = strtol(str, NULL, 10);
-    cd->flags |= DETECT_CONTENT_DISTANCE;
-
-    /** Propagate the modifiers through the first chunk
-     * (SigMatch) if we're dealing with chunks */
-    if (cd->flags & DETECT_CONTENT_IS_CHUNK)
-        DetectContentPropagateDistance(pm);
-
-    //DetectContentPrint(cd);
-    //printf("DetectDistanceSetup: set distance %" PRId32 " for previous content\n", cd->distance);
-
-    pm = DetectContentFindPrevApplicableSM(m->prev);
+    SigMatch *pm = SigMatchGetLastPattern(s);
     if (pm == NULL) {
-        SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content options");
-        goto error;
+        SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "depth needs two preceeding content (or uricontent) options");
+        if (dubbed) SCFree(str);
+        return -1;
     }
 
-    if (pm->type == DETECT_PCRE) {
-        DetectPcreData *pe = (DetectPcreData *)pm->ctx;
-        pe->flags |= DETECT_PCRE_DISTANCE_NEXT;
-    } else if (pm->type == DETECT_CONTENT) {
-        DetectContentData *cd = (DetectContentData *)pm->ctx;
-        cd->flags |= DETECT_CONTENT_DISTANCE_NEXT;
-    } else if (pm->type == DETECT_URICONTENT) {
-        DetectUricontentData *cd = (DetectUricontentData *)pm->ctx;
-        cd->flags |= DETECT_URICONTENT_DISTANCE_NEXT;
-    } else {
-        printf("DetectDistanceSetup: Unknown previous-previous keyword!\n");
-        goto error;
+    DetectUricontentData *ud = NULL;
+    DetectContentData *cd = NULL;
+
+    switch (pm->type) {
+        case DETECT_URICONTENT:
+            ud = (DetectUricontentData *)pm->ctx;
+            if (ud == NULL) {
+                SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "Unknown previous keyword!\n");
+                goto error;
+            }
+
+            ud->distance = strtol(str, NULL, 10);
+            ud->flags |= DETECT_URICONTENT_DISTANCE;
+            if (ud->flags & DETECT_URICONTENT_WITHIN) {
+                if (ud->distance + ud->uricontent_len > ud->within) {
+                    ud->within = ud->distance + ud->uricontent_len;
+                }
+            }
+
+            pm = DetectUricontentGetLastPattern(s->umatch_tail->prev);
+            if (pm == NULL) {
+                SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content options");
+                goto error;
+            }
+
+            if (pm->type == DETECT_URICONTENT) {
+                ud = (DetectUricontentData *)pm->ctx;
+                ud->flags |= DETECT_URICONTENT_RELATIVE_NEXT;
+            } else {
+                SCLogError(SC_ERR_RULE_KEYWORD_UNKNOWN, "Unknown previous-previous keyword!");
+                goto error;
+            }
+        break;
+
+        case DETECT_CONTENT:
+            cd = (DetectContentData *)pm->ctx;
+            if (cd == NULL) {
+                SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "Unknown previous keyword!\n");
+                goto error;
+            }
+
+            cd->distance = strtol(str, NULL, 10);
+            cd->flags |= DETECT_CONTENT_DISTANCE;
+            if (cd->flags & DETECT_CONTENT_WITHIN) {
+                if (cd->distance + cd->content_len > cd->within) {
+                    cd->within = cd->distance + cd->content_len;
+                }
+            }
+
+            pm = DetectContentGetLastPattern(s->pmatch_tail->prev);
+            if (pm == NULL) {
+                SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content options");
+                goto error;
+            }
+
+            if (pm->type == DETECT_CONTENT) {
+                cd = (DetectContentData *)pm->ctx;
+                cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+            } else {
+                SCLogError(SC_ERR_RULE_KEYWORD_UNKNOWN, "Unknown previous-previous keyword!");
+                goto error;
+            }
+        break;
+
+        default:
+            SCLogError(SC_ERR_DISTANCE_MISSING_CONTENT, "distance needs two preceeding content (or uricontent) options");
+            if (dubbed) SCFree(str);
+                return -1;
+        break;
     }
 
-    if (dubbed) free(str);
+    if (dubbed) SCFree(str);
     return 0;
 error:
-    if (dubbed) free(str);
+    if (dubbed) SCFree(str);
     return -1;
 }
 

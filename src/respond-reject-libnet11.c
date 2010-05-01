@@ -14,10 +14,7 @@
  * to be the default in flexresp and iptables
  */
 
-
 #include "suricata-common.h"
-
-#include <libnet.h>
 
 #include "decode.h"
 #include "decode-ipv4.h"
@@ -31,6 +28,11 @@
 #include "action-globals.h"
 #include "respond-reject.h"
 #include "respond-reject-libnet11.h"
+
+#ifdef HAVE_LIBNET11
+
+#include <libnet.h>
+
 
 typedef struct Libnet11Packet_
 {
@@ -61,7 +63,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
 
     if ((c = libnet_init (LIBNET_RAW4, NULL, ebuf)) == NULL)
     {
-        printf("RejectSendLibnet11IPv4TCP libnet_init %s\n", ebuf);
+        SCLogError(SC_ERR_LIBNET_INIT,"libnet_inint failed: %s", ebuf);
         return 1;
     }
 
@@ -72,7 +74,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
     lpacket.dsize = p->payload_len;
 
     if (dir == REJECT_DIR_SRC) {
-        printf ("sending a tcp reset to src\n");
+        SCLogDebug("sending a tcp reset to src");
         lpacket.seq = TCP_GET_ACK(p);
         lpacket.ack = TCP_GET_SEQ(p) + lpacket.dsize;
 
@@ -83,7 +85,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
         lpacket.dst4 = GET_IPV4_SRC_ADDR_U32(p);
     }
     else if (dir == REJECT_DIR_DST) {
-        printf ("sending a tcp reset to dst\n");
+        SCLogDebug("sending a tcp reset to dst");
         lpacket.seq = TCP_GET_SEQ(p);
         lpacket.ack = TCP_GET_ACK(p);
 
@@ -94,7 +96,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
         lpacket.dst4 = GET_IPV4_DST_ADDR_U32(p);
 
     } else {
-        printf ("reset not src or dst returning\n");
+        SCLogError(SC_ERR_LIBNET_INVALID_DIR,"reset not src or dst returning");
         return 1;
     }
 
@@ -109,7 +111,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
                     lpacket.sp,            /* source port */
                     lpacket.dp,            /* dst port */
                     lpacket.seq,           /* seq number */
-                    lpacket.ack,           /* ack number */
+                    lpacket.ack+1,           /* ack number */
                     TH_RST|TH_ACK,         /* flags */
                     lpacket.window,        /* window size */
                     0,                     /* checksum */
@@ -120,7 +122,7 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
                     c,                     /* libnet context */
                     0)) < 0)               /* libnet ptag */
     {
-        printf("RejectSendLibnet11IPv4TCP libnet_build_tcp %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_BUILD_FAILED,"libnet_build_tcp %s", libnet_geterror(c));
         goto cleanup;
     }
 
@@ -139,13 +141,13 @@ int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) 
                     c,                            /* libnet context pointer */
                     0)) < 0)                      /* packet id */
     {
-        printf("RejectSendLibnet11IPv4TCP libnet_build_ipv4 %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_BUILD_FAILED,"libnet_build_ipv4 %s", libnet_geterror(c));
         goto cleanup;
     }
 
     result = libnet_write(c);
     if (result == -1) {
-        printf("RejectSendLibnet11IPv4TCP libnet_write failed: %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_WRITE_FAILED,"libnet_write failed: %s", libnet_geterror(c));
         goto cleanup;
     }
 
@@ -169,7 +171,7 @@ int RejectSendLibnet11L3IPv4ICMP(ThreadVars *tv, Packet *p, void *data, int dir)
 
     lpacket.len = (IPV4_GET_HLEN(p) + p->payload_len);
     if ((c = libnet_init (LIBNET_RAW4, NULL, ebuf)) == NULL){
-        printf("RejectSendLibnet11L3IPv4ICMP libnet_init %s\n", ebuf);
+        SCLogError(SC_ERR_LIBNET_INIT,"libnet_inint failed: %s", ebuf);
         return 1;
     }
 
@@ -182,7 +184,7 @@ int RejectSendLibnet11L3IPv4ICMP(ThreadVars *tv, Packet *p, void *data, int dir)
         lpacket.dst4 = GET_IPV4_DST_ADDR_U32(p);
 
     } else {
-        printf ("reset not src or dst returning\n");
+        SCLogError(SC_ERR_LIBNET_INVALID_DIR,"reset not src or dst returning");
         return 1;
     }
 
@@ -199,7 +201,7 @@ int RejectSendLibnet11L3IPv4ICMP(ThreadVars *tv, Packet *p, void *data, int dir)
                     c,                        /* libnet context */
                     0)) < 0)                  /* libnet ptag */
     {
-        printf("RejectSendLibnet11L3IPv4ICMP libnet_build_icmpv4_unreach %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_BUILD_FAILED,"libnet_build_icmpv4_unreach %s", libnet_geterror(c));
         goto cleanup;
     }
 
@@ -219,13 +221,13 @@ int RejectSendLibnet11L3IPv4ICMP(ThreadVars *tv, Packet *p, void *data, int dir)
                     c,                              /* libnet context pointer */
                     0)) < 0)                        /* packet id */
     {
-        printf("RejectSendLibnet11L3IPv4ICMP %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_BUILD_FAILED,"libnet_build_ipv4 %s", libnet_geterror(c));
         goto cleanup;
     }
 
     result = libnet_write(c);
     if (result == -1) {
-        printf("RejectSendLibnet11L3IPv4ICMP libnet_write_raw_ipv4 failed: %s\n", libnet_geterror(c));
+        SCLogError(SC_ERR_LIBNET_WRITE_FAILED,"libnet_write_raw_ipv4 failed: %s", libnet_geterror(c));
         goto cleanup;
     }
 
@@ -234,3 +236,16 @@ cleanup:
     return 0;
 }
 
+#else
+
+int RejectSendLibnet11L3IPv4TCP(ThreadVars *tv, Packet *p, void *data, int dir) {
+	SCLogError(SC_ERR_LIBNET_NOT_ENABLED,"Libnet based rejects are disabled. Usually this means that you don't have libnet installed, or configure couldn't find it.");
+	return 0;
+}
+
+int RejectSendLibnet11L3IPv4ICMP(ThreadVars *tv, Packet *p, void *data, int dir) {
+    SCLogError(SC_ERR_LIBNET_NOT_ENABLED,"Libnet based rejects are disabled. Usually this means that you don't have libnet installed, or configure couldn't find it.");
+	return 0;
+}
+
+#endif /* HAVE_LIBNET11 */

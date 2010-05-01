@@ -15,6 +15,7 @@
 
 #include "util-cidr.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-rule-vars.h"
 
 #include "detect-parse.h"
@@ -56,7 +57,7 @@ void DetectPortRegister(void) {
  *             case of error.
  */
 DetectPort *DetectPortInit(void) {
-    DetectPort *dp = malloc(sizeof(DetectPort));
+    DetectPort *dp = SCMalloc(sizeof(DetectPort));
     if (dp == NULL) {
        // SCLogDebug(SC_ERR_MEM_ALLOC, "Error allocating memory");
         return NULL;
@@ -93,7 +94,7 @@ void DetectPortFree(DetectPort *dp) {
 
     detect_port_memory -= sizeof(DetectPort);
     detect_port_free_cnt++;
-    free(dp);
+    SCFree(dp);
 }
 
 /**
@@ -904,7 +905,7 @@ static int DetectPortParseInsertString(DetectPort **head, char *s) {
     /** parse the address */
     ad = PortParse(s);
     if (ad == NULL) {
-        SCLogError(SC_INVALID_ARGUMENT,"PortParse error \"%s\"",s);
+        SCLogError(SC_ERR_INVALID_ARGUMENT,"PortParse error \"%s\"",s);
         goto error;
     }
 
@@ -925,7 +926,7 @@ static int DetectPortParseInsertString(DetectPort **head, char *s) {
          */
         if (ad2 != NULL) {
             if (DetectPortParseInsert(head, ad2) < 0) {
-                if (ad2 != NULL) free(ad2);
+                if (ad2 != NULL) SCFree(ad2);
                 goto error;
             }
         }
@@ -950,7 +951,7 @@ static int DetectPortParseInsertString(DetectPort **head, char *s) {
     return 0;
 
 error:
-    SCLogError(SC_PORT_PARSE_INSERT_STRING_ERR,"DetectPortParseInsertString error");
+    SCLogError(SC_ERR_PORT_PARSE_INSERT_STRING,"DetectPortParseInsertString error");
     if (ad != NULL)
         DetectPortCleanupList(ad);
     if (ad_any != NULL)
@@ -982,7 +983,8 @@ error:
  */
 static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                              int negate) {
-    int i, x;
+    size_t u = 0;
+    size_t x = 0;
     int o_set = 0, n_set = 0, d_set = 0;
     int range = 0;
     int depth = 0;
@@ -990,41 +992,45 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
     char address[1024] = "";
     char *rule_var_port = NULL;
     char *temp_rule_var_port = NULL;
+    int r = 0;
 
     SCLogDebug("head %p, *head %p, negate %d", head, *head, negate);
 
-    for (i = 0, x = 0; i < size && x < sizeof(address); i++) {
-        address[x] = s[i];
+    for (u = 0, x = 0; u < size && x < sizeof(address); u++) {
+        address[x] = s[u];
         x++;
 
-        if (s[i] == ':')
+        if (s[u] == ':')
             range = 1;
 
-        if (range == 1 && s[i] == '!') {
-            SCLogError(SC_NEGATED_VALUE_IN_PORT_RANGE,"Can't have a negated value in a range.");
+        if (range == 1 && s[u] == '!') {
+            SCLogError(SC_ERR_NEGATED_VALUE_IN_PORT_RANGE,"Can't have a negated value in a range.");
             return -1;
-        } else if (!o_set && s[i] == '!') {
+        } else if (!o_set && s[u] == '!') {
             SCLogDebug("negation encountered");
             n_set = 1;
             x--;
-        } else if (s[i] == '[') {
+        } else if (s[u] == '[') {
             if (!o_set) {
                 o_set = 1;
                 x = 0;
             }
             depth++;
-        } else if (s[i] == ']') {
+        } else if (s[u] == ']') {
             if (depth == 1) {
                 address[x - 1] = '\0';
                 SCLogDebug("Parsed port from DetectPortParseDo - %s", address);
                 x = 0;
 
-                DetectPortParseDo(head, nhead, address, negate? negate: n_set);
+                r = DetectPortParseDo(head, nhead, address, negate? negate: n_set);
+                if (r == -1)
+                    goto error;
+
                 n_set = 0;
             }
             depth--;
             range = 0;
-        } else if (depth == 0 && s[i] == ',') {
+        } else if (depth == 0 && s[u] == ',') {
             if (o_set == 1) {
                 o_set = 0;
             } else if (d_set == 1) {
@@ -1036,7 +1042,7 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                     goto error;
                 temp_rule_var_port = rule_var_port;
                 if (negate == 1 || n_set == 1) {
-                    temp_rule_var_port = malloc(strlen(rule_var_port) + 3);
+                    temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
                     if (temp_rule_var_port == NULL) {
                         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
                         goto error;
@@ -1044,30 +1050,40 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                     snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
                              "[%s]", rule_var_port);
                 }
-                DetectPortParseDo(head, nhead, temp_rule_var_port,
+                r = DetectPortParseDo(head, nhead, temp_rule_var_port,
                                   (negate + n_set) % 2);//negate? negate: n_set);
+                if (r == -1)
+                    goto error;
+
                 d_set = 0;
                 n_set = 0;
                 if (temp_rule_var_port != rule_var_port)
-                    free(temp_rule_var_port);
+                    SCFree(temp_rule_var_port);
             } else {
                 address[x - 1] = '\0';
                 SCLogDebug("Parsed port from DetectPortParseDo - %s", address);
 
                 if (negate == 0 && n_set == 0) {
-                    DetectPortParseInsertString(head, address);
+                    r = DetectPortParseInsertString(head, address);
                 } else {
-                    DetectPortParseInsertString(nhead, address);
+                    r = DetectPortParseInsertString(nhead, address);
                 }
+                if (r == -1)
+                    goto error;
+
                 n_set = 0;
             }
             x = 0;
             range = 0;
-        } else if (depth == 0 && s[i] == '$') {
+        } else if (depth == 0 && s[u] == '$') {
             d_set = 1;
-        } else if (depth == 0 && i == size-1) {
+        } else if (depth == 0 && u == size-1) {
             range = 0;
-            address[x] = '\0';
+            if (x == 1024) {
+                address[x - 1] = '\0';
+            } else {
+                address[x] = '\0';
+            }
             SCLogDebug("%s", address);
             x = 0;
             if (d_set == 1) {
@@ -1077,7 +1093,7 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                     goto error;
                 temp_rule_var_port = rule_var_port;
                 if ((negate + n_set) % 2) {
-                    temp_rule_var_port = malloc(strlen(rule_var_port) + 3);
+                    temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
                     if (temp_rule_var_port == NULL) {
                         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
                         goto error;
@@ -1085,17 +1101,22 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                     snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
                             "[%s]", rule_var_port);
                 }
-                DetectPortParseDo(head, nhead, temp_rule_var_port,
+                r = DetectPortParseDo(head, nhead, temp_rule_var_port,
                                   (negate + n_set) % 2);
+                if (r == -1)
+                    goto error;
+
                 d_set = 0;
                 if (temp_rule_var_port != rule_var_port)
-                    free(temp_rule_var_port);
+                    SCFree(temp_rule_var_port);
             } else {
                 if (!((negate + n_set) % 2)) {
-                    DetectPortParseInsertString(head,address);
+                    r = DetectPortParseInsertString(head,address);
                 } else {
-                    DetectPortParseInsertString(nhead,address);
+                    r = DetectPortParseInsertString(nhead,address);
                 }
+                if (r == -1)
+                    goto error;
             }
             n_set = 0;
         }
@@ -1129,9 +1150,6 @@ int DetectPortIsCompletePortSpace(DetectPort *p) {
     p = p->next;
 
     for ( ; p != NULL; p = p->next) {
-        if (p == NULL)
-            return 0;
-
         if (p->port != next_port)
             return 0;
 
@@ -1160,7 +1178,7 @@ int DetectPortParseMergeNotPorts(DetectPort **head, DetectPort **nhead) {
 
     /** check if the full port space is negated */
     if (DetectPortIsCompletePortSpace(*nhead) == 1) {
-        SCLogError(SC_COMPLETE_PORT_SPACE_NEGATED,"Complete port space is negated");
+        SCLogError(SC_ERR_COMPLETE_PORT_SPACE_NEGATED,"Complete port space is negated");
         goto error;
     }
 
@@ -1229,7 +1247,7 @@ int DetectPortParseMergeNotPorts(DetectPort **head, DetectPort **nhead) {
     }
 
     if (*head == NULL) {
-        SCLogError(SC_NO_PORTS_LEFT_AFTER_MERGE,"no ports left after merging ports with negated ports");
+        SCLogError(SC_ERR_NO_PORTS_LEFT_AFTER_MERGE,"no ports left after merging ports with negated ports");
         goto error;
     }
 
@@ -1285,7 +1303,7 @@ error:
  * \retval NULL on error
  */
 DetectPort *PortParse(char *str) {
-    char *portdup = strdup(str);
+    char *portdup = SCStrdup(str);
     char *port2 = NULL;
     DetectPort *dp = NULL;
 
@@ -1338,14 +1356,14 @@ DetectPort *PortParse(char *str) {
         }
     }
 
-    free(portdup);
+    SCFree(portdup);
     return dp;
 
 error:
     if (dp != NULL)
         DetectPortCleanupList(dp);
 
-    if (portdup) free(portdup);
+    if (portdup) SCFree(portdup);
     return NULL;
 }
 
@@ -2141,56 +2159,10 @@ int PortTestMatchReal(uint8_t *raw_eth_pkt, uint16_t pktsize, char *sig,
                       uint32_t sid)
 {
     int result = 1;
-
-    Packet p;
-    DecodeThreadVars dtv;
-
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-
-    memset(&p, 0, sizeof(Packet));
-    memset(&dtv, 0, sizeof(DecodeThreadVars));
-    memset(&th_v, 0, sizeof(th_v));
-
     FlowInitConfig(FLOW_QUIET);
-    DecodeEthernet(&th_v, &dtv, &p, raw_eth_pkt, pktsize, NULL);
-
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        result=0;
-        goto end;
-    }
-
-    de_ctx->flags |= DE_QUIET;
-
-    de_ctx->sig_list = SigInit(de_ctx, sig);
-    de_ctx->sig_list->next = NULL;
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
-
-    SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, MPM_B2G);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, sid) != 1) {
-        result = 0;
-        goto end;
-    }
-
-end:
-    if (de_ctx != NULL)
-    {
-        //PatternMatchDestroy(mpm_ctx);
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-        DetectEngineCtxFree(de_ctx);
-    }
+    Packet *p = UTHBuildPacketFromEth(raw_eth_pkt, pktsize);
+    result = UTHPacketMatchSig(p, sig);
     FlowShutdown();
-
     return result;
 }
 
@@ -2270,8 +2242,7 @@ int PortTestMatchRealWrp(char *sig, uint32_t sid) {
 int PortTestMatchReal01()
 {
     /* tcp.sport=47370 tcp.dport=80 */
-    char *sig = "alert tcp any any -> any 80 (msg:\"Nothing..\";"
-                " content:\"GET\"; sid:1;)";
+    char *sig = "alert tcp any any -> any 80 (msg:\"Nothing..\"; content:\"GET\"; sid:1;)";
     return PortTestMatchRealWrp(sig, 1);
 }
 
@@ -2451,7 +2422,7 @@ int PortTestMatchReal18()
 int PortTestMatchReal19()
 {
     char *sig = "alert tcp any any -> any 80 (msg:\"Nothing..\";"
-                " sid:1;)";
+                " content:\"GET\"; sid:1;)";
     return PortTestMatchRealWrp(sig, 1);
 }
 

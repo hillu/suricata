@@ -31,7 +31,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectRpcSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+int DetectRpcSetup (DetectEngineCtx *, Signature *, char *);
 void DetectRpcRegisterTests(void);
 void DetectRpcFree(void *);
 
@@ -52,14 +52,14 @@ void DetectRpcRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        SCLogDebug("pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        SCLogDebug("pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -111,7 +111,7 @@ int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
     }
 
     /* Point through the rpc msg structure. Use ntohl() to compare values */
-    struct rpc_msg *msg = (struct rpc_msg *)rpcmsg;
+    RpcMsg *msg = (RpcMsg *)rpcmsg;
 
     /* If its not a call, no match */
     if (ntohl(msg->type) != 0) {
@@ -150,14 +150,14 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
 
     ret = pcre_exec(parse_regex, parse_regex_study, rpcstr, strlen(rpcstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1 || ret > 4) {
-        SCLogDebug("DetectRpcParse: parse error, ret %" PRId32 ", string %s", ret, rpcstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "parse error, ret %" PRId32 ", string %s", ret, rpcstr);
         goto error;
     }
     if (ret > 1) {
         const char *str_ptr;
         res = pcre_get_substring((char *)rpcstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
         if (res < 0) {
-            SCLogDebug("DetectRpcParse: pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
         args[0] = (char *)str_ptr;
@@ -165,7 +165,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
         if (ret > 2) {
             res = pcre_get_substring((char *)rpcstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
             if (res < 0) {
-                SCLogDebug("DetectRpcParse: pcre_get_substring failed");
+                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
                 goto error;
             }
             args[1] = (char *)str_ptr;
@@ -173,16 +173,16 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
         if (ret > 3) {
             res = pcre_get_substring((char *)rpcstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
             if (res < 0) {
-                SCLogDebug("DetectRpcParse: pcre_get_substring failed");
+                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
                 goto error;
             }
             args[2] = (char *)str_ptr;
         }
     }
 
-    rd = malloc(sizeof(DetectRpcData));
+    rd = SCMalloc(sizeof(DetectRpcData));
     if (rd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC ,"DetectRpcParse malloc failed");
+        SCLogError(SC_ERR_MEM_ALLOC ,"malloc failed");
         goto error;
     }
     rd->flags = 0;
@@ -196,7 +196,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
             switch (i) {
                 case 0:
                     if (ByteExtractStringUint32(&rd->program, 10, strlen(args[i]), args[i]) <= 0) {
-                        SCLogError(SC_INVALID_ARGUMENT, "Invalid size specified for the rpc program:\"%s\"", args[i]);
+                        SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid size specified for the rpc program:\"%s\"", args[i]);
                         goto error;
                     }
                     rd->flags |= DETECT_RPC_CHECK_PROGRAM;
@@ -204,7 +204,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                 case 1:
                     if (args[i][0] != '*') {
                         if (ByteExtractStringUint32(&rd->program_version, 10, strlen(args[i]), args[i]) <= 0) {
-                            SCLogError(SC_INVALID_ARGUMENT, "Invalid size specified for the rpc version:\"%s\"", args[i]);
+                            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid size specified for the rpc version:\"%s\"", args[i]);
                             goto error;
                         }
                         rd->flags |= DETECT_RPC_CHECK_VERSION;
@@ -213,7 +213,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                 case 2:
                     if (args[i][0] != '*') {
                         if (ByteExtractStringUint32(&rd->procedure, 10, strlen(args[i]), args[i]) <= 0) {
-                            SCLogError(SC_INVALID_ARGUMENT, "Invalid size specified for the rpc procedure:\"%s\"", args[i]);
+                            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid size specified for the rpc procedure:\"%s\"", args[i]);
                             goto error;
                         }
                         rd->flags |= DETECT_RPC_CHECK_PROCEDURE;
@@ -221,18 +221,18 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                 break;
                 }
             } else {
-                SCLogDebug("invalid rpc option %s",args[i]);
+                SCLogError(SC_ERR_INVALID_VALUE, "invalid rpc option %s",args[i]);
                 goto error;
             }
     }
     for (i = 0; i < (ret -1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
     return rd;
 
 error:
     for (i = 0; i < (ret -1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
     if (rd != NULL) DetectRpcFree(rd);
     return NULL;
@@ -250,7 +250,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rpcstr)
+int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, char *rpcstr)
 {
     DetectRpcData *rd = NULL;
     SigMatch *sm = NULL;
@@ -265,13 +265,13 @@ int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rp
     sm->type = DETECT_RPC;
     sm->ctx = (void *)rd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
     if (rd != NULL) DetectRpcFree(rd);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 
 }
@@ -282,8 +282,16 @@ error:
  * \param rd pointer to DetectRpcData
  */
 void DetectRpcFree(void *ptr) {
+    SCEnter();
+
+    if (ptr == NULL) {
+        SCReturn;
+    }
+
     DetectRpcData *rd = (DetectRpcData *)ptr;
-    free(rd);
+    SCFree(rd);
+
+    SCReturn;
 }
 
 #ifdef UNITTESTS
@@ -527,19 +535,19 @@ static int DetectRpcTestSig01(void) {
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) == 0) {
-        SCLogDebug("sid 1 didnt alert, but it should have.");
+        printf("sid 1 didnt alert, but it should have: ");
         goto cleanup;
     } else if (PacketAlertCheck(&p, 2) == 0) {
-        SCLogDebug("sid 2 didnt alert, but it should have.");
+        printf("sid 2 didnt alert, but it should have: ");
         goto cleanup;
     } else if (PacketAlertCheck(&p, 3) == 0) {
-        SCLogDebug("sid 3 didnt alert, but it should have.");
+        printf("sid 3 didnt alert, but it should have: ");
         goto cleanup;
     } else if (PacketAlertCheck(&p, 4) == 0) {
-        SCLogDebug("sid 4 didnt alert, but it should have.");
+        printf("sid 4 didnt alert, but it should have: ");
         goto cleanup;
     } else if (PacketAlertCheck(&p, 5) > 0) {
-        SCLogDebug("sid 5 did alert, but should not.");
+        printf("sid 5 did alert, but should not: ");
         goto cleanup;
     }
 

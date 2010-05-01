@@ -6,21 +6,12 @@
 #include "flow-hash.h"
 #include "flow-queue.h"
 
-/* per flow flags */
-#define FLOW_TO_SRC_SEEN            0x0001
-#define FLOW_TO_DST_SEEN            0x0002
-
-#define FLOW_NEW_LIST               0x0004
-#define FLOW_EST_LIST               0x0008
-#define FLOW_CLOSED_LIST            0x0010
-
-#define FLOW_TOSERVER_IPONLY_SET    0x0020
-#define FLOW_TOCLIENT_IPONLY_SET    0x0040
-
-#define FLOW_NOPACKET_INSPECTION    0x0080  /**< Flag to indicate the packet belongs to this flow should not be inspected*/
-#define FLOW_NOPAYLOAD_INSPECTION   0x0100  /**< Flag to indicate the contents or the packet which belongs to this flow should not be inspected*/
 
 /* global flow flags */
+
+/** Flow engine is in emergency mode. This means it doesn't have enough spare
+ *  flows for new flows and/or it's memcap limit it reached. In this state the
+ *  flow engine with evaluate flows with lower timeout settings. */
 #define FLOW_EMERGENCY   0x01
 
 /* Flow Time out values */

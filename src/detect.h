@@ -6,11 +6,15 @@
 #include "flow.h"
 
 #include "detect-engine-proto.h"
+#include "detect-reference.h"
 
 #include "packet-queue.h"
 #include "util-mpm.h"
 #include "util-hash.h"
 #include "util-hashlist.h"
+#include "util-debug.h"
+#include "util-error.h"
+#include "util-radix-tree.h"
 
 #include "detect-threshold.h"
 
@@ -21,46 +25,80 @@ struct SCSigOrderFunc_;
 struct SCSigSignatureWrapper_;
 
 /*
+
+  The detection engine groups similar signatures/rules together. Internally a
+  tree of different types of data is created on initialization. This is it's
+  global layout:
+
+   For TCP/UDP
+
+   Packet data size (dsize)
+   - Flow direction
+   -- Protocol
+   -=- Src address
+   -==- Dst address
+   -===- Src port
+   -====- Dst port
+
+   For the other protocols
+
+   Packet data size (dsize)
+   - Flow direction
+   -- Protocol
+   -=- Src address
+   -==- Dst address
+
+*/
+
+/*
  * DETECT ADDRESS
  */
 
 /* a is ... than b */
 enum {
-    ADDRESS_ER = -1, /* error e.g. compare ipv4 and ipv6 */
-    ADDRESS_LT,      /* smaller              [aaa] [bbb] */
-    ADDRESS_LE,      /* smaller with overlap [aa[bab]bb] */
-    ADDRESS_EQ,      /* exactly equal        [abababab]  */
-    ADDRESS_ES,      /* within               [bb[aaa]bb] and [[abab]bbb] and [bbb[abab]] */
-    ADDRESS_EB,      /* completely overlaps  [aa[bbb]aa] and [[baba]aaa] and [aaa[baba]] */
-    ADDRESS_GE,      /* bigger with overlap  [bb[aba]aa] */
-    ADDRESS_GT,      /* bigger               [bbb] [aaa] */
+    ADDRESS_ER = -1, /**< error e.g. compare ipv4 and ipv6 */
+    ADDRESS_LT,      /**< smaller              [aaa] [bbb] */
+    ADDRESS_LE,      /**< smaller with overlap [aa[bab]bb] */
+    ADDRESS_EQ,      /**< exactly equal        [abababab]  */
+    ADDRESS_ES,      /**< within               [bb[aaa]bb] and [[abab]bbb] and [bbb[abab]] */
+    ADDRESS_EB,      /**< completely overlaps  [aa[bbb]aa] and [[baba]aaa] and [aaa[baba]] */
+    ADDRESS_GE,      /**< bigger with overlap  [bb[aba]aa] */
+    ADDRESS_GT,      /**< bigger               [bbb] [aaa] */
 };
 
-#define ADDRESS_FLAG_ANY            0x01
-#define ADDRESS_FLAG_NOT            0x02
+#define ADDRESS_FLAG_ANY            0x01 /**< address is "any" */
+#define ADDRESS_FLAG_NOT            0x02 /**< address is negated */
 
-#define ADDRESS_SIGGROUPHEAD_COPY   0x04
-#define ADDRESS_PORTS_COPY          0x08
+#define ADDRESS_SIGGROUPHEAD_COPY   0x04 /**< sgh is a ptr to another sgh */
+#define ADDRESS_PORTS_COPY          0x08 /**< ports are a ptr to other ports */
 #define ADDRESS_PORTS_NOTUNIQ       0x10
-#define ADDRESS_HAVEPORT            0x20
+#define ADDRESS_HAVEPORT            0x20 /**< address has a ports ptr */
 
+/** \brief address structure for use in the detection engine.
+ *
+ *  Contains the address information and matching information.
+ */
 typedef struct DetectAddress_ {
-    /* address data for this group */
-    uint8_t family;
-    uint32_t ip[4];
-    uint32_t ip2[4];
+    /** address data for this group */
+    uint8_t family; /**< address family, AF_INET (IPv4) or AF_INET6 (IPv6) */
+    uint32_t ip[4]; /**< the address, or lower end of a range */
+    uint32_t ip2[4]; /**< higher end of a range */
 
-    /* XXX ptr to rules, or PortGroup or whatever */
+    /** ptr to the next address (dst addr in that case) or to the src port */
     union {
-        struct DetectAddressHead_ *dst_gh;
-        struct DetectPort_ *port;
+        struct DetectAddressHead_ *dst_gh; /**< destination address */
+        struct DetectPort_ *port; /**< source port */
     };
-    /* signatures that belong in this group */
+
+    /** signatures that belong in this group */
     struct SigGroupHead_ *sh;
+
+    /** flags affecting this address */
     uint8_t flags;
 
-    /* double linked list */
+    /** ptr to the previous address in the list */
     struct DetectAddress_ *prev;
+    /** ptr to the next address in the list */
     struct DetectAddress_ *next;
 
     uint32_t cnt;
@@ -139,11 +177,21 @@ typedef struct DetectPort_ {
 /* Detection Engine flags */
 #define DE_QUIET           0x01     /**< DE is quiet (esp for unittests) */
 
-typedef struct DetectEngineIPOnlyThreadCtx_ {
-    DetectAddress *src, *dst;
-    uint8_t *sig_match_array; /* bit array of sig nums */
-    uint32_t sig_match_size;  /* size in bytes of the array */
-} DetectEngineIPOnlyThreadCtx;
+typedef struct IPOnlyCIDRItem_ {
+    /* address data for this item */
+    uint8_t family;
+    uint32_t ip[4];
+    /* netmask in CIDR values (ex. /16 /18 /24..) */
+    uint8_t netmask;
+
+    /* If this host or net is negated for the signum */
+    uint8_t negated;
+    SigIntId signum; /**< our internal id */
+
+    /* linked list, the header should be the biggest network */
+    struct IPOnlyCIDRItem_ *next;
+
+} IPOnlyCIDRItem;
 
 /** \brief Signature container */
 typedef struct Signature_ {
@@ -158,16 +206,27 @@ typedef struct Signature_ {
     uint8_t nchunk_groups; /**< Internal chunk grp id (for splitted patterns) */
     char *msg;
 
-    /* classification message */
+    /** classification message */
     char *class_msg;
+
+    /** Reference */
+    Reference *references;
 
     /** addresses, ports and proto this sig matches on */
     DetectAddressHead src, dst;
     DetectProto proto;
     DetectPort *sp, *dp;
 
-    /** ptr to the SigMatch list */
-    struct SigMatch_ *match;
+    /** netblocks and hosts specified at the sid, in CIDR format */
+    IPOnlyCIDRItem *CidrSrc, *CidrDst;
+
+    /** ptr to the SigMatch lists */
+    struct SigMatch_ *match; /* non-payload matches */
+    struct SigMatch_ *match_tail; /* non-payload matches, tail of the list */
+    struct SigMatch_ *pmatch; /* payload matches */
+    struct SigMatch_ *pmatch_tail; /* payload matches, tail of the list */
+    struct SigMatch_ *umatch; /* uricontent payload matches */
+    struct SigMatch_ *umatch_tail; /* uricontent payload matches, tail of the list */
     /** ptr to the next sig in the list */
     struct Signature_ *next;
 
@@ -180,7 +239,15 @@ typedef struct Signature_ {
 
     /* app layer signature stuff */
     uint8_t alproto;
+
+    /** number of sigmatches in the match and pmatch list */
+    uint16_t sm_cnt;
 } Signature;
+
+typedef struct DetectEngineIPOnlyThreadCtx_ {
+    uint8_t *sig_match_array; /* bit array of sig nums */
+    uint32_t sig_match_size;  /* size in bytes of the array */
+} DetectEngineIPOnlyThreadCtx;
 
 /** \brief IP only rules matching ctx.
  *  \todo a radix tree would be great here */
@@ -188,6 +255,13 @@ typedef struct DetectEngineIPOnlyCtx_ {
     /* lookup hashes */
     HashListTable *ht16_src, *ht16_dst;
     HashListTable *ht24_src, *ht24_dst;
+
+    /* Lookup trees */
+    SCRadixTree *tree_ipv4src, *tree_ipv4dst;
+    SCRadixTree *tree_ipv6src, *tree_ipv6dst;
+
+    /* Used to build the radix trees */
+    IPOnlyCIDRItem *ip_src, *ip_dst;
 
     /* counters */
     uint32_t a_src_uniq16, a_src_total16;
@@ -292,18 +366,73 @@ typedef struct DetectEngineCtx_ {
     ThresholdCtx ths_ctx;
 
     uint16_t mpm_matcher; /**< mpm matcher this ctx uses */
+
+#ifdef __SC_CUDA_SUPPORT__
+    /* cuda rules content module handle.  Holds the handler serivice's
+     * (util-cuda-handler.c) handle for a module.  This module would
+     * hold the cuda context for all the rules content */
+    int cuda_rc_mod_handle;
+#endif
+
+    /* Config options */
+
+    uint16_t max_uniq_toclient_src_groups;
+    uint16_t max_uniq_toclient_dst_groups;
+    uint16_t max_uniq_toclient_sp_groups;
+    uint16_t max_uniq_toclient_dp_groups;
+
+    uint16_t max_uniq_toserver_src_groups;
+    uint16_t max_uniq_toserver_dst_groups;
+    uint16_t max_uniq_toserver_sp_groups;
+    uint16_t max_uniq_toserver_dp_groups;
+
+    uint16_t max_uniq_small_toclient_src_groups;
+    uint16_t max_uniq_small_toclient_dst_groups;
+    uint16_t max_uniq_small_toclient_sp_groups;
+    uint16_t max_uniq_small_toclient_dp_groups;
+
+    uint16_t max_uniq_small_toserver_src_groups;
+    uint16_t max_uniq_small_toserver_dst_groups;
+    uint16_t max_uniq_small_toserver_sp_groups;
+    uint16_t max_uniq_small_toserver_dp_groups;
+
+    HashTable *content_hash;
+    uint32_t content_hash_unique;
+    uint32_t content_hash_shared;
 } DetectEngineCtx;
+
+/* Engine groups profiles (low, medium, high, custom) */
+enum {
+    ENGINE_PROFILE_UNKNOWN,
+    ENGINE_PROFILE_LOW,
+    ENGINE_PROFILE_MEDIUM,
+    ENGINE_PROFILE_HIGH,
+    ENGINE_PROFILE_CUSTOM,
+    ENGINE_PROFILE_MAX
+};
 
 /**
   * Detection engine thread data.
   */
 typedef struct DetectionEngineThreadCtx_ {
+    /* the thread to which this detection engine thread belongs */
+    ThreadVars *tv;
+
     /* detection engine variables */
-    uint8_t *pkt_ptr; /* ptr to the current position in the pkt */
-    uint16_t pkt_off;
+
+    /** offset into the payload of the last match by:
+     *  content, pcre, etc */
+    uint32_t payload_offset;
+
+    /** offset into the uri payload of the last match by
+     *  uricontent */
+    uint32_t uricontent_payload_offset;
+
+    /** recursive counter */
     uint8_t pkt_cnt;
 
     char de_checking_distancewithin;
+    char de_checking_uricontent_distancewithin;
 
     /* http_uri stuff for uricontent */
     char de_have_httpuri;
@@ -318,27 +447,17 @@ typedef struct DetectionEngineThreadCtx_ {
 
     /* counters */
     uint32_t pkts;
-    uint32_t pkts_scanned;
     uint32_t pkts_searched;
-    uint32_t pkts_scanned1;
     uint32_t pkts_searched1;
-    uint32_t pkts_scanned2;
     uint32_t pkts_searched2;
-    uint32_t pkts_scanned3;
     uint32_t pkts_searched3;
-    uint32_t pkts_scanned4;
     uint32_t pkts_searched4;
 
     uint32_t uris;
-    uint32_t pkts_uri_scanned;
     uint32_t pkts_uri_searched;
-    uint32_t pkts_uri_scanned1;
     uint32_t pkts_uri_searched1;
-    uint32_t pkts_uri_scanned2;
     uint32_t pkts_uri_searched2;
-    uint32_t pkts_uri_scanned3;
     uint32_t pkts_uri_searched3;
-    uint32_t pkts_uri_scanned4;
     uint32_t pkts_uri_searched4;
 
     /** id for alert counter */
@@ -348,10 +467,24 @@ typedef struct DetectionEngineThreadCtx_ {
     DetectEngineIPOnlyThreadCtx io_ctx;
 
     DetectEngineCtx *de_ctx;
+
+#ifdef __SC_CUDA_SUPPORT__
+    /* each detection thread would have it's own queue where the cuda dispatcher
+     * thread can dump the packets once it has processed them */
+    Tmq *cuda_mpm_rc_disp_outq;
+#endif
+
+    uint64_t mpm_match;
+    uint64_t mpm_sigs;
+    uint64_t mpm_sigsmin25;
+    uint64_t mpm_sigsplus100;
+    uint64_t mpm_sigsplus1000;
+    uint64_t mpm_sigsmax;
 } DetectEngineThreadCtx;
 
 /** \brief a single match condition for a signature */
 typedef struct SigMatch_ {
+    uint16_t idx; /**< position in the signature */
     uint8_t type; /**< match type */
     void *ctx; /**< plugin specific data */
     struct SigMatch_ *next;
@@ -360,14 +493,17 @@ typedef struct SigMatch_ {
 
 /** \brief element in sigmatch type table. */
 typedef struct SigTableElmt_ {
-    /** Packet match function */
+    /** Packet match function pointer */
     int (*Match)(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-    /** AppLayer match function */
-    int (*AppLayerMatch)(ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t flags, void *alstate, Signature *, SigMatch *);
-    uint16_t alproto; /**< app layer proto from app-layer-protos.h this match
-                           applies to */
 
-    int (*Setup)(DetectEngineCtx *, Signature *, SigMatch *, char *);
+    /** AppLayer match function  pointer */
+    int (*AppLayerMatch)(ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t flags, void *alstate, Signature *, SigMatch *);
+    /** app layer proto from app-layer-protos.h this match applies to */
+    uint16_t alproto;
+
+    /** keyword setup function pointer */
+    int (*Setup)(DetectEngineCtx *, Signature *, char *);
+
     void (*Free)(void *);
     void (*RegisterTests)(void);
 
@@ -443,9 +579,10 @@ enum {
     DETECT_REFERENCE,
     DETECT_TAG,
     DETECT_MSG,
-    DETECT_CONTENT,    /* 8 */
-    DETECT_URICONTENT, /* 9 */
-    DETECT_PCRE,       /* 10 */
+    DETECT_CONTENT,
+    DETECT_URICONTENT,
+    DETECT_PCRE,
+    DETECT_PCRE_HTTPBODY,
     DETECT_ACK,
     DETECT_SEQ,
     DETECT_DEPTH,
@@ -485,6 +622,8 @@ enum {
     DETECT_ITYPE,
     DETECT_ICODE,
     DETECT_ICMP_ID,
+    DETECT_ICMP_SEQ,
+    DETECT_DETECTION_FILTER,
 
     DETECT_ADDRESS,
     DETECT_PROTO,
@@ -493,10 +632,15 @@ enum {
     DETECT_IPOPTS,
     DETECT_FLAGS,
     DETECT_FRAGBITS,
+    DETECT_FRAGOFFSET,
     DETECT_GID,
 
     DETECT_AL_TLS_VERSION,
     DETECT_AL_HTTP_COOKIE,
+    DETECT_AL_HTTP_METHOD,
+    DETECT_AL_URILEN,
+    DETECT_AL_HTTP_CLIENT_BODY,
+
     DETECT_DCE_IFACE,
     DETECT_DCE_OPNUM,
     DETECT_DCE_STUB_DATA,
@@ -510,7 +654,8 @@ SigTableElmt sigmatch_table[DETECT_TBLSIZE];
 
 /* detection api */
 SigMatch *SigMatchAlloc(void);
-void SigMatchAppend(Signature *, SigMatch *, SigMatch *);
+Signature *SigFindSignatureBySidGid(DetectEngineCtx *, uint32_t, uint32_t);
+void SigMatchFree(SigMatch *sm);
 void SigCleanSignatures(DetectEngineCtx *);
 
 void SigTableRegisterTests(void);
@@ -521,8 +666,7 @@ int SigGroupBuild(DetectEngineCtx *);
 int SigGroupCleanup();
 void SigAddressPrepareBidirectionals (DetectEngineCtx *);
 
-int PacketAlertAppend(Packet *, uint32_t, uint32_t, uint8_t, uint8_t, char *,
-                      char *);
+int PacketAlertAppend(DetectEngineThreadCtx *, Signature *s, Packet *);
 
 int SigLoadSignatures (DetectEngineCtx *, char *);
 void SigTableSetup(void);

@@ -31,6 +31,13 @@
 #include "decode-icmpv6.h"
 #include "decode-tcp.h"
 #include "decode-udp.h"
+#include "decode-raw.h"
+#include "decode-vlan.h"
+
+#include "detect-reference.h"
+
+/* forward declaration */
+struct DetectionEngineThreadCtx_;
 
 /* Address */
 typedef struct Address_
@@ -74,6 +81,16 @@ typedef struct Address_
     (a)->addr_data32[2] = 0; \
     (a)->addr_data32[3] = 0; \
 }
+
+/* clear the address structure by setting all fields to 0 */
+#define CLEAR_ADDR(a) { \
+    (a)->family = 0; \
+    (a)->addr_data32[0] = 0; \
+    (a)->addr_data32[1] = 0; \
+    (a)->addr_data32[2] = 0; \
+    (a)->addr_data32[3] = 0; \
+}
+
 /* Set the IPv6 addressesinto the Addrs of the Packet.
  * Make sure p->ip6h is initialized and validated. */
 #define SET_IPV6_SRC_ADDR(p,a) { \
@@ -130,6 +147,10 @@ typedef uint16_t Port;
 #define CMP_PORT(p1,p2) \
     ((p1 == p2))
 
+/*Given a packet pkt offset to the start of the ip header in a packet
+ *We determine the ip version. */
+#define IP_GET_RAW_VER(pkt) (((pkt[0] & 0xf0) >> 4))
+
 #define PKT_IS_IPV4(p)      (((p)->ip4h != NULL))
 #define PKT_IS_IPV6(p)      (((p)->ip6h != NULL))
 #define PKT_IS_TCP(p)       (((p)->tcph != NULL))
@@ -138,6 +159,8 @@ typedef uint16_t Port;
 #define PKT_IS_ICMPV6(p)    (((p)->icmpv6h != NULL))
 #define PKT_IS_TOSERVER(p)  (((p)->flowflags & FLOW_PKT_TOSERVER))
 #define PKT_IS_TOCLIENT(p)  (((p)->flowflags & FLOW_PKT_TOCLIENT))
+
+#define IPH_IS_VALID(p) (PKT_IS_IPV4((p)) || PKT_IS_IPV6((p)))
 
 /* structure to store the sids/gids/etc the detection engine
  * found in this packet */
@@ -149,6 +172,7 @@ typedef struct PacketAlert_ {
     uint8_t prio;
     char *msg;
     char *class_msg;
+    Reference *references;
 } PacketAlert;
 
 #define PACKET_ALERT_MAX 256
@@ -158,21 +182,6 @@ typedef struct PacketAlerts_ {
     PacketAlert alerts[PACKET_ALERT_MAX];
 } PacketAlerts;
 
-#define HTTP_URI_MAXCNT 8
-#define HTTP_URI_MAXLEN 1024
-
-typedef struct HttpUri_ {
-    /* the raw uri for the packet as set by pcre */
-    uint8_t *raw[HTTP_URI_MAXCNT];
-    uint16_t raw_size[HTTP_URI_MAXCNT];
-
-    /* normalized uri */
-    uint8_t norm[HTTP_URI_MAXCNT][HTTP_URI_MAXLEN];
-    uint16_t norm_size[HTTP_URI_MAXCNT];
-
-    uint8_t cnt;
-} HttpUri;
-
 typedef struct PktVar_ {
     char *name;
     struct PktVar_ *next; /* right now just implement this as a list,
@@ -181,6 +190,9 @@ typedef struct PktVar_ {
     uint8_t *value;
     uint16_t value_len;
 } PktVar;
+
+/* forward declartion since Packet struct definition requires this */
+struct PacketQueue_;
 
 typedef struct Packet_
 {
@@ -226,9 +238,9 @@ typedef struct Packet_
     /** data linktype in host order */
     int datalink;
 
-    /* storage */
-    uint8_t pkt[65536];
-    uint16_t pktlen;
+    /* storage: maximum ip packet size + link header */
+    uint8_t pkt[IPV6_HEADER_LEN + 65536 + 28];
+    uint32_t pktlen;
 
     /* flow */
     struct Flow_ *flow;
@@ -246,6 +258,7 @@ typedef struct Packet_
     PPPOESessionHdr *pppoesh;
     PPPOEDiscoveryHdr *pppoedh;
     GREHdr *greh;
+    VLANHdr *vlanh;
 
     IPV4Hdr *ip4h;
     IPV4Vars ip4vars;
@@ -280,12 +293,10 @@ typedef struct Packet_
     /* decoder events: review how many events we have */
     uint8_t events[65535 / 8];
 
-    HttpUri http_uri;
-
     PacketAlerts alerts;
 
     /* IPS action to take */
-    int action;
+    uint8_t action;
 
     /* double linked list ptrs */
     struct Packet_ *next;
@@ -298,6 +309,23 @@ typedef struct Packet_
                            * It should always point to the lowest
                            * packet in a encapsulated packet */
 
+    /* required for cuda support */
+#ifdef __SC_CUDA_SUPPORT__
+    PatternMatcherQueue *cuda_pmq;
+    MpmCtx *cuda_mpm_ctx;
+    MpmThreadCtx *cuda_mtc;
+
+    /* used to hold the match results.  We can instead use a void *result
+     * instead here.  That way we can make them hold any result. *todo* */
+    uint16_t cuda_matches;
+    /* indicates if the dispatcher should call the search or the scan phase
+     * of the pattern matcher.  We can instead use a void *cuda_data instead.
+     * This way we can send any data across to the dispatcher */
+    uint8_t cuda_search;
+    /* the dispatcher thread would pump the packet into this queue once it has
+     * processed the packet */
+    struct PacketQueue_ *cuda_outq;
+#endif
 } Packet;
 
 typedef struct PacketQueue_ {
@@ -324,27 +352,40 @@ typedef struct DecodeThreadVars_
     uint16_t counter_ipv6;
     uint16_t counter_eth;
     uint16_t counter_sll;
+    uint16_t counter_raw;
     uint16_t counter_tcp;
     uint16_t counter_udp;
     uint16_t counter_icmpv4;
     uint16_t counter_icmpv6;
     uint16_t counter_ppp;
     uint16_t counter_gre;
+    uint16_t counter_vlan;
     uint16_t counter_pppoe;
     uint16_t counter_avg_pkt_size;
     uint16_t counter_max_pkt_size;
+
+    /** frag stats - defrag runs in the context of the decoder. */
+    uint16_t counter_defrag_ipv4_fragments;
+    uint16_t counter_defrag_ipv4_reassembled;
+    uint16_t counter_defrag_ipv4_timeouts;
+    uint16_t counter_defrag_ipv6_fragments;
+    uint16_t counter_defrag_ipv6_reassembled;
+    uint16_t counter_defrag_ipv6_timeouts;
 } DecodeThreadVars;
 
 /* clear key vars so we don't need to call the expensive
  * memset or bzero
  */
 #define CLEAR_PACKET(p) { \
+    CLEAR_ADDR(&p->src); \
+    CLEAR_ADDR(&p->dst); \
     if ((p)->tcph != NULL) { \
         CLEAR_TCP_PACKET((p)); \
     } \
     (p)->ethh = NULL; \
     (p)->ppph = NULL; \
     (p)->greh = NULL; \
+    (p)->vlanh = NULL; \
     (p)->ip4h = NULL; \
     (p)->ip6h = NULL; \
     (p)->action = 0; \
@@ -361,12 +402,13 @@ typedef struct DecodeThreadVars_
     (p)->flowflags = 0; \
     (p)->flags = 0; \
     (p)->alerts.cnt = 0; \
-    PktHttpUriFree((p)); \
     if ((p)->pktvar != NULL) { \
         PktVarFree((p)->pktvar); \
     } \
     (p)->pktvar = NULL; \
     (p)->recursion_level = 0; \
+    (p)->ts.tv_sec = 0; \
+    (p)->ts.tv_usec = 0; \
 }
 
 /* reset these to -1(indicates that the packet is fresh from the queue) */
@@ -429,6 +471,7 @@ void DecodePPP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, 
 void DecodePPPOESession(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodePPPOEDiscovery(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeTunnel(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+void DecodeRaw(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeIPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeIPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeICMPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
@@ -436,6 +479,7 @@ void DecodeICMPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_
 void DecodeTCP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeUDP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+void DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 
 Packet *SetupPkt (void);
 Packet *TunnelPktSetup(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, uint8_t);
@@ -474,8 +518,9 @@ inline void DecodeSetNoPacketInspectionFlag(Packet *);
 #define LINKTYPE_ETHERNET   DLT_EN10MB
 #define LINKTYPE_LINUX_SLL  113
 #define LINKTYPE_PPP        9
-
+#define LINKTYPE_RAW        DLT_RAW
 #define PPP_OVER_GRE        11
+#define VLAN_OVER_GRE       13
 
 /*Packet Flags*/
 #define PKT_NOPACKET_INSPECTION         0x01    /**< Flag to indicate that packet header or contents should not be inspected*/

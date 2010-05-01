@@ -11,6 +11,7 @@
 
 #include "detect-content.h"
 #include "detect-uricontent.h"
+#include "detect-reference.h"
 
 #include "flow.h"
 
@@ -23,17 +24,16 @@
 
 #include "util-classification-config.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-debug.h"
 #include "string.h"
 #include "detect-parse.h"
+#include "detect-engine-iponly.h"
 
 static pcre *config_pcre = NULL;
 static pcre *option_pcre = NULL;
 static pcre_extra *config_pcre_extra = NULL;
 static pcre_extra *option_pcre_extra = NULL;
-
-/* XXX this should be part of the DE */
-//static uint32_t signum = 0;
 
 static uint32_t dbg_srcportany_cnt = 0;
 static uint32_t dbg_dstportany_cnt = 0;
@@ -63,7 +63,7 @@ uint32_t DbgGetDstPortAnyCnt(void) {
 }
 
 SigMatch *SigMatchAlloc(void) {
-    SigMatch *sm = malloc(sizeof(SigMatch));
+    SigMatch *sm = SCMalloc(sizeof(SigMatch));
     if (sm == NULL)
         return NULL;
 
@@ -86,7 +86,7 @@ void SigMatchFree(SigMatch *sm) {
             sigmatch_table[sm->type].Free(sm->ctx);
         }
     }
-    free(sm);
+    SCFree(sm);
 }
 
 /* Get the detection module by name */
@@ -106,21 +106,133 @@ SigTableElmt *SigTableGet(char *name) {
     return NULL;
 }
 
-/* Append 'new' SigMatch to the current Signature. If present
- * append it to Sigmatch 'm', otherwise place it in the root.
+/**
+ * \brief SigMatchAppendUricontent, append a SigMatch of type uricontent
+ *        to the Signature structure
+ * \param s pointer to the Signature
+ * \param new pointer to the SigMatch of type uricontent to be appended
  */
-void SigMatchAppend(Signature *s, SigMatch *m, SigMatch *new) {
-    //printf("s:%p,m:%p,new:%p\n", s,m,new);
-
-    if (m == NULL)
-        m = s->match;
-
-    if (s->match == NULL)
-        s->match = new;
-    else {
-        m->next = new;
-        new->prev = m;
+void SigMatchAppendUricontent(Signature *s, SigMatch *new) {
+    if (s->umatch == NULL) {
+        s->umatch = new;
+        s->umatch_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->umatch_tail;
+        cur->next = new;
+        new->prev = cur;
+        new->next = NULL;
+        s->umatch_tail = new;
     }
+
+    new->idx = s->sm_cnt;
+    s->sm_cnt++;
+}
+
+void SigMatchAppendPayload(Signature *s, SigMatch *new) {
+    if (s->pmatch == NULL) {
+        s->pmatch = new;
+        s->pmatch_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->pmatch_tail;
+        cur->next = new;
+        new->prev = cur;
+        new->next = NULL;
+        s->pmatch_tail = new;
+    }
+
+    new->idx = s->sm_cnt;
+    s->sm_cnt++;
+}
+
+/** \brief Append a sig match to the signatures non-payload match list
+ *
+ *  \param s signature
+ *  \param new sigmatch to append
+ */
+void SigMatchAppendPacket(Signature *s, SigMatch *new) {
+    if (s->match == NULL) {
+        s->match = new;
+        s->match_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->match;
+
+        for ( ; cur->next != NULL; cur = cur->next);
+
+        cur->next = new;
+        new->next = NULL;
+        new->prev = cur;
+        s->match_tail = new;
+    }
+
+    new->idx = s->sm_cnt;
+    s->sm_cnt++;
+}
+
+/** \brief Pull a content 'old' from the pmatch list, append 'new' to match list.
+  * Used for replacing contents that have http_cookie, etc modifiers.
+  */
+void SigMatchReplaceContent(Signature *s, SigMatch *old, SigMatch *new) {
+    BUG_ON(old == NULL);
+
+    SigMatch *m = s->pmatch;
+    SigMatch *pm = m;
+
+    for ( ; m != NULL; m = m->next) {
+        if (m == old) {
+            if (m == s->pmatch) {
+                s->pmatch = m->next;
+                if (m->next != NULL) {
+                    m->next->prev = NULL;
+                }
+            } else {
+                pm->next = m->next;
+                if (m->next != NULL) {
+                    m->next->prev = pm;
+                }
+            }
+
+            if (m == s->pmatch_tail) {
+                if (pm == m) {
+                    s->pmatch_tail = NULL;
+                } else {
+                    s->pmatch_tail = pm;
+                }
+            }
+
+            //printf("m %p  s->pmatch %p s->pmatch_tail %p\n", m, s->pmatch, s->pmatch_tail);
+            break;
+        }
+
+        pm = m;
+    }
+
+    /* finally append the "new" sig match to the app layer list */
+    /** \todo if the app layer gets it's own list, adapt this code */
+    if (s->match == NULL) {
+        s->match = new;
+        s->match_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->match;
+
+        for ( ; cur->next != NULL; cur = cur->next);
+
+        cur->next = new;
+        new->next = NULL;
+        new->prev = cur;
+        s->match_tail = new;
+    }
+
+    /* move over the idx */
+    if (pm != NULL)
+        new->idx = pm->idx;
 }
 
 /**
@@ -132,8 +244,6 @@ void SigMatchAppend(Signature *s, SigMatch *m, SigMatch *new) {
  * \param new   pointer to the new sigmatch, which will replace m
  */
 void SigMatchReplace(Signature *s, SigMatch *m, SigMatch *new) {
-
-
     if (s->match == NULL) {
         s->match = new;
         return;
@@ -155,30 +265,27 @@ void SigMatchReplace(Signature *s, SigMatch *m, SigMatch *new) {
             new->next = m->next;
         }
     }
-
 }
 
 /**
  * \brief Returns a pointer to the last SigMatch instance of a particular type
- *        in a Signature.
+ *        in a Signature of the payload list.
  *
- * \param s    Pointer to the Signature.
+ * \param s    Pointer to the tail of the sigmatch list
  * \param type SigMatch type which has to be searched for in the Signature.
  *
  * \retval match Pointer to the last SigMatch instance of type 'type'.
  */
-SigMatch *SigMatchGetLastSM(Signature *s, uint8_t type)
+SigMatch *SigMatchGetLastSM(SigMatch *sm, uint8_t type)
 {
-    SigMatch *sm = s->match;
-    SigMatch *match = NULL;
-
     while (sm != NULL) {
-        if (sm->type == type)
-            match = sm;
-        sm = sm->next;
+        if (sm->type == type) {
+            return sm;
+        }
+        sm = sm->prev;
     }
 
-    return match;
+    return NULL;
 }
 
 void SigParsePrepare(void) {
@@ -191,14 +298,14 @@ void SigParsePrepare(void) {
     config_pcre = pcre_compile(regexstr, opts, &eb, &eo, NULL);
     if(config_pcre == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", regexstr, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
         exit(1);
     }
 
     config_pcre_extra = pcre_study(config_pcre, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         exit(1);
     }
 
@@ -208,26 +315,26 @@ void SigParsePrepare(void) {
     option_pcre = pcre_compile(regexstr, opts, &eb, &eo, NULL);
     if(option_pcre == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", regexstr, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
         exit(1);
     }
 
     option_pcre_extra = pcre_study(option_pcre, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         exit(1);
     }
 }
 
-int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *optstr) {
+static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr) {
 #define MAX_SUBSTRINGS 30
     int ov[MAX_SUBSTRINGS];
     int ret = 0, i = 0;
     SigTableElmt *st = NULL;
     char *optname = NULL, *optvalue = NULL, *optmore = NULL;
 
-    const char **arr = calloc(OPTION_PARTS+1, sizeof(char *));
+    const char **arr = SCCalloc(OPTION_PARTS+1, sizeof(char *));
     if (arr == NULL)
         return -1;
 
@@ -238,7 +345,7 @@ int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *op
      *  4: keyword w value, more options coming
      */
     if (ret != 2 && ret != 3 && ret != 4) {
-        printf("pcre_exec failed: ret %" PRId32 ", optstr \"%s\"\n", ret, optstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec failed: ret %" PRId32 ", optstr \"%s\"", ret, optstr);
         goto error;
     }
 
@@ -252,7 +359,7 @@ int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *op
     /* Call option parsing */
     st = SigTableGet((char *)arr[0]);
     if (st == NULL) {
-        SCLogError(SC_RULE_KEYWORD_UNKNOWN, "unknown rule keyword '%s'.", (char *)arr[0]);
+        SCLogError(SC_ERR_RULE_KEYWORD_UNKNOWN, "unknown rule keyword '%s'.", (char *)arr[0]);
         goto error;
     }
 
@@ -270,46 +377,35 @@ int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *op
     }
 
     /* setup may or may not add a new SigMatch to the list */
-    if (st->Setup(de_ctx, s, m, optvalue) < 0) {
+    if (st->Setup(de_ctx, s, optvalue) < 0) {
         SCLogDebug("\"%s\" failed to setup", st->name);
         goto error;
     }
-
-    /* thats why we check for that here
-     * (it may install more than one SigMatch!) */
-    if (m != NULL && m->next != NULL)
-        while (m != NULL && m->next != NULL)
-            m = m->next;
-    else if (m == NULL && s->match != NULL)
-            m = s->match;
-
-    while (m != NULL && m->next != NULL)
-        m = m->next;
 
     if (ret == 4 && optmore != NULL) {
         //printf("SigParseOptions: recursive call for more options... (s:%p,m:%p)\n", s, m);
 
         if (optname) pcre_free_substring(optname);
         if (optvalue) pcre_free_substring(optvalue);
-        if (optstr) free(optstr);
+        if (optstr) SCFree(optstr);
         //if (optmore) pcre_free_substring(optmore);
-        if (arr != NULL) free(arr);
-        return SigParseOptions(de_ctx, s, m, optmore);
+        if (arr != NULL) SCFree(arr);
+        return SigParseOptions(de_ctx, s, optmore);
     }
 
     if (optname) pcre_free_substring(optname);
     if (optvalue) pcre_free_substring(optvalue);
     if (optmore) pcre_free_substring(optmore);
-    if (optstr) free(optstr);
-    if (arr != NULL) free(arr);
+    if (optstr) SCFree(optstr);
+    if (arr != NULL) SCFree(arr);
     return 0;
 
 error:
     if (optname) pcre_free_substring(optname);
     if (optvalue) pcre_free_substring(optvalue);
     if (optmore) pcre_free_substring(optmore);
-    if (optstr) free(optstr);
-    if (arr != NULL) free(arr);
+    if (optstr) SCFree(optstr);
+    if (arr != NULL) SCFree(arr);
     return -1;
 }
 
@@ -425,25 +521,38 @@ int SigParseAction(Signature *s, const char *action) {
     if (strcasecmp(action, "alert") == 0) {
         s->action = ACTION_ALERT;
         return 0;
-    } else if(strcasecmp(action, "drop") == 0) {
+    } else if (strcasecmp(action, "drop") == 0) {
         s->action = ACTION_DROP;
         return 0;
-    } else if(strcasecmp(action, "pass") == 0) {
+    } else if (strcasecmp(action, "pass") == 0) {
         s->action = ACTION_PASS;
         return 0;
-    } else if(strcasecmp(action, "reject") == 0) {
+#ifdef HAVE_LIBNET11
+    } else if (strcasecmp(action, "reject") == 0) {
         s->action = ACTION_REJECT;
         return 0;
-    } else if(strcasecmp(action, "rejectsrc") == 0) {
+    } else if (strcasecmp(action, "rejectsrc") == 0) {
         s->action = ACTION_REJECT;
         return 0;
-    } else if(strcasecmp(action, "rejectdst") == 0) {
+    } else if (strcasecmp(action, "rejectdst") == 0) {
         s->action = ACTION_REJECT_DST;
         return 0;
-    } else if(strcasecmp(action, "rejectboth") == 0) {
+    } else if (strcasecmp(action, "rejectboth") == 0) {
         s->action = ACTION_REJECT_BOTH;
         return 0;
+#else
+    } else if (strcasecmp(action, "reject") == 0 ||
+               strcasecmp(action, "rejectsrc") == 0 ||
+               strcasecmp(action, "rejectdst") == 0 ||
+               strcasecmp(action, "rejectboth") == 0)
+    {
+        SCLogError(SC_ERR_LIBNET_REQUIRED_FOR_ACTION, "Libnet 1.1.x is "
+                "required for action \"%s\" but is not compiled into Suricata",
+                action);
+        return -1;
+#endif /* HAVE_LIBNET11 */
     } else {
+        SCLogError(SC_ERR_INVALID_ACTION,"An invalid action \"%s\" was given",action);
         return -1;
     }
 }
@@ -453,7 +562,7 @@ int SigParseBasics(Signature *s, char *sigstr, char ***result, uint8_t addrs_dir
     int ov[MAX_SUBSTRINGS];
     int ret = 0, i = 0;
 
-    const char **arr = calloc(CONFIG_PARTS + 1, sizeof(char *));
+    const char **arr = SCCalloc(CONFIG_PARTS + 1, sizeof(char *));
     if (arr == NULL)
         return -1;
 
@@ -487,6 +596,15 @@ int SigParseBasics(Signature *s, char *sigstr, char ***result, uint8_t addrs_dir
 
     if (SigParseAddress(s, arr[CONFIG_DST], SIG_DIREC_DST ^ addrs_direction) < 0)
         goto error;
+
+    /* For IPOnly */
+    if (IPOnlySigParseAddress(s, arr[CONFIG_SRC], SIG_DIREC_SRC ^ addrs_direction) < 0)
+       goto error;
+
+    if (IPOnlySigParseAddress(s, arr[CONFIG_DST], SIG_DIREC_DST ^ addrs_direction) < 0)
+        goto error;
+
+
     /* For "ip" we parse the ports as well, even though they will be just "any".
      *  We do this for later sgh building for the tcp and udp protocols. */
     if (DetectProtoContainsProto(&s->proto, IPPROTO_TCP) ||
@@ -508,7 +626,7 @@ error:
 
             pcre_free_substring(arr[i - 1]);
         }
-        free(arr);
+        SCFree(arr);
     }
     *result = NULL;
     return -1;
@@ -521,7 +639,7 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
 
     int ret = SigParseBasics(s, sigstr, &basics, addrs_direction);
     if (ret < 0) {
-        //printf("SigParseBasics failed\n");
+        printf("SigParseBasics failed\n");
         SCReturnInt(-1);
     }
 
@@ -536,7 +654,7 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
 
     /* we can have no options, so make sure we have them */
     if (basics[CONFIG_OPTS] != NULL) {
-        ret = SigParseOptions(de_ctx, s, NULL, strdup(basics[CONFIG_OPTS]));
+        ret = SigParseOptions(de_ctx, s, SCStrdup(basics[CONFIG_OPTS]));
         SCLogDebug("ret from SigParseOptions %d", ret);
     }
 
@@ -544,17 +662,17 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
     if (basics != NULL) {
         int i = 0;
         while (basics[i] != NULL) {
-            free(basics[i]);
+            SCFree(basics[i]);
             i++;
         }
-        free(basics);
+        SCFree(basics);
     }
 
     SCReturnInt(ret);
 }
 
 Signature *SigAlloc (void) {
-    Signature *sig = malloc(sizeof(Signature));
+    Signature *sig = SCMalloc(sizeof(Signature));
     if (sig == NULL)
         return NULL;
 
@@ -565,6 +683,35 @@ Signature *SigAlloc (void) {
      * overwritten, we can then assign the default value of 3 */
     sig->prio = -1;
     return sig;
+}
+
+/**
+ * \internal
+ * \brief Free Reference list
+ *
+ * \param s Pointer to the signature
+ */
+static void SigRefFree (Signature *s) {
+    SCEnter();
+
+    Reference *ref = NULL;
+    Reference *next_ref = NULL;
+
+    if (s == NULL) {
+        SCReturn;
+    }
+
+    SCLogDebug("s %p, s->references %p", s, s->references);
+
+    for (ref = s->references; ref != NULL;)   {
+        next_ref = ref->next;
+        DetectReferenceFree(ref);
+        ref = next_ref;
+    }
+
+    s->references = NULL;
+
+    SCReturn;
 }
 
 void SigFree(Signature *s) {
@@ -578,6 +725,12 @@ void SigFree(Signature *s) {
         sm = nsm;
     }
 
+    sm = s->pmatch;
+    while (sm != NULL) {
+        nsm = sm->next;
+        SigMatchFree(sm);
+        sm = nsm;
+    }
     DetectAddressHeadCleanup(&s->src);
     DetectAddressHeadCleanup(&s->dst);
 
@@ -588,9 +741,12 @@ void SigFree(Signature *s) {
         DetectPortCleanupList(s->dp);
     }
 
-    if (s->msg != NULL) free(s->msg);
+    if (s->msg != NULL)
+        SCFree(s->msg);
 
-    free(s);
+    SigRefFree(s);
+
+    SCFree(s);
 }
 
 /**
@@ -605,6 +761,8 @@ void SigFree(Signature *s) {
  * \retval Pointer to the Signature instance on success; NULL on failure
  */
 Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
+    SCEnter();
+
     Signature *sig = SigAlloc();
     if (sig == NULL)
         goto error;
@@ -619,6 +777,31 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
     sig->num = de_ctx->signum;
     de_ctx->signum++;
 
+    /* see if need to set the SIG_FLAG_MPM flag */
+    SigMatch *sm;
+    for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
+        if (sm->type == DETECT_CONTENT) {
+            DetectContentData *cd = (DetectContentData *)sm->ctx;
+            if (cd == NULL)
+                continue;
+
+            sig->flags |= SIG_FLAG_MPM;
+
+            if (cd->flags & DETECT_CONTENT_NEGATED) {
+                sig->flags |= SIG_FLAG_MPM_NEGCONTENT;
+            }
+        }
+    }
+    for (sm = sig->umatch; sm != NULL; sm = sm->next) {
+        if (sm->type == DETECT_URICONTENT) {
+            DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
+            if (ud == NULL)
+                continue;
+
+            sig->flags |= SIG_FLAG_MPM;
+        }
+    }
+
     /* set mpm_content_len */
 
     /* determine the length of the longest pattern in the sig */
@@ -626,17 +809,25 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->mpm_content_maxlen = 0;
         sig->mpm_uricontent_maxlen = 0;
 
-        SigMatch *sm;
-        for (sm = sig->match; sm != NULL; sm = sm->next) {
+        for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_CONTENT) {
                 DetectContentData *cd = (DetectContentData *)sm->ctx;
+                 if (cd == NULL)
+                    continue;
 
                 if (sig->mpm_content_maxlen == 0)
                     sig->mpm_content_maxlen = cd->content_len;
                 if (sig->mpm_content_maxlen < cd->content_len)
                     sig->mpm_content_maxlen = cd->content_len;
-            } else if (sm->type == DETECT_URICONTENT) {
+            }
+        }
+
+        for (sm = sig->umatch; sm != NULL; sm = sm->next) {
+            if (sm->type == DETECT_URICONTENT) {
                 DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
+                if (ud == NULL)
+                    continue;
+
                 if (sig->mpm_uricontent_maxlen == 0)
                     sig->mpm_uricontent_maxlen = ud->uricontent_len;
                 if (sig->mpm_uricontent_maxlen < ud->uricontent_len)
@@ -666,7 +857,7 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",
         sig->flags & SIG_FLAG_PACKET ? "set" : "not set");
 
-    return sig;
+    SCReturnPtr(sig, "Signature");
 
 error:
     if ( sig != NULL ) SigFree(sig);
@@ -674,7 +865,7 @@ error:
         SCLogError(SC_ERR_INVALID_SIGNATURE,"Signature parsing failed: \"%s\"", sigstr);
         exit(EXIT_FAILURE);
     }
-    return NULL;
+    SCReturnPtr(NULL,"Signature");
 }
 
 /**
@@ -707,6 +898,32 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
     sig->num = de_ctx->signum;
     de_ctx->signum++;
 
+    /* see if need to set the SIG_FLAG_MPM flag */
+    SigMatch *sm;
+    for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
+        if (sm->type == DETECT_CONTENT) {
+            DetectContentData *cd = (DetectContentData *)sm->ctx;
+            if (cd == NULL)
+                continue;
+
+            sig->flags |= SIG_FLAG_MPM;
+
+            if (cd->flags & DETECT_CONTENT_NEGATED) {
+                sig->flags |= SIG_FLAG_MPM_NEGCONTENT;
+            }
+        }
+    }
+
+    for (sm = sig->umatch; sm != NULL; sm = sm->next) {
+        if (sm->type == DETECT_URICONTENT) {
+            DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
+            if (ud == NULL)
+                continue;
+
+            sig->flags |= SIG_FLAG_MPM;
+        }
+    }
+
     /* set mpm_content_len */
 
     /* determine the length of the longest pattern in the sig */
@@ -714,17 +931,24 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->mpm_content_maxlen = 0;
         sig->mpm_uricontent_maxlen = 0;
 
-        SigMatch *sm;
-        for (sm = sig->match; sm != NULL; sm = sm->next) {
+        for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_CONTENT) {
                 DetectContentData *cd = (DetectContentData *)sm->ctx;
+                if (cd == NULL)
+                    continue;
 
                 if (sig->mpm_content_maxlen == 0)
                     sig->mpm_content_maxlen = cd->content_len;
                 if (sig->mpm_content_maxlen < cd->content_len)
                     sig->mpm_content_maxlen = cd->content_len;
-            } else if (sm->type == DETECT_URICONTENT) {
+            }
+        }
+
+        for (sm = sig->umatch; sm != NULL; sm = sm->next) {
+            if (sm->type == DETECT_URICONTENT) {
                 DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
+                if (ud == NULL)
+                    continue;
                 if (sig->mpm_uricontent_maxlen == 0)
                     sig->mpm_uricontent_maxlen = ud->uricontent_len;
                 if (sig->mpm_uricontent_maxlen < ud->uricontent_len)
@@ -754,16 +978,23 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
             sig->next->mpm_uricontent_maxlen = 0;
 
             SigMatch *sm;
-            for (sm = sig->next->match; sm != NULL; sm = sm->next) {
+            for (sm = sig->next->pmatch; sm != NULL; sm = sm->next) {
                 if (sm->type == DETECT_CONTENT) {
                     DetectContentData *cd = (DetectContentData *)sm->ctx;
+                    if (cd == NULL)
+                        continue;
 
                     if (sig->next->mpm_content_maxlen == 0)
                         sig->next->mpm_content_maxlen = cd->content_len;
                     if (sig->next->mpm_content_maxlen < cd->content_len)
                         sig->next->mpm_content_maxlen = cd->content_len;
-                } else if (sm->type == DETECT_URICONTENT) {
+                }
+            }
+            for (sm = sig->next->umatch; sm != NULL; sm = sm->next) {
+                if (sm->type == DETECT_URICONTENT) {
                     DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
+                    if (ud == NULL)
+                        continue;
                     if (sig->next->mpm_uricontent_maxlen == 0)
                         sig->next->mpm_uricontent_maxlen = ud->uricontent_len;
                     if (sig->next->mpm_uricontent_maxlen < ud->uricontent_len)
@@ -807,10 +1038,6 @@ error:
             SigFree(sig->next);
         SigFree(sig);
     }
-    if (de_ctx->failure_fatal == 1) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE,"Signature init failed \"%s\"",sigstr);
-        exit(EXIT_FAILURE);
-    }
     /* if something failed, restore the old signum count
      * since we didn't install it */
     de_ctx->signum = oldsignum;
@@ -832,14 +1059,16 @@ error:
 Signature *DetectEngineAppendSig(DetectEngineCtx *de_ctx, char *sigstr) {
     Signature *sig = SigInitReal(de_ctx, sigstr);
     if (sig == NULL)
-        goto error;
+        return NULL;
 
     if (sig->flags & SIG_FLAG_BIDIREC) {
-        if (sig->next != NULL)
+        if (sig->next != NULL) {
             sig->next->next = de_ctx->sig_list;
-        else
+        } else {
             goto error;
-    } else {
+        }
+    }
+    else {
         /* if this sig is the first one, sig_list should be null */
         sig->next = de_ctx->sig_list;
     }
@@ -855,10 +1084,6 @@ Signature *DetectEngineAppendSig(DetectEngineCtx *de_ctx, char *sigstr) {
 
 error:
     if ( sig != NULL ) SigFree(sig);
-    if (de_ctx->failure_fatal == 1) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE,"Signature init failed %s ",sigstr);
-        exit(EXIT_FAILURE);
-    }
     return NULL;
 }
 
@@ -964,7 +1189,7 @@ end:
 
 /** \test Port validation */
 int SigParseTest05 (void) {
-    int result = 1;
+    int result = 0;
     Signature *sig = NULL;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
@@ -972,8 +1197,33 @@ int SigParseTest05 (void) {
         goto end;
 
     sig = SigInit(de_ctx, "alert tcp 1.2.3.4 1024:65536 -> !1.2.3.4 any (msg:\"SigParseTest05\"; sid:1;)");
-    if (sig != NULL)
+    if (sig == NULL) {
         result = 1;
+    } else {
+        printf("signature didn't fail to parse as we expected: ");
+    }
+
+end:
+    if (sig != NULL) SigFree(sig);
+    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Parsing bug debugging at 2010-03-18 */
+int SigParseTest06 (void) {
+    int result = 0;
+    Signature *sig = NULL;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    sig = SigInit(de_ctx, "alert tcp any any -> any any (flow:to_server; content:\"GET\"; nocase; http_method; uricontent:\"/uri/\"; nocase; content:\"Host|3A| abc\"; nocase; sid:1; rev:1;)");
+    if (sig != NULL) {
+        result = 1;
+    } else {
+        printf("signature failed to parse: ");
+    }
 
 end:
     if (sig != NULL) SigFree(sig);
@@ -1155,30 +1405,31 @@ end:
  */
 int SigTestBidirec01 (void) {
     Signature *sig = NULL;
+    int result = 0;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
-        goto error;
+        goto end;
 
     sig = DetectEngineAppendSig(de_ctx, "alert tcp 1.2.3.4 1024:65535 -> !1.2.3.4 any (msg:\"SigTestBidirec01\"; sid:1;)");
     if (sig == NULL)
-        goto error;
+        goto end;
     if (sig->next != NULL)
-        goto error;
+        goto end;
     if (sig->flags & SIG_FLAG_BIDIREC)
-        goto error;
+        goto end;
     if (de_ctx->signum != 1)
-        goto error;
+        goto end;
 
-    return 1;
-error:
-    if (sig != NULL) {
-        if (sig->next != NULL)
-            SigFree(sig->next);
-        SigFree(sig);
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigCleanSignatures(de_ctx);
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
     }
-    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
-    return 0;
+    return result;
 }
 
 /** \test Ensure that we set a bidirectional Signature correctly */
@@ -1213,7 +1464,12 @@ int SigTestBidirec02 (void) {
     result = 1;
 
 end:
-    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
+    if (de_ctx != NULL) {
+        SigCleanSignatures(de_ctx);
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
     return result;
 }
 
@@ -1224,6 +1480,7 @@ end:
 int SigTestBidirec03 (void) {
     int result = 0;
     Signature *sig = NULL;
+    Packet *p = NULL;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1231,24 +1488,14 @@ int SigTestBidirec03 (void) {
 
     de_ctx->flags |= DE_QUIET;
 
-    sig = DetectEngineAppendSig(de_ctx, "alert tcp any any -> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 1\"; sid:1;)");
-    if (sig == NULL)
-        goto end;
-    sig = DetectEngineAppendSig(de_ctx, "alert tcp any any <> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 2 bidirectional\"; sid:2;)");
-    if (sig == NULL)
-        goto end;
-    if ( !(sig->flags & SIG_FLAG_BIDIREC))
-        goto end;
-    if (sig->next == NULL)
-        goto end;
-    if (sig->next->next == NULL)
-        goto end;
-    if (sig->next->next->next != NULL)
-        goto end;
-    if (de_ctx->signum != 3)
-        goto end;
+    char *sigs[3];
+    sigs[0] = "alert tcp any any -> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 1\"; sid:1;)";
+    sigs[1] = "alert tcp any any <> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 2 bidirectional\"; sid:2;)";
+    sigs[2] = "alert tcp any any -> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 3\"; sid:3;)";
+    UTHAppendSigs(de_ctx, sigs, 3);
 
-    sig = DetectEngineAppendSig(de_ctx, "alert tcp any any -> 192.168.1.1 any (msg:\"SigTestBidirec03 sid 3\"; sid:3;)");
+    /* Checking that bidirectional rules are set correctly */
+    sig = de_ctx->sig_list;
     if (sig == NULL)
         goto end;
     if (sig->next == NULL)
@@ -1319,38 +1566,28 @@ int SigTestBidirec03 (void) {
         0x6b,0x65,0x65,0x70,0x2d,0x61,0x6c,0x69,
         0x76,0x65,0x0d,0x0a,0x0d,0x0a }; /* end rawpkt1_ether */
 
-    Packet p;
-    DecodeThreadVars dtv;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
-
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&dtv, 0, sizeof(DecodeThreadVars));
-    memset(&p, 0, sizeof(p));
-
     FlowInitConfig(FLOW_QUIET);
-    DecodeEthernet(&th_v, &dtv, &p, rawpkt1_ether, sizeof(rawpkt1_ether), NULL);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, MPM_B2G);
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-
-    /* all the sids should match with a packet going to 192.168.1.1 port 80 */
-    if (PacketAlertCheck(&p, 1) == 1 && PacketAlertCheck(&p, 2) == 1 &&
-        PacketAlertCheck(&p, 3) == 1) {
-        result = 1;
+    p = UTHBuildPacketFromEth(rawpkt1_ether, sizeof(rawpkt1_ether));
+    if (p == NULL) {
+        SCLogDebug("Error building packet");
+        goto end;
     }
-    FlowShutdown();
-    //PatternMatchDestroy(mpm_ctx);
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    UTHMatchPackets(de_ctx, &p, 1);
+
+    uint32_t sids[3] = {1, 2, 3};
+    uint32_t results[3] = {1, 1, 1};
+    result = UTHCheckPacketMatchResults(p, sids, results, 1);
 
 end:
+    if (p != NULL)
+        SCFree(p);
     if (de_ctx != NULL) {
         SigCleanSignatures(de_ctx);
         SigGroupCleanup(de_ctx);
         DetectEngineCtxFree(de_ctx);
     }
+    FlowShutdown();
+
     return result;
 }
 
@@ -1854,6 +2091,8 @@ void SigParseRegisterTests(void) {
     UtRegisterTest("SigParseTest03", SigParseTest03, 1);
     UtRegisterTest("SigParseTest04", SigParseTest04, 1);
     UtRegisterTest("SigParseTest05", SigParseTest05, 1);
+    UtRegisterTest("SigParseTest06", SigParseTest06, 1);
+
     UtRegisterTest("SigParseBidirecTest06", SigParseBidirecTest06, 1);
     UtRegisterTest("SigParseBidirecTest07", SigParseBidirecTest07, 1);
     UtRegisterTest("SigParseBidirecTest08", SigParseBidirecTest08, 1);

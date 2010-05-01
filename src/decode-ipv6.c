@@ -1,6 +1,7 @@
 /* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
 
 #include "suricata-common.h"
+#include "packet-queue.h"
 #include "decode.h"
 #include "decode-ipv6.h"
 #include "decode-icmpv6.h"
@@ -348,6 +349,12 @@ static int DecodeIPV6Packet (ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, u
         return -1;
     }
 
+    if (IP_GET_RAW_VER(pkt) != 6) {
+        SCLogDebug("wrong ip version %" PRIu8 "",IP_GET_RAW_VER(pkt));
+        DECODER_SET_EVENT(p,IPV6_WRONG_IP_VER);
+        return -1;
+    }
+
     p->ip6h = (IPV6Hdr *)pkt;
 
     if (len < (IPV6_HEADER_LEN + IPV6_GET_PLEN(p)))
@@ -407,15 +414,18 @@ void DecodeIPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
             break;
     }
 
-#if 0
     /* Pass to defragger if a fragment. */
     if (IPV6_EXTHDR_ISSET_FH(p)) {
-        Packet *rp = Defrag6(tv, NULL, p);
+        Packet *rp = Defrag(tv, dtv, NULL, p);
         if (rp != NULL) {
-            /* Reinject. */
+            DecodeIPV6(tv, dtv, rp, rp->pkt, rp->pktlen, pq);
+            PacketEnqueue(pq, rp);
+
+            /* Not really a tunnel packet, but we're piggybacking that
+             * functionality for now. */
+            SET_TUNNEL_PKT(p);
         }
     }
-#endif
 
 #ifdef DEBUG
     if (IPV6_EXTHDR_ISSET_FH(p)) {

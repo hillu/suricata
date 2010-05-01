@@ -7,9 +7,14 @@
 #include "suricata-common.h"
 #include "suricata.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "flow-var.h"
 #include "decode-events.h"
+
+#include "util-debug.h"
 
 /* Need to get the DIpOpts[] array */
 #define DETECT_EVENTS
@@ -23,7 +28,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectIpOptsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectIpOptsSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *str);
+static int DetectIpOptsSetup (DetectEngineCtx *, Signature *, char *);
 void IpOptsRegisterTests(void);
 void DetectIpOptsFree(void *);
 
@@ -44,14 +49,14 @@ void DetectIpOptsRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -122,6 +127,7 @@ DetectIpOptsData *DetectIpOptsParse (char *rawstr)
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1) {
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, rawstr);
         goto error;
     }
 
@@ -135,9 +141,9 @@ DetectIpOptsData *DetectIpOptsParse (char *rawstr)
     if(found == 0)
         goto error;
 
-    de = malloc(sizeof(DetectIpOptsData));
+    de = SCMalloc(sizeof(DetectIpOptsData));
     if (de == NULL) {
-        printf("DetectIpOptsSetup malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
 
@@ -146,7 +152,7 @@ DetectIpOptsData *DetectIpOptsParse (char *rawstr)
     return de;
 
 error:
-    if (de) free(de);
+    if (de) SCFree(de);
     return NULL;
 }
 
@@ -156,13 +162,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param rawstr pointer to the user provided ipopts options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectIpOptsData *de = NULL;
     SigMatch *sm = NULL;
@@ -178,12 +183,12 @@ int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     sm->type = DETECT_IPOPTS;
     sm->ctx = (void *)de;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
     return 0;
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return -1;
 }
 
@@ -195,7 +200,7 @@ error:
  */
 void DetectIpOptsFree(void *de_ptr) {
     DetectIpOptsData *de = (DetectIpOptsData *)de_ptr;
-    if(de) free(de);
+    if(de) SCFree(de);
 }
 
 /*
@@ -278,8 +283,8 @@ int IpOptsTestParse03 (void) {
         return 1;
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -324,8 +329,8 @@ int IpOptsTestParse04 (void) {
         return 1;
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 #endif /* UNITTESTS */

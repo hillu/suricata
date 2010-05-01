@@ -24,12 +24,13 @@
 #include "flow-var.h"
 #include "threads.h"
 #include "detect-ftpbounce.h"
+#include "stream-tcp.h"
 
 int DetectFtpbounceMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
                           Signature *, SigMatch *);
 int DetectFtpbounceALMatch(ThreadVars *, DetectEngineThreadCtx *, Flow *,
                            uint8_t, void *, Signature *, SigMatch *);
-int DetectFtpbounceSetup(DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectFtpbounceSetup(DetectEngineCtx *, Signature *, char *);
 int DetectFtpbounceMatchArgs(uint8_t *payload, uint16_t payload_len,
                              uint32_t ip_orig, uint16_t offset);
 void DetectFtpbounceRegisterTests(void);
@@ -43,7 +44,6 @@ void DetectFtpbounceRegister(void)
 {
     sigmatch_table[DETECT_FTPBOUNCE].name = "ftpbounce";
     sigmatch_table[DETECT_FTPBOUNCE].Setup = DetectFtpbounceSetup;
-    //sigmatch_table[DETECT_FTPBOUNCE].Match = DetectFtpbounceMatch;
     sigmatch_table[DETECT_FTPBOUNCE].Match = NULL;
     sigmatch_table[DETECT_FTPBOUNCE].AppLayerMatch = DetectFtpbounceALMatch;
     sigmatch_table[DETECT_FTPBOUNCE].alproto = ALPROTO_FTP;
@@ -182,12 +182,14 @@ int DetectFtpbounceALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 int DetectFtpbounceMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
                           Packet *p, Signature *s, SigMatch *m)
 {
+/** \todo VJ broken and no longer used */
+#if 0
     SCEnter();
     uint16_t offset = 0;
     if (!(PKT_IS_TCP(p)))
         return 0;
 
-    SigMatch *sm = SigMatchGetLastSM(s, DETECT_CONTENT);
+    SigMatch *sm = SigMatchGetLastSM(s->pmatch_tail, DETECT_CONTENT);
     if (sm == NULL)
         return 0;
 
@@ -204,6 +206,8 @@ int DetectFtpbounceMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 
     return DetectFtpbounceMatchArgs(p->payload, p->payload_len,
                                     p->src.addr_data32[0], offset);
+#endif
+    return 0;
 }
 
 /**
@@ -218,19 +222,18 @@ int DetectFtpbounceMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m,
-                          char *ftpbouncestr)
+int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, char *ftpbouncestr)
 {
+    SCEnter();
+
     SigMatch *sm = NULL;
 
     sm = SigMatchAlloc();
-    if (sm == NULL)
-        return -1;
+    if (sm == NULL) {
+        goto error;;
+    }
 
     sm->type = DETECT_FTPBOUNCE;
-
-//    if (s != NULL)
-//        s->flags |= SIG_FLAG_APPLAYER;
 
     /* We don't need to allocate any data for ftpbounce here.
     *
@@ -243,8 +246,21 @@ int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, SigMatch *m,
     */
     sm->ctx = NULL;
 
-    SigMatchAppend(s, m, sm);
-    return 0;
+    SigMatchAppendAppLayer(s, sm);
+
+    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_FTP) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
+        goto error;
+    }
+
+    s->alproto = ALPROTO_FTP;
+    SCReturnInt(0);
+
+error:
+    if (sm != NULL) {
+        SigMatchFree(sm);
+    }
+    SCReturnInt(-1);
 }
 
 #ifdef UNITTESTS
@@ -256,13 +272,12 @@ int DetectFtpbounceTestSetup01(void)
 {
     int res = 0;
     DetectEngineCtx *de_ctx = NULL;
-    SigMatch *m = NULL;
     Signature *s = SigAlloc();
     if (s == NULL)
         return 0;
 
     /* ftpbounce doesn't accept options so the str is NULL */
-    res = !DetectFtpbounceSetup(de_ctx, s, m, NULL);
+    res = !DetectFtpbounceSetup(de_ctx, s, NULL);
     res &= s->match != NULL && s->match->type & DETECT_FTPBOUNCE;
 
     SigFree(s);
@@ -294,7 +309,7 @@ static int DetectFtpbounceTestALMatch02(void) {
     Packet p;
     Signature *s = NULL;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -308,12 +323,13 @@ static int DetectFtpbounceTestALMatch02(void) {
     p.payload = NULL;
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
-
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx =(void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_FTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -331,29 +347,29 @@ static int DetectFtpbounceTestALMatch02(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *)de_ctx,(void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1,
-                          ftplen1, FALSE);
+    StreamL7DataPtrInit(&ssn);
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3);
     if (r != 0) {
         SCLogDebug("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4);
     if (r != 0) {
         SCLogDebug("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -388,6 +404,8 @@ end:
     DetectEngineThreadCtxDeinit(&th_v,(void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -413,7 +431,7 @@ static int DetectFtpbounceTestALMatch03(void) {
     Packet p;
     Signature *s = NULL;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -428,11 +446,13 @@ static int DetectFtpbounceTestALMatch03(void) {
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx =(void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_FTP;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -450,29 +470,28 @@ static int DetectFtpbounceTestALMatch03(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *)de_ctx,(void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1,
-                          ftplen1, FALSE);
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3);
     if (r != 0) {
         SCLogDebug("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4, FALSE);
+    r = AppLayerParse(&f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4);
     if (r != 0) {
         SCLogDebug("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -509,6 +528,8 @@ end:
     DetectEngineThreadCtxDeinit(&th_v,(void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 

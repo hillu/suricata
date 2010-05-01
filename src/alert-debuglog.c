@@ -26,34 +26,41 @@
 
 #include "util-debug.h"
 
+#include "output.h"
+#include "alert-debuglog.h"
+
 #define DEFAULT_LOG_FILENAME "alert-debug.log"
 
-TmEcode AlertDebuglog (ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertDebuglogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertDebuglogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertDebuglogThreadInit(ThreadVars *, void*, void **);
-TmEcode AlertDebuglogThreadDeinit(ThreadVars *, void *);
-void AlertDebuglogExitPrintStats(ThreadVars *, void *);
-int AlertDebuglogOpenFileCtx(LogFileCtx* , char *);
+#define MODULE_NAME "AlertDebugLog"
 
-void TmModuleAlertDebuglogRegister (void) {
-    tmm_modules[TMM_ALERTDEBUGLOG].name = "AlertDebuglog";
-    tmm_modules[TMM_ALERTDEBUGLOG].ThreadInit = AlertDebuglogThreadInit;
-    tmm_modules[TMM_ALERTDEBUGLOG].Func = AlertDebuglog;
-    tmm_modules[TMM_ALERTDEBUGLOG].ThreadExitPrintStats = AlertDebuglogExitPrintStats;
-    tmm_modules[TMM_ALERTDEBUGLOG].ThreadDeinit = AlertDebuglogThreadDeinit;
+TmEcode AlertDebugLog (ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertDebugLogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertDebugLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertDebugLogThreadInit(ThreadVars *, void*, void **);
+TmEcode AlertDebugLogThreadDeinit(ThreadVars *, void *);
+void AlertDebugLogExitPrintStats(ThreadVars *, void *);
+int AlertDebugLogOpenFileCtx(LogFileCtx* , const char *);
+
+void TmModuleAlertDebugLogRegister (void) {
+    tmm_modules[TMM_ALERTDEBUGLOG].name = MODULE_NAME;
+    tmm_modules[TMM_ALERTDEBUGLOG].ThreadInit = AlertDebugLogThreadInit;
+    tmm_modules[TMM_ALERTDEBUGLOG].Func = AlertDebugLog;
+    tmm_modules[TMM_ALERTDEBUGLOG].ThreadExitPrintStats = AlertDebugLogExitPrintStats;
+    tmm_modules[TMM_ALERTDEBUGLOG].ThreadDeinit = AlertDebugLogThreadDeinit;
     tmm_modules[TMM_ALERTDEBUGLOG].RegisterTests = NULL;
+
+    OutputRegisterModule(MODULE_NAME, "alert-debug", AlertDebugLogInitCtx);
 }
 
-typedef struct AlertDebuglogThread_ {
+typedef struct AlertDebugLogThread_ {
     LogFileCtx *file_ctx;
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */
-    uint32_t alerts;
-} AlertDebuglogThread;
+} AlertDebugLogThread;
 
 static void CreateTimeString (const struct timeval *ts, char *str, size_t size) {
     time_t time = ts->tv_sec;
-    struct tm *t = gmtime(&time);
+    struct tm local_tm;
+    struct tm *t = gmtime_r(&time, &local_tm);
     uint32_t sec = ts->tv_sec % 86400;
 
     snprintf(str, size, "%02d/%02d/%02d-%02d:%02d:%02d.%06u",
@@ -62,9 +69,9 @@ static void CreateTimeString (const struct timeval *ts, char *str, size_t size) 
         (uint32_t) ts->tv_usec);
 }
 
-TmEcode AlertDebuglogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    AlertDebuglogThread *aft = (AlertDebuglogThread *)data;
+    AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
     int i;
     char timebuf[64];
 
@@ -119,19 +126,12 @@ TmEcode AlertDebuglogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
         PrintRawDataFp(aft->file_ctx->fp, pv->value, pv->value_len);
     }
 
-    for (i = 0; i < p->http_uri.cnt; i++) {
-        fprintf(aft->file_ctx->fp, "RAW URI [%2d]:      ", i);
-        PrintRawUriFp(aft->file_ctx->fp, p->http_uri.raw[i], p->http_uri.raw_size[i]);
-        fprintf(aft->file_ctx->fp, "\n");
-        PrintRawDataFp(aft->file_ctx->fp, p->http_uri.raw[i], p->http_uri.raw_size[i]);
-    }
-
 /* any stuff */
 /* Sig details? */
 /* pkt vars */
 /* flowvars */
 
-    aft->alerts += p->alerts.cnt;
+    aft->file_ctx->alerts += p->alerts.cnt;
 
     fprintf(aft->file_ctx->fp, "PACKET LEN:        %" PRIu32 "\n", p->pktlen);
     fprintf(aft->file_ctx->fp, "PACKET:\n");
@@ -143,16 +143,16 @@ TmEcode AlertDebuglogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
     return TM_ECODE_OK;
 }
 
-TmEcode AlertDebuglogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertDebugLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    AlertDebuglogThread *aft = (AlertDebuglogThread *)data;
+    AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
     int i;
     char timebuf[64];
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
-    aft->alerts += p->alerts.cnt;
+    aft->file_ctx->alerts += p->alerts.cnt;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
@@ -173,117 +173,116 @@ TmEcode AlertDebuglogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
     return TM_ECODE_OK;
 }
 
-TmEcode AlertDebuglog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertDebugLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
     if (PKT_IS_IPV4(p)) {
-        return AlertDebuglogIPv4(tv, p, data, pq);
+        return AlertDebugLogIPv4(tv, p, data, pq);
     } else if (PKT_IS_IPV6(p)) {
-        return AlertDebuglogIPv6(tv, p, data, pq);
+        return AlertDebugLogIPv6(tv, p, data, pq);
     }
 
     return TM_ECODE_OK;
 }
 
-TmEcode AlertDebuglogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode AlertDebugLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    AlertDebuglogThread *aft = malloc(sizeof(AlertDebuglogThread));
+    AlertDebugLogThread *aft = SCMalloc(sizeof(AlertDebugLogThread));
     if (aft == NULL) {
         return TM_ECODE_FAILED;
     }
-    memset(aft, 0, sizeof(AlertDebuglogThread));
+    memset(aft, 0, sizeof(AlertDebugLogThread));
 
     if(initdata == NULL)
     {
-        SCLogError(SC_ERR_DEBUG_LOG_GENERIC_ERROR, "Error getting context for "
-                   "DebugLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for DebugLog.  \"initdata\" argument NULL");
+        SCFree(aft);
         return TM_ECODE_FAILED;
     }
     /** Use the Ouptut Context (file pointer and mutex) */
-    aft->file_ctx=(LogFileCtx *) initdata;
+    aft->file_ctx = ((OutputCtx *)initdata)->data;
 
     *data = (void *)aft;
     return TM_ECODE_OK;
 }
 
-TmEcode AlertDebuglogThreadDeinit(ThreadVars *t, void *data)
+TmEcode AlertDebugLogThreadDeinit(ThreadVars *t, void *data)
 {
-    AlertDebuglogThread *aft = (AlertDebuglogThread *)data;
+    AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
     if (aft == NULL) {
         return TM_ECODE_OK;
     }
 
     /* clear memory */
-    memset(aft, 0, sizeof(AlertDebuglogThread));
+    memset(aft, 0, sizeof(AlertDebugLogThread));
 
-    free(aft);
+    SCFree(aft);
     return TM_ECODE_OK;
 }
 
-void AlertDebuglogExitPrintStats(ThreadVars *tv, void *data) {
-    AlertDebuglogThread *aft = (AlertDebuglogThread *)data;
+void AlertDebugLogExitPrintStats(ThreadVars *tv, void *data) {
+    AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
     if (aft == NULL) {
         return;
     }
 
-    SCLogInfo("(%s) Alerts %" PRIu32 "", tv->name, aft->alerts);
+    SCLogInfo("(%s) Alerts %" PRIu64 "", tv->name, aft->file_ctx->alerts);
 }
 
 
-/** \brief Create a new file_ctx from config_file (if specified)
- *  \param config_file for loading separate configs
+/** \brief Create a new LogFileCtx for alert debug logging.
+ *  \param ConfNode containing configuration for this logger.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-LogFileCtx *AlertDebuglogInitCtx(char *config_file)
+OutputCtx *AlertDebugLogInitCtx(ConfNode *conf)
 {
     int ret=0;
     LogFileCtx* file_ctx=LogFileNewCtx();
 
     if(file_ctx == NULL)
     {
-        SCLogError(SC_ERR_DEBUG_LOG_GENERIC_ERROR, "AlertDebuglogInitCtx: Couldn't "
-                   "create new file_ctx");
+        SCLogDebug("AlertDebugLogInitCtx: Couldn't create new file_ctx");
         return NULL;
     }
 
-    /** fill the new LogFileCtx with the specific AlertDebuglog configuration */
-    ret=AlertDebuglogOpenFileCtx(file_ctx, config_file);
+    const char *filename = ConfNodeLookupChildValue(conf, "filename");
+    if (filename == NULL)
+        filename = DEFAULT_LOG_FILENAME;
+
+    /** fill the new LogFileCtx with the specific AlertDebugLog configuration */
+    ret=AlertDebugLogOpenFileCtx(file_ctx, filename);
 
     if(ret < 0)
         return NULL;
 
-    /** In AlertDebuglogOpenFileCtx the second parameter should be the configuration file to use
-    * but it's not implemented yet, so passing NULL to load the default
-    * configuration
-    */
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (output_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "Failed to allocate OutputCtx for AlertDebugLog");
+        exit(EXIT_FAILURE);
+    }
+    output_ctx->data = file_ctx;
 
-    return file_ctx;
+    return output_ctx;
 }
 
 /** \brief Read the config set the file pointer, open the file
  *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param config_file for loading separate configs
+ *  \param filename name of log file
  *  \return -1 if failure, 0 if succesful
  * */
-int AlertDebuglogOpenFileCtx(LogFileCtx *file_ctx, char *config_file)
+int AlertDebugLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename)
 {
     int ret=0;
-    if(config_file == NULL)
-    {
-        /** Separate config files not implemented at the moment,
-        * but it must be able to load from separate config file.
-        * Load the default configuration.
-        */
 
-        char log_path[PATH_MAX], *log_dir;
-        if (ConfGet("default-log-dir", &log_dir) != 1)
-            log_dir = DEFAULT_LOG_DIR;
-        snprintf(log_path, PATH_MAX, "%s/%s", log_dir, DEFAULT_LOG_FILENAME);
-        file_ctx->fp = fopen(log_path, "w");
-        if (file_ctx->fp == NULL) {
-            SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
-                       strerror(errno));
-            return -1;
-        }
+    char log_path[PATH_MAX], *log_dir;
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
+    snprintf(log_path, PATH_MAX, "%s/%s", log_dir, DEFAULT_LOG_FILENAME);
+    file_ctx->fp = fopen(log_path, "w");
+    if (file_ctx->fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
+            strerror(errno));
+        return -1;
     }
 
     return ret;

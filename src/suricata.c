@@ -13,18 +13,21 @@
 #include "threads.h"
 #include "threadvars.h"
 
-#include "util-binsearch.h"
+#include "util-spm.h"
 #include "util-hash.h"
 #include "util-hashlist.h"
 #include "util-bloomfilter.h"
 #include "util-bloomfilter-counting.h"
 #include "util-pool.h"
 #include "util-byte.h"
+#include "util-cpu.h"
+#include "util-pidfile.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-sigorder.h"
+#include "detect-engine-payload.h"
 
 #include "tm-queuehandlers.h"
 #include "tm-queues.h"
@@ -33,11 +36,15 @@
 
 #include "tmqh-flow.h"
 
+#include "conf.h"
+#include "conf-yaml-loader.h"
+
 #include "alert-fastlog.h"
 #include "alert-unified-log.h"
 #include "alert-unified-alert.h"
 #include "alert-unified2-alert.h"
 #include "alert-debuglog.h"
+#include "alert-prelude.h"
 
 #include "log-httplog.h"
 
@@ -45,6 +52,8 @@
 
 #include "source-nfq.h"
 #include "source-nfq-prototypes.h"
+
+#include "source-ipfw.h"
 
 #include "source-pcap.h"
 #include "source-pcap-file.h"
@@ -61,7 +70,6 @@
 
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
-#include "app-layer-http.h"
 #include "app-layer-tls.h"
 #include "app-layer-smb.h"
 #include "app-layer-dcerpc.h"
@@ -72,21 +80,29 @@
 #include "util-host-os-info.h"
 #include "util-cidr.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-time.h"
 #include "util-rule-vars.h"
 #include "util-classification-config.h"
-
-#include "conf.h"
-#include "conf-yaml-loader.h"
+#include "util-threshold-config.h"
 
 #include "defrag.h"
 
 #include "runmodes.h"
 
+#include "util-cuda.h"
+
 #include "util-debug.h"
 #include "util-error.h"
 #include "detect-engine-siggroup.h"
 #include "util-daemon.h"
+#include "reputation.h"
+
+/* holds the cuda b2g module */
+#include "util-mpm-b2g-cuda.h"
+#include "util-cuda-handlers.h"
+
+#include "output.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -94,6 +110,9 @@
 volatile sig_atomic_t sigint_count = 0;
 volatile sig_atomic_t sighup_count = 0;
 volatile sig_atomic_t sigterm_count = 0;
+
+/* Max packets processed simultaniously. */
+#define DEFAULT_MAX_PENDING_PACKETS 50
 
 #define SURICATA_SIGINT  0x01
 #define SURICATA_SIGHUP  0x02
@@ -103,10 +122,38 @@ volatile sig_atomic_t sigterm_count = 0;
 
 static uint8_t sigflags = 0;
 
+/* Run mode selected */
+int run_mode = MODE_UNKNOWN;
+
+/* Maximum packets to simultaneously process. */
+intmax_t max_pending_packets;
+
+int RunmodeIsUnittests(void) {
+    if (run_mode == MODE_UNITTEST)
+        return 1;
+
+    return 0;
+}
+
 static void SignalHandlerSigint(/*@unused@*/ int sig) { sigint_count = 1; sigflags |= SURICATA_SIGINT; }
 static void SignalHandlerSigterm(/*@unused@*/ int sig) { sigterm_count = 1; sigflags |= SURICATA_SIGTERM; }
 static void SignalHandlerSighup(/*@unused@*/ int sig) { sighup_count = 1; sigflags |= SURICATA_SIGHUP; }
 
+#ifdef DBG_MEM_ALLOC
+#ifndef _GLOBAL_MEM_
+#define _GLOBAL_MEM_
+/* This counter doesn't complain realloc's(), it's gives
+ * an aproximation for the startup */
+uint64_t global_mem = 0;
+#ifdef DBG_MEM_ALLOC_SKIP_STARTUP
+uint8_t print_mem_flag = 0;
+#else
+uint8_t print_mem_flag = 1;
+#endif
+#endif
+#endif
+
+#ifndef OS_WIN32
 static void
 SignalHandlerSetup(int sig, void (*handler)())
 {
@@ -118,6 +165,7 @@ SignalHandlerSetup(int sig, void (*handler)())
     action.sa_flags = 0;
     sigaction(sig, &action, 0);
 }
+#endif /* OS_WIN32 */
 
 Packet *SetupPktWait (void)
 {
@@ -154,9 +202,9 @@ Packet *SetupPkt (void)
     if (p == NULL) {
         TmqDebugList();
 
-        p = malloc(sizeof(Packet));
+        p = SCMalloc(sizeof(Packet));
         if (p == NULL) {
-            printf("ERROR: malloc failed: %s\n", strerror(errno));
+            printf("ERROR: SCMalloc failed: %s\n", strerror(errno));
             exit(EXIT_FAILURE);
         }
 
@@ -197,7 +245,6 @@ void GlobalInits()
     memset(&packet_q,0,sizeof(packet_q));
     SCMutexInit(&packet_q.mutex_q, NULL);
     SCCondInit(&packet_q.cond_q, NULL);
-
 }
 
 /* \todo dtv not used. */
@@ -243,9 +290,17 @@ Packet *TunnelPktSetup(ThreadVars *t, DecodeThreadVars *dtv, Packet *parent, uin
     memcpy(&p->pkt, pkt, len);
     p->recursion_level = parent->recursion_level + 1;
 
+    p->ts.tv_sec = parent->ts.tv_sec;
+    p->ts.tv_usec = parent->ts.tv_usec;
+
     /* set tunnel flags */
     SET_TUNNEL_PKT(p);
     TUNNEL_INCR_PKT_TPR(p);
+
+    /* disable payload (not packet) inspection on the parent, as the payload
+     * is the packet we will now run through the system separately. We do
+     * check it against the ip/port/other header checks though */
+    DecodeSetNoPayloadInspectionFlag(parent);
     return p;
 }
 
@@ -260,6 +315,45 @@ void EngineKill(void) {
     sigflags |= SURICATA_KILL;
 }
 
+static void SetBpfString(int optind, char *argv[]) {
+    char *bpf_filter = NULL;
+    uint32_t bpf_len = 0;
+    int tmpindex = 0;
+
+    /* attempt to parse remaining args as bpf filter */
+    tmpindex = optind;
+    while(argv[tmpindex] != NULL) {
+        bpf_len+=strlen(argv[tmpindex]) + 1;
+        tmpindex++;
+    }
+
+    if (bpf_len == 0)
+        return;
+
+    bpf_filter = SCMalloc(bpf_len);
+    if (bpf_filter == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "%s", strerror(errno));
+        exit(EXIT_FAILURE);
+    }
+    memset(bpf_filter, 0x00, bpf_len);
+
+    tmpindex = optind;
+    while(argv[tmpindex] != NULL) {
+        strlcat(bpf_filter, argv[tmpindex],bpf_len);
+        if(argv[tmpindex + 1] != NULL) {
+            strlcat(bpf_filter," ", bpf_len);
+        }
+        tmpindex++;
+    }
+
+    if(strlen(bpf_filter) > 0) {
+        if (ConfSet("bpf-filter", bpf_filter, 0) != 1) {
+            fprintf(stderr, "ERROR: Failed to set bpf filter.\n");
+            exit(EXIT_FAILURE);
+        }
+    }
+}
+
 void usage(const char *progname)
 {
     printf("%s %s\n", PROG_NAME, PROG_VER);
@@ -268,6 +362,7 @@ void usage(const char *progname)
     printf("\t-i <dev>                     : run in pcap live mode\n");
     printf("\t-r <path>                    : run in pcap file/offline mode\n");
     printf("\t-q <qid>                     : run in inline nfqueue mode\n");
+    printf("\t-d <divert port>             : run in inline ipfw divert mode\n");
     printf("\t-s <path>                    : path to signature file (optional)\n");
     printf("\t-l <dir>                     : default log directory\n");
     printf("\t-D                           : run as daemon\n");
@@ -277,7 +372,12 @@ void usage(const char *progname)
     printf("\t--list-unittests             : list unit tests\n");
     printf("\t--fatal-unittests            : enable fatal failure on unittest error\n");
 #endif /* UNITTESTS */
+    printf("\t--pidfile <file>             : write pid to this file (only for daemon mode)\n");
     printf("\t--init-errors-fatal          : enable fatal failure on signature init error\n");
+    printf("\t--dump-config                : show the running configuration\n");
+    printf("\t--pfring-int <dev>           : run in pfring mode\n");
+    printf("\t--pfring-cluster-id <id>     : pfring cluster id \n");
+    printf("\t--pfring-cluster-type <type> : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow");
     printf("\n");
     printf("\nTo run the engine with default configuration on "
             "interface eth0 with signature file \"signatures.rules\", run the "
@@ -288,20 +388,35 @@ void usage(const char *progname)
 int main(int argc, char **argv)
 {
     int opt;
-    int mode = MODE_UNKNOWN;
     char *pcap_file = NULL;
     char *pcap_dev = NULL;
     char *pfring_dev = NULL;
     char *sig_file = NULL;
-    int nfq_id = 0;
+    char *nfq_id = NULL;
     char *conf_filename = NULL;
+    char *pid_filename = NULL;
+#ifdef UNITTESTS
     char *regex_arg = NULL;
+#endif
     int dump_config = 0;
     int list_unittests = 0;
     int daemon = 0;
 
+    char *log_dir;
+    struct stat buf;
+
+#ifdef OS_WIN32
+	WSADATA wsaData;
+	if (0 != WSAStartup(MAKEWORD(2, 2), &wsaData)) {
+		fprintf(stderr, "ERROR: Failed to initialize Windows sockets.\n");
+		exit(EXIT_FAILURE);
+	}
+#endif
+
     /* initialize the logging subsys */
     SCLogInitLogModule(NULL);
+
+    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
 
     /* Initialize the configuration module. */
     ConfInit();
@@ -309,9 +424,11 @@ int main(int argc, char **argv)
     struct option long_opts[] = {
         {"dump-config", 0, &dump_config, 1},
         {"pfring-int",  required_argument, 0, 0},
-        {"pfring-clusterid",  required_argument, 0, 0},
+        {"pfring-cluster-id",  required_argument, 0, 0},
+        {"pfring-cluster-type",  required_argument, 0, 0},
         {"unittest-filter", required_argument, 0, 'U'},
         {"list-unittests", 0, &list_unittests, 1},
+        {"pidfile", required_argument, 0, 0},
         {"init-errors-fatal", 0, 0, 0},
         {"fatal-unittests", 0, 0, 0},
         {NULL, 0, NULL, 0}
@@ -320,22 +437,27 @@ int main(int argc, char **argv)
     /* getopt_long stores the option index here. */
     int option_index = 0;
 
-    char short_opts[] = "c:Dhi:l:q:r:us:U:V";
+    char short_opts[] = "c:Dhi:l:q:d:r:us:U:V";
 
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, &option_index)) != -1) {
         switch (opt) {
         case 0:
             if(strcmp((long_opts[option_index]).name , "pfring-int") == 0){
-                mode = MODE_PFRING;
+                run_mode = MODE_PFRING;
                 if (ConfSet("pfring.interface", optarg, 0) != 1) {
                     fprintf(stderr, "ERROR: Failed to set pfring interface.\n");
                     exit(EXIT_FAILURE);
                 }
             }
-            else if(strcmp((long_opts[option_index]).name , "pfring-clusterid") == 0){
-                printf ("clusterid %s\n",optarg);
-                if (ConfSet("pfring.clusterid", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set pfring clusterid.\n");
+            else if(strcmp((long_opts[option_index]).name , "pfring-cluster-id") == 0){
+                if (ConfSet("pfring.cluster-id", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set pfring cluster-id.\n");
+                    exit(EXIT_FAILURE);
+                }
+            }
+            else if(strcmp((long_opts[option_index]).name , "pfring-cluster-type") == 0){
+                if (ConfSet("pfring.cluster-type", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set pfring cluster-type.\n");
                     exit(EXIT_FAILURE);
                 }
             }
@@ -347,12 +469,15 @@ int main(int argc, char **argv)
             }
             else if(strcmp((long_opts[option_index]).name, "list-unittests") == 0) {
 #ifdef UNITTESTS
-                /* Set mode to unit tests. */
-                mode = MODE_UNITTEST;
+                /* Set run_mode to unit tests. */
+                run_mode = MODE_UNITTEST;
 #else
                 fprintf(stderr, "ERROR: Unit tests not enabled. Make sure to pass --enable-unittests to configure when building.\n");
                 exit(EXIT_FAILURE);
 #endif /* UNITTESTS */
+            }
+            else if(strcmp((long_opts[option_index]).name, "pidfile") == 0) {
+                pid_filename = optarg;
             }
             else if(strcmp((long_opts[option_index]).name, "fatal-unittests") == 0) {
 #ifdef UNITTESTS
@@ -377,7 +502,14 @@ int main(int argc, char **argv)
             exit(EXIT_SUCCESS);
             break;
         case 'i':
-            mode = MODE_PCAP_DEV;
+            if (run_mode == MODE_UNKNOWN) {
+                run_mode = MODE_PCAP_DEV;
+            } else {
+                SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                                                     "has been specified");
+                usage(argv[0]);
+                exit(EXIT_FAILURE);
+            }
             pcap_dev = optarg;
             break;
         case 'l':
@@ -385,13 +517,47 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ERROR: Failed to set log directory.\n");
                 exit(EXIT_FAILURE);
             }
+            if (stat(optarg, &buf) != 0) {
+                SCLogError(SC_ERR_LOGDIR_CMDLINE, "The logging directory \"%s\" "
+                        "upplied at the commandline (-l %s) doesn't "
+                        "exist. Shutting down the engine.", optarg, optarg);
+                exit(EXIT_FAILURE);
+            }
             break;
         case 'q':
-            mode = MODE_NFQ;
-            nfq_id = atoi(optarg); /* strtol? */
+            if (run_mode == MODE_UNKNOWN) {
+                run_mode = MODE_NFQ;
+            } else {
+                SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                                                     "has been specified");
+                usage(argv[0]);
+                exit(EXIT_SUCCESS);
+            }
+            nfq_id = optarg;
+            break;
+        case 'd':
+            if (run_mode == MODE_UNKNOWN) {
+                run_mode = MODE_IPFW;
+            } else {
+                SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                                                     "has been specified");
+                usage(argv[0]);
+                exit(EXIT_SUCCESS);
+            }
+            if (ConfSet("ipfw-divert-port", optarg, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set ipfw_divert_port\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 'r':
-            mode = MODE_PCAP_FILE;
+            if (run_mode == MODE_UNKNOWN) {
+                run_mode = MODE_PCAP_FILE;
+            } else {
+                SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                                                     "has been specified");
+                usage(argv[0]);
+                exit(EXIT_SUCCESS);
+            }
             pcap_file = optarg;
             break;
         case 's':
@@ -399,7 +565,14 @@ int main(int argc, char **argv)
             break;
         case 'u':
 #ifdef UNITTESTS
-            mode = MODE_UNITTEST;
+            if (run_mode == MODE_UNKNOWN) {
+                run_mode = MODE_UNITTEST;
+            } else {
+                SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode has"
+                                                     " been specified");
+                usage(argv[0]);
+                exit(EXIT_SUCCESS);
+            }
 #else
             fprintf(stderr, "ERROR: Unit tests not enabled. Make sure to pass --enable-unittests to configure when building.\n");
             exit(EXIT_FAILURE);
@@ -421,10 +594,16 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
     }
+    SetBpfString(optind, argv);
 
-    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
+    UtilCpuPrintSummary();
 
-    if (!CheckValidDaemonModes(daemon, mode)) {
+#ifdef __SC_CUDA_SUPPORT__
+    /* Init the CUDA environment */
+    SCCudaInitCudaEnvironment();
+#endif
+
+    if (!CheckValidDaemonModes(daemon, run_mode)) {
         exit(EXIT_FAILURE);
     }
 
@@ -433,8 +612,11 @@ int main(int argc, char **argv)
 
     /* Load yaml configuration file if provided. */
     if (conf_filename != NULL) {
-        ConfYamlLoadFile(conf_filename);
-    } else if (mode != MODE_UNITTEST){
+        if (ConfYamlLoadFile(conf_filename) != 0) {
+            /* Error already displayed. */
+            exit(EXIT_FAILURE);
+        }
+    } else if (run_mode != MODE_UNITTEST){
         SCLogError(SC_ERR_OPENING_FILE, "Configuration file has not been provided");
         usage(argv[0]);
         exit(EXIT_FAILURE);
@@ -445,11 +627,31 @@ int main(int argc, char **argv)
         exit(EXIT_SUCCESS);
     }
 
+    /* Check for the existance of the default logging directory which we pick
+     * from suricata.yaml.  If not found, shut the engine down */
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
+    if (stat(log_dir, &buf) != 0) {
+        SCLogError(SC_ERR_LOGDIR_CONFIG, "The logging directory \"%s\" "
+                    "supplied by %s (default-log-dir) doesn't exist. "
+                    "Shutting down the engine", log_dir, conf_filename);
+        exit(EXIT_FAILURE);
+    }
+
+    /* Pull the max pending packets from the config, if not found fall
+     * back on a sane default. */
+    if (ConfGetInt("max-pending-packets", &max_pending_packets) != 1)
+        max_pending_packets = DEFAULT_MAX_PENDING_PACKETS;
+    SCLogDebug("Max pending packets set to %"PRIiMAX, max_pending_packets);
+
     /* Since our config is now loaded we can finish configurating the
      * logging module. */
     SCLogLoadConfig();
 
-    if (mode == MODE_UNKNOWN) {
+    /* Load the Host-OS lookup. */
+    SCHInfoLoadFromConfig();
+
+    if (run_mode == MODE_UNKNOWN) {
         usage(argv[0]);
         exit(EXIT_FAILURE);
     }
@@ -467,26 +669,18 @@ int main(int argc, char **argv)
     SigTableSetup(); /* load the rule keywords */
     TmqhSetup();
 
-    BinSearchInit();
     CIDRInit();
     SigParsePrepare();
     //PatternMatchPrepare(mpm_ctx, MPM_B2G);
     SCPerfInitCounterApi();
-
-    /** \todo we need an api for these */
-    AppLayerDetectProtoThreadInit();
-    RegisterAppLayerParsers();
-    //RegisterHTTPParsers();
-    RegisterHTPParsers();
-    RegisterTLSParsers();
-    RegisterSMBParsers();
-    RegisterDCERPCParsers();
-    RegisterFTPParsers();
-    AppLayerParsersInitPostProcess();
+    SCReputationInitCtx();
 
     TmModuleReceiveNFQRegister();
     TmModuleVerdictNFQRegister();
     TmModuleDecodeNFQRegister();
+    TmModuleReceiveIPFWRegister();
+    TmModuleVerdictIPFWRegister();
+    TmModuleDecodeIPFWRegister();
     TmModuleReceivePcapRegister();
     TmModuleDecodePcapRegister();
     TmModuleReceivePfringRegister();
@@ -494,28 +688,52 @@ int main(int argc, char **argv)
     TmModuleReceivePcapFileRegister();
     TmModuleDecodePcapFileRegister();
     TmModuleDetectRegister();
-    TmModuleAlertFastlogRegister();
-    TmModuleAlertDebuglogRegister();
+    TmModuleAlertFastLogRegister();
+    TmModuleAlertDebugLogRegister();
+    TmModuleAlertPreludeRegister();
     TmModuleRespondRejectRegister();
-    TmModuleAlertFastlogIPv4Register();
-    TmModuleAlertFastlogIPv6Register();
+    TmModuleAlertFastLogIPv4Register();
+    TmModuleAlertFastLogIPv6Register();
     TmModuleAlertUnifiedLogRegister();
     TmModuleAlertUnifiedAlertRegister();
     TmModuleUnified2AlertRegister();
     TmModuleStreamTcpRegister();
-    TmModuleLogHttplogRegister();
-    TmModuleLogHttplogIPv4Register();
-    TmModuleLogHttplogIPv6Register();
+    TmModuleLogHttpLogRegister();
+    TmModuleLogHttpLogIPv4Register();
+    TmModuleLogHttpLogIPv6Register();
+#ifdef __SC_CUDA_SUPPORT__
+    TmModuleCudaMpmB2gRegister();
+#endif
     TmModuleDebugList();
 
+    /** \todo we need an api for these */
+    AppLayerDetectProtoThreadInit();
+    RegisterAppLayerParsers();
+    RegisterHTPParsers();
+    RegisterTLSParsers();
+    RegisterSMBParsers();
+    RegisterDCERPCParsers();
+    RegisterFTPParsers();
+    AppLayerParsersInitPostProcess();
+
 #ifdef UNITTESTS
-    if (mode == MODE_UNITTEST) {
+
+    if (run_mode == MODE_UNITTEST) {
+#ifdef DBG_MEM_ALLOC
+    SCLogInfo("Memory used at startup: %"PRIu64, global_mem);
+#endif
         /* test and initialize the unittesting subsystem */
         if(regex_arg == NULL){
             regex_arg = ".*";
             UtRunSelftest(regex_arg); /* inits and cleans up again */
         }
+
+        AppLayerHtpEnableRequestBodyCallback();
+        AppLayerHtpRegisterExtraCallbacks();
+
         UtInitialize();
+        UTHRegisterTests();
+        SCReputationRegisterTests();
         TmModuleRegisterTests();
         SigTableRegisterTests();
         HashTableRegisterTests();
@@ -529,12 +747,13 @@ int main(int argc, char **argv)
         FlowAlertSidRegisterTests();
         SCPerfRegisterTests();
         DecodePPPRegisterTests();
-        //HTTPParserRegisterTests();
+        DecodeVLANRegisterTests();
         HTPParserRegisterTests();
         TLSParserRegisterTests();
         SMBParserRegisterTests();
         DCERPCParserRegisterTests();
         FTPParserRegisterTests();
+        DecodeRawRegisterTests();
         DecodePPPOERegisterTests();
         DecodeICMPV4RegisterTests();
         DecodeICMPV6RegisterTests();
@@ -556,37 +775,73 @@ int main(int argc, char **argv)
         SCRuleVarsRegisterTests();
         AppLayerParserRegisterTests();
         ThreadMacrosRegisterTests();
+        UtilSpmSearchRegistertests();
         SCClassConfRegisterTests();
+        SCThresholdConfRegisterTests();
+#ifdef __SC_CUDA_SUPPORT__
+        SCCudaRegisterTests();
+#endif
+        PayloadRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
         else {
             uint32_t failed = UtRunTests(regex_arg);
             UtCleanup();
+#ifdef __SC_CUDA_SUPPORT__
+            /* need this in case any of the cuda dispatcher threads are still
+             * running, kill them, so that we can free the cuda contexts.  We
+             * need to free those cuda contexts so that next when we call
+             * deregister functions, we will need to attach to those contexts
+             * the contexts and its associated data */
+            TmThreadKillThreads();
+            SCCudaHlDeRegisterAllRegisteredModules();
+#endif
             if (failed) {
                 exit(EXIT_FAILURE);
             }
         }
 
+#ifdef DBG_MEM_ALLOC
+        SCLogInfo("Total memory used (without SCFree()): %"PRIu64, global_mem);
+#endif
+
         exit(EXIT_SUCCESS);
     }
 #endif /* UNITTESTS */
 
-    if (daemon) Daemonize();
+    if (daemon == 1) {
+        Daemonize();
+        if (pid_filename != NULL) {
+            if (SCPidfileCreate(pid_filename) != 0) {
+                pid_filename = NULL;
+                exit(EXIT_FAILURE);
+            }
+        }
+    } else {
+        if (pid_filename != NULL) {
+            SCLogError(SC_ERR_PIDFILE_DAEMON, "The pidfile file option applies "
+                    "only to the daemon modes");
+            pid_filename = NULL;
+            exit(EXIT_FAILURE);
+        }
+    }
 
+#ifndef OS_WIN32
     /* registering signals we use */
     SignalHandlerSetup(SIGINT, SignalHandlerSigint);
     SignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
     SignalHandlerSetup(SIGHUP, SignalHandlerSighup);
+#endif /* OS_WIN32 */
 
     /* pre allocate packets */
-    SCLogInfo("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)sizeof(Packet));
+    SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)sizeof(Packet));
     int i = 0;
-    for (i = 0; i < MAX_PENDING; i++) {
+    for (i = 0; i < max_pending_packets; i++) {
         /* XXX pkt alloc function */
-        Packet *p = malloc(sizeof(Packet));
+        Packet *p = SCMalloc(sizeof(Packet));
         if (p == NULL) {
-            printf("ERROR: malloc failed: %s\n", strerror(errno));
+            printf("ERROR: SCMalloc failed: %s\n", strerror(errno));
             exit(EXIT_FAILURE);
         }
         memset(p, 0, sizeof(Packet));
@@ -594,23 +849,14 @@ int main(int argc, char **argv)
 
         PacketEnqueue(&packet_q,p);
     }
-    SCLogInfo("preallocating packets... done: total memory %"PRIuMAX"", (uintmax_t)(MAX_PENDING*sizeof(Packet)));
+    SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
+        max_pending_packets, (uintmax_t)(max_pending_packets*sizeof(Packet)));
 
     FlowInitConfig(FLOW_VERBOSE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
 
     SCClassConfLoadClassficationConfigFile(de_ctx);
-
-    /** Create file contexts for output modules */
-    /* ascii */
-    LogFileCtx *af_logfile_ctx = AlertFastlogInitCtx(NULL);
-    LogFileCtx *ad_logfile_ctx = AlertDebuglogInitCtx(NULL);
-    LogFileCtx *lh_logfile_ctx = LogHttplogInitCtx(NULL);
-    /* unified */
-    LogFileCtx *aul_logfile_ctx = AlertUnifiedLogInitCtx(NULL);
-    LogFileCtx *aua_logfile_ctx = AlertUnifiedAlertInitCtx(NULL);
-    LogFileCtx *au2a_logfile_ctx = Unified2AlertInitCtx(NULL);
 
     if (SigLoadSignatures(de_ctx, sig_file) < 0) {
         if (sig_file == NULL) {
@@ -622,31 +868,52 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
     }
 
+    AppLayerHtpRegisterExtraCallbacks();
+    SCThresholdConfInitContext(de_ctx,NULL);
+
     struct timeval start_time;
     memset(&start_time, 0, sizeof(start_time));
     gettimeofday(&start_time, NULL);
 
-    if (mode == MODE_PCAP_DEV) {
-        //RunModeIdsPcap3(de_ctx, pcap_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
-        RunModeIdsPcap2(de_ctx, pcap_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
-        //RunModeIdsPcap(de_ctx, pcap_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
+    RunModeInitializeOutputs();
+    if (run_mode == MODE_PCAP_DEV) {
+        //RunModeIdsPcap3(de_ctx, pcap_dev);
+        //RunModeIdsPcap2(de_ctx, pcap_dev);
+        //RunModeIdsPcap(de_ctx, pcap_dev);
+        RunModeIdsPcapAuto(de_ctx, pcap_dev);
     }
-    else if (mode == MODE_PCAP_FILE) {
-        RunModeFilePcap(de_ctx, pcap_file, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
-        //RunModeFilePcap2(de_ctx, pcap_file, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
+    else if (run_mode == MODE_PCAP_FILE) {
+        //RunModeFilePcap(de_ctx, pcap_file);
+        //RunModeFilePcap2(de_ctx, pcap_file);
+        RunModeFilePcapAuto(de_ctx, pcap_file);
     }
-    else if (mode == MODE_PFRING) {
-        //RunModeIdsPfring3(de_ctx, pfring_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
-        RunModeIdsPfring2(de_ctx, pfring_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
-        //RunModeIdsPfring(de_ctx, pfring_dev, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
+    else if (run_mode == MODE_PFRING) {
+        //RunModeIdsPfring3(de_ctx, pfring_dev);
+        //RunModeIdsPfring2(de_ctx, pfring_dev);
+        //RunModeIdsPfring(de_ctx, pfring_dev);
+        //RunModeIdsPfring4(de_ctx, pfring_dev);
+        RunModeIdsPfringAuto(de_ctx, pfring_dev);
     }
-    else if (mode == MODE_NFQ) {
-        RunModeIpsNFQ(de_ctx, af_logfile_ctx, ad_logfile_ctx, lh_logfile_ctx, aul_logfile_ctx, aua_logfile_ctx, au2a_logfile_ctx);
+    else if (run_mode == MODE_NFQ) {
+        //RunModeIpsNFQ(de_ctx, nfq_id);
+        RunModeIpsNFQAuto(de_ctx, nfq_id);
+    }
+    else if (run_mode == MODE_IPFW) {
+        //RunModeIpsIPFW(de_ctx);
+        RunModeIpsIPFWAuto(de_ctx);
     }
     else {
-        printf("ERROR: Unknown runtime mode.\n");
+        SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
         exit(EXIT_FAILURE);
     }
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (PatternMatchDefaultMatcher() == MPM_B2G_CUDA) {
+        /* start the dispatcher thread for this module */
+        if (B2gCudaStartDispatcherThreadRC("SC_RULES_CONTENT_B2G_CUDA") == -1)
+            exit(EXIT_FAILURE);
+    }
+#endif
 
     /* Spawn the flow manager thread */
     FlowManagerThreadSpawn();
@@ -665,12 +932,20 @@ int main(int argc, char **argv)
 
     /* Wait till all the threads have been initialized */
     if (TmThreadWaitOnThreadInit() == TM_ECODE_FAILED) {
-        printf("ERROR: Engine initialization failed, aborting...\n");
+        SCLogError(SC_ERR_INITIALIZATION, "Engine initialization failed, "
+                   "aborting...");
         exit(EXIT_FAILURE);
     }
 
     /* Un-pause all the paused threads */
     TmThreadContinueThreads();
+
+#ifdef DBG_MEM_ALLOC
+    SCLogInfo("Memory used at startup: %"PRIu64, global_mem);
+#ifdef DBG_MEM_ALLOC_SKIP_STARTUP
+    print_mem_flag = 1;
+#endif
+#endif
 
     while(1) {
         if (sigflags) {
@@ -722,24 +997,60 @@ int main(int argc, char **argv)
         usleep(100);
     }
 
+
     FlowShutdown();
     FlowPrintQueueInfo();
     StreamTcpFreeConfig(STREAM_VERBOSE);
     HTPFreeConfig();
     HTPAtExitPrintStats();
 
+#ifdef DBG_MEM_ALLOC
+    SCLogInfo("Total memory used (without SCFree()): %"PRIu64, global_mem);
+#ifdef DBG_MEM_ALLOC_SKIP_STARTUP
+    print_mem_flag = 0;
+#endif
+#endif
+
+    SCPidfileRemove(pid_filename);
+
     /** \todo review whats needed here */
+#ifdef __SC_CUDA_SUPPORT__
+    if (PatternMatchDefaultMatcher() == MPM_B2G_CUDA) {
+        /* all threadvars related to cuda should be free by now, which means
+         * the cuda contexts would be floating */
+        if (SCCudaHlPushCudaContextFromModule("SC_RULES_CONTENT_B2G_CUDA") == -1) {
+            SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Call to "
+                       "SCCudaHlPushCudaContextForModule() failed during the "
+                       "shutdown phase just before the call to SigGroupCleanup()");
+        }
+    }
+#endif
     SigGroupCleanup(de_ctx);
+#ifdef __SC_CUDA_SUPPORT__
+    if (PatternMatchDefaultMatcher() == MPM_B2G_CUDA) {
+        /* pop the cuda context we just pushed before the call to SigGroupCleanup() */
+        if (SCCudaCtxPopCurrent(NULL) == -1) {
+            SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Call to SCCudaCtxPopCurrent() "
+                       "during the shutdown phase just before the call to "
+                       "SigGroupCleanup()");
+            return 0;
+        }
+    }
+#endif
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
+    AlpProtoDestroy();
 
-    /** Destroy file contexts for output modules */
-    LogFileFreeCtx(af_logfile_ctx);
-    LogFileFreeCtx(lh_logfile_ctx);
-    LogFileFreeCtx(ad_logfile_ctx);
-    LogFileFreeCtx(aul_logfile_ctx);
-    LogFileFreeCtx(aua_logfile_ctx);
-    LogFileFreeCtx(au2a_logfile_ctx);
+    RunModeShutDown();
+    OutputDeregisterAll();
+
+#ifdef __SC_CUDA_SUPPORT__
+    /* all cuda contexts attached to any threads should be free by now.
+     * if any host_thread is still attached to any cuda_context, they need
+     * to pop them by the time we reach here, if they aren't using those
+     * cuda contexts in any way */
+    SCCudaHlDeRegisterAllRegisteredModules();
+#endif
 
     exit(EXIT_SUCCESS);
 }

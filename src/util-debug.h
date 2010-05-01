@@ -5,7 +5,6 @@
 #include <stdio.h>
 #include "threads.h"
 #include <stdint.h>
-#include <syslog.h>
 
 #include "util-enum.h"
 #include "util-error.h"
@@ -29,6 +28,7 @@
  * \brief The various log levels
  */
 typedef enum {
+    SC_LOG_NOTSET = -1,
     SC_LOG_NONE = 0,
     SC_LOG_EMERGENCY,
     SC_LOG_ALERT,
@@ -180,7 +180,7 @@ extern int sc_log_module_cleaned;
                                   { } else {                             \
                                       snprintf(_sc_log_temp,             \
                                                (SC_LOG_MAX_LOG_MSG_LEN - \
-                                                (_sc_log_msg - _sc_log_temp)), \
+                                                (_sc_log_temp - _sc_log_msg)), \
                                                __VA_ARGS__);             \
                                       SCLogOutputBuffer(x, _sc_log_msg); \
                                   }                                      \
@@ -201,13 +201,20 @@ extern int sc_log_module_cleaned;
                                                 _sc_log_err_temp +       \
                                                 snprintf(_sc_log_err_temp, \
                                                (SC_LOG_MAX_LOG_MSG_LEN - \
-                                                (_sc_log_err_msg - _sc_log_err_temp)), \
+                                                (_sc_log_err_temp - _sc_log_err_msg)), \
                                                "[ERRCODE: %s(%d)] - ",   \
                                                SCErrorToString(err),     \
                                                err);                     \
+                                      if ((_sc_log_err_temp - _sc_log_err_msg) > \
+                                          SC_LOG_MAX_LOG_MSG_LEN) {      \
+                                          printf("Warning: Log message exceeded message length limit of %d\n",\
+                                                 SC_LOG_MAX_LOG_MSG_LEN); \
+                                          _sc_log_err_temp = _sc_log_err_msg + \
+                                              SC_LOG_MAX_LOG_MSG_LEN;    \
+                                      }                                  \
                                       snprintf(_sc_log_err_temp,         \
                                                (SC_LOG_MAX_LOG_MSG_LEN - \
-                                                (_sc_log_err_msg - _sc_log_err_temp)), \
+                                                (_sc_log_err_temp - _sc_log_err_msg)), \
                                                __VA_ARGS__);             \
                                       SCLogOutputBuffer(x, _sc_log_err_msg); \
                                   }                                      \
@@ -277,7 +284,7 @@ extern int sc_log_module_cleaned;
 /* Avoid the overhead of using the debugging subsystem, in production mode */
 #ifndef DEBUG
 
-#define SCLogDebug(...)
+#define SCLogDebug(...)                 do { } while (0)
 
 #define SCEnter(...)
 
@@ -363,7 +370,7 @@ extern int sc_log_module_cleaned;
  */
 #define SCReturnInt(x)        do {                                           \
                                   if (sc_log_global_log_level >= SC_LOG_DEBUG) { \
-                                      SCLogDebug("Returning: %d ... <<", x); \
+                                      SCLogDebug("Returning: %"PRIdMAX" ... <<", (intmax_t)x); \
                                       SCLogCheckFDFilterExit(__FUNCTION__);  \
                                   }                                          \
                                   return x;                                  \
@@ -381,7 +388,7 @@ extern int sc_log_module_cleaned;
  */
 #define SCReturnUInt(x)       do {                                           \
                                   if (sc_log_global_log_level >= SC_LOG_DEBUG) { \
-                                      SCLogDebug("Returning: %u ... <<", x); \
+                                      SCLogDebug("Returning: %"PRIuMAX" ... <<", (uintmax_t)x); \
                                       SCLogCheckFDFilterExit(__FUNCTION__);  \
                                   }                                          \
                                   return x;                                  \

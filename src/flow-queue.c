@@ -11,7 +11,7 @@
 #include <string.h>
 
 FlowQueue *FlowQueueNew() {
-    FlowQueue *q = (FlowQueue *)malloc(sizeof(FlowQueue));
+    FlowQueue *q = (FlowQueue *)SCMalloc(sizeof(FlowQueue));
     if (q == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC,"Error allocating flow queue");
         exit(EXIT_SUCCESS);
@@ -27,6 +27,16 @@ FlowQueue *FlowQueueInit (FlowQueue *q) {
         SCCondInit(&q->cond_q, NULL);
     }
     return q;
+}
+
+/**
+ *  \brief Destroy a flow queue
+ *
+ *  \param q the flow queue to destroy
+ */
+void FlowQueueDestroy (FlowQueue *q) {
+    SCMutexDestroy(&q->mutex_q);
+    SCCondDestroy(&q->cond_q);
 }
 
 void FlowEnqueue (FlowQueue *q, Flow *f) {

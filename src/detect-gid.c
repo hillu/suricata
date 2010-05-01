@@ -13,13 +13,14 @@
 
 #include "detect-gid.h"
 #include "util-unittest.h"
+#include "util-debug.h"
 
 #define PARSE_REGEX "[0-9]+"
 
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectGidSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *str);
+static int DetectGidSetup (DetectEngineCtx *, Signature *, char *);
 
 /**
  * \brief Registration function for gid: keyword
@@ -39,14 +40,14 @@ void DetectGidRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
@@ -74,14 +75,14 @@ static uint32_t DetectGidParse (char *rawstr)
     uint32_t rc;
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
-
     if (ret < 1) {
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, rawstr);
         return -1;
     }
 
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 0, &str_ptr);
-
     if (res < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         return -1;
     }
 
@@ -92,7 +93,7 @@ static uint32_t DetectGidParse (char *rawstr)
 
     rc = (uint32_t )atol(ptr);
 
-    free(ptr);
+    SCFree(ptr);
     return rc;
 }
 
@@ -102,18 +103,17 @@ static uint32_t DetectGidParse (char *rawstr)
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param rawstr pointer to the user provided gid options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectGidSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectGidSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     s->gid = DetectGidParse(rawstr);
 
     if(s->gid > 0)
-    return 0;
+        return 0;
 
     return -1;
 }

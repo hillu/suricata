@@ -1,6 +1,6 @@
+/* Copyright (c) 2009 Open Information Security Foundation */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
- *
  * \file
  * \author Victor Julien <victor@inliniac.net>
  */
@@ -9,9 +9,10 @@
 #include "threads.h"
 #include "debug.h"
 #include "decode.h"
-#include "detect.h"
 
+#include "detect.h"
 #include "detect-parse.h"
+
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 
@@ -26,6 +27,7 @@
 #include "app-layer-tls.h"
 #include "detect-tls-version.h"
 
+#include "stream-tcp.h"
 
 /**
  * \brief Regex for parsing "id" option, matching number or "number"
@@ -36,7 +38,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectTlsVersionMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
-int DetectTlsVersionSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectTlsVersionSetup (DetectEngineCtx *, Signature *, char *);
 void DetectTlsVersionRegisterTests(void);
 void DetectTlsVersionFree(void *);
 
@@ -60,14 +62,14 @@ void DetectTlsVersionRegister (void) {
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if (parse_regex == NULL) {
-        SCLogDebug("Compile of \"%s\" failed at offset %" PRId32 ": %s",
+        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
                     PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -136,7 +138,7 @@ DetectTlsVersionData *DetectTlsVersionParse (char *str)
                     ov, MAX_SUBSTRINGS);
 
     if (ret < 1 || ret > 3) {
-        SCLogDebug("invalid tls.version option");
+        SCLogError(SC_ERR_PCRE_MATCH, "invalid tls.version option");
         goto error;
     }
 
@@ -146,18 +148,18 @@ DetectTlsVersionData *DetectTlsVersionParse (char *str)
         char *tmp_str;
         res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
         if (res < 0) {
-            SCLogDebug("DetectTlsVersionParse: pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
 
         /* We have a correct id option */
-        tls = malloc(sizeof(DetectTlsVersionData));
+        tls = SCMalloc(sizeof(DetectTlsVersionData));
         if (tls == NULL) {
-            SCLogDebug("DetectTlsVersionParse malloc failed");
+            SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
             goto error;
         }
 
-        orig = strdup((char*)str_ptr);
+        orig = SCStrdup((char*)str_ptr);
         tmp_str=orig;
         /* Let's see if we need to scape "'s */
         if (tmp_str[0] == '"')
@@ -173,12 +175,13 @@ DetectTlsVersionData *DetectTlsVersionParse (char *str)
         } else if (strcmp("1.2", tmp_str) == 0) {
             temp = TLS_VERSION_12;
         } else {
+            SCLogError(SC_ERR_INVALID_VALUE, "Invalid value");
             goto error;
         }
 
         tls->ver = temp;
 
-        free(orig);
+        SCFree(orig);
 
         SCLogDebug("will look for tls %"PRIu8"", tls->ver);
     }
@@ -198,13 +201,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param idstr pointer to the user provided "id" option
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *str)
+static int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
 {
     DetectTlsVersionData *tls = NULL;
     SigMatch *sm = NULL;
@@ -221,12 +223,19 @@ int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, c
     sm->type = DETECT_AL_TLS_VERSION;
     sm->ctx = (void *)tls;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendAppLayer(s, sm);
+
+    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
+        goto error;
+    }
+
+    s->alproto = ALPROTO_TLS;
     return 0;
 
 error:
     if (tls != NULL) DetectTlsVersionFree(tls);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 
 }
@@ -238,7 +247,7 @@ error:
  */
 void DetectTlsVersionFree(void *ptr) {
     DetectTlsVersionData *id_d = (DetectTlsVersionData *)ptr;
-    free(id_d);
+    SCFree(id_d);
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
@@ -292,7 +301,7 @@ static int DetectTlsVersionTestDetect01(void) {
     Packet p;
     Signature *s = NULL;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -305,11 +314,13 @@ static int DetectTlsVersionTestDetect01(void) {
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_TLS;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -326,25 +337,25 @@ static int DetectTlsVersionTestDetect01(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1, FALSE);
+    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -384,6 +395,8 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -402,7 +415,7 @@ static int DetectTlsVersionTestDetect02(void) {
     Packet p;
     Signature *s = NULL;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -415,11 +428,13 @@ static int DetectTlsVersionTestDetect02(void) {
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_TLS;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -436,25 +451,25 @@ static int DetectTlsVersionTestDetect02(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1, FALSE);
+    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -492,6 +507,8 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -510,7 +527,7 @@ static int DetectTlsVersionTestDetect03(void) {
     Packet p;
     Signature *s = NULL;
     ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -523,11 +540,13 @@ static int DetectTlsVersionTestDetect03(void) {
     p.payload_len = tlslen4;
     p.proto = IPPROTO_TCP;
 
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_TLS;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -548,25 +567,25 @@ static int DetectTlsVersionTestDetect03(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1, FALSE);
+    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4, FALSE);
+    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -604,6 +623,8 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 

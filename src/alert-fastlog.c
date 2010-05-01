@@ -19,6 +19,7 @@
 #include "conf.h"
 
 #include "threads.h"
+#include "tm-threads.h"
 #include "threadvars.h"
 #include "tm-modules.h"
 #include "util-debug.h"
@@ -28,108 +29,132 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-reference.h"
 #include "util-classification-config.h"
+
+#include "output.h"
+#include "alert-fastlog.h"
+
+#include "util-mpm-b2g-cuda.h"
+#include "util-cuda-handlers.h"
 
 #define DEFAULT_LOG_FILENAME "fast.log"
 
-TmEcode AlertFastlog (ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertFastlogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertFastlogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode AlertFastlogThreadInit(ThreadVars *, void *, void **);
-TmEcode AlertFastlogThreadDeinit(ThreadVars *, void *);
-void AlertFastlogExitPrintStats(ThreadVars *, void *);
-int AlertFastlogOpenFileCtx(LogFileCtx *, char *);
-void AlertFastLogRegisterTests(void);
+#define MODULE_NAME "AlertFastLog"
 
-void TmModuleAlertFastlogRegister (void) {
-    tmm_modules[TMM_ALERTFASTLOG].name = "AlertFastlog";
-    tmm_modules[TMM_ALERTFASTLOG].ThreadInit = AlertFastlogThreadInit;
-    tmm_modules[TMM_ALERTFASTLOG].Func = AlertFastlog;
-    tmm_modules[TMM_ALERTFASTLOG].ThreadExitPrintStats = AlertFastlogExitPrintStats;
-    tmm_modules[TMM_ALERTFASTLOG].ThreadDeinit = AlertFastlogThreadDeinit;
+TmEcode AlertFastLog (ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertFastLogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertFastLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode AlertFastLogThreadInit(ThreadVars *, void *, void **);
+TmEcode AlertFastLogThreadDeinit(ThreadVars *, void *);
+void AlertFastLogExitPrintStats(ThreadVars *, void *);
+static int AlertFastLogOpenFileCtx(LogFileCtx *, const char *);
+void AlertFastLogRegisterTests(void);
+static void AlertFastLogDeInitCtx(OutputCtx *);
+
+void TmModuleAlertFastLogRegister (void) {
+    tmm_modules[TMM_ALERTFASTLOG].name = MODULE_NAME;
+    tmm_modules[TMM_ALERTFASTLOG].ThreadInit = AlertFastLogThreadInit;
+    tmm_modules[TMM_ALERTFASTLOG].Func = AlertFastLog;
+    tmm_modules[TMM_ALERTFASTLOG].ThreadExitPrintStats = AlertFastLogExitPrintStats;
+    tmm_modules[TMM_ALERTFASTLOG].ThreadDeinit = AlertFastLogThreadDeinit;
     tmm_modules[TMM_ALERTFASTLOG].RegisterTests = AlertFastLogRegisterTests;
+
+    OutputRegisterModule(MODULE_NAME, "fast", AlertFastLogInitCtx);
 }
 
-void TmModuleAlertFastlogIPv4Register (void) {
-    tmm_modules[TMM_ALERTFASTLOG4].name = "AlertFastlogIPv4";
-    tmm_modules[TMM_ALERTFASTLOG4].ThreadInit = AlertFastlogThreadInit;
-    tmm_modules[TMM_ALERTFASTLOG4].Func = AlertFastlogIPv4;
-    tmm_modules[TMM_ALERTFASTLOG4].ThreadExitPrintStats = AlertFastlogExitPrintStats;
-    tmm_modules[TMM_ALERTFASTLOG4].ThreadDeinit = AlertFastlogThreadDeinit;
+void TmModuleAlertFastLogIPv4Register (void) {
+    tmm_modules[TMM_ALERTFASTLOG4].name = "AlertFastLogIPv4";
+    tmm_modules[TMM_ALERTFASTLOG4].ThreadInit = AlertFastLogThreadInit;
+    tmm_modules[TMM_ALERTFASTLOG4].Func = AlertFastLogIPv4;
+    tmm_modules[TMM_ALERTFASTLOG4].ThreadExitPrintStats = AlertFastLogExitPrintStats;
+    tmm_modules[TMM_ALERTFASTLOG4].ThreadDeinit = AlertFastLogThreadDeinit;
     tmm_modules[TMM_ALERTFASTLOG4].RegisterTests = NULL;
 }
 
-void TmModuleAlertFastlogIPv6Register (void) {
-    tmm_modules[TMM_ALERTFASTLOG6].name = "AlertFastlogIPv6";
-    tmm_modules[TMM_ALERTFASTLOG6].ThreadInit = AlertFastlogThreadInit;
-    tmm_modules[TMM_ALERTFASTLOG6].Func = AlertFastlogIPv6;
-    tmm_modules[TMM_ALERTFASTLOG6].ThreadExitPrintStats = AlertFastlogExitPrintStats;
-    tmm_modules[TMM_ALERTFASTLOG6].ThreadDeinit = AlertFastlogThreadDeinit;
+void TmModuleAlertFastLogIPv6Register (void) {
+    tmm_modules[TMM_ALERTFASTLOG6].name = "AlertFastLogIPv6";
+    tmm_modules[TMM_ALERTFASTLOG6].ThreadInit = AlertFastLogThreadInit;
+    tmm_modules[TMM_ALERTFASTLOG6].Func = AlertFastLogIPv6;
+    tmm_modules[TMM_ALERTFASTLOG6].ThreadExitPrintStats = AlertFastLogExitPrintStats;
+    tmm_modules[TMM_ALERTFASTLOG6].ThreadDeinit = AlertFastLogThreadDeinit;
     tmm_modules[TMM_ALERTFASTLOG6].RegisterTests = NULL;
 }
 
-typedef struct AlertFastlogThread_ {
+typedef struct AlertFastLogThread_ {
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */
     LogFileCtx* file_ctx;
-    uint32_t alerts;
-} AlertFastlogThread;
+} AlertFastLogThread;
 
 static void CreateTimeString (const struct timeval *ts, char *str, size_t size) {
     time_t time = ts->tv_sec;
-    struct tm *t = gmtime(&time);
+    struct tm local_tm;
+    struct tm *t = gmtime_r(&time, &local_tm);
     uint32_t sec = ts->tv_sec % 86400;
 
     snprintf(str, size, "%02d/%02d/%02d-%02d:%02d:%02d.%06u",
-        t->tm_mon + 1, t->tm_mday, t->tm_year - 100,
-        sec / 3600, (sec % 3600) / 60, sec % 60,
-        (uint32_t) ts->tv_usec);
+            t->tm_mon + 1, t->tm_mday, t->tm_year - 100,
+            sec / 3600, (sec % 3600) / 60, sec % 60,
+            (uint32_t) ts->tv_usec);
 }
 
-TmEcode AlertFastlogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertFastLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    AlertFastlogThread *aft = (AlertFastlogThread *)data;
+    AlertFastLogThread *aft = (AlertFastLogThread *)data;
     int i;
+    Reference *ref = NULL;
     char timebuf[64];
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
-    aft->alerts += p->alerts.cnt;
-
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     SCMutexLock(&aft->file_ctx->fp_mutex);
 
+    aft->file_ctx->alerts += p->alerts.cnt;
+
     for (i = 0; i < p->alerts.cnt; i++) {
         PacketAlert *pa = &p->alerts.alerts[i];
+
         char srcip[16], dstip[16];
 
         inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
 
-        fprintf(aft->file_ctx->fp, "%s  [**] [%" PRIu32 ":%" PRIu32 ":%" PRIu32 "] %s [**] [Classification: %s] [Priority: %" PRIu32 "] {%" PRIu32 "} %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
-            timebuf, pa->gid, pa->sid, pa->rev, pa->msg, pa->class_msg, pa->prio, IPV4_GET_IPPROTO(p), srcip, p->sp, dstip, p->dp);
+        fprintf(aft->file_ctx->fp, "%s  [**] [%" PRIu32 ":%" PRIu32 ":%" PRIu32 "] %s [**] [Classification: %s] [Priority: %" PRIu32 "] {%" PRIu32 "} %s:%" PRIu32 " -> %s:%" PRIu32 " ",
+                timebuf, pa->gid, pa->sid, pa->rev, pa->msg, pa->class_msg, pa->prio, IPV4_GET_IPPROTO(p), srcip, p->sp, dstip, p->dp);
+
+        if(pa->references != NULL)  {
+            for (ref = pa->references; ref != NULL; ref = ref->next)   {
+                fprintf(aft->file_ctx->fp,"[Xref => %s%s]", ref->key, ref->reference);
+            }
+        }
+
+        fprintf(aft->file_ctx->fp,"\n");
+
+        fflush(aft->file_ctx->fp);
     }
-    fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
     return TM_ECODE_OK;
 }
 
-TmEcode AlertFastlogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertFastLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    AlertFastlogThread *aft = (AlertFastlogThread *)data;
+    AlertFastLogThread *aft = (AlertFastLogThread *)data;
     int i;
+    Reference *ref = NULL;
     char timebuf[64];
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
-    aft->alerts += p->alerts.cnt;
-
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     SCMutexLock(&aft->file_ctx->fp_mutex);
+
+    aft->file_ctx->alerts += p->alerts.cnt;
 
     for (i = 0; i < p->alerts.cnt; i++) {
         PacketAlert *pa = &p->alerts.alerts[i];
@@ -138,124 +163,138 @@ TmEcode AlertFastlogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
         inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
 
-        fprintf(aft->file_ctx->fp, "%s  [**] [%" PRIu32 ":%" PRIu32 ":%" PRIu32 "] %s [**] [Classification: %s] [Priority: %" PRIu32 "] {%" PRIu32 "} %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
+        fprintf(aft->file_ctx->fp, "%s  [**] [%" PRIu32 ":%" PRIu32 ":%" PRIu32 "] %s [**] [Classification: %s] [Priority: %" PRIu32 "] {%" PRIu32 "} %s:%" PRIu32 " -> %s:%" PRIu32 " ",
                 timebuf, pa->gid, pa->sid, pa->rev, pa->msg, pa->class_msg, pa->prio, IPV6_GET_L4PROTO(p), srcip, p->sp, dstip, p->dp);
+
+        if(pa->references != NULL)  {
+            for (ref = pa->references; ref != NULL; ref = ref->next)   {
+                fprintf(aft->file_ctx->fp,"[Xref => %s%s]", ref->key, ref->reference);
+            }
+        }
+
+        fprintf(aft->file_ctx->fp,"\n");
+
+        fflush(aft->file_ctx->fp);
     }
-    fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
     return TM_ECODE_OK;
 }
 
-TmEcode AlertFastlog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode AlertFastLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
     if (PKT_IS_IPV4(p)) {
-        return AlertFastlogIPv4(tv, p, data, pq);
+        return AlertFastLogIPv4(tv, p, data, pq);
     } else if (PKT_IS_IPV6(p)) {
-        return AlertFastlogIPv6(tv, p, data, pq);
+        return AlertFastLogIPv6(tv, p, data, pq);
     }
 
     return TM_ECODE_OK;
 }
 
-TmEcode AlertFastlogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode AlertFastLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    AlertFastlogThread *aft = malloc(sizeof(AlertFastlogThread));
+    AlertFastLogThread *aft = SCMalloc(sizeof(AlertFastLogThread));
     if (aft == NULL) {
         return TM_ECODE_FAILED;
     }
-    memset(aft, 0, sizeof(AlertFastlogThread));
+    memset(aft, 0, sizeof(AlertFastLogThread));
     if(initdata == NULL)
     {
-        SCLogError(SC_ERR_FAST_LOG_GENERIC_ERROR, "Error getting context for "
-                   "AlertFastLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for AlertFastLog.  \"initdata\" argument NULL");
+        SCFree(aft);
         return TM_ECODE_FAILED;
     }
     /** Use the Ouptut Context (file pointer and mutex) */
-    aft->file_ctx = (LogFileCtx*) initdata;
+    aft->file_ctx = ((OutputCtx *)initdata)->data;
+
     *data = (void *)aft;
     return TM_ECODE_OK;
 }
 
-TmEcode AlertFastlogThreadDeinit(ThreadVars *t, void *data)
+TmEcode AlertFastLogThreadDeinit(ThreadVars *t, void *data)
 {
-    AlertFastlogThread *aft = (AlertFastlogThread *)data;
+    AlertFastLogThread *aft = (AlertFastLogThread *)data;
     if (aft == NULL) {
         return TM_ECODE_OK;
     }
 
     /* clear memory */
-    memset(aft, 0, sizeof(AlertFastlogThread));
+    memset(aft, 0, sizeof(AlertFastLogThread));
 
-    free(aft);
+    SCFree(aft);
     return TM_ECODE_OK;
 }
 
-void AlertFastlogExitPrintStats(ThreadVars *tv, void *data) {
-    AlertFastlogThread *aft = (AlertFastlogThread *)data;
+void AlertFastLogExitPrintStats(ThreadVars *tv, void *data) {
+    AlertFastLogThread *aft = (AlertFastLogThread *)data;
     if (aft == NULL) {
         return;
     }
 
-    SCLogInfo("(%s) Alerts %" PRIu32 "", tv->name, aft->alerts);
+    SCLogInfo("(%s) Alerts %" PRIu64 "", tv->name, aft->file_ctx->alerts);
 }
 
-/** \brief Create a new file_ctx from config_file (if specified)
- *  \param config_file for loading separate configs
- *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
- * */
-LogFileCtx *AlertFastlogInitCtx(char *config_file)
+/**
+ * \brief Create a new LogFileCtx for "fast" output style.
+ * \param conf The configuration node for this output.
+ * \return A LogFileCtx pointer on success, NULL on failure.
+ */
+OutputCtx *AlertFastLogInitCtx(ConfNode *conf)
 {
-    int ret=0;
-    LogFileCtx* file_ctx=LogFileNewCtx();
-
-    if(file_ctx == NULL)
-    {
-        SCLogError(SC_ERR_FAST_LOG_GENERIC_ERROR, "AlertFastlogInitCtx: Couldn't "
-                   "create new file_ctx");
+    LogFileCtx *logfile_ctx = LogFileNewCtx();
+    if (logfile_ctx == NULL) {
+        SCLogDebug("AlertFastLogInitCtx2: Could not create new LogFileCtx");
         return NULL;
     }
 
-    /** fill the new LogFileCtx with the specific AlertFastlog configuration */
-    ret=AlertFastlogOpenFileCtx(file_ctx, config_file);
-
-    if(ret < 0)
+    const char *filename = ConfNodeLookupChildValue(conf, "filename");
+    if (filename == NULL)
+        filename = DEFAULT_LOG_FILENAME;
+    if (AlertFastLogOpenFileCtx(logfile_ctx, filename) < 0) {
+        LogFileFreeCtx(logfile_ctx);
         return NULL;
+    }
 
-    /** In AlertFastlogOpenFileCtx the second parameter should be the configuration file to use
-    * but it's not implemented yet, so passing NULL to load the default
-    * configuration
-    */
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (output_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+                "Failed to allocated memory for OutputCtx");
+        exit(EXIT_FAILURE);
+    }
+    output_ctx->data = logfile_ctx;
+    output_ctx->DeInit = AlertFastLogDeInitCtx;
 
-    return file_ctx;
+    SCLogInfo("Fast log output initialized, filename: %s", filename);
+
+    return output_ctx;
+}
+
+static void AlertFastLogDeInitCtx(OutputCtx *output_ctx)
+{
+    LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
+    LogFileFreeCtx(logfile_ctx);
+    free(output_ctx);
 }
 
 /** \brief Read the config set the file pointer, open the file
  *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param config_file for loading separate configs
+ *  \param filename name of log file
  *  \return -1 if failure, 0 if succesful
  * */
-int AlertFastlogOpenFileCtx(LogFileCtx *file_ctx, char *config_file)
+static int AlertFastLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename)
 {
-    if(config_file == NULL)
-    {
-        /** Separate config files not implemented at the moment,
-        * but it must be able to load from separate config file.
-        * Load the default configuration.
-        */
+    char log_path[PATH_MAX], *log_dir;
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
+    snprintf(log_path, PATH_MAX, "%s/%s", log_dir, filename);
 
-        char log_path[PATH_MAX], *log_dir;
-        if (ConfGet("default-log-dir", &log_dir) != 1)
-            log_dir = DEFAULT_LOG_DIR;
-        snprintf(log_path, PATH_MAX, "%s/%s", log_dir, DEFAULT_LOG_FILENAME);
+    file_ctx->fp = fopen(log_path, "w");
 
-        file_ctx->fp = fopen(log_path, "w");
-
-        if (file_ctx->fp == NULL) {
-            SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
-                       strerror(errno));
-            return -1;
-        }
+    if (file_ctx->fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
+                strerror(errno));
+        return -1;
     }
 
     return 0;
@@ -297,8 +336,8 @@ int AlertFastLogTest01()
     SCClassConfDeleteDummyClassificationConfigFD();
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"Fastlog test\"; content:GET; "
-                               "Classtype:unknown; sid:1;)");
+            "(msg:\"FastLog test\"; content:GET; "
+            "Classtype:unknown; sid:1;)");
     result = (de_ctx->sig_list != NULL);
 
     SigGroupBuild(de_ctx);
@@ -310,6 +349,14 @@ int AlertFastLogTest01()
         result = (strcmp(p.alerts.alerts[0].class_msg, "Unknown are we") == 0);
     else
         result = 0;
+
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadRC();
+    if (SCCudaHlPushCudaContextFromModule("SC_RULES_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
 
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
@@ -350,8 +397,8 @@ int AlertFastLogTest02()
     SCClassConfDeleteDummyClassificationConfigFD();
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"Fastlog test\"; content:GET; "
-                               "Classtype:unknown; sid:1;)");
+            "(msg:\"FastLog test\"; content:GET; "
+            "Classtype:unknown; sid:1;)");
     result = (de_ctx->sig_list != NULL);
     if (result == 0) printf("sig parse failed: ");
 
@@ -364,11 +411,19 @@ int AlertFastLogTest02()
         result = (strcmp(p.alerts.alerts[0].class_msg, "Unknown Traffic") != 0);
         if (result == 0) printf("p.alerts.alerts[0].class_msg %s: ", p.alerts.alerts[0].class_msg);
         result = (strcmp(p.alerts.alerts[0].class_msg,
-                         "Unknown are we") == 0);
+                    "Unknown are we") == 0);
         if (result == 0) printf("p.alerts.alerts[0].class_msg %s: ", p.alerts.alerts[0].class_msg);
     } else {
         result = 0;
     }
+
+#ifdef __SC_CUDA_SUPPORT__
+    B2gCudaKillDispatcherThreadRC();
+    if (SCCudaHlPushCudaContextFromModule("SC_RULES_CONTENT_B2G_CUDA") == -1) {
+        printf("Call to SCCudaHlPushCudaContextForModule() failed\n");
+        return 0;
+    }
+#endif
 
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
@@ -389,8 +444,18 @@ void AlertFastLogRegisterTests(void)
 
 #ifdef UNITTESTS
 
+#ifdef __SC_CUDA_SUPPORT__
+    UtRegisterTest("AlertFastLogCudaContextInit",
+            SCCudaHlTestEnvCudaContextInit, 1);
+#endif
+
     UtRegisterTest("AlertFastLogTest01", AlertFastLogTest01, 1);
     UtRegisterTest("AlertFastLogTest02", AlertFastLogTest02, 1);
+
+#ifdef __SC_CUDA_SUPPORT__
+    UtRegisterTest("AlertFastLogCudaContextDeInit",
+            SCCudaHlTestEnvCudaContextDeInit, 1);
+#endif
 
 #endif /* UNITTESTS */
 
