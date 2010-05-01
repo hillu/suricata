@@ -1,23 +1,17 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
+/* Copyright (c) 2009 Open Information Security Foundation. */
+
+/**
+ *  \file
  *  \author Anoop Saldanha <poonaatsoc@gmail.com>
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <stdarg.h>
-#include <sys/time.h>
-#include <sys/syscall.h>
-#include <syslog.h>
-
+#include "suricata-common.h"
+#include "threads.h"
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-enum.h"
 #include "util-debug-filters.h"
 
-#include "suricata-common.h"
 #include "decode.h"
 #include "detect.h"
 #include "packet-queue.h"
@@ -34,6 +28,7 @@
 
 /* holds the string-enum mapping for the enums held in the table SCLogLevel */
 SCEnumCharMap sc_log_level_map[ ] = {
+    { "Not set",        SC_LOG_NOTSET},
     { "None",           SC_LOG_NONE },
     { "Emergency",      SC_LOG_EMERGENCY },
     { "Alert",          SC_LOG_ALERT },
@@ -215,7 +210,7 @@ void SCLogOutputBuffer(SCLogLevel log_level, char *msg)
 
     op_iface_ctx = sc_log_config->op_ifaces;
     while (op_iface_ctx != NULL) {
-        if (log_level != -1 && log_level > op_iface_ctx->log_level) {
+        if (log_level != SC_LOG_NOTSET && log_level > op_iface_ctx->log_level) {
             op_iface_ctx = op_iface_ctx->next;
             continue;
         }
@@ -255,16 +250,16 @@ void SCLogOutputBuffer(SCLogLevel log_level, char *msg)
 SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
                      unsigned line, const char *function)
 {
-	char *temp_fmt = strdup(sc_log_config->log_format);
+    char *temp_fmt = strdup(sc_log_config->log_format);
     char *temp_fmt_h = temp_fmt;
-	char *substr = temp_fmt;
+    char *substr = temp_fmt;
     char *temp = *msg;
     const char *s = NULL;
 
     struct timeval tval;
     struct tm *tms = NULL;
 
-    /* no of characters_written(cw) by sprintf */
+    /* no of characters_written(cw) by snprintf */
     int cw = 0;
 
     if (temp_fmt == NULL) {
@@ -277,29 +272,49 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
         printf("Logging module not initialized.  Call SCLogInitLogModule(), "
                "before using the logging API\n");
 #endif
-        return SC_LOG_MODULE_NOT_INIT;
+        if (temp_fmt != NULL)
+            free(temp_fmt);
+        return SC_ERR_LOG_MODULE_NOT_INIT;
     }
 
     if (sc_log_fg_filters_present == 1) {
-        if (SCLogMatchFGFilterWL(file, function, line) != 1)
-            return SC_LOG_FG_FILTER_MATCH_FAILED;
+        if (SCLogMatchFGFilterWL(file, function, line) != 1) {
+            if (temp_fmt != NULL)
+                free(temp_fmt);
+            return SC_ERR_LOG_FG_FILTER_MATCH;
+        }
 
-        if (SCLogMatchFGFilterBL(file, function, line) != 1)
-            return SC_LOG_FG_FILTER_MATCH_FAILED;
+        if (SCLogMatchFGFilterBL(file, function, line) != 1) {
+            if (temp_fmt != NULL)
+                free(temp_fmt);
+            return SC_ERR_LOG_FG_FILTER_MATCH;
+        }
     }
 
-    if (sc_log_fd_filters_present == 1 && SCLogMatchFDFilter(function) != 1)
-        return SC_LOG_FG_FILTER_MATCH_FAILED;
+    if (sc_log_fd_filters_present == 1 && SCLogMatchFDFilter(function) != 1) {
+        if (temp_fmt != NULL)
+            free(temp_fmt);
+        return SC_ERR_LOG_FG_FILTER_MATCH;
+    }
 
 	while ( (temp_fmt = index(temp_fmt, SC_LOG_FMT_PREFIX)) ) {
+        if ((temp - *msg) > SC_LOG_MAX_LOG_MSG_LEN) {
+            printf("Warning: Log message exceeded message length limit of %d\n",
+                   SC_LOG_MAX_LOG_MSG_LEN);
+            *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
+            if (temp_fmt_h != NULL)
+                free(temp_fmt_h);
+            return SC_OK;
+        }
         switch(temp_fmt[1]) {
             case SC_LOG_FMT_TIME:
                 temp_fmt[0] = '\0';
 
                 gettimeofday(&tval, NULL);
-                tms = localtime(&tval.tv_sec);
+                struct tm local_tm;
+                tms = localtime_r(&tval.tv_sec, &local_tm);
 
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN,
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
                               "%s%d/%d/%04d -- %02d:%02d:%02d",
                               substr, tms->tm_mday, tms->tm_mon + 1,
                               tms->tm_year + 1900, tms->tm_hour, tms->tm_min,
@@ -314,8 +329,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_PID:
                 temp_fmt[0] = '\0';
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%u", substr,
-                              getpid());
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%u", substr, getpid());
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -326,8 +341,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_TID:
                 temp_fmt[0] = '\0';
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%lu", substr,
-                              syscall(SYS_gettid));
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%lu", substr, SCGetThreadIdLong());
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -339,8 +354,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
             case SC_LOG_FMT_TM:
                 temp_fmt[0] = '\0';
                 ThreadVars *tv = TmThreadsGetCallingThread();
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%s", substr,
-                              ((tv != NULL)? tv->name: "UNKNOWN TM"));
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%s", substr, ((tv != NULL)? tv->name: "UNKNOWN TM"));
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -353,11 +368,11 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
                 temp_fmt[0] = '\0';
                 s = SCMapEnumValueToName(log_level, sc_log_level_map);
                 if (s != NULL)
-                    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%s", substr,
-                                  s);
+                    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                                  "%s%s", substr, s);
                 else
-                    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%s", substr,
-                                  "INVALID");
+                    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                                  "%s%s", substr, "INVALID");
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -368,8 +383,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_FILE_NAME:
                 temp_fmt[0] = '\0';
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%s", substr,
-                              file);
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%s", substr, file);
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -380,8 +395,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_LINE:
                 temp_fmt[0] = '\0';
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%d", substr,
-                              line);
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%d", substr, line);
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -392,8 +407,8 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_FUNCTION:
                 temp_fmt[0] = '\0';
-                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s%s", substr,
-                              function);
+                cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
+                              "%s%s", substr, function);
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -405,7 +420,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
         }
         temp_fmt++;
 	}
-    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN, "%s", substr);
+    cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg), "%s", substr);
     if (cw < 0)
         goto error;
 
@@ -416,7 +431,9 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
     return SC_OK;
 
  error:
-    return SC_SPRINTF_ERROR;
+    if (temp_fmt != NULL)
+        free(temp_fmt_h);
+    return SC_ERR_SPRINTF;
 }
 
 /**
@@ -528,7 +545,8 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
 }
 
 /**
- * \brief Initializes the console output interface
+ * \brief Initializes the console output interface and deals with possible
+ *        env var overrides.
  *
  * \param log_format Pointer to the log_format for this op interface, that
  *                   overrides the global_log_format
@@ -537,7 +555,7 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
  * \retval iface_ctx Pointer to the console output interface context created
  */
 static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
-                                                       int log_level)
+                                                       SCLogLevel log_level)
 {
     SCLogOPIfaceCtx *iface_ctx = SCLogAllocLogOPIfaceCtx();
 
@@ -549,13 +567,33 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
 
     iface_ctx->iface = SC_LOG_OP_IFACE_CONSOLE;
 
-    if (log_format != NULL &&
-        (iface_ctx->log_format = strdup(log_format)) == NULL) {
+    /* console log format is overridden by envvars */
+    const char *tmp_log_format = log_format;
+    const char *s = getenv(SC_LOG_ENV_LOG_FORMAT);
+    if (s != NULL) {
+        printf("Overriding setting for \"console.format\" because of env "
+                "var SC_LOG_FORMAT=\"%s\".\n", s);
+        tmp_log_format = s;
+    }
+
+    if (tmp_log_format != NULL &&
+        (iface_ctx->log_format = strdup(tmp_log_format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
 
-    iface_ctx->log_level = log_level;
+    /* console log level is overridden by envvars */
+    SCLogLevel tmp_log_level = log_level;
+    s = getenv(SC_LOG_ENV_LOG_LEVEL);
+    if (s != NULL) {
+        SCLogLevel l = SCMapEnumNameToValue(s, sc_log_level_map);
+        if (l > SC_LOG_NOTSET && l < SC_LOG_LEVEL_MAX) {
+            printf("Overriding setting for \"console.level\" because of env "
+                    "var SC_LOG_LEVEL=\"%s\".\n", s);
+            tmp_log_level = l;
+        }
+    }
+    iface_ctx->log_level = tmp_log_level;
 
     return iface_ctx;
 }
@@ -572,7 +610,7 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
  */
 static inline SCLogOPIfaceCtx *SCLogInitSyslogOPIface(int facility,
                                                       const char *log_format,
-                                                      int log_level)
+                                                      SCLogLevel log_level)
 {
     SCLogOPIfaceCtx *iface_ctx = SCLogAllocLogOPIfaceCtx();
 
@@ -622,8 +660,9 @@ static inline void SCLogFreeLogOPIfaceCtx(SCLogOPIfaceCtx *iface_ctx)
         if (iface_ctx->log_format != NULL)
             free((void *)iface_ctx->log_format);
 
-        if (iface_ctx->iface == SC_LOG_OP_IFACE_SYSLOG)
+        if (iface_ctx->iface == SC_LOG_OP_IFACE_SYSLOG) {
             closelog();
+        }
 
         iface_ctx = iface_ctx->next;
 
@@ -642,26 +681,28 @@ static inline void SCLogFreeLogOPIfaceCtx(SCLogOPIfaceCtx *iface_ctx)
  */
 static inline void SCLogSetLogLevel(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
 {
-    SCLogLevel log_level = -1;
+    SCLogLevel log_level = SC_LOG_NOTSET;
     const char *s = NULL;
 
-    if (sc_lid != NULL)
+    /* envvar overrides config */
+    s = getenv(SC_LOG_ENV_LOG_LEVEL);
+    if (s != NULL) {
+        log_level = SCMapEnumNameToValue(s, sc_log_level_map);
+    } else if (sc_lid != NULL) {
         log_level = sc_lid->global_log_level;
-    else {
-        s = getenv(SC_LOG_ENV_LOG_LEVEL);
-        if (s != NULL)
-            log_level = SCMapEnumNameToValue(s, sc_log_level_map);
     }
 
     /* deal with the global_log_level to be used */
-    if (log_level >= 0 && log_level < SC_LOG_LEVEL_MAX)
+    if (log_level > SC_LOG_NOTSET && log_level < SC_LOG_LEVEL_MAX)
         sc_lc->log_level = log_level;
     else {
         sc_lc->log_level = SC_LOG_DEF_LOG_LEVEL;
 #ifndef UNITTESTS
-        printf("Warning: Invalid global_log_level assigned by user.  Falling "
-               "back on the default_log_level \"%s\"\n",
-               SCMapEnumValueToName(sc_lc->log_level, sc_log_level_map));
+        if (sc_lid != NULL) {
+            printf("Warning: Invalid/No global_log_level assigned by user.  Falling "
+                   "back on the default_log_level \"%s\"\n",
+                   SCMapEnumValueToName(sc_lc->log_level, sc_log_level_map));
+        }
 #endif
     }
 
@@ -686,24 +727,28 @@ static inline void SCLogSetLogFormat(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
 {
     char *format = NULL;
 
-    if (sc_lid != NULL)
-        format = sc_lid->global_log_format;
-    else
-        format = getenv(SC_LOG_ENV_LOG_FORMAT);
+    /* envvar overrides config */
+    format = getenv(SC_LOG_ENV_LOG_FORMAT);
+    if (format == NULL) {
+        if (sc_lid != NULL) {
+            format = sc_lid->global_log_format;
+        }
+    }
 
     /* deal with the global log format to be used */
     if (format == NULL || strlen(format) > SC_LOG_MAX_LOG_FORMAT_LEN) {
         format = SC_LOG_DEF_LOG_FORMAT;
 #ifndef UNITTESTS
-        printf("Warning: Invalid global_log_format supplied by user or format "
-               "length exceeded limit of \"%d\" characters.  Falling back on "
-               "default log_format \"%s\"\n", SC_LOG_MAX_LOG_FORMAT_LEN,
-               format);
+        if (sc_lid != NULL) {
+            printf("Warning: Invalid/No global_log_format supplied by user or format "
+                   "length exceeded limit of \"%d\" characters.  Falling back on "
+                   "default log_format \"%s\"\n", SC_LOG_MAX_LOG_FORMAT_LEN,
+                   format);
+        }
 #endif
     }
 
-    if (format != NULL &&
-        (sc_lc->log_format = strdup(format)) == NULL) {
+    if (format != NULL && (sc_lc->log_format = strdup(format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -732,8 +777,7 @@ static inline void SCLogSetOPIface(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
         sc_lc->op_ifaces = sc_lid->op_ifaces;
         sc_lid->op_ifaces = NULL;
         sc_lc->op_ifaces_cnt = sc_lid->op_ifaces_cnt;
-    }
-    else {
+    } else {
         s = getenv(SC_LOG_ENV_LOG_OP_IFACE);
         if (s != NULL) {
             op_iface = SCMapEnumNameToValue(s, sc_log_op_iface_map);
@@ -750,22 +794,24 @@ static inline void SCLogSetOPIface(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
         else {
             op_iface = SC_LOG_DEF_LOG_OP_IFACE;
 #ifndef UNITTESTS
-            printf("Warning: Output_interface not supplied by user.  Falling "
-                   "back on default_output_interface \"%s\"\n",
-                   SCMapEnumValueToName(op_iface, sc_log_op_iface_map));
+            if (sc_lid != NULL) {
+                printf("Warning: Output_interface not supplied by user.  Falling "
+                       "back on default_output_interface \"%s\"\n",
+                       SCMapEnumValueToName(op_iface, sc_log_op_iface_map));
+            }
 #endif
         }
 
         switch (op_iface) {
             case SC_LOG_OP_IFACE_CONSOLE:
-                op_ifaces_ctx = SCLogInitConsoleOPIface(NULL, -1);
+                op_ifaces_ctx = SCLogInitConsoleOPIface(NULL, SC_LOG_LEVEL_MAX);
                 break;
             case SC_LOG_OP_IFACE_FILE:
                 s = getenv(SC_LOG_ENV_LOG_FILE);
                 if (s == NULL)
                     s = SCLogGetLogFilename(SC_LOG_DEF_LOG_FILE);
 
-                op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, -1);
+                op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, SC_LOG_LEVEL_MAX);
                 break;
             case SC_LOG_OP_IFACE_SYSLOG:
                 s = getenv(SC_LOG_ENV_LOG_FACILITY);
@@ -799,10 +845,13 @@ static inline void SCLogSetOPFilter(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
     const char *ep;
     int eo = 0;
 
-    if (sc_lid != NULL)
-        filter = sc_lid->op_filter;
-    else
-        filter = getenv(SC_LOG_ENV_LOG_OP_FILTER);
+    /* envvar overrides */
+    filter = getenv(SC_LOG_ENV_LOG_OP_FILTER);
+    if (filter == NULL) {
+        if (sc_lid != NULL) {
+            filter = sc_lid->op_filter;
+        }
+    }
 
     if (filter != NULL && strcmp(filter, "") != 0) {
         sc_lc->op_filter_regex = pcre_compile(filter, opts, &ep, &eo, NULL);
@@ -949,7 +998,7 @@ SCLogOPIfaceCtx *SCLogInitOPIfaceCtx(const char *iface_name,
                "is invalid.  Defaulting to not specifing an override\n",
                iface_name);
 #endif
-        log_level = -1;
+        log_level = SC_LOG_NOTSET;
     }
 
     switch (iface) {
@@ -969,9 +1018,11 @@ SCLogOPIfaceCtx *SCLogInitOPIfaceCtx(const char *iface_name,
 }
 
 /**
- * \brief Initializes the logging module
+ * \brief Initializes the logging module.
  *
- * \param sc_did The initialization data for the logging module
+ * \param sc_lid The initialization data for the logging module.  If sc_lid is
+ *               NULL, we would stick to the default configuration for the
+ *               logging subsystem.
  *
  */
 void SCLogInitLogModule(SCLogInitData *sc_lid)
@@ -1003,53 +1054,103 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
 void SCLogLoadConfig(void)
 {
     ConfNode *outputs;
+    SCLogInitData *sc_lid;
 
-    outputs = ConfGetNode("logging.output");
+    outputs = ConfGetNode("logging.outputs");
     if (outputs == NULL) {
         SCLogDebug("No logging.output configuration section found.");
         return;
     }
 
-    /* Process each output. */
-    ConfNode *output;
-    TAILQ_FOREACH(output, &outputs->head, next) {
-        //ConfNode *param;
-        char *interface = NULL;
-        char *log_level = NULL;
-        char *facility = NULL;
-        //char *filename = NULL;
-        char *format = NULL;
+    sc_lid = SCLogAllocLogInitData();
 
-        interface = (char *)ConfNodeLookupChildValue(output, "interface");
-        if (interface == NULL) {
-            /* No interface in this item, ignore. */
-            continue;
-        }
-        if (SCMapEnumNameToValue(interface, sc_log_op_iface_map) < 0) {
-            SCLogError(SC_INVALID_ARGUMENT,
-                "Invalid logging interface: %s", interface);
+    /* Get default log level and format. */
+    char *default_log_level_s = NULL;
+    if (ConfGet("logging.default-log-level", &default_log_level_s) == 1) {
+        sc_lid->global_log_level =
+            SCMapEnumNameToValue(default_log_level_s, sc_log_level_map);
+        if (sc_lid->global_log_level == -1) {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid default log level: %s",
+                default_log_level_s);
             exit(EXIT_FAILURE);
         }
+    }
+    else {
+        SCLogWarning(SC_ERR_MISSING_CONFIG_PARAM,
+            "No default log level set, will use info.");
+        sc_lid->global_log_level = SC_LOG_INFO;
+    }
+    if (ConfGet("logging.default-log-format", &sc_lid->global_log_format) != 1)
+        sc_lid->global_log_format = SC_LOG_DEF_LOG_FORMAT;
 
-        /* Any output may have a log-level set. */
-        log_level = (char *)ConfNodeLookupChildValue(output, "log-level");
+    ConfNode *seq_node, *output;
+    TAILQ_FOREACH(seq_node, &outputs->head, next) {
+        SCLogLevel level = sc_lid->global_log_level;
+        SCLogOPIfaceCtx *op_iface_ctx = NULL;
+        const char *format;
+        const char *level_s;
 
-        /* Any output may have a format set. */
-        format = (char *)ConfNodeLookupChildValue(output, "format");
+        output = ConfNodeLookupChild(seq_node, seq_node->val);
+        if (output == NULL)
+            continue;
 
-        if (strcmp(interface, "console") == 0) {
-            /* No other lookups required for console logging. */
-            /* \todo Setup console logging... */
+        /* By default an output is enabled. */
+        const char *enabled = ConfNodeLookupChildValue(output, "enabled");
+        if (enabled != NULL && strcmp(enabled, "no") == 0)
+            continue;
+
+        format = ConfNodeLookupChildValue(output, "format");
+        level_s = ConfNodeLookupChildValue(output, "level");
+        if (level_s != NULL) {
+            level = SCMapEnumNameToValue(level_s, sc_log_level_map);
+            if (level == -1) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid log level: %s",
+                    level_s);
+                exit(EXIT_FAILURE);
+            }
         }
-        else if (strcmp(interface, "syslog") == 0) {
-            facility = (char *)ConfNodeLookupChildValue(output, "facility");
-            /* \todo Setup syslog logging. */
+
+        if (strcmp(output->name, "console") == 0) {
+            op_iface_ctx = SCLogInitConsoleOPIface(format, level);
+        }
+        else if (strcmp(output->name, "file") == 0) {
+            const char *filename = ConfNodeLookupChildValue(output, "filename");
+            if (filename == NULL) {
+                SCLogError(SC_ERR_MISSING_CONFIG_PARAM,
+                    "Logging to file requires a filename");
+                exit(EXIT_FAILURE);
+            }
+            op_iface_ctx = SCLogInitFileOPIface(filename, format, level);
+        }
+        else if (strcmp(output->name, "syslog") == 0) {
+            int facility = SC_LOG_DEF_SYSLOG_FACILITY;
+            const char *facility_s = ConfNodeLookupChildValue(output,
+                "facility");
+            if (facility_s != NULL) {
+                facility = SCMapEnumNameToValue(facility_s,
+                    sc_syslog_facility_map);
+                if (facility == -1) {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "Invalid syslog facility: %s", facility_s);
+                    exit(EXIT_FAILURE);
+                }
+            }
+            printf("Initialization syslog logging with format \"%s\".\n",
+                format);
+            op_iface_ctx = SCLogInitSyslogOPIface(facility, format, level);
         }
         else {
-            SCLogWarning(SC_UNIMPLEMENTED,
-                "Ignoring unknown logging interface: %s", interface);
+            SCLogWarning(SC_ERR_INVALID_ARGUMENT, "Invalid logging method: %s, "
+                "ignoring", output->name);
+        }
+        if (op_iface_ctx != NULL) {
+            SCLogAppendOPIfaceCtx(op_iface_ctx, sc_lid);
         }
     }
+
+    SCLogInitLogModule(sc_lid);
+    //exit(1);
+    /* \todo Can we free sc_lid now? */
 }
 
 /**
@@ -1068,7 +1169,7 @@ void SCLogInitLogModuleIfEnvSet(void)
     SCLogOPIfaceCtx *op_ifaces_ctx = NULL;
     int op_iface = 0;
     char *format = NULL;
-    SCLogLevel log_level = -1;
+    SCLogLevel log_level = SC_LOG_NOTSET;
 
     /* sc_log_config is a global variable */
     if ( (sc_log_config = malloc(sizeof(SCLogConfig))) == NULL) {
@@ -1401,6 +1502,16 @@ int SCLogTestInit04()
     return result;
 }
 
+int SCLogTestInit05()
+{
+    int result = 1;
+
+    SCLogInfo("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
+
+    return result;
+}
+
+
 #endif /* UNITTESTS */
 
 void SCLogRegisterTests()
@@ -1412,6 +1523,7 @@ void SCLogRegisterTests()
     UtRegisterTest("SCLogTestInit02", SCLogTestInit02, 1);
     UtRegisterTest("SCLogTestInit03", SCLogTestInit03, 1);
     UtRegisterTest("SCLogTestInit04", SCLogTestInit04, 1);
+    UtRegisterTest("SCLogTestInit05", SCLogTestInit05, 1);
 
 #endif /* UNITTESTS */
 

@@ -2,8 +2,10 @@
 
 #include "suricata-common.h"
 #include "detect.h"
+#include "util-debug.h"
+#include "util-error.h"
 
-int DetectRevSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *str);
+static int DetectRevSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectRevRegister (void) {
     sigmatch_table[DETECT_REV].name = "rev";
@@ -13,21 +15,21 @@ void DetectRevRegister (void) {
     sigmatch_table[DETECT_REV].RegisterTests = NULL;
 }
 
-int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     char *str = rawstr;
     char dubbed = 0;
 
     /* strip "'s */
     if (rawstr[0] == '\"' && rawstr[strlen(rawstr)-1] == '\"') {
-        str = strdup(rawstr+1);
+        str = SCStrdup(rawstr+1);
         str[strlen(rawstr)-2] = '\0';
         dubbed = 1;
     }
 
     s->rev = (uint8_t)atoi(str);
 
-    if (dubbed) free(str);
+    if (dubbed) SCFree(str);
     return 0;
 }
 

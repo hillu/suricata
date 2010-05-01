@@ -5,6 +5,8 @@
  *         HTP library.
  *
  * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
+ * \author Pablo Rincon <pablo.rincon.crespo@gmail.com>
+ * \author Brian Rectanus <brectanu@gmail.com>
  *
  */
 
@@ -15,26 +17,106 @@
 
 #include "util-print.h"
 #include "util-pool.h"
+#include "util-radix-tree.h"
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
+#include "stream-tcp.h"
 #include "stream.h"
 
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 #include "app-layer-htp.h"
 
-#include "util-binsearch.h"
+#include "util-spm.h"
 #include "util-unittest.h"
 #include "util-debug.h"
 #include "app-layer-htp.h"
 #include "util-time.h"
+#include <htp/htp.h>
+
+#include "conf.h"
+
+/** Need a linked list in order to keep track of these */
+typedef struct HTPCfgRec_ HTPCfgRec;
+struct HTPCfgRec_ {
+    htp_cfg_t         *cfg;
+    HTPCfgRec         *next;
+};
+
+/** Fast lookup tree (radix) for the various HTP configurations */
+static SCRadixTree *cfgtree;
+/** List of HTP configurations. */
+static HTPCfgRec cfglist;
 
 #ifdef DEBUG
 static SCMutex htp_state_mem_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t htp_state_memuse = 0;
 static uint64_t htp_state_memcnt = 0;
 #endif
+
+static uint8_t need_htp_request_body = 0;
+
+
+#if 0 /* Not used yet */
+/**
+ * \internal
+ *
+ * \brief Lookup the HTP personality string from the numeric personality.
+ *
+ * \todo This needs to be a libhtp function.
+ */
+static const char *HTPLookupPersonalityString(int p)
+{
+#define CASE_HTP_PERSONALITY_STRING(p) \
+    case HTP_SERVER_ ## p: return #p
+
+    switch (p) {
+        CASE_HTP_PERSONALITY_STRING(MINIMAL);
+        CASE_HTP_PERSONALITY_STRING(GENERIC);
+        CASE_HTP_PERSONALITY_STRING(IDS);
+        CASE_HTP_PERSONALITY_STRING(IIS_4_0);
+        CASE_HTP_PERSONALITY_STRING(IIS_5_0);
+        CASE_HTP_PERSONALITY_STRING(IIS_5_1);
+        CASE_HTP_PERSONALITY_STRING(IIS_6_0);
+        CASE_HTP_PERSONALITY_STRING(IIS_7_0);
+        CASE_HTP_PERSONALITY_STRING(IIS_7_5);
+        CASE_HTP_PERSONALITY_STRING(TOMCAT_6_0);
+        CASE_HTP_PERSONALITY_STRING(APACHE);
+        CASE_HTP_PERSONALITY_STRING(APACHE_2_2);
+    }
+
+    return NULL;
+}
+#endif /* Not used yet */
+
+/**
+ * \internal
+ *
+ * \brief Lookup the numeric HTP personality from a string.
+ *
+ * \todo This needs to be a libhtp function.
+ */
+static int HTPLookupPersonality(const char *str)
+{
+#define IF_HTP_PERSONALITY_NUM(p) \
+    if (strcasecmp(#p, str) == 0) return HTP_SERVER_ ## p
+
+    IF_HTP_PERSONALITY_NUM(MINIMAL);
+    IF_HTP_PERSONALITY_NUM(GENERIC);
+    IF_HTP_PERSONALITY_NUM(IDS);
+    IF_HTP_PERSONALITY_NUM(IIS_4_0);
+    IF_HTP_PERSONALITY_NUM(IIS_5_0);
+    IF_HTP_PERSONALITY_NUM(IIS_5_1);
+    IF_HTP_PERSONALITY_NUM(IIS_6_0);
+    IF_HTP_PERSONALITY_NUM(IIS_7_0);
+    IF_HTP_PERSONALITY_NUM(IIS_7_5);
+    IF_HTP_PERSONALITY_NUM(TOMCAT_6_0);
+    IF_HTP_PERSONALITY_NUM(APACHE);
+    IF_HTP_PERSONALITY_NUM(APACHE_2_2);
+
+    return -1;
+}
 
 /** \brief Function to allocates the HTTP state memory and also creates the HTTP
  *         connection parser to be used by the HTP library
@@ -43,33 +125,29 @@ static void *HTPStateAlloc(void)
 {
     SCEnter();
 
-    HtpState *s = malloc(sizeof(HtpState));
+    HtpState *s = SCMalloc(sizeof(HtpState));
     if (s == NULL) {
         goto error;
     }
 
     memset(s, 0x00, sizeof(HtpState));
 
-    /* create the connection parser structure to be used by HTP library */
-    s->connp = htp_connp_create(cfg);
-    if (s->connp == NULL) {
-        goto error;
-    }
-
-    SCLogDebug("s->connp %p", s->connp);
+    s->body.nchunks = 0;
+    s->body.operation = HTP_BODY_NONE;
+    s->body.pcre_flags = HTP_PCRE_NONE;
 
 #ifdef DEBUG
     SCMutexLock(&htp_state_mem_lock);
     htp_state_memcnt++;
-    htp_state_memuse+=sizeof(HtpState);
+    htp_state_memuse += sizeof(HtpState);
     SCMutexUnlock(&htp_state_mem_lock);
 #endif
-
     SCReturnPtr((void *)s, "void");
 
 error:
-    if (s != NULL)
-        free(s);
+    if (s != NULL) {
+        SCFree(s);
+    }
 
     SCReturnPtr(NULL, "void");
 }
@@ -77,7 +155,7 @@ error:
 /** \brief Function to frees the HTTP state memory and also frees the HTTP
  *         connection parser memory which was used by the HTP library
  */
-static void HTPStateFree(void *state)
+void HTPStateFree(void *state)
 {
     SCEnter();
 
@@ -88,19 +166,35 @@ static void HTPStateFree(void *state)
         if (s->connp != NULL) {
             htp_connp_destroy_all(s->connp);
         }
+        /* free the list of body chunks */
+        if (s->body.nchunks > 0) {
+            HtpBodyFree(&s->body);
+        }
     }
 
-    free(s);
+    SCFree(s);
 
 #ifdef DEBUG
     SCMutexLock(&htp_state_mem_lock);
     htp_state_memcnt--;
-    htp_state_memuse-=sizeof(HtpState);
+    htp_state_memuse -= sizeof(HtpState);
     SCMutexUnlock(&htp_state_mem_lock);
 #endif
 
     SCReturn;
 }
+
+/**
+ * \brief Sets a flag that informs the HTP app layer that some module in the
+ *        engine needs the http request body data.
+ */
+void AppLayerHtpEnableRequestBodyCallback(void)
+{
+    need_htp_request_body = 1;
+
+    return;
+}
+
 
 /**
  *  \brief  Function to convert the IP addresses in to the string
@@ -111,10 +205,12 @@ static void HTPStateFree(void *state)
  */
 void HTPGetIPAddr(Flow *f, int family, char *remote_addr, char *local_addr)
 {
+    SCEnter();
     inet_ntop(family, (const void *)&f->src.addr_data32[0], remote_addr,
             sizeof (remote_addr));
     inet_ntop(family, (const void *)&f->dst.addr_data32[0], local_addr,
             sizeof (local_addr));
+    SCReturn;
 }
 
 /**
@@ -137,8 +233,67 @@ static int HTPHandleRequestData(Flow *f, void *htp_state,
     SCEnter();
     int r = -1;
     int ret = 1;
-
     HtpState *hstate = (HtpState *)htp_state;
+
+    /* On the first invocation, create the connection parser structure to
+     * be used by HTP library.  This is looked up via IP in the radix
+     * tree.  Failing that, the default HTP config is used.
+     */
+    if (NULL == hstate->connp ) {
+        htp_cfg_t *htp = cfglist.cfg; /* Default to the global HTP config */
+        SCRadixNode *cfgnode = NULL;
+
+        if (AF_INET == f->dst.family) {
+            SCLogDebug("Looking up HTP config for ipv4 %08x", *GET_IPV4_DST_ADDR_PTR(f));
+            cfgnode = SCRadixFindKeyIPV4BestMatch((uint8_t *)GET_IPV4_DST_ADDR_PTR(f), cfgtree);
+        }
+        else if (AF_INET6 == f->dst.family) {
+            SCLogDebug("Looking up HTP config for ipv6");
+            cfgnode = SCRadixFindKeyIPV6BestMatch((uint8_t *)GET_IPV6_DST_ADDR(f), cfgtree);
+        }
+        else {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "unknown address family, bug!");
+            goto error;
+        }
+
+        if (cfgnode != NULL) {
+            HTPCfgRec *htp_cfg_rec = SC_RADIX_NODE_USERDATA(cfgnode, HTPCfgRec);
+            if (htp_cfg_rec != NULL) {
+                htp = htp_cfg_rec->cfg;
+                SCLogDebug("LIBHTP using config: %p", htp);
+            }
+        } else {
+            SCLogDebug("Using default HTP config: %p", htp);
+        }
+
+        if (NULL == htp) {
+            BUG_ON(htp == NULL);
+            /* should never happen if HTPConfigure is properly invoked */
+            goto error;
+        }
+
+        hstate->connp = htp_connp_create(htp);
+        if (hstate->connp == NULL) {
+            goto error;
+        }
+
+        htp_connp_set_user_data(hstate->connp, (void *)hstate);
+
+        SCLogDebug("New hstate->connp %p", hstate->connp);
+    }
+
+    /* the code block above should make sure connp is never NULL here */
+    BUG_ON(hstate->connp == NULL);
+
+    if (hstate->connp->in_status == STREAM_STATE_ERROR) {
+        SCLogError(SC_ERR_ALPARSER, "Inbound parser is in error state, no"
+                " need to feed data to libhtp");
+        SCReturnInt(-1);
+    }
+
+    /* Unset the body inspection (the callback should
+     * reactivate it if necessary) */
+    hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
 
     /* Open the HTTP connection on receiving the first request */
     if (!(hstate->flags & HTP_FLAG_STATE_OPEN)) {
@@ -151,27 +306,41 @@ static int HTPHandleRequestData(Flow *f, void *htp_state,
     }
 
     r = htp_connp_req_data(hstate->connp, 0, input, input_len);
-    if(r == STREAM_STATE_ERROR)
-    {
-        if (hstate->connp->last_error != NULL) {
-            SCLogError(SC_ALPARSER_ERR, "Error in parsing HTTP client request: "
-                "[%"PRId32"] [%s] [%"PRId32"] %s", hstate->connp->last_error->level,
-                hstate->connp->last_error->file, hstate->connp->last_error->line,
-                hstate->connp->last_error->msg);
-        } else {
-             SCLogError(SC_ALPARSER_ERR, "Error in parsing HTTP client request");
-        }
-        hstate->flags |= HTP_FLAG_STATE_ERROR;
-        hstate->flags &= ~HTP_FLAG_STATE_DATA;
-        ret = -1;
 
-    } else if (r == STREAM_STATE_DATA) {
-        hstate->flags |= HTP_FLAG_STATE_DATA;
-    } else {
-        hstate->flags &= ~HTP_FLAG_STATE_DATA;
-    }
+    switch(r) {
+        case STREAM_STATE_ERROR:
+            if (hstate->connp->last_error != NULL) {
+                SCLogError(SC_ERR_ALPARSER, "Error in parsing HTTP client "
+                                    "request: [%"PRId32"] [%s] [%"PRId32"] %s",
+                                    hstate->connp->last_error->level,
+                                    hstate->connp->last_error->file,
+                                    hstate->connp->last_error->line,
+                                    hstate->connp->last_error->msg);
+            } else {
+                SCLogError(SC_ERR_ALPARSER, "Error in parsing HTTP client "
+                                            "request");
+            }
+            hstate->flags |= HTP_FLAG_STATE_ERROR;
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+            ret = -1;
+            break;
+        case STREAM_STATE_DATA:
+            hstate->flags |= HTP_FLAG_STATE_DATA;
+            break;
+        case STREAM_STATE_DATA_OTHER:
+            SCLogDebug("CONNECT not supported yet");
+            hstate->flags |= HTP_FLAG_STATE_ERROR;
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+            ret = -1;
+            break;
+        default:
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+     }
 
-    /* if we the TCP connection is closed, then close the HTTP connection */
+    /* if the TCP connection is closed, then close the HTTP connection */
     if ((pstate->flags & APP_LAYER_PARSER_EOF) &&
             ! (hstate->flags & HTP_FLAG_STATE_CLOSED) &&
             ! (hstate->flags & HTP_FLAG_STATE_DATA))
@@ -183,6 +352,9 @@ static int HTPHandleRequestData(Flow *f, void *htp_state,
 
     SCLogDebug("hstate->connp %p", hstate->connp);
     SCReturnInt(ret);
+
+error:
+    SCReturnInt(-1);
 }
 
 /**
@@ -207,26 +379,54 @@ static int HTPHandleResponseData(Flow *f, void *htp_state,
     int ret = 1;
 
     HtpState *hstate = (HtpState *)htp_state;
+    if (hstate->connp == NULL) {
+        SCLogError(SC_ERR_ALPARSER, "HTP state has no connp");
+        SCReturnInt(-1);
+    }
+
+    if (hstate->connp->out_status == STREAM_STATE_ERROR) {
+        SCLogError(SC_ERR_ALPARSER, "Outbound parser is in error state, no"
+                " need to feed data to libhtp");
+        SCReturnInt(-1);
+    }
+
+    /* Unset the body inspection (the callback should
+     * reactivate it if necessary) */
+    hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
 
     r = htp_connp_res_data(hstate->connp, 0, input, input_len);
-    if (r == STREAM_STATE_ERROR)
-    {
-         if (hstate->connp->last_error != NULL) {
-            SCLogError(SC_ALPARSER_ERR, "Error in parsing HTTP server request: "
-                "[%"PRId32"] [%s] [%"PRId32"] %s", hstate->connp->last_error->level,
-                hstate->connp->last_error->file, hstate->connp->last_error->line,
-                hstate->connp->last_error->msg);
-         } else {
-             SCLogError(SC_ALPARSER_ERR, "Error in parsing HTTP server request");
-         }
-         hstate->flags = HTP_FLAG_STATE_ERROR;
-         ret = -1;
-
-    } else if (r == STREAM_STATE_DATA) {
-        hstate->flags |= HTP_FLAG_STATE_DATA;
-    } else {
-        hstate->flags &= ~HTP_FLAG_STATE_DATA;
-    }
+    switch(r) {
+        case STREAM_STATE_ERROR:
+            if (hstate->connp->last_error != NULL) {
+                SCLogError(SC_ERR_ALPARSER, "Error in parsing HTTP server "
+                                    "response: [%"PRId32"] [%s] [%"PRId32"] %s",
+                                    hstate->connp->last_error->level,
+                                    hstate->connp->last_error->file,
+                                    hstate->connp->last_error->line,
+                                    hstate->connp->last_error->msg);
+            } else {
+                SCLogError(SC_ERR_ALPARSER, "Error in parsing HTTP server "
+                                            "response");
+            }
+            hstate->flags = HTP_FLAG_STATE_ERROR;
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+            ret = -1;
+            break;
+        case STREAM_STATE_DATA:
+            hstate->flags |= HTP_FLAG_STATE_DATA;
+            break;
+        case STREAM_STATE_DATA_OTHER:
+            SCLogDebug("CONNECT not supported yet");
+            hstate->flags = HTP_FLAG_STATE_ERROR;
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+            ret = -1;
+            break;
+        default:
+            hstate->flags &= ~HTP_FLAG_STATE_DATA;
+            hstate->flags &= ~HTP_FLAG_NEW_BODY_SET;
+     }
 
     /* if we the TCP connection is closed, then close the HTTP connection */
     if ((pstate->flags & APP_LAYER_PARSER_EOF) &&
@@ -242,22 +442,490 @@ static int HTPHandleResponseData(Flow *f, void *htp_state,
 }
 
 /**
+ * \brief Append a chunk of body to the HtpBody struct
+ * \param body pointer to the HtpBody holding the list
+ * \param data pointer to the data of the chunk
+ * \param len length of the chunk pointed by data
+ * \retval none
+ */
+void HtpBodyAppendChunk(HtpBody *body, uint8_t *data, uint32_t len)
+{
+    SCEnter();
+
+    HtpBodyChunk *bd = NULL;
+
+    if (len == 0 || data == NULL)
+        goto error;
+
+    if (body->nchunks == 0) {
+        /* New chunk */
+        bd = (HtpBodyChunk *)SCMalloc(sizeof(HtpBodyChunk));
+        if (bd == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
+            goto error;
+        }
+
+        bd->len = len;
+        bd->data = SCMalloc(len);
+        if (bd->data == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
+            goto error;
+        }
+
+        memcpy(bd->data, data, len);
+        body->first = body->last = bd;
+        body->nchunks++;
+        bd->next = NULL;
+        bd->id = body->nchunks;
+    } else {
+        /* New or old, we have to check it.. */
+        if (body->last->data == data) {
+            /* Weird, but sometimes htp lib calls the callback
+             * more than once for the same chunk, with more
+             * len, so updating the len */
+            body->last->len = len;
+            bd = body->last;
+
+            bd->data = SCRealloc(bd->data, len);
+            if (bd->data == NULL) {
+                SCLogError(SC_ERR_MEM_ALLOC, "realloc failed: %s", strerror(errno));
+                goto error;
+            }
+
+            memcpy(bd->data, data, len);
+        } else {
+            bd = (HtpBodyChunk *)SCMalloc(sizeof(HtpBodyChunk));
+            if (bd == NULL) {
+                SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
+                goto error;
+            }
+
+            bd->len = len;
+            bd->data = SCMalloc(len);
+            if (bd->data == NULL) {
+                SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
+                goto error;
+            }
+
+            memcpy(bd->data, data, len);
+            body->last->next = bd;
+            body->last = bd;
+            body->nchunks++;
+            bd->next = NULL;
+            bd->id = body->nchunks;
+        }
+    }
+    SCLogDebug("Body %p; Chunk id: %"PRIu32", data %p, len %"PRIu32"", body,
+                bd->id, bd->data, (uint32_t)bd->len);
+
+    SCReturn;
+
+error:
+    if (bd != NULL) {
+        if (bd->data != NULL) {
+            SCFree(bd->data);
+        }
+        SCFree(bd->data);
+    }
+    SCReturn;
+}
+
+/**
+ * \brief Print the information and chunks of a Body
+ * \param body pointer to the HtpBody holding the list
+ * \retval none
+ */
+void HtpBodyPrint(HtpBody *body)
+{
+    if (SCLogDebugEnabled()) {
+        SCEnter();
+
+        if (body->nchunks == 0)
+            return;
+
+        HtpBodyChunk *cur = NULL;
+        SCLogDebug("--- Start body chunks at %p ---", body);
+        for (cur = body->first; cur != NULL; cur = cur->next) {
+            SCLogDebug("Body %p; Chunk id: %"PRIu32", data %p, len %"PRIu32"\n",
+                        body, cur->id, cur->data, (uint32_t)cur->len);
+            PrintRawDataFp(stdout, (uint8_t*)cur->data, cur->len);
+        }
+        SCLogDebug("--- End body chunks at %p ---", body);
+    }
+}
+
+/**
+ * \brief Free the information held in the request body
+ * \param body pointer to the HtpBody holding the list
+ * \retval none
+ */
+void HtpBodyFree(HtpBody *body)
+{
+    SCEnter();
+
+    if (body->nchunks == 0)
+        return;
+
+    SCLogDebug("Removing chunks of Body %p; Last Chunk id: %"PRIu32", data %p,"
+               " len %"PRIu32"\n", body, body->last->id, body->last->data,
+                (uint32_t)body->last->len);
+    body->nchunks = 0;
+
+    HtpBodyChunk *cur = NULL;
+    HtpBodyChunk *prev = NULL;
+
+    prev = body->first;
+    while (prev != NULL) {
+        cur = prev->next;
+        SCFree(prev);
+        prev = cur;
+    }
+    body->first = body->last = NULL;
+    body->pcre_flags = HTP_PCRE_NONE;
+    body->operation = HTP_BODY_NONE;
+}
+
+/**
+ * \brief Function callback to append chunks for Requests
+ * \param d pointer to the htp_tx_data_t structure (a chunk from htp lib)
+ * \retval int HOOK_OK if all goes well
+ */
+int HTPCallbackRequestBodyData(htp_tx_data_t *d)
+{
+    SCEnter();
+    HtpState *hstate = (HtpState *)d->tx->connp->user_data;
+    SCLogDebug("New response body data available at %p -> %p -> %p, bodylen "
+               "%"PRIu32"", hstate, d, d->data, (uint32_t)d->len);
+
+    //PrintRawDataFp(stdout, d->data, d->len);
+
+    /* If it has been inspected by pcre and there's no match,
+     * remove this chunks */
+    if ( !(hstate->body.pcre_flags & HTP_PCRE_HAS_MATCH) &&
+          (hstate->body.pcre_flags & HTP_PCRE_DONE))
+    {
+        HtpBodyFree(&hstate->body);
+    }
+
+    /* If its a new operation, remove the old data */
+    if (hstate->body.operation == HTP_BODY_RESPONSE) {
+        HtpBodyFree(&hstate->body);
+        hstate->body.pcre_flags = HTP_PCRE_NONE;
+    }
+    hstate->body.operation = HTP_BODY_REQUEST;
+
+
+    HtpBodyAppendChunk(&hstate->body, (uint8_t*)d->data, (uint32_t)d->len);
+    hstate->body.pcre_flags = HTP_PCRE_NONE;
+    if (SCLogDebugEnabled()) {
+        HtpBodyPrint(&hstate->body);
+    }
+
+    /* set the new chunk flag */
+    hstate->flags |= HTP_FLAG_NEW_BODY_SET;
+
+    SCReturnInt(HOOK_OK);
+}
+
+/**
  * \brief Print the stats of the HTTP requests
  */
 void HTPAtExitPrintStats(void)
 {
 #ifdef DEBUG
+    SCEnter();
     SCMutexLock(&htp_state_mem_lock);
     SCLogDebug("http_state_memcnt %"PRIu64", http_state_memuse %"PRIu64"",
                 htp_state_memcnt, htp_state_memuse);
     SCMutexUnlock(&htp_state_mem_lock);
+    SCReturn;
 #endif
 }
 
 /** \brief Clears the HTTP server configuration memory used by HTP library */
 void HTPFreeConfig(void)
 {
-    htp_config_destroy(cfg);
+    SCEnter();
+
+    HTPCfgRec *nextrec = cfglist.next;
+    SCRadixReleaseRadixTree(cfgtree);
+    SCFree(cfglist.cfg);
+    while (nextrec != NULL) {
+        HTPCfgRec *htprec = nextrec;
+        nextrec = nextrec->next;
+
+        SCFree(htprec->cfg);
+        SCFree(htprec);
+    }
+    SCReturn;
+}
+
+/**
+ *  \brief  callback for request to store the recent incoming request
+            in to the recent_in_tx for the given htp state
+ *  \param  connp   pointer to the current connection parser which has the htp
+ *                  state in it as user data
+ */
+static int HTPCallbackRequest(htp_connp_t *connp) {
+    SCEnter();
+
+    HtpState *hstate = (HtpState *)connp->user_data;
+    if (hstate == NULL) {
+        SCReturnInt(HOOK_ERROR);
+    }
+    if (! (hstate->flags & HTP_FLAG_NEW_REQUEST)) {
+        hstate->flags |= HTP_FLAG_NEW_REQUEST;
+        hstate->new_in_tx_index = list_size(hstate->connp->conn->transactions) - 1;
+    }
+    SCReturnInt(HOOK_OK);
+}
+
+/**
+ *  \brief  callback for response to remove the recent received requests
+            from the recent_in_tx for the given htp state
+ *  \param  connp   pointer to the current connection parser which has the htp
+ *                  state in it as user data
+ */
+static int HTPCallbackResponse(htp_connp_t *connp) {
+    SCEnter();
+
+    size_t idx;
+
+    HtpState *hstate = (HtpState *)connp->user_data;
+    if (hstate == NULL) {
+        SCReturnInt(HOOK_ERROR);
+    }
+
+    /* Free data when we have a response */
+    if (hstate->body.nchunks > 0)
+        HtpBodyFree(&hstate->body);
+
+    hstate->body.operation = HTP_BODY_RESPONSE;
+    hstate->body.pcre_flags = HTP_PCRE_NONE;
+
+    /* Clear the trasactions which are processed by the engine from libhtp.
+       This helps in reducing the meory consumptions of libhtp */
+    for (idx = 0; idx < hstate->new_in_tx_index; idx++) {
+        htp_tx_t *tx = list_get(hstate->connp->conn->transactions, idx);
+        if (tx != NULL)
+            htp_tx_destroy(tx);
+    }
+
+    SCReturnInt(HOOK_OK);
+}
+
+static void HTPConfigure(void)
+{
+    SCEnter();
+    ConfNode *default_config;
+    ConfNode *server_config;
+
+    AppLayerRegisterStateFuncs(ALPROTO_HTTP, HTPStateAlloc, HTPStateFree);
+
+    cfglist.next = NULL;
+
+    cfgtree = SCRadixCreateRadixTree(NULL, NULL);
+    if (NULL == cfgtree) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Error initializing HTP config tree");
+
+        if (SCLogDebugEnabled()) {
+            abort();
+        }
+        else {
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    /* Default Config */
+    cfglist.cfg = htp_config_create();
+    if (NULL == cfglist.cfg) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to create HTP default config");
+
+        if (SCLogDebugEnabled()) {
+            abort();
+        }
+        else {
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    SCLogDebug("LIBHTP default config: %p", cfglist.cfg);
+
+    htp_config_register_request(cfglist.cfg, HTPCallbackRequest);
+    htp_config_register_response(cfglist.cfg, HTPCallbackResponse);
+    htp_config_set_generate_request_uri_normalized(cfglist.cfg, 1);
+
+    default_config = ConfGetNode("libhtp.default-config");
+    if (NULL != default_config) {
+        ConfNode *p = NULL;
+
+        /* Default Parameters */
+        TAILQ_FOREACH(p, &default_config->head, next) {
+            ConfNode *pval;
+
+            if (strcasecmp("personality", p->name) == 0) {
+                /* Personalities */
+                TAILQ_FOREACH(pval, &p->head, next) {
+                    int personality = HTPLookupPersonality(pval->val);
+
+                    SCLogDebug("LIBHTP default: %s=%s",
+                               p->name, pval->val);
+
+
+                    if (personality >= 0) {
+                        SCLogDebug("LIBHTP default: %s=%s (%d)",
+                                   p->name, pval->val,
+                                   personality);
+                        if (htp_config_set_server_personality(cfglist.cfg,
+                                personality) == HTP_ERROR)
+                        {
+                            SCLogWarning(SC_ERR_INVALID_VALUE,
+                                         "LIBHTP Failed adding personality "
+                                         "\"%s\", ignoring", pval->val);
+                        }
+                    }
+                    else {
+                        SCLogWarning(SC_ERR_UNKNOWN_VALUE,
+                                     "LIBHTP Unknown personality "
+                                     "\"%s\", ignoring", pval->val);
+                        continue;
+                    }
+
+                }
+            } else {
+                SCLogWarning(SC_ERR_UNKNOWN_VALUE,
+                             "LIBHTP Ignoring unknown default config: %s",
+                             p->name);
+            }
+        }
+    }
+
+    /* Read server config and create a parser for each IP in radix tree */
+    server_config = ConfGetNode("libhtp.server-config");
+    SCLogDebug("LIBHTP Configuring %p", server_config);
+    if (server_config != NULL) {
+        ConfNode *si;
+        ConfNode *s;
+        HTPCfgRec *htprec;
+        HTPCfgRec *nextrec;
+        htp_cfg_t *htp;
+
+        /* Server Nodes */
+        TAILQ_FOREACH(si, &server_config->head, next) {
+            ConfNode *p = NULL;
+
+            /* Need the named node, not the index */
+            s = TAILQ_FIRST(&si->head);
+            if (NULL == s) {
+                SCLogDebug("LIBHTP s NULL");
+                continue;
+            }
+
+            SCLogDebug("LIBHTP server %s", s->name);
+
+            nextrec = cfglist.next;
+            htprec = cfglist.next = SCMalloc(sizeof(HTPCfgRec));
+            if (NULL == htprec) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Failed to create HTP server config rec");
+                if (SCLogDebugEnabled()) {
+                    abort();
+                }
+                else {
+                    exit(EXIT_FAILURE);
+                }
+            }
+
+            cfglist.next->next = nextrec;
+            htp = cfglist.next->cfg = htp_config_create();
+            if (NULL == htp) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Failed to create HTP server config");
+                if (SCLogDebugEnabled()) {
+                    abort();
+                }
+                else {
+                    exit(EXIT_FAILURE);
+                }
+            }
+
+            htp_config_register_request(htp, HTPCallbackRequest);
+            htp_config_register_response(htp, HTPCallbackResponse);
+            htp_config_set_generate_request_uri_normalized(htp, 1);
+
+            /* Server Parameters */
+            TAILQ_FOREACH(p, &s->head, next) {
+                ConfNode *pval;
+
+                if (strcasecmp("address", p->name) == 0) {
+
+                    /* Addresses */
+                    TAILQ_FOREACH(pval, &p->head, next) {
+                        SCLogDebug("LIBHTP server %s: %s=%s",
+                                   s->name, p->name, pval->val);
+
+                        /* IPV6 or IPV4? */
+                        if (strchr(pval->val, ':') != NULL) {
+                            SCLogDebug("LIBHTP adding ipv6 server %s at %s: %p",
+                                       s->name, pval->val, htp);
+                            if (SCRadixAddKeyIPV6String(pval->val,
+                                                        cfgtree, htprec) == NULL)
+                            {
+                                SCLogWarning(SC_ERR_INVALID_VALUE,
+                                             "LIBHTP failed to add "
+                                             "ipv6 server %s, ignoring",
+                                             pval->val);
+                            }
+                        } else {
+                            SCLogDebug("LIBHTP adding ipv4 server %s at %s: %p",
+                                       s->name, pval->val, htp);
+                            if (SCRadixAddKeyIPV4String(pval->val,
+                                                        cfgtree, htprec) == NULL)
+                            {
+                                SCLogWarning(SC_ERR_INVALID_VALUE,
+                                             "LIBHTP failed to add "
+                                             "ipv4 server %s, ignoring",
+                                             pval->val);
+                            }
+                        }
+                    }
+                } else if (strcasecmp("personality", p->name) == 0) {
+                    /* Personalities */
+                    TAILQ_FOREACH(pval, &p->head, next) {
+                        int personality = HTPLookupPersonality(pval->val);
+
+                        SCLogDebug("LIBHTP server %s: %s=%s",
+                                   s->name, p->name, pval->val);
+
+
+                        if (personality >= 0) {
+                            SCLogDebug("LIBHTP %s: %s=%s (%d)",
+                                       s->name, p->name, pval->val,
+                                       personality);
+                            if (htp_config_set_server_personality(htp,
+                                    personality) == HTP_ERROR)
+                            {
+                                SCLogWarning(SC_ERR_INVALID_VALUE,
+                                             "LIBHTP Failed adding personality "
+                                             "\"%s\", ignoring", pval->val);
+                            }
+                        }
+                        else {
+                            SCLogWarning(SC_ERR_UNKNOWN_VALUE,
+                                         "LIBHTP Unknown personality "
+                                         "\"%s\", ignoring", pval->val);
+                            continue;
+                        }
+
+                    }
+                } else {
+                    SCLogWarning(SC_ERR_UNKNOWN_VALUE,
+                                 "LIBHTP Ignoring unknown server config: %s",
+                                 p->name);
+                }
+            }
+        }
+    }
+
+    SCReturn;
 }
 
 /**
@@ -266,7 +934,7 @@ void HTPFreeConfig(void)
  */
 void RegisterHTPParsers(void)
 {
-
+    SCEnter();
     AppLayerRegisterStateFuncs(ALPROTO_HTTP, HTPStateAlloc, HTPStateFree);
 
     AppLayerRegisterProto("http", ALPROTO_HTTP, STREAM_TOSERVER,
@@ -274,10 +942,32 @@ void RegisterHTPParsers(void)
     AppLayerRegisterProto("http", ALPROTO_HTTP, STREAM_TOCLIENT,
                           HTPHandleResponseData);
 
-    cfg = htp_config_create();
+    HTPConfigure();
+    SCReturn;
 }
 
-//#ifdef UNITTESTS
+/**
+ * \brief This function is called at the end of SigLoadSignatures.  This function
+ *        enables the htp layer to register a callback for the http request body.
+ *        need_htp_request_body is a flag that informs the htp app layer that
+ *        a module in the engine needs the http request body.
+ */
+void AppLayerHtpRegisterExtraCallbacks(void) {
+    SCEnter();
+    SCLogDebug("Registering extra htp callbacks");
+    if (need_htp_request_body == 1) {
+        SCLogDebug("Registering callback htp_config_register_request_body_data on htp");
+        htp_config_register_request_body_data(cfglist.cfg,
+                                              HTPCallbackRequestBodyData);
+    } else {
+        SCLogDebug("No htp extra callback needed");
+    }
+    SCReturn;
+}
+
+
+#ifdef UNITTESTS
+
 /** \test Test case where chunks are sent in smaller chunks and check the
  *        response of the parser from HTP library. */
 int HTPParserTest01(void) {
@@ -287,11 +977,17 @@ int HTPParserTest01(void) {
                          " Data is c0oL!";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
+
+    HtpState *htp_state =  NULL;
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     uint32_t u;
     for (u = 0; u < httplen1; u++) {
@@ -301,7 +997,7 @@ int HTPParserTest01(void) {
         else if (u == (httplen1 - 1)) flags = STREAM_TOSERVER|STREAM_EOF;
         else flags = STREAM_TOSERVER;
 
-        r = AppLayerParse(&f, ALPROTO_HTTP, flags, &httpbuf1[u], 1, FALSE);
+        r = AppLayerParse(&f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
         if (r != 0) {
             printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
                     " 0: ", u, r);
@@ -310,7 +1006,7 @@ int HTPParserTest01(void) {
         }
     }
 
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -338,6 +1034,10 @@ int HTPParserTest01(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     return result;
 }
 
@@ -348,22 +1048,26 @@ int HTPParserTest02(void) {
     uint8_t httpbuf1[] = "POST";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
+    HtpState *http_state = NULL;
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
-
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
-                          STREAM_EOF, httpbuf1, httplen1, FALSE);
+                          STREAM_EOF, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    HtpState *http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -385,6 +1089,10 @@ int HTPParserTest02(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (http_state != NULL)
+        HTPStateFree(http_state);
     return result;
 }
 
@@ -396,11 +1104,17 @@ int HTPParserTest03(void) {
     uint8_t httpbuf1[] = "HELLO / HTTP/1.0\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
+
+    HtpState *htp_state =  NULL;
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     uint32_t u;
     for (u = 0; u < httplen1; u++) {
@@ -410,7 +1124,7 @@ int HTPParserTest03(void) {
         else if (u == (httplen1 - 1)) flags = STREAM_TOSERVER|STREAM_EOF;
         else flags = STREAM_TOSERVER;
 
-        r = AppLayerParse(&f, ALPROTO_HTTP, flags, &httpbuf1[u], 1, FALSE);
+        r = AppLayerParse(&f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
         if (r != 0) {
             printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
                     " 0: ", u, r);
@@ -418,8 +1132,7 @@ int HTPParserTest03(void) {
             goto end;
         }
     }
-
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -444,6 +1157,10 @@ int HTPParserTest03(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     return result;
 }
 
@@ -452,19 +1169,24 @@ end:
 int HTPParserTest04(void) {
     int result = 1;
     Flow f;
+    HtpState *htp_state = NULL;
     uint8_t httpbuf1[] = "World!\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
-                          STREAM_EOF, httpbuf1, httplen1, FALSE);
+                          STREAM_EOF, httpbuf1, httplen1);
 
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -489,6 +1211,10 @@ int HTPParserTest04(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     return result;
 }
 
@@ -497,6 +1223,7 @@ end:
 int HTPParserTest05(void) {
     int result = 1;
     Flow f;
+    HtpState *http_state = NULL;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Victor/1.0\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     uint8_t httpbuf2[] = "Post D";
@@ -514,12 +1241,15 @@ int HTPParserTest05(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
-
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START,
-                          httpbuf1, httplen1, FALSE);
+                          httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -527,21 +1257,21 @@ int HTPParserTest05(void) {
     }
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOCLIENT|STREAM_START, httpbuf4,
-                      httplen4, FALSE);
+                      httplen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOCLIENT, httpbuf5, httplen5, FALSE);
+    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOCLIENT, httpbuf5, httplen5);
     if (r != 0) {
         printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -549,7 +1279,7 @@ int HTPParserTest05(void) {
     }
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_EOF, httpbuf3,
-                      httplen3, FALSE);
+                      httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -557,14 +1287,14 @@ int HTPParserTest05(void) {
     }
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOCLIENT|STREAM_EOF, httpbuf6,
-                      httplen6, FALSE);
+                      httplen6);
     if (r != 0) {
         printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    HtpState *http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -588,9 +1318,7 @@ int HTPParserTest05(void) {
         goto end;
     }
 
-    if (tx->response_status_number != 200 ||
-            h == NULL || tx->request_protocol_number != HTTP_1_0)
-    {
+    if (tx->response_status_number != 200) {
         printf("expected response 200 OK and got %"PRId32" %s: , expected protocol "
                 "HTTP/1.0 and got %s \n", tx->response_status_number,
                 bstr_tocstr(tx->response_message),
@@ -599,6 +1327,10 @@ int HTPParserTest05(void) {
         goto end;
     }
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (http_state != NULL)
+        HTPStateFree(http_state);
     return result;
 }
 
@@ -650,15 +1382,20 @@ int HTPParserTest06(void) {
                          "aHA=0\r\n\r\n";
     uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
     TcpSession ssn;
+    HtpState *http_state = NULL;
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
 
     f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START,
-                          httpbuf1, httplen1, FALSE);
+                          httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -666,14 +1403,14 @@ int HTPParserTest06(void) {
     }
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOCLIENT|STREAM_START, httpbuf2,
-                      httplen2, FALSE);
+                      httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    HtpState *http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state =  ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -708,9 +1445,400 @@ int HTPParserTest06(void) {
         goto end;
     }
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (http_state != NULL)
+        HTPStateFree(http_state);
     return result;
 }
-//#endif /* UNITTESTS */
+
+#include "conf-yaml-loader.h"
+
+/** \test Test basic config */
+int HTPParserConfigTest01(void)
+{
+    int ret = 0;
+    char input[] = "\
+%YAML 1.1\n\
+---\n\
+libhtp:\n\
+\n\
+  default-config:\n\
+    personality: IDS\n\
+\n\
+  server-config:\n\
+\n\
+    - apache-tomcat:\n\
+        address: [192.168.1.0/24, 127.0.0.0/8, \"::1\"]\n\
+        personality: Tomcat_6_0\n\
+\n\
+    - iis7:\n\
+        address: \n\
+          - 192.168.0.0/24\n\
+          - 192.168.10.0/24\n\
+        personality: IIS_7_0\n\
+";
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    ConfYamlLoadString(input, strlen(input));
+
+    ConfNode *outputs;
+    outputs = ConfGetNode("libhtp.default-config.personality");
+    if (outputs == NULL) {
+        goto end;
+    }
+
+    outputs = ConfGetNode("libhtp.server-config");
+    if (outputs == NULL) {
+        goto end;
+    }
+
+    ConfNode *node = TAILQ_FIRST(&outputs->head);
+    if (node == NULL) {
+        goto end;
+    }
+    if (strcmp(node->name, "0") != 0) {
+        goto end;
+    }
+    node = TAILQ_FIRST(&node->head);
+    if (node == NULL) {
+        goto end;
+    }
+    if (strcmp(node->name, "apache-tomcat") != 0) {
+        goto end;
+    }
+
+    int i = 0;
+    ConfNode *n;
+
+    ConfNode *node2 = ConfNodeLookupChild(node, "personality");
+    if (node2 == NULL) {
+        goto end;
+    }
+    if (strcmp(node2->val, "Tomcat_6_0") != 0) {
+        goto end;
+    }
+
+    node = ConfNodeLookupChild(node, "address");
+    if (node == NULL) {
+        goto end;
+    }
+    TAILQ_FOREACH(n, &node->head, next) {
+        if (n == NULL) {
+            goto end;
+        }
+
+        switch(i) {
+            case 0:
+                if (strcmp(n->name, "0") != 0) {
+                    goto end;
+                }
+                if (strcmp(n->val, "192.168.1.0/24") != 0) {
+                    goto end;
+                }
+                break;
+            case 1:
+                if (strcmp(n->name, "1") != 0) {
+                    goto end;
+                }
+                if (strcmp(n->val, "127.0.0.0/8") != 0) {
+                    goto end;
+                }
+                break;
+            case 2:
+                if (strcmp(n->name, "2") != 0) {
+                    goto end;
+                }
+                if (strcmp(n->val, "::1") != 0) {
+                    goto end;
+                }
+                break;
+            default:
+                goto end;
+        }
+        i++;
+    }
+
+    outputs = ConfGetNode("libhtp.server-config");
+    if (outputs == NULL) {
+        goto end;
+    }
+
+    node = TAILQ_FIRST(&outputs->head);
+    node = TAILQ_NEXT(node, next);
+    if (node == NULL) {
+        goto end;
+    }
+    if (strcmp(node->name, "1") != 0) {
+        goto end;
+    }
+    node = TAILQ_FIRST(&node->head);
+    if (node == NULL) {
+        goto end;
+    }
+    if (strcmp(node->name, "iis7") != 0) {
+        goto end;
+    }
+
+    node2 = ConfNodeLookupChild(node, "personality");
+    if (node2 == NULL) {
+        goto end;
+    }
+    if (strcmp(node2->val, "IIS_7_0") != 0) {
+        goto end;
+    }
+
+    node = ConfNodeLookupChild(node, "address");
+    if (node == NULL) {
+        goto end;
+    }
+
+    i = 0;
+    TAILQ_FOREACH(n, &node->head, next) {
+        if (n == NULL) {
+            goto end;
+        }
+
+        switch(i) {
+            case 0:
+                if (strcmp(n->name, "0") != 0) {
+                    goto end;
+                }
+                if (strcmp(n->val, "192.168.0.0/24") != 0) {
+                    goto end;
+                }
+                break;
+            case 1:
+                if (strcmp(n->name, "1") != 0) {
+                    goto end;
+                }
+                if (strcmp(n->val, "192.168.10.0/24") != 0) {
+                    goto end;
+                }
+                break;
+            default:
+                goto end;
+        }
+        i++;
+    }
+
+    ret = 1;
+
+end:
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return ret;
+}
+
+/** \test Test config builds radix correctly */
+int HTPParserConfigTest02(void)
+{
+    int ret = 0;
+    char input[] = "\
+%YAML 1.1\n\
+---\n\
+libhtp:\n\
+\n\
+  default-config:\n\
+    personality: IDS\n\
+\n\
+  server-config:\n\
+\n\
+    - apache-tomcat:\n\
+        address: [192.168.1.0/24, 127.0.0.0/8, \"::1\"]\n\
+        personality: Tomcat_6_0\n\
+\n\
+    - iis7:\n\
+        address: \n\
+          - 192.168.0.0/24\n\
+          - 192.168.10.0/24\n\
+        personality: IIS_7_0\n\
+";
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    ConfYamlLoadString(input, strlen(input));
+
+    HTPConfigure();
+
+    if (cfglist.cfg == NULL) {
+        printf("No default config created.\n");
+        goto end;
+    }
+
+    if (cfgtree == NULL) {
+        printf("No config tree created.\n");
+        goto end;
+    }
+
+    SCRadixNode *cfgnode = NULL;
+    htp_cfg_t *htp = cfglist.cfg;
+    uint8_t buf[128];
+    const char *addr;
+
+    addr = "192.168.10.42";
+    if (inet_pton(AF_INET, addr, buf) == 1) {
+        cfgnode = SCRadixFindKeyIPV4BestMatch(buf, cfgtree);
+        if (cfgnode != NULL) {
+            HTPCfgRec *htp_cfg_rec = SC_RADIX_NODE_USERDATA(cfgnode, HTPCfgRec);
+            if (htp_cfg_rec != NULL) {
+                htp = htp_cfg_rec->cfg;
+                SCLogDebug("LIBHTP using config: %p", htp);
+            }
+        }
+        if (htp == NULL) {
+            printf("Could not get config for: %s\n", addr);
+            goto end;
+        }
+    }
+    else {
+        printf("Failed to parse address: %s\n", addr);
+        goto end;
+    }
+
+    addr = "::1";
+    if (inet_pton(AF_INET6, addr, buf) == 1) {
+        cfgnode = SCRadixFindKeyIPV6BestMatch(buf, cfgtree);
+        if (cfgnode != NULL) {
+            HTPCfgRec *htp_cfg_rec = SC_RADIX_NODE_USERDATA(cfgnode, HTPCfgRec);
+            if (htp_cfg_rec != NULL) {
+                htp = htp_cfg_rec->cfg;
+                SCLogDebug("LIBHTP using config: %p", htp);
+            }
+        }
+        if (htp == NULL) {
+            printf("Could not get config for: %s\n", addr);
+            goto end;
+        }
+    }
+    else {
+        printf("Failed to parse address: %s\n", addr);
+        goto end;
+    }
+
+    ret = 1;
+
+end:
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return ret;
+}
+
+/** \test Test traffic is handled by the correct htp config */
+int HTPParserConfigTest03(void)
+{
+    int result = 1;
+    Flow f;
+    uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Victor/1.0\r\n\r\nPost"
+                         " Data is c0oL!";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+
+    HtpState *htp_state =  NULL;
+    int r = 0;
+    char input[] = "\
+%YAML 1.1\n\
+---\n\
+libhtp:\n\
+\n\
+  default-config:\n\
+    personality: IDS\n\
+\n\
+  server-config:\n\
+\n\
+    - apache-tomcat:\n\
+        address: [192.168.1.0/24, 127.0.0.0/8, \"::1\"]\n\
+        personality: Tomcat_6_0\n\
+\n\
+    - iis7:\n\
+        address: \n\
+          - 192.168.0.0/24\n\
+          - 192.168.10.0/24\n\
+        personality: IIS_7_0\n\
+";
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    ConfYamlLoadString(input, strlen(input));
+
+    HTPConfigure();
+
+    const char *addr = "192.168.10.42";
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+    f.protoctx = (void *)&ssn;
+    f.dst.family = AF_INET;
+    inet_pton(f.dst.family, addr, f.dst.addr_data32);
+
+    SCRadixNode *cfgnode = NULL;
+    htp_cfg_t *htp = cfglist.cfg;
+    cfgnode = SCRadixFindKeyIPV4BestMatch((uint8_t *)GET_IPV4_DST_ADDR_PTR(&f), cfgtree);
+    if (cfgnode != NULL) {
+        HTPCfgRec *htp_cfg_rec = SC_RADIX_NODE_USERDATA(cfgnode, HTPCfgRec);
+        if (htp_cfg_rec != NULL) {
+            htp = htp_cfg_rec->cfg;
+            SCLogDebug("LIBHTP using config: %p", htp);
+        }
+    }
+    if (htp == NULL) {
+        printf("Could not get config for: %s\n", addr);
+        goto end;
+    }
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0) flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1)) flags = STREAM_TOSERVER|STREAM_EOF;
+        else flags = STREAM_TOSERVER;
+
+        r = AppLayerParse(&f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
+        if (r != 0) {
+            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
+                    " 0: ", u, r);
+            result = 0;
+            goto end;
+        }
+    }
+
+    htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (htp_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    /* Check that the HTP state config matches the correct one */
+    if (htp_state->connp->cfg != htp) {
+        printf("wrong HTP config (%p instead of %p - default=%p): ",
+               htp_state->connp->cfg, htp, cfglist.cfg);
+        result = 0;
+        goto end;
+    }
+
+end:
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
+    return result;
+}
+#endif /* UNITTESTS */
+
 /**
  *  \brief  Register the Unit tests for the HTTP protocol
  */
@@ -722,6 +1850,9 @@ void HTPParserRegisterTests(void) {
     UtRegisterTest("HTPParserTest04", HTPParserTest04, 1);
     UtRegisterTest("HTPParserTest05", HTPParserTest05, 1);
     UtRegisterTest("HTPParserTest06", HTPParserTest06, 1);
+    UtRegisterTest("HTPParserConfigTest01", HTPParserConfigTest01, 1);
+    UtRegisterTest("HTPParserConfigTest02", HTPParserConfigTest02, 1);
+    UtRegisterTest("HTPParserConfigTest03", HTPParserConfigTest03, 1);
 #endif /* UNITTESTS */
 }
 

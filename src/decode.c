@@ -11,11 +11,12 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
     switch (p->tunnel_proto) {
         case PPP_OVER_GRE:
             return DecodePPP(tv, dtv, p, pkt, len, pq);
-            break;
         case IPPROTO_IP:
             return DecodeIPV4(tv, dtv, p, pkt, len, pq);
         case IPPROTO_IPV6:
             return DecodeIPV6(tv, dtv, p, pkt, len, pq);
+       case VLAN_OVER_GRE:
+            return DecodeVLAN(tv, dtv, p, pkt, len, pq);
         default:
             SCLogInfo("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", p->tunnel_proto);
             break;
@@ -64,6 +65,8 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
                                                 SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_eth = SCPerfTVRegisterCounter("decoder.ethernet", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_raw = SCPerfTVRegisterCounter("decoder.raw", tv,
+                                               SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_sll = SCPerfTVRegisterCounter("decoder.sll", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_tcp = SCPerfTVRegisterCounter("decoder.tcp", tv,
@@ -80,10 +83,31 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
                                                  SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_gre = SCPerfTVRegisterCounter("decoder.gre", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_vlan = SCPerfTVRegisterCounter("decoder.vlan", tv,
+                                               SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_avg_pkt_size = SCPerfTVRegisterAvgCounter("decoder.avg_pkt_size", tv,
                                                            SC_PERF_TYPE_DOUBLE, "NULL");
     dtv->counter_max_pkt_size = SCPerfTVRegisterMaxCounter("decoder.max_pkt_size", tv,
                                                            SC_PERF_TYPE_UINT64, "NULL");
+
+    dtv->counter_defrag_ipv4_fragments =
+        SCPerfTVRegisterCounter("defrag.ipv4.fragments", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_defrag_ipv4_reassembled =
+        SCPerfTVRegisterCounter("defrag.ipv4.reassembled", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_defrag_ipv4_timeouts =
+        SCPerfTVRegisterCounter("defrag.ipv4.timeouts", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_defrag_ipv6_fragments =
+        SCPerfTVRegisterCounter("defrag.ipv6.fragments", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_defrag_ipv6_reassembled =
+        SCPerfTVRegisterCounter("defrag.ipv6.reassembled", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_defrag_ipv6_timeouts =
+        SCPerfTVRegisterCounter("defrag.ipv6.timeouts", tv,
+            SC_PERF_TYPE_UINT64, "NULL");
 
     tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
     SCPerfAddToClubbedTMTable(tv->name, &tv->sc_perf_pctx);

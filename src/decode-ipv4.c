@@ -31,8 +31,9 @@ inline uint16_t IPV4CalculateChecksum(uint16_t *pkt, uint16_t hlen)
     hlen -= 20;
     pkt += 10;
 
-    if (hlen == 0)
+    if (hlen == 0) {
         ;
+    }
     if (hlen == 4)
         csum += pkt[0] + pkt[1];
     else if (hlen == 8)
@@ -500,6 +501,12 @@ static int DecodeIPV4Packet(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
         return -1;
     }
 
+    if (IP_GET_RAW_VER(pkt) != 4) {
+        SCLogDebug("wrong ip version %" PRIu8 "",IP_GET_RAW_VER(pkt));
+        DECODER_SET_EVENT(p,IPV4_WRONG_IP_VER);
+        return -1;
+    }
+
     p->ip4h = (IPV4Hdr *)pkt;
 
     if (IPV4_GET_HLEN(p) < IPV4_HEADER_LEN) {
@@ -612,7 +619,7 @@ void DecodeIPV4(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
 
     /* If a fragment, pass off for re-assembly. */
     if (IPV4_GET_IPOFFSET(p) > 0 || IPV4_GET_MF(p) == 1) {
-        Packet *rp = Defrag4(tv, NULL, p);
+        Packet *rp = Defrag(tv, dtv, NULL, p);
         if (rp != NULL) {
             /* Got re-assembled packet, re-run through decoder. */
             DecodeIPV4(tv, dtv, rp, rp->pkt, rp->pktlen, pq);

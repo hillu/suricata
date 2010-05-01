@@ -1,95 +1,77 @@
-/*
- * Copyright (c) 2009 Open Information Security Foundation
- * app-layer-smb.h
+/* Copyright (c) 2009,2010 Open Information Security Foundation */
+
+/**
+ * \file
  *
  * \author Kirby Kuehl <kkuehl@gmail.com>
  */
 
-#ifndef APPLAYERSMB_H_
-#define APPLAYERSMB_H_
+#ifndef __APP_LAYER_SMB_H__
+#define __APP_LAYER_SMB_H__
+
+#include "suricata-common.h"
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 #include "flow.h"
 #include "stream.h"
-#include <stdint.h>
-/*
- http://ubiqx.org/cifs/rfc-draft/rfc1002.html#s4.3
- All session packets are of the following general structure:
+#include "app-layer-nbss.h"
+#include "app-layer-dcerpc-common.h"
 
-                        1 1 1 1 1 1 1 1 1 1 2 2 2 2 2 2 2 2 2 2 3 3
-    0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |      TYPE     |     FLAGS     |            LENGTH             |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-   |                                                               |
-   /               TRAILER (Packet Type Dependent)                 /
-   |                                                               |
-   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+typedef struct SMBHdr_ {
+    uint8_t protocol[4];
+    uint8_t command;
+    uint32_t status;
+    uint8_t flags;
+    uint16_t flags2;
+    uint16_t pidhigh;
+    uint64_t securitysignature;
+    uint16_t unused;
+    uint16_t tid;
+    uint16_t pid;
+    uint16_t uid;
+    uint16_t mid;
+} SMBHdr;
 
-   The TYPE, FLAGS, and LENGTH fields are present in every session
-   packet.
-*/
-#define NBSS_SESSION_MESSAGE 0x00
-#define NBSS_SESSION_REQUEST 0x81
-#define NBSS_POSITIVE_SESSION_RESPONSE 0x82
-#define NBSS_NEGATIVE_SESSION_RESPONSE 0x83
-#define NBSS_RETARGET_SESSION_RESPONSE 0x84
-#define NBSS_SESSION_KEEP_ALIVE 0x85
-
-typedef struct nbss_hdr_ {
-	uint8_t type;
-	uint8_t flags;
-	uint32_t length;
-}nbss_hdr_t, *pnbss_hdr_t;
-#define NBSS_HDR_LEN 4
-
-typedef struct smb_hdr_ {
-	uint8_t protocol[4];
-	uint8_t command;
-	uint32_t status;
-	uint8_t flags;
-	uint16_t flags2;
-	uint16_t pidhigh;
-	uint64_t securitysignature;
-	uint16_t unused;
-	uint16_t tid;
-	uint16_t pid;
-	uint16_t uid;
-	uint16_t mid;
-}smb_hdr_t, *psmb_hdr_t;
 #define SMB_HDR_LEN 32
 #define MINIMUM_SMB_LEN 35
 #define NBSS_SMB_HDRS_LEN 36
 
-typedef struct wordcount_ {
-	uint8_t wordcount;
-	uint8_t *words;
-}wordcount_t, *pwordcount_t;
+typedef struct SMBWordCount_ {
+    uint8_t wordcount;
+    uint8_t wordcountleft;
+    uint8_t *words;
+} SMBWordCount;
 
-typedef struct bytecount_ {
-	uint8_t bytecountbytes;
-	uint16_t bytecount;
-	uint8_t *bytes;
-}bytecount_t, *pbytyecount_t;
+typedef struct SMBByteCount_ {
+    uint8_t bytecountbytes;
+    uint16_t bytecount;
+    uint16_t bytecountleft;
+    uint8_t *bytes;
+} SMBByteCount;
 
-typedef struct andxcount_ {
+typedef struct SMBAndX_ {
     uint8_t isandx;
     uint8_t paddingparsed;
     uint8_t andxcommand;
+    uint8_t maxchainedandx;
     uint16_t andxoffset;
     uint16_t andxbytesprocessed;
-    uint32_t datalength;
+    uint16_t datalength;
+    uint16_t datalengthhigh;
     uint64_t dataoffset;
-}andx_t, *pandx_t;
+} SMBAndX;
 
 typedef struct SMBState_ {
-	nbss_hdr_t nbss;
-	smb_hdr_t smb;
-	wordcount_t wordcount;
-	bytecount_t bytecount;
-	andx_t andx;
-	uint16_t bytesprocessed;
-}SMBState;
+    uint32_t head;
+    NBSSHdr nbss;
+    SMBHdr smb;
+    SMBWordCount wordcount;
+    SMBByteCount bytecount;
+    SMBAndX andx;
+    uint16_t bytesprocessed;
+    DCERPC dcerpc;
+    uint32_t tail;
+} SMBState;
 
 #define SMB_FLAGS_SERVER_TO_REDIR 0x80
 #define SMB_NO_SECONDARY_ANDX_COMMAND 0xff
@@ -165,5 +147,5 @@ void RegisterSMBParsers(void);
 void SMBParserRegisterTests(void);
 int isAndX(SMBState *smb_state);
 
+#endif /* __APP_LAYER_SMB_H__ */
 
-#endif /* APPLAYERSMB_H_ */

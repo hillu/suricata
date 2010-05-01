@@ -14,12 +14,16 @@
 #include "tmqh-packetpool.h"
 #include "threads.h"
 #include "util-debug.h"
+#include <pthread.h>
+#include <unistd.h>
+
 
 #ifdef OS_FREEBSD
 #include <sched.h>
 #include <sys/param.h>
 #include <sys/resource.h>
 #include <sys/cpuset.h>
+#include <sys/thr.h>
 #define cpu_set_t cpuset_t
 #elif OS_DARWIN
 #include <mach/mach.h>
@@ -31,7 +35,7 @@
 #endif /* OS_FREEBSD */
 
 /* prototypes */
-static int SetCPUAffinity(int cpu);
+static int SetCPUAffinity(uint16_t cpu);
 
 /* root of the threadvars list */
 ThreadVars *tv_root[TVT_MAX] = { NULL };
@@ -76,7 +80,7 @@ typedef struct TmVarSlot_ {
 inline int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag) {
     int r;
     if (SCSpinLock(&tv->flags_spinlock) != 0) {
-        SCLogError(SC_SPINLOCK_ERROR,"spin lock errno=%d",errno);
+        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return 0;
     }
 
@@ -87,7 +91,7 @@ inline int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag) {
 
 inline void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag) {
     if (SCSpinLock(&tv->flags_spinlock) != 0) {
-        SCLogError(SC_SPINLOCK_ERROR,"spin lock errno=%d",errno);
+        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return;
     }
 
@@ -97,7 +101,7 @@ inline void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag) {
 
 inline void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag) {
     if (SCSpinLock(&tv->flags_spinlock) != 0) {
-        SCLogError(SC_SPINLOCK_ERROR,"spin lock errno=%d",errno);
+        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return;
     }
 
@@ -114,8 +118,11 @@ void *TmThreadsSlot1NoIn(void *td) {
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
-    if (tv->set_cpu_affinity == 1)
-        SetCPUAffinity(tv->cpu_affinity);
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
 
     if (s->s.SlotThreadInit != NULL) {
         r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
@@ -178,8 +185,11 @@ void *TmThreadsSlot1NoOut(void *td) {
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
-    if (tv->set_cpu_affinity == 1)
-        SetCPUAffinity(tv->cpu_affinity);
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
 
     if (s->s.SlotThreadInit != NULL) {
         r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
@@ -235,8 +245,11 @@ void *TmThreadsSlot1NoInOut(void *td) {
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
-    if (tv->set_cpu_affinity == 1)
-        SetCPUAffinity(tv->cpu_affinity);
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
 
     SCLogDebug("%s starting", tv->name);
 
@@ -296,8 +309,11 @@ void *TmThreadsSlot1(void *td) {
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
-    if (tv->set_cpu_affinity == 1)
-        SetCPUAffinity(tv->cpu_affinity);
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
 
     SCLogDebug("%s starting", tv->name);
 
@@ -413,8 +429,11 @@ void *TmThreadsSlotVar(void *td) {
     TmEcode r = TM_ECODE_OK;
     TmSlot *slot = NULL;
 
-    if (tv->set_cpu_affinity == 1)
-        SetCPUAffinity(tv->cpu_affinity);
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
 
     //printf("TmThreadsSlot1: %s starting\n", tv->name);
 
@@ -521,7 +540,7 @@ TmEcode TmThreadSetSlots(ThreadVars *tv, char *name, void *(*fn_p)(void *)) {
         goto error;
     }
 
-    tv->tm_slots = malloc(size);
+    tv->tm_slots = SCMalloc(size);
     if (tv->tm_slots == NULL) goto error;
     memset(tv->tm_slots, 0, size);
 
@@ -546,7 +565,7 @@ void Tm1SlotSetFunc(ThreadVars *tv, TmModule *tm, void *data) {
 
 void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
     TmVarSlot *s = (TmVarSlot *)tv->tm_slots;
-    TmSlot *slot = malloc(sizeof(TmSlot));
+    TmSlot *slot = SCMalloc(sizeof(TmSlot));
     if (slot == NULL)
         return;
 
@@ -574,35 +593,101 @@ void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
     }
 }
 
-/* called from the thread */
-static int SetCPUAffinity(int cpu) {
-    //pthread_t tid = pthread_self();
-    pid_t tid = syscall(SYS_gettid);
-    cpu_set_t cs;
+/**
+ * \brief Set the thread affinity on the calling thread
+ * \param cpuid id of the core/cpu to setup the affinity
+ * \retval 0 if all goes well; -1 if something is wrong
+ */
+static int SetCPUAffinity(uint16_t cpuid) {
 
-    printf("Setting CPU Affinity for thread %" PRIu32 " to CPU %" PRId32 "\n", tid, cpu);
+    int cpu = (int)cpuid;
+
+#ifdef OS_WIN32
+	DWORD cs = 1 << cpu;
+#else
+    cpu_set_t cs;
 
     CPU_ZERO(&cs);
     CPU_SET(cpu,&cs);
+#endif /* OS_WIN32 */
 
 #ifdef OS_FREEBSD
-    int r = cpuset_setaffinity(CPU_LEVEL_WHICH,CPU_WHICH_TID,tid,sizeof(cpu_set_t),&cs);
+    int r = cpuset_setaffinity(CPU_LEVEL_WHICH,CPU_WHICH_TID,SCGetThreadIdLong(),sizeof(cpu_set_t),&cs);
 #elif OS_DARWIN
     int r = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY, (void*)&cs, THREAD_AFFINITY_POLICY_COUNT);
+#elif OS_WIN32
+	int r = (0 == SetThreadAffinityMask(GetCurrentThread(), cs));
 #else
+    pid_t tid = syscall(SYS_gettid);
     int r = sched_setaffinity(tid,sizeof(cpu_set_t),&cs);
 #endif /* OS_FREEBSD */
 
     if (r != 0) {
         printf("Warning: sched_setaffinity failed (%" PRId32 "): %s\n", r, strerror(errno));
+        return -1;
     }
+    SCLogDebug("CPU Affinity for thread %lu set to CPU %" PRId32, SCGetThreadIdLong(), cpu);
 
     return 0;
 }
 
-TmEcode TmThreadSetCPUAffinity(ThreadVars *tv, int cpu) {
-    tv->set_cpu_affinity = 1;
+
+/**
+ * \brief Set the thread options (thread priority)
+ * \param tv pointer to the ThreadVars to setup the thread priority
+ * \retval TM_ECOE_OK
+ */
+TmEcode TmThreadSetThreadPriority(ThreadVars *tv, int prio) {
+    tv->thread_setup_flags |= THREAD_SET_PRIORITY;
+    tv->thread_priority = prio;
+    return TM_ECODE_OK;
+}
+
+/**
+ * \brief Adjusting nice value for threads
+ */
+void TmThreadSetPrio(ThreadVars *tv)
+{
+    SCEnter();
+#ifdef OS_WIN32
+	if (0 == SetThreadPriority(GetCurrentThread(), tv->thread_priority)) {
+        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting priority for thread %s: %s", tv->name, strerror(errno));
+    } else {
+        SCLogDebug("Priority set to %"PRId32" for thread %s", tv->thread_priority, tv->name);
+    }
+#else
+    int ret = nice(tv->thread_priority);
+    if (ret == -1) {
+        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting nice value for thread %s: %s", tv->name, strerror(errno));
+    } else {
+        SCLogDebug("Nice value set to %"PRId32" for thread %s", tv->thread_priority, tv->name);
+    }
+#endif /* OS_WIN32 */
+}
+
+
+/**
+ * \brief Set the thread options (cpu affinity)
+ * \param tv pointer to the ThreadVars to setup the affinity
+ * \retval TM_ECOE_OK
+ */
+TmEcode TmThreadSetCPUAffinity(ThreadVars *tv, uint16_t cpu) {
+    tv->thread_setup_flags |= THREAD_SET_AFFINITY;
     tv->cpu_affinity = cpu;
+    return TM_ECODE_OK;
+}
+
+/**
+ * \brief Set the thread options (cpu affinitythread)
+ *        Priority should be already set by pthread_create
+ * \param tv pointer to the ThreadVars of the calling thread
+ */
+TmEcode TmThreadSetupOptions(ThreadVars *tv) {
+    if (tv->thread_setup_flags & THREAD_SET_AFFINITY) {
+        SCLogInfo("Setting affinity for \"%s\" Module to cpu/core %"PRIu16", thread id %lu", tv->name, tv->cpu_affinity, SCGetThreadIdLong());
+        SetCPUAffinity(tv->cpu_affinity);
+    }
+    TmThreadSetPrio(tv);
     return TM_ECODE_OK;
 }
 
@@ -632,7 +717,7 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
     SCLogDebug("creating thread \"%s\"...", name);
 
     /* XXX create separate function for this: allocate a thread container */
-    tv = malloc(sizeof(ThreadVars));
+    tv = SCMalloc(sizeof(ThreadVars));
     if (tv == NULL) goto error;
     memset(tv, 0, sizeof(ThreadVars));
 
@@ -798,6 +883,91 @@ void TmThreadAppend(ThreadVars *tv, int type)
     //printf("TmThreadAppend: thread \'%s\' is added to the list.\n", tv->name);
 }
 
+/**
+ * \brief Removes this TV from tv_root based on its type
+ *
+ * \param tv   The tv instance to remove from the global tv list.
+ * \param type Holds the type this TV belongs to.
+ */
+void TmThreadRemove(ThreadVars *tv, int type)
+{
+    SCMutexLock(&tv_root_lock);
+
+    if (tv_root[type] == NULL) {
+        SCMutexUnlock(&tv_root_lock);
+        return;
+    }
+
+    ThreadVars *t = tv_root[type];
+    while (t != tv) {
+        t = t->next;
+    }
+
+    if (t != NULL) {
+        if (t->prev != NULL)
+            t->prev->next = t->next;
+        if (t->next != NULL)
+            t->next->prev = t->prev;
+
+    if (t == tv_root[type])
+        tv_root[type] = t->next;;
+    }
+
+    SCMutexUnlock(&tv_root_lock);
+
+    return;
+}
+
+/**
+ * \brief Kill a thread.
+ *
+ * \param tv A ThreadVars instance corresponding to the thread that has to be
+ *           killed.
+ */
+void TmThreadKillThread(ThreadVars *tv)
+{
+    int i = 0;
+
+    if (tv == NULL)
+        return;
+
+    /* set the thread flag informing the thread that it needs to be
+     * terminated */
+    TmThreadsSetFlag(tv, THV_KILL);
+
+    if (tv->inq != NULL) {
+        /* signal the queue for the number of users */
+        for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
+            SCCondSignal(&trans_q[tv->inq->id].cond_q);
+
+        /* to be sure, signal more */
+        while (1) {
+            if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                break;
+            }
+
+            for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
+                SCCondSignal(&trans_q[tv->inq->id].cond_q);
+
+            usleep(100);
+        }
+    }
+
+    if (tv->cond != NULL ) {
+        while (1) {
+            if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                break;
+            }
+
+            pthread_cond_broadcast(tv->cond);
+
+            usleep(100);
+        }
+    }
+
+    return;
+}
+
 void TmThreadKillThreads(void) {
     ThreadVars *tv = NULL;
     int i = 0;
@@ -878,7 +1048,6 @@ void TmThreadKillThreads(void) {
 TmEcode TmThreadSpawn(ThreadVars *tv)
 {
     pthread_attr_t attr;
-
     if (tv->tm_func == NULL) {
         printf("ERROR: no thread function set\n");
         return TM_ECODE_FAILED;
@@ -886,6 +1055,7 @@ TmEcode TmThreadSpawn(ThreadVars *tv)
 
     /* Initialize and set thread detached attribute */
     pthread_attr_init(&attr);
+
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
     int rc = pthread_create(&tv->t, &attr, tv->tm_func, (void *)tv);
@@ -935,7 +1105,7 @@ void TmThreadSetAOF(ThreadVars *tv, uint8_t aof)
  */
 void TmThreadInitMC(ThreadVars *tv)
 {
-    if ( (tv->m = malloc(sizeof(SCMutex))) == NULL) {
+    if ( (tv->m = SCMalloc(sizeof(SCMutex))) == NULL) {
         printf("Error allocating memory\n");
         exit(0);
     }
@@ -945,7 +1115,7 @@ void TmThreadInitMC(ThreadVars *tv)
         exit(0);
     }
 
-    if ( (tv->cond = malloc(sizeof(SCCondT))) == NULL) {
+    if ( (tv->cond = SCMalloc(sizeof(SCCondT))) == NULL) {
         printf("Error allocating memory\n");
         exit(0);
     }

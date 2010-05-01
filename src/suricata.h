@@ -14,10 +14,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "0.8.0"
-
-/* max packets processed simultaniously */
-#define MAX_PENDING 50
+#define PROG_VER "0.8.2"
 
 /* number of packets in processing right now
  * This is the diff between recv'd and verdicted
@@ -25,12 +22,13 @@
  * XXX this should be turned into an api located
  * in the packetpool code
  */
-uint32_t pending;
+intmax_t pending;
 #ifdef DBG_PERF
 uint32_t dbg_maxpending;
 #endif /* DBG_PERF */
 SCMutex mutex_pending;
 SCCondT cond_pending;
+
 
 /* Run mode */
 enum {
@@ -39,6 +37,7 @@ enum {
     MODE_PCAP_FILE,
     MODE_PFRING,
     MODE_NFQ,
+    MODE_IPFW,
     MODE_UNITTEST
 };
 
@@ -63,6 +62,8 @@ uint8_t g_u8_lowercasetable[256];
 
 void EngineStop(void);
 void EngineKill(void);
+
+int RunmodeIsUnittests(void);
 
 #endif /* __SURICATA_H__ */
 

@@ -1,3 +1,8 @@
+noinst_HEADERS = action-globals.h \
+    app-layer-nbss.h app-layer-dcerpc-common.h \
+    debug.h decode-events.h \
+	flow-private.h queue.h source-nfq-prototypes.h \
+	suricata-common.h threadvars.h util-binsearch.h
 bin_PROGRAMS = suricata
 suricata_SOURCES = suricata.c suricata.h \
 runmodes.c runmodes.h \
@@ -7,14 +12,17 @@ source-nfq.c source-nfq.h \
 source-pcap.c source-pcap.h \
 source-pcap-file.c source-pcap-file.h \
 source-pfring.c source-pfring.h \
+source-ipfw.c source-ipfw.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
+decode-vlan.c decode-vlan.h \
 decode-sll.c decode-sll.h \
 decode-gre.c decode-gre.h \
 decode-ppp.c decode-ppp.h \
 decode-pppoe.c decode-pppoe.h \
 decode-ipv4.c decode-ipv4.h \
 decode-ipv6.c decode-ipv6.h \
+decode-raw.c decode-raw.h \
 decode-icmpv4.c decode-icmpv4.h \
 decode-icmpv6.c decode-icmpv6.h \
 decode-tcp.c decode-tcp.h \
@@ -23,11 +31,13 @@ flow.c flow.h \
 flow-queue.c flow-queue.h \
 flow-hash.c flow-hash.h \
 flow-util.c flow-util.h \
+util-mem.h \
 flow-var.c flow-var.h \
 flow-bit.c flow-bit.h \
 flow-alert-sid.c flow-alert-sid.h \
 pkt-var.c pkt-var.h \
 host.c host.h \
+reputation.c reputation.h \
 detect.c detect.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine.c detect-engine.h \
@@ -44,6 +54,8 @@ detect-engine-port.c detect-engine-port.h \
 detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-iponly.c detect-engine-iponly.h \
+detect-engine-payload.c detect-engine-payload.h \
+detect-engine-uri.c detect-engine-uri.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
 detect-seq.c detect-seq.h \
@@ -83,6 +95,7 @@ detect-decode-event.c detect-decode-event.h \
 detect-ipopts.c detect-ipopts.h \
 detect-flags.c detect-flags.h \
 detect-fragbits.c detect-fragbits.h \
+detect-fragoffset.c detect-fragoffset.h \
 detect-gid.c detect-gid.h \
 detect-noalert.c detect-noalert.h \
 detect-csum.c detect-csum.h \
@@ -90,19 +103,32 @@ detect-ttl.c detect-ttl.h \
 detect-itype.c detect-itype.h \
 detect-icode.c detect-icode.h \
 detect-http-cookie.c detect-http-cookie.h \
+detect-http-method.c detect-http-method.h \
 detect-tls-version.c detect-tls-version.h \
 detect-icmp-id.c detect-icmp-id.h \
+detect-icmp-seq.c detect-icmp-seq.h \
 detect-dce-iface.c detect-dce-iface.h \
 detect-dce-opnum.c detect-dce-opnum.h \
 detect-dce-stub-data.c detect-dce-stub-data.h \
+detect-urilen.c detect-urilen.h \
+detect-detection-filter.c detect-detection-filter.h \
+detect-http-client-body.c detect-http-client-body.h \
 util-print.c util-print.h \
+util-fmemopen.c util-fmemopen.h \
+util-cpu.c util-cpu.h \
+util-pidfile.c util-pidfile.h \
 util-mpm.c util-mpm.h \
-util-binsearch.c util-binsearch.h \
+util-spm.c util-spm.h util-clock.h \
+util-spm-bs.c util-spm-bs.h \
+util-spm-bs2bm.c util-spm-bs2bm.h \
+util-spm-bm.c util-spm-bm.h \
 util-mpm-wumanber.c util-mpm-wumanber.h \
 util-mpm-b2g.c util-mpm-b2g.h \
+util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
 util-mpm-b3g.c util-mpm-b3g.h \
 util-cidr.c util-cidr.h \
 util-unittest.c util-unittest.h \
+util-unittest-helper.c util-unittest-helper.h \
 util-hash.c util-hash.h \
 util-hashlist.c util-hashlist.h \
 util-bloomfilter.c util-bloomfilter.h \
@@ -123,6 +149,11 @@ util-fix_checksum.c util-fix_checksum.h \
 util-daemon.c util-daemon.h \
 util-random.c util-random.h \
 util-classification-config.c util-classification-config.h \
+util-threshold-config.c util-threshold-config.h \
+util-strlcatu.c \
+util-strlcpyu.c \
+util-cuda.c util-cuda.h \
+util-cuda-handlers.c util-cuda-handlers.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -133,6 +164,7 @@ tmqh-packetpool.c tmqh-packetpool.h \
 tmqh-flow.c tmqh-flow.h \
 alert-fastlog.c alert-fastlog.h \
 alert-debuglog.c alert-debuglog.h \
+alert-prelude.c alert-prelude.h \
 alert-unified-log.c alert-unified-log.h \
 alert-unified-alert.c alert-unified-alert.h \
 alert-unified2-alert.c alert-unified2-alert.h \
@@ -144,7 +176,7 @@ respond-reject.c respond-reject.h \
 respond-reject-libnet11.h respond-reject-libnet11.c \
 conf.c conf.h \
 conf-yaml-loader.c conf-yaml-loader.h \
-counters.c counter.h \
+counters.c counters.h \
 app-layer.c app-layer.h \
 app-layer-detect-proto.c app-layer-detect-proto.h \
 app-layer-parser.c app-layer-parser.h \
@@ -155,13 +187,22 @@ app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-ftp.c app-layer-ftp.h \
-defrag.c defrag.h
+defrag.c defrag.h \
+output.c output.h \
+win32-misc.c win32-misc.h \
+win32-syslog.h
 
 # set the include path found by configure
 INCLUDES= $(all_includes)
 
+
 # the library search path.
-suricata_LDFLAGS = $(all_libraries) 
-#suricata_LDADD = -lnetfilter_queue -lpthread -lpcre 
+suricata_LDFLAGS = $(all_libraries)
+
+if BUILD_LIBHTP
+suricata_LDADD = $(top_builddir)/libhtp/htp/libhtp.la
+INCLUDES += -I$(top_srcdir)/libhtp
+endif
+
 #suricata_CFLAGS = -Wall -fno-strict-aliasing 
 

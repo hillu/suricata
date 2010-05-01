@@ -12,7 +12,7 @@
 #include "flow.h"
 #include "flow-bit.h"
 #include "detect-flowbits.h"
-#include "util-binsearch.h"
+#include "util-spm.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
@@ -28,7 +28,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectFlowbitMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectFlowbitSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectFlowbitSetup (DetectEngineCtx *, Signature *, char *);
 void DetectFlowbitFree (void *);
 void FlowBitsRegisterTests(void);
 
@@ -46,14 +46,14 @@ void DetectFlowbitsRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
@@ -126,19 +126,17 @@ int DetectFlowbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
         case DETECT_FLOWBITS_CMD_TOGGLE:
             return DetectFlowbitMatchToggle(p,fd);
         default:
-            printf("ERROR: DetectFlowbitMatch unknown cmd %" PRIu32 "\n", fd->cmd);
+            SCLogError(SC_ERR_UNKNOWN_VALUE, "unknown cmd %" PRIu32 "", fd->cmd);
             return 0;
     }
 
     return 0;
 }
 
-int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectFlowbitsData *cd = NULL;
     SigMatch *sm = NULL;
-    char *str = rawstr;
-    char dubbed = 0;
     char *fb_cmd_str = NULL, *fb_name = NULL;
     uint8_t fb_cmd = 0;
 #define MAX_SUBSTRINGS 30
@@ -147,14 +145,14 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 2 && ret != 3) {
-        printf("ERROR: \"%s\" is not a valid setting for flowbits.\n", rawstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "\"%s\" is not a valid setting for flowbits.", rawstr);
         return -1;
     }
 
     const char *str_ptr;
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        printf("DetectPcreSetup: pcre_get_substring failed\n");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         return -1;
     }
     fb_cmd_str = (char *)str_ptr;
@@ -162,8 +160,8 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     if (ret == 3) {
         res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
         if (res < 0) {
-            printf("DetectPcreSetup: pcre_get_substring failed\n");
-            return -1;
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+            goto error;
         }
         fb_name = (char *)str_ptr;
     }
@@ -181,14 +179,14 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     } else if (strcmp(fb_cmd_str,"toggle") == 0) {
         fb_cmd = DETECT_FLOWBITS_CMD_TOGGLE;
     } else {
-        printf("ERROR: flowbits action \"%s\" is not supported.\n", fb_cmd_str);
-        return -1;
+        SCLogError(SC_ERR_UNKNOWN_VALUE, "ERROR: flowbits action \"%s\" is not supported.", fb_cmd_str);
+        goto error;
     }
 
     switch(fb_cmd)  {
         case DETECT_FLOWBITS_CMD_NOALERT:
             if(fb_name != NULL)
-            goto error;
+                goto error;
             s->flags |= SIG_FLAG_NOALERT;
             return 0;
         case DETECT_FLOWBITS_CMD_ISNOTSET:
@@ -197,13 +195,13 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
         case DETECT_FLOWBITS_CMD_UNSET:
         case DETECT_FLOWBITS_CMD_TOGGLE:
             if(fb_name == NULL)
-            goto error;
+                goto error;
             break;
     }
 
-    cd = malloc(sizeof(DetectFlowbitsData));
+    cd = SCMalloc(sizeof(DetectFlowbitsData));
     if (cd == NULL) {
-        printf("DetectFlowbitsSetup malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "DetectFlowbitsSetup malloc failed");
         goto error;
     }
 
@@ -217,6 +215,11 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     SCLogDebug("idx %" PRIu32 ", cmd %s, name %s",
         cd->idx, fb_cmd_str, fb_name ? fb_name : "(null)");
 
+    pcre_free_substring(fb_name);
+    fb_name = NULL;
+    pcre_free_substring(fb_cmd_str);
+    fb_cmd_str = NULL;
+
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
     sm = SigMatchAlloc();
@@ -226,14 +229,19 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char
     sm->type = DETECT_FLOWBITS;
     sm->ctx = (void *)cd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
-    if (dubbed) free(str);
     return 0;
 
 error:
-    if (dubbed) free(str);
-    if (sm) free(sm);
+    if (fb_name != NULL)
+        pcre_free_substring(fb_name);
+    if (fb_cmd_str != NULL)
+        pcre_free_substring(fb_cmd_str);
+    if (cd != NULL)
+        SCFree(cd);
+    if (sm != NULL)
+        SCFree(sm);
     return -1;
 }
 
@@ -243,7 +251,7 @@ void DetectFlowbitFree (void *ptr) {
     if (fd == NULL)
         return;
 
-    free(fd);
+    SCFree(fd);
 }
 
 #ifdef UNITTESTS
@@ -806,7 +814,7 @@ static int FlowBitsTestSig07(void) {
         goto end;
     }
 
-    s = de_ctx->sig_list = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Flowbit unset\"; flowbits:unset,myflow2; sid:11;)");
+    s = s->next = SigInit(de_ctx,"alert ip any any -> any any (msg:\"Flowbit unset\"; flowbits:unset,myflow2; sid:11;)");
     if (s == NULL) {
         goto end;
     }

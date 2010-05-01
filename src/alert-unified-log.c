@@ -9,8 +9,8 @@
  * - inspect error messages for threadsafety
  * - inspect gettimeofday for threadsafely
  * - implement configuration
- *
  */
+#include <string.h>
 
 #include "suricata-common.h"
 #include "debug.h"
@@ -26,28 +26,47 @@
 #include "util-time.h"
 #include "util-debug.h"
 #include "util-error.h"
+#include "util-byte.h"
+
+#include "output.h"
+#include "alert-unified-log.h"
 
 #define DEFAULT_LOG_FILENAME "unified.log"
+
+/**< Default log file limit in MB. */
+#define DEFAULT_LIMIT 32
+
+/**< Minimum log file limit in MB. */
+#define MIN_LIMIT 1
+
+#define MODULE_NAME "AlertUnifiedLog"
 
 TmEcode AlertUnifiedLog (ThreadVars *, Packet *, void *, PacketQueue *);
 TmEcode AlertUnifiedLogThreadInit(ThreadVars *, void *, void **);
 TmEcode AlertUnifiedLogThreadDeinit(ThreadVars *, void *);
-int AlertUnifiedLogOpenFileCtx(LogFileCtx *, char *);
+int AlertUnifiedLogOpenFileCtx(LogFileCtx *, const char *);
 void AlertUnifiedLogRegisterTests(void);
+static void AlertUnifiedLogDeInitCtx(OutputCtx *);
 
 void TmModuleAlertUnifiedLogRegister (void) {
-    tmm_modules[TMM_ALERTUNIFIEDLOG].name = "AlertUnifiedLog";
+    tmm_modules[TMM_ALERTUNIFIEDLOG].name = MODULE_NAME;
     tmm_modules[TMM_ALERTUNIFIEDLOG].ThreadInit = AlertUnifiedLogThreadInit;
     tmm_modules[TMM_ALERTUNIFIEDLOG].Func = AlertUnifiedLog;
     tmm_modules[TMM_ALERTUNIFIEDLOG].ThreadDeinit = AlertUnifiedLogThreadDeinit;
     tmm_modules[TMM_ALERTUNIFIEDLOG].RegisterTests = AlertUnifiedLogRegisterTests;
+
+    OutputRegisterModule(MODULE_NAME, "unified-log", AlertUnifiedLogInitCtx);
+
+#if __WORDSIZE == 64
+    SCLogInfo("The Unified1 module detected a 64-bit system. For Barnyard "
+            "0.2.0 to work correctly, it needs to be patched. Patch can be "
+            "found here: https://redmine.openinfosecfoundation.org/attachments/download/184/barnyard.64bit.diff");
+#endif
 }
 
 typedef struct AlertUnifiedLogThread_ {
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */
     LogFileCtx* file_ctx;
-    uint32_t size_limit;
-    uint32_t size_current;
 } AlertUnifiedLogThread;
 
 #define ALERTUNIFIEDLOG_LOGMAGIC 0xDEAD1080 /* taken from Snort */
@@ -73,21 +92,31 @@ typedef struct AlertUnifiedLogPacketHeader_ {
     uint32_t sig_prio;
     uint32_t pad1; /* Snort's event_id */
     uint32_t pad2; /* Snort's event_reference */
-    uint32_t tv_sec1; /* from Snort's struct pcap_timeval */
-    uint32_t tv_usec1; /* from Snort's struct pcap_timeval */
+#ifdef UNIFIED_NATIVE_TIMEVAL
+    struct timeval ref_tv;
+#else
+    SCTimeval32 ref_tv;
+#endif /* UNIFIED_NATIVE_TIMEVAL */
 
     /* 32 bit unsigned flags */
     uint32_t pktflags;
 
     /* Snort's 'SnortPktHeader' structure */
-    uint32_t tv_sec2; /* from Snort's struct pcap_timeval */
-    uint32_t tv_usec2; /* from Snort's struct pcap_timeval */
+#ifdef UNIFIED_NATIVE_TIMEVAL
+    struct timeval tv;
+#else
+    SCTimeval32 tv;
+#endif /* UNIFIED_NATIVE_TIMEVAL */
     uint32_t caplen;
     uint32_t pktlen;
 } AlertUnifiedLogPacketHeader;
 
-int AlertUnifiedLogWriteFileHeader(ThreadVars *t, AlertUnifiedLogThread *aun) {
+int AlertUnifiedLogWriteFileHeader(LogFileCtx *file_ctx) {
     int ret;
+
+    if (file_ctx->flags & LOGFILE_HEADER_WRITTEN)
+        return 0;
+
     /* write the fileheader to the file so the reader can recognize it */
 
     AlertUnifiedLogFileHeader hdr;
@@ -99,13 +128,14 @@ int AlertUnifiedLogWriteFileHeader(ThreadVars *t, AlertUnifiedLogThread *aun) {
     hdr.snaplen = 65536; /* XXX */
     hdr.linktype = DLT_EN10MB; /* XXX */
 
-    ret = fwrite(&hdr, sizeof(hdr), 1, aun->file_ctx->fp);
+    ret = fwrite(&hdr, sizeof(hdr), 1, file_ctx->fp);
     if (ret != 1) {
-        printf("Error: fwrite failed: ret = %" PRId32 ", %s\n", ret, strerror(errno));
+        SCLogError(SC_ERR_FWRITE, "fwrite failed: ret = %" PRId32 ", %s", ret,
+                strerror(errno));
         return -1;
     }
 
-    aun->size_current = sizeof(hdr);
+    file_ctx->size_current = sizeof(hdr);
     return 0;
 }
 
@@ -113,7 +143,8 @@ int AlertUnifiedLogCloseFile(ThreadVars *t, AlertUnifiedLogThread *aun) {
     if (aun->file_ctx->fp != NULL) {
         fclose(aun->file_ctx->fp);
     }
-    aun->size_current = 0;
+    aun->file_ctx->size_current = 0;
+    aun->file_ctx->flags = 0;
     return 0;
 }
 
@@ -122,14 +153,12 @@ int AlertUnifiedLogRotateFile(ThreadVars *t, AlertUnifiedLogThread *aun) {
         printf("Error: AlertUnifiedLogCloseFile failed\n");
         return -1;
     }
-    if (AlertUnifiedLogOpenFileCtx(aun->file_ctx,aun->file_ctx->config_file) < 0) {
+
+    if (AlertUnifiedLogOpenFileCtx(aun->file_ctx,aun->file_ctx->prefix) < 0) {
         printf("Error: AlertUnifiedLogOpenFileCtx, open new log file failed\n");
         return -1;
     }
-    if (AlertUnifiedLogWriteFileHeader(t, aun) < 0) {
-        printf("Error: AlertUnifiedLogAppendFile, write unified header failed\n");
-        return -1;
-    }
+
     return 0;
 }
 
@@ -152,90 +181,92 @@ TmEcode AlertUnifiedLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
         ethh_offset = sizeof(EthernetHdr);
     }
 
-    /* check and enforce the filesize limit */
-    /** Wait for the mutex. We dont want all the threads rotating the file
-     * at the same time :) */
-    SCMutexLock(&aun->file_ctx->fp_mutex);
-    if ((aun->size_current + sizeof(hdr) + p->pktlen + ethh_offset) > aun->size_limit) {
-        if (AlertUnifiedLogRotateFile(tv,aun) < 0)
-        {
-            SCMutexUnlock(&aun->file_ctx->fp_mutex);
-            return TM_ECODE_FAILED;
-        }
-    }
-    SCMutexUnlock(&aun->file_ctx->fp_mutex);
-
-    /* XXX which one to add to this alert? Lets see how Snort solves this.
-     * For now just take last alert. */
-    PacketAlert *pa = &p->alerts.alerts[p->alerts.cnt-1];
-
-    /* fill the hdr structure */
-    hdr.sig_gen = pa->gid;
-    hdr.sig_sid = pa->sid;
-    hdr.sig_rev = pa->rev;
-    hdr.sig_class = pa->class;
-    hdr.sig_prio = pa->prio;
+    /* fill the hdr structure with the data of the packet */
     hdr.pad1 = 0;
     hdr.pad2 = 0;
-    hdr.tv_sec1 = hdr.tv_sec2 = p->ts.tv_sec;
-    hdr.tv_usec1 = hdr.tv_usec2 = p->ts.tv_usec;
+    hdr.tv.tv_sec = hdr.ref_tv.tv_sec = p->ts.tv_sec;
+    hdr.tv.tv_usec = hdr.ref_tv.tv_usec = p->ts.tv_usec;
     hdr.pktflags = 0; /* XXX */
     hdr.pktlen = hdr.caplen = p->pktlen + ethh_offset;
 
-    memcpy(buf,&hdr,sizeof(hdr));
-    buflen = sizeof(hdr);
 
-    if (p->ethh == NULL) {
-        EthernetHdr ethh;
-        memset(&ethh, 0, sizeof(EthernetHdr));
-        ethh.eth_type = htons(ETHERNET_TYPE_IP);
+    uint16_t i = 0;
+    for (; i < p->alerts.cnt; i++) {
+        PacketAlert *pa = &p->alerts.alerts[i];
 
-        memcpy(buf+buflen,&ethh,sizeof(ethh));
-        buflen += sizeof(ethh);
+        /* fill the hdr structure with the data of the alert */
+        hdr.sig_gen = pa->gid;
+        hdr.sig_sid = pa->sid;
+        hdr.sig_rev = pa->rev;
+        hdr.sig_class = pa->class;
+        hdr.sig_prio = pa->prio;
+
+        memcpy(buf,&hdr,sizeof(hdr));
+        buflen = sizeof(hdr);
+
+        if (p->ethh == NULL) {
+            EthernetHdr ethh;
+            memset(&ethh, 0, sizeof(EthernetHdr));
+            ethh.eth_type = htons(ETHERNET_TYPE_IP);
+
+            memcpy(buf+buflen,&ethh,sizeof(ethh));
+            buflen += sizeof(ethh);
+        }
+
+        memcpy(buf+buflen,&p->pkt,p->pktlen);
+        buflen += p->pktlen;
+
+        /** Wait for the mutex. We dont want all the threads rotating the file
+         * at the same time :) */
+        SCMutexLock(&aun->file_ctx->fp_mutex);
+        if ((aun->file_ctx->size_current + sizeof(hdr) + p->pktlen + ethh_offset) > aun->file_ctx->size_limit) {
+            if (AlertUnifiedLogRotateFile(tv,aun) < 0) {
+                SCMutexUnlock(&aun->file_ctx->fp_mutex);
+                aun->file_ctx->alerts += i;
+                return TM_ECODE_FAILED;
+            }
+        }
+
+        ret = fwrite(buf, buflen, 1, aun->file_ctx->fp);
+        if (ret != 1) {
+            SCLogError(SC_ERR_FWRITE, "fwrite failed: %s", strerror(errno));
+            aun->file_ctx->alerts += i;
+            SCMutexUnlock(&aun->file_ctx->fp_mutex);
+            return TM_ECODE_FAILED;
+        }
+        /* force writing to disk so barnyard will not read half
+         * written records and choke. */
+        fflush(aun->file_ctx->fp);
+
+        aun->file_ctx->alerts++;
+        aun->file_ctx->size_current += buflen;
+        SCMutexUnlock(&aun->file_ctx->fp_mutex);
     }
 
-    memcpy(buf+buflen,&p->pkt,p->pktlen);
-    buflen += p->pktlen;
-
-    /** write and flush so it's written immediately, no need to lock her, no need to lock heree */
-    ret = fwrite(buf, buflen, 1, aun->file_ctx->fp);
-    if (ret != 1) {
-        printf("Error: fwrite failed: %s\n", strerror(errno));
-        return TM_ECODE_FAILED;
-    }
-    /* force writing to disk so barnyard will not read half
-     * written records and choke. */
-    fflush(aun->file_ctx->fp);
-
-    aun->size_current += buflen;
     return TM_ECODE_OK;
 }
 
 TmEcode AlertUnifiedLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    AlertUnifiedLogThread *aun = malloc(sizeof(AlertUnifiedLogThread));
+    AlertUnifiedLogThread *aun = SCMalloc(sizeof(AlertUnifiedLogThread));
     if (aun == NULL) {
         return TM_ECODE_FAILED;
     }
     memset(aun, 0, sizeof(AlertUnifiedLogThread));
-    if(initdata == NULL)
-    {
-        SCLogError(SC_ERR_UNIFIED_LOG_GENERIC_ERROR, "Error getting context for "
-                   "UnifiedLog.  \"initdata\" argument NULL");
+
+    if (initdata == NULL) {
+        SCLogDebug("Error getting context for UnifiedLog. \"initdata\" argument NULL");
+        SCFree(aun);
         return TM_ECODE_FAILED;
     }
     /** Use the Ouptut Context (file pointer and mutex) */
-    aun->file_ctx = (LogFileCtx*) initdata;
+    aun->file_ctx = ((OutputCtx *)initdata)->data;
 
-    /** Write Unified header */
-    int ret = AlertUnifiedLogWriteFileHeader(t, aun);
-    if (ret != 0) {
-        printf("Error: AlertUnifiedLogWriteFileHeader failed.\n");
+    if (aun->file_ctx->fp == NULL) {
+        SCLogError (SC_ERR_OPENING_FILE, "Target file has not been opened, check"
+                " the write permission");
         return TM_ECODE_FAILED;
     }
-
-    /* XXX make configurable */
-    aun->size_limit = 1 * 1024 * 1024;
 
     *data = (void *)aun;
     return TM_ECODE_OK;
@@ -248,93 +279,140 @@ TmEcode AlertUnifiedLogThreadDeinit(ThreadVars *t, void *data)
         goto error;
     }
 
+    if (!(aun->file_ctx->flags & LOGFILE_ALERTS_PRINTED)) {
+        SCLogInfo("Alert unified 1 log module wrote %"PRIu64" alerts", aun->file_ctx->alerts);
+        /* Do not print it for each thread */
+        aun->file_ctx->flags |= LOGFILE_ALERTS_PRINTED;
+    }
+
     /* clear memory */
     memset(aun, 0, sizeof(AlertUnifiedLogThread));
-    free(aun);
+    SCFree(aun);
     return TM_ECODE_OK;
 
 error:
-    /* clear memory */
-    if (aun != NULL) {
-        memset(aun, 0, sizeof(AlertUnifiedLogThread));
-        free(aun);
-    }
-    printf("AlertUnifiedLogThreadDeinit done (error)\n");
+
     return TM_ECODE_FAILED;
 }
 
 
-/** \brief Create a new file_ctx from config_file (if specified)
- *  \param config_file for loading separate configs
+/** \brief Create a new LogFileCtx for unified alert logging.
+ *  \param ConfNode pointer to the configuration node for this logger.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-LogFileCtx *AlertUnifiedLogInitCtx(char *config_file)
+OutputCtx *AlertUnifiedLogInitCtx(ConfNode *conf)
 {
-    int ret=0;
+    int ret = 0;
     LogFileCtx* file_ctx=LogFileNewCtx();
 
-    if(file_ctx == NULL)
-    {
-        printf("AlertUnifiedLogInitCtx: Couldn't create new file_ctx\n");
+    if (file_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Couldn't create new file_ctx");
         return NULL;
     }
 
-    /** fill the new LogFileCtx with the specific AlertUnifiedLog configuration */
-    ret=AlertUnifiedLogOpenFileCtx(file_ctx, config_file);
+    const char *filename = NULL;
+    if (conf != NULL) { /* \todo Maybe test should setup a ConfNode */
+        filename = ConfNodeLookupChildValue(conf, "filename");
+    }
+    if (filename == NULL)
+        filename = DEFAULT_LOG_FILENAME;
+    file_ctx->prefix = SCStrdup(filename);
 
-    if(ret < 0)
+    const char *s_limit = NULL;
+    uint32_t limit = DEFAULT_LIMIT;
+    if (conf != NULL) {
+        s_limit = ConfNodeLookupChildValue(conf, "limit");
+        if (s_limit != NULL) {
+            if (ByteExtractStringUint32(&limit, 10, 0, s_limit) == -1) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                    "Fail to initialize unified log output, invalid limit: %s",
+                    s_limit);
+                exit(EXIT_FAILURE);
+            }
+            if (limit < MIN_LIMIT) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                    "Fail to initialize unified log output, limit less than "
+                    "allowed minimum.");
+                exit(EXIT_FAILURE);
+            }
+            SCLogDebug("limit set to %"PRIu32, limit);
+        }
+    }
+    file_ctx->size_limit = limit * 1024 * 1024;
+
+    ret = AlertUnifiedLogOpenFileCtx(file_ctx, filename);
+    if (ret < 0)
         return NULL;
 
-    /** In AlertUnifiedLogOpenFileCtx the second parameter should be the configuration file to use
-    * but it's not implemented yet, so passing NULL to load the default
-    * configuration
-    */
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (output_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "Failed to allocate OutputCtx for AlertUnifiedLog");
+        exit(EXIT_FAILURE);
+    }
+    output_ctx->data = file_ctx;
+    output_ctx->DeInit = AlertUnifiedLogDeInitCtx;
 
-    return file_ctx;
+    SCLogInfo("Unified-log initialized: filename %s, limit %"PRIu32" MB",
+       filename, limit);
+
+    return output_ctx;
+}
+
+static void AlertUnifiedLogDeInitCtx(OutputCtx *output_ctx)
+{
+    LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
+    LogFileFreeCtx(logfile_ctx);
+    free(output_ctx);
 }
 
 /** \brief Read the config set the file pointer, open the file
  *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param config_file for loading separate configs
+ *  \param prefix Prefix for log filenames.
  *  \return -1 if failure, 0 if succesful
  * */
-int AlertUnifiedLogOpenFileCtx(LogFileCtx *file_ctx, char *config_file)
+int AlertUnifiedLogOpenFileCtx(LogFileCtx *file_ctx, const char *prefix)
 {
+    int ret = 0;
     char *filename = NULL;
     if (file_ctx->filename != NULL)
         filename = file_ctx->filename;
     else
-        filename = file_ctx->filename = malloc(PATH_MAX); /* XXX some sane default? */
+        filename = file_ctx->filename = SCMalloc(PATH_MAX); /* XXX some sane default? */
 
-    if(config_file == NULL)
-    {
-        /** Separate config files not implemented at the moment,
-        * but it must be able to load from separate config file.
-        * Load the default configuration.
-        */
+    /* get the time so we can have a filename with seconds since epoch */
+    struct timeval ts;
+    memset (&ts, 0, sizeof(struct timeval));
 
-        /* get the time so we can have a filename with seconds since epoch */
-        struct timeval ts;
-        memset (&ts, 0, sizeof(struct timeval));
+    extern int run_mode;
+    if (run_mode == MODE_UNITTEST)
         TimeGet(&ts);
+    else
+        gettimeofday(&ts, NULL);
 
-        /* create the filename to use */
-        char *log_dir;
-        if (ConfGet("default-log-dir", &log_dir) != 1)
-            log_dir = DEFAULT_LOG_DIR;
+    /* create the filename to use */
+    char *log_dir;
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
 
-        snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, log_dir, "unified.log", (uint32_t)ts.tv_sec);
+    snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, log_dir, prefix, (uint32_t)ts.tv_sec);
 
-        /* XXX filename & location */
-        file_ctx->fp = fopen(filename, "wb");
-        if (file_ctx->fp == NULL) {
-            SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", filename,
-                       strerror(errno));
-            return -1;
-        }
+    /* XXX filename & location */
+    file_ctx->fp = fopen(filename, "wb");
+    if (file_ctx->fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", filename,
+            strerror(errno));
+        return TM_ECODE_FAILED;
     }
 
-    return 0;
+    /** Write Unified header */
+    ret = AlertUnifiedLogWriteFileHeader(file_ctx);
+    if (ret != 0) {
+        printf("Error: AlertUnifiedLogWriteFileHeader failed.\n");
+        return TM_ECODE_FAILED;
+    }
+
+    return TM_ECODE_OK;
 }
 
 #ifdef UNITTESTS
@@ -349,22 +427,25 @@ static int AlertUnifiedLogTestRotate01(void)
     int ret = 0;
     int r = 0;
     ThreadVars tv;
+    OutputCtx *oc;
     LogFileCtx *lf;
     void *data = NULL;
 
-    lf = AlertUnifiedLogInitCtx(NULL);
+    oc = AlertUnifiedLogInitCtx(NULL);
+    if (oc == NULL)
+        return 0;
+    lf = (LogFileCtx *)oc->data;
     if (lf == NULL)
         return 0;
-    char *filename = strdup(lf->filename);
+    char *filename = SCStrdup(lf->filename);
 
     memset(&tv, 0, sizeof(ThreadVars));
 
-    if (lf == NULL)
-        return 0;
-
-    ret = AlertUnifiedLogThreadInit(&tv, lf, &data);
+    ret = AlertUnifiedLogThreadInit(&tv, oc, &data);
     if (ret == TM_ECODE_FAILED) {
         LogFileFreeCtx(lf);
+        if (filename != NULL)
+            free(filename);
         return 0;
     }
 
@@ -381,7 +462,7 @@ static int AlertUnifiedLogTestRotate01(void)
 
 error:
     AlertUnifiedLogThreadDeinit(&tv, data);
-    if (lf != NULL) LogFileFreeCtx(lf);
+    if (oc != NULL) AlertUnifiedLogDeInitCtx(oc);
     if (filename != NULL) free(filename);
     return r;
 }

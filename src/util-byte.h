@@ -11,6 +11,43 @@
 #define BYTE_BIG_ENDIAN      0
 #define BYTE_LITTLE_ENDIAN   1
 
+/** Wrappers for OS dependent byte swapping functions */
+#ifdef OS_FREEBSD
+#include <sys/endian.h>
+#define SCByteSwap16(x) bswap16(x)
+#define SCByteSwap32(x) bswap32(x)
+#define SCByteSwap64(x) bswap64(x)
+#elif OS_DARWIN
+#include <libkern/OSByteOrder.h>
+#define SCByteSwap16(x) OSSwapInt16(x)
+#define SCByteSwap32(x) OSSwapInt32(x)
+#define SCByteSwap64(x) OSSwapInt64(x)
+#elif OS_WIN32
+/* Quick & dirty solution, nothing seems to exist for this in Win32 API */
+#define SCByteSwap16(x)                         \
+	((((x) & 0xff00) >> 8)                      \
+	| (((x) & 0x00ff) << 8))
+#define SCByteSwap32(x)                         \
+	((((x) & 0xff000000) >> 24)                 \
+	| (((x) & 0x00ff0000) >> 8)                 \
+	| (((x) & 0x0000ff00) << 8)                 \
+	| (((x) & 0x000000ff) << 24))
+#define SCByteSwap64(x)                         \
+	((((x) & 0xff00000000000000ull) >> 56)      \
+	| (((x) & 0x00ff000000000000ull) >> 40)     \
+	| (((x) & 0x0000ff0000000000ull) >> 24)     \
+	| (((x) & 0x000000ff00000000ull) >> 8)      \
+	| (((x) & 0x00000000ff000000ull) << 8)      \
+	| (((x) & 0x0000000000ff0000ull) << 24)     \
+	| (((x) & 0x000000000000ff00ull) << 40)     \
+	| (((x) & 0x00000000000000ffull) << 56))
+#else
+#include <byteswap.h>
+#define SCByteSwap16(x) bswap_16(x)
+#define SCByteSwap32(x) bswap_32(x)
+#define SCByteSwap64(x) bswap_64(x)
+#endif /* OS_FREEBSD */
+
 /**
  * Extract bytes from a byte string and convert to a unint64_t.
  *

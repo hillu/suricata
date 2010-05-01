@@ -9,7 +9,9 @@
 #include "detect-content.h"
 #include "detect-pcre.h"
 
-int DetectRawbytesSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+#include "util-debug.h"
+
+static int DetectRawbytesSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectRawbytesRegister (void) {
     sigmatch_table[DETECT_RAWBYTES].name = "rawbytes";
@@ -22,34 +24,33 @@ void DetectRawbytesRegister (void) {
     sigmatch_table[DETECT_RAWBYTES].flags |= SIGMATCH_PAYLOAD;
 }
 
-int DetectRawbytesSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *nullstr)
+static int DetectRawbytesSetup (DetectEngineCtx *de_ctx, Signature *s, char *nullstr)
 {
-    //printf("DetectRawbytesSetup: s->match:%p,m:%p\n", s->match, m);
+    SCEnter();
 
     if (nullstr != NULL) {
-        printf("DetectRawbytesSetup: nocase has no value\n");
+        SCLogError(SC_ERR_INVALID_VALUE, "nocase has no value");
         return -1;
     }
 
-    SigMatch *pm = m;
-    if (pm != NULL) {
-#if 0
-        if (pm->type == DETECT_PCRE) {
-            DetectPcreData *pe = (DetectPcreData *)pm->ctx;
-            printf("DetectRawbytesSetup: set depth %" PRIu32 " for previous pcre\n", pe->depth);
-        } else 
-#endif
-        if (pm->type == DETECT_CONTENT) {
-            DetectContentData *cd = (DetectContentData *)pm->ctx;
-            //printf("DetectRawbytesSetup: set nocase for previous content\n");
-            cd->flags |= DETECT_CONTENT_RAWBYTES;
-        } else {
-            printf("DetectRawbytesSetup: Unknown previous keyword!\n");
-        }
-    } else {
-        printf("DetectRawbytesSetup: No previous match!\n");
+    SigMatch *pm = DetectContentGetLastPattern(s->pmatch_tail);
+    if (pm == NULL) {
+        SCLogError(SC_ERR_RAWBYTES_MISSING_CONTENT, "\"rawbytes\" needs a preceeding content option");
+        SCReturnInt(-1);
     }
 
-    return 0;
+    switch (pm->type) {
+        case DETECT_CONTENT:
+        {
+            DetectContentData *cd = (DetectContentData *)pm->ctx;
+            cd->flags |= DETECT_CONTENT_RAWBYTES;
+            break;
+        }
+        default:
+            SCLogError(SC_ERR_RAWBYTES_MISSING_CONTENT, "\"rawbytes\" needs a preceeding content option");
+            SCReturnInt(-1);
+    }
+
+    SCReturnInt(0);
 }
 

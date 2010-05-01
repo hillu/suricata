@@ -17,13 +17,14 @@
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
+#include "stream-tcp.h"
 #include "stream.h"
 
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 #include "app-layer-ftp.h"
 
-#include "util-binsearch.h"
+#include "util-spm.h"
 #include "util-unittest.h"
 #include "util-debug.h"
 
@@ -109,8 +110,8 @@ static int FTPParseRequestCommandLine(Flow *f, void *ftp_state, AppLayerParserSt
                         * the ftpbounce condition directly from detect-ftpbounce
                         */
                         if (fstate->port_line != NULL)
-                            free(fstate->port_line);
-                        fstate->port_line = malloc(input_len);
+                            SCFree(fstate->port_line);
+                        fstate->port_line = SCMalloc(input_len);
                         if (fstate->port_line == NULL) {
                             SCLogError(SC_ERR_MEM_ALLOC, "Error allocating"
                                                          "memory");
@@ -218,7 +219,7 @@ static uint64_t ftp_state_memcnt = 0;
 #endif
 
 static void *FTPStateAlloc(void) {
-    void *s = malloc(sizeof(FtpState));
+    void *s = SCMalloc(sizeof(FtpState));
     if (s == NULL)
         return NULL;
 
@@ -234,7 +235,7 @@ static void *FTPStateAlloc(void) {
 }
 
 static void FTPStateFree(void *s) {
-    free(s);
+    SCFree(s);
 #ifdef DEBUG
     SCMutexLock(&ftp_state_mem_lock);
     ftp_state_memcnt--;
@@ -277,10 +278,12 @@ int FTPParserTest01(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf, ftplen, FALSE);
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
+
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf, ftplen);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -301,6 +304,8 @@ int FTPParserTest01(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -318,24 +323,26 @@ int FTPParserTest03(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1, FALSE);
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
+
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf3, ftplen3, FALSE);
+    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf3, ftplen3);
     if (r != 0) {
         SCLogDebug("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -356,6 +363,8 @@ int FTPParserTest03(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -369,11 +378,12 @@ int FTPParserTest06(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
-
     f.protoctx = (void *)&ssn;
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, ftpbuf1, ftplen1, FALSE);
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
+
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -394,6 +404,8 @@ int FTPParserTest06(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -409,18 +421,19 @@ int FTPParserTest07(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
-
     f.protoctx = (void *)&ssn;
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1, FALSE);
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
+
+    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf2, ftplen2, FALSE);
+    r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -441,6 +454,8 @@ int FTPParserTest07(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 
@@ -455,8 +470,10 @@ int FTPParserTest10(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    StreamL7DataPtrInit(&ssn,StreamL7GetStorageSize());
     f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    StreamL7DataPtrInit(&ssn);
 
     uint32_t u;
     for (u = 0; u < ftplen1; u++) {
@@ -466,7 +483,7 @@ int FTPParserTest10(void) {
         else if (u == (ftplen1 - 1)) flags = STREAM_TOSERVER|STREAM_EOF;
         else flags = STREAM_TOSERVER;
 
-        r = AppLayerParse(&f, ALPROTO_FTP, flags, &ftpbuf1[u], 1, FALSE);
+        r = AppLayerParse(&f, ALPROTO_FTP, flags, &ftpbuf1[u], 1);
         if (r != 0) {
             SCLogDebug("toserver chunk %" PRIu32 " returned %" PRId32 ", expected 0: ", u, r);
             result = 0;
@@ -488,6 +505,8 @@ int FTPParserTest10(void) {
     }
 
 end:
+    StreamL7DataPtrFree(&ssn);
+    StreamTcpFreeConfig(TRUE);
     return result;
 }
 #endif /* UNITTESTS */

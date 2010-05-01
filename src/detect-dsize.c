@@ -1,5 +1,6 @@
-/* DSIZE part of the detection engine. */
 /* Copyright (c) 2009 Open Information Security Foundation */
+
+/* DSIZE part of the detection engine. */
 
 /** \file
  *  \author Victor Julien <victor@inliniac.net>
@@ -7,7 +8,10 @@
 
 #include "suricata-common.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "flow-var.h"
 
 #include "detect-dsize.h"
@@ -24,7 +28,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectDsizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectDsizeSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *str);
+static int DetectDsizeSetup (DetectEngineCtx *, Signature *s, char *str);
 void DsizeRegisterTests(void);
 static void DetectDsizeFree(void *);
 
@@ -45,14 +49,14 @@ void DetectDsizeRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        SCLogError(SC_PCRE_COMPILE_FAILED,"pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE,"pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        SCLogError(SC_PCRE_STUDY_FAILED,"pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY,"pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -113,7 +117,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 3 || ret > 5) {
-        SCLogError(SC_PCRE_MATCH_FAILED,"Parse error %s", rawstr);
+        SCLogError(SC_ERR_PCRE_MATCH,"Parse error %s", rawstr);
         goto error;
     }
 
@@ -121,7 +125,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        SCLogError(SC_PCRE_GET_SUBSTRING_FAILED,"pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
         goto error;
     }
     mode = (char *)str_ptr;
@@ -129,7 +133,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
     if (res < 0) {
-        SCLogError(SC_PCRE_GET_SUBSTRING_FAILED,"pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
         goto error;
     }
     value1 = (char *)str_ptr;
@@ -137,7 +141,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
     if (res < 0) {
-        SCLogError(SC_PCRE_GET_SUBSTRING_FAILED,"pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
         goto error;
     }
     range = (char *)str_ptr;
@@ -145,13 +149,13 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 4, &str_ptr);
     if (res < 0) {
-        SCLogError(SC_PCRE_GET_SUBSTRING_FAILED,"pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
         goto error;
     }
     value2 = (char *)str_ptr;
     SCLogDebug("value2 \"%s\"", value2);
 
-    dd = malloc(sizeof(DetectDsizeData));
+    dd = SCMalloc(sizeof(DetectDsizeData));
     if (dd == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto error;
@@ -165,7 +169,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     if (strcmp("<>", range) == 0) {
         if (strlen(mode) != 0) {
-            SCLogError(SC_INVALID_ARGUMENT,"Range specified but mode also set");
+            SCLogError(SC_ERR_INVALID_ARGUMENT,"Range specified but mode also set");
             goto error;
         }
         dd->mode = DETECTDSIZE_RA;
@@ -173,42 +177,42 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     /** set the first dsize value */
     if(ByteExtractStringUint16(&dd->dsize,10,strlen(value1),value1) <= 0){
-        SCLogError(SC_INVALID_ARGUMENT,"Invalid size value1:\"%s\"",value1);
+        SCLogError(SC_ERR_INVALID_ARGUMENT,"Invalid size value1:\"%s\"",value1);
         goto error;
     }
 
     /** set the second dsize value if specified */
     if (strlen(value2) > 0) {
         if (dd->mode != DETECTDSIZE_RA) {
-            SCLogError(SC_INVALID_ARGUMENT,"Multiple dsize values specified but mode is not range");
+            SCLogError(SC_ERR_INVALID_ARGUMENT,"Multiple dsize values specified but mode is not range");
             goto error;
         }
 
         if(ByteExtractStringUint16(&dd->dsize2,10,strlen(value2),value2) <= 0){
-            SCLogError(SC_INVALID_ARGUMENT,"Invalid size value2:\"%s\"",value2);
+            SCLogError(SC_ERR_INVALID_ARGUMENT,"Invalid size value2:\"%s\"",value2);
             goto error;
         }
 
         if (dd->dsize2 <= dd->dsize){
-            SCLogError(SC_INVALID_ARGUMENT,"dsize2:%"PRIu16" <= dsize:%"PRIu16"",dd->dsize2,dd->dsize);
+            SCLogError(SC_ERR_INVALID_ARGUMENT,"dsize2:%"PRIu16" <= dsize:%"PRIu16"",dd->dsize2,dd->dsize);
             goto error;
         }
     }
 
     SCLogDebug("dsize parsed succesfully dsize: %"PRIu16" dsize2: %"PRIu16"",dd->dsize,dd->dsize2);
 
-    free(value1);
-    free(value2);
-    free(mode);
-    free(range);
+    SCFree(value1);
+    SCFree(value2);
+    SCFree(mode);
+    SCFree(range);
     return dd;
 
 error:
-    if (dd) free(dd);
-    if (value1) free(value1);
-    if (value2) free(value2);
-    if (mode) free(mode);
-    if (range) free(range);
+    if (dd) SCFree(dd);
+    if (value1) SCFree(value1);
+    if (value2) SCFree(value2);
+    if (mode) SCFree(mode);
+    if (range) SCFree(range);
     return NULL;
 }
 
@@ -218,13 +222,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param rawstr pointer to the user provided flags options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectDsizeData *dd = NULL;
     SigMatch *sm = NULL;
@@ -233,7 +236,7 @@ int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *
 
     dd = DetectDsizeParse(rawstr);
     if (dd == NULL) {
-        SCLogError(SC_INVALID_ARGUMENT,"Parsing \'%s\' failed", rawstr);
+        SCLogError(SC_ERR_INVALID_ARGUMENT,"Parsing \'%s\' failed", rawstr);
         goto error;
     }
 
@@ -248,15 +251,15 @@ int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *
     sm->type = DETECT_DSIZE;
     sm->ctx = (void *)dd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
     /* tell the sig it has a dsize to speed up engine init */
     s->flags |= SIG_FLAG_DSIZE;
     return 0;
 
 error:
-    if (dd) free(dd);
-    if (sm) free(sm);
+    if (dd) SCFree(dd);
+    if (sm) SCFree(sm);
     return -1;
 }
 
@@ -268,7 +271,7 @@ error:
  */
 void DetectDsizeFree(void *de_ptr) {
     DetectDsizeData *dd = (DetectDsizeData *)de_ptr;
-    if(dd) free(dd);
+    if(dd) SCFree(dd);
 }
 
 /*

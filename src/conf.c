@@ -11,86 +11,23 @@
  *
  * \author Endace Technology Limited - Jason Ish <jason.ish@endace.com>
  *
- * \todo Consider using HashListTable to allow easy dumping of all data.
+ * \todo Consider having the in-memory configuration database a direct
+ *   reflection of the configuration file and moving command line
+ *   parameters to a primary lookup table?
+ *
+ * \todo Get rid of allow override and go with a simpler first set,
+ *   stays approach?
  */
+
+#include <string.h>
 
 #include "suricata-common.h"
 #include "conf.h"
-#include "util-hash.h"
 #include "util-unittest.h"
 #include "util-debug.h"
 
-#define CONF_HASH_TBL_SIZE 1024
-
-static HashTable *conf_hash = NULL;
-
-/* temporary variable that would be used to hold the hash_table instance
- * present in conf_hash.  Used while running tests that require their
- * own yaml conf file.  The backup can be set and then be reused by using
- * the function ConfCreateContextBackup() and ConfRestoreContextBackup() */
-static HashTable *backup_conf_hash = NULL;
-
-/**
- * \brief Function to generate the hash of a configuration value.
- *
- * This is a callback function provided to HashTable for creating the
- * hash key.  Its a simple wrapper around the generic hash function
- * the passes on the configuration parameter name.
- *
- * \retval The hash ID of the configuration parameters name.
- */
-static uint32_t
-ConfHashFunc(HashTable *ht, void *data, uint16_t len)
-{
-    ConfNode *cn = (ConfNode *)data;
-    uint32_t hash;
-
-    hash = HashTableGenericHash(ht, cn->name, strlen(cn->name));
-    SCLogDebug("%s -> %" PRIu32 "", cn->name, hash);
-    return hash;
-}
-
-/**
- * \brief Function to compare 2 hash nodes.
- *
- * This is a callback function provided to the HashTable for comparing
- * 2 nodes.
- *
- * \retval 1 if equivalant otherwise 0.
- */
-static char
-ConfHashComp(void *a, uint16_t a_len, void *b, uint16_t b_len)
-{
-    ConfNode *ca = (ConfNode *)a;
-    ConfNode *cb = (ConfNode *)b;
-
-    if (strcmp(ca->name, cb->name) == 0)
-        return 1;
-    else
-        return 0;
-}
-
-/**
- * \brief Callback function to free a hash node.
- */
-static void ConfHashFree(void *data)
-{
-    ConfNode *cn = (ConfNode *)data;
-    if (cn == NULL)
-        return;
-
-    /** \todo VJ apparently the list that is free is also in the hash
-     *           individually resulting in double free errors if we
-     *           call ConfNodeFree (that clears the list) from this
-     *           hash free function */
-
-    if (cn->name != NULL)
-        free(cn->name);
-    if (cn->val != NULL)
-        free(cn->val);
-    free(cn);
-    //ConfNodeFree(cn);
-}
+static ConfNode *root = NULL;
+static ConfNode *root_backup = NULL;
 
 /**
  * \brief Initialize the configuration system.
@@ -98,18 +35,16 @@ static void ConfHashFree(void *data)
 void
 ConfInit(void)
 {
-    /* Prevent double initialization. */
-    if (conf_hash != NULL) {
+    if (root != NULL) {
         SCLogDebug("already initialized");
         return;
     }
-
-    conf_hash = HashTableInit(CONF_HASH_TBL_SIZE, ConfHashFunc, ConfHashComp,
-        ConfHashFree);
-    if (conf_hash == NULL) {
-        fprintf(stderr,
-            "ERROR: Failed to allocate memory for configuration, aborting.\n");
-        exit(1);
+    root = ConfNodeNew();
+    if (root == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "ERROR: Failed to allocate memory for root configuration node, "
+            "aborting.");
+        exit(EXIT_FAILURE);
     }
     SCLogDebug("configuration module initialized");
 }
@@ -124,12 +59,14 @@ ConfNodeNew(void)
 {
     ConfNode *new;
 
-    new = calloc(1, sizeof(*new));
+    new = SCCalloc(1, sizeof(*new));
     if (new == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC,
             "Error allocating memory for new configuration node");
         exit(EXIT_FAILURE);
     }
+    /* By default we allow an override. */
+    new->allow_override = 1;
     TAILQ_INIT(&new->head);
 
     return new;
@@ -138,7 +75,7 @@ ConfNodeNew(void)
 /**
  * \brief Free a ConfNode and all of its children.
  *
- * \param node The configuration node to free.
+ * \param node The configuration node to SCFree.
  */
 void
 ConfNodeFree(ConfNode *node)
@@ -151,57 +88,50 @@ ConfNodeFree(ConfNode *node)
     }
 
     if (node->name != NULL)
-        free(node->name);
+        SCFree(node->name);
     if (node->val != NULL)
-        free(node->val);
-    free(node);
+        SCFree(node->val);
+    SCFree(node);
 }
 
 /**
- * \brief Set a configuration node.
+ * \brief Get a ConfNode by name.
  *
- * \retval 1 on success, 0 on failure.
- */
-int
-ConfSetNode(ConfNode *node)
-{
-    ConfNode lookup;
-    ConfNode *pnode;
-
-    lookup.name = node->name;
-    pnode = HashTableLookup(conf_hash, &lookup, sizeof(lookup));
-    if (pnode != NULL) {
-        if (!pnode->allow_override) {
-            return 0;
-        }
-        HashTableRemove(conf_hash, pnode, sizeof(*pnode));
-    }
-
-    if (HashTableAdd(conf_hash, node, sizeof(*node)) != 0) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Failed to add new configuration node.");
-        exit(EXIT_FAILURE);
-    }
-
-    return 1;
-}
-
-/**
- * \brief Get a ConfNode by key.
+ * \param key The full name of the configuration node to lookup.
  *
- * \param key The lookup key of the node to find.
- *
- * \retval The node matching the key or NULL if not found.
+ * \retval A pointer to ConfNode is found or NULL if the configuration
+ *    node does not exist.
  */
 ConfNode *
 ConfGetNode(char *key)
 {
-    ConfNode lookup;
-    ConfNode *node;
+    ConfNode *node = root;
+    char *saveptr = NULL;
+    char *token;
 
-    lookup.name = key;
+    /* Need to dup the key for tokenization... */
+    char *tokstr = SCStrdup(key);
 
-    node = HashTableLookup(conf_hash, &lookup, sizeof(lookup));
+    token = strtok_r(tokstr, ".", &saveptr);
+    for (;;) {
+        node = ConfNodeLookupChild(node, token);
+        if (node == NULL)
+            break;
+        token = strtok_r(NULL, ".", &saveptr);
+        if (token == NULL)
+            break;
+    }
+    SCFree(tokstr);
     return node;
+}
+
+/**
+ * \brief Get the root configuration node.
+ */
+ConfNode *
+ConfGetRootNode(void)
+{
+    return root;
 }
 
 /**
@@ -216,37 +146,70 @@ ConfGetNode(char *key)
 int
 ConfSet(char *name, char *val, int allow_override)
 {
-    ConfNode lookup_key, *conf_node;
+    ConfNode *parent = root;
+    ConfNode *node;
+    char *token;
+    char *saveptr = NULL;
 
-    lookup_key.name = name;
-    conf_node = HashTableLookup(conf_hash, &lookup_key, sizeof(lookup_key));
-    if (conf_node != NULL) {
-        if (!conf_node->allow_override) {
+    /* First check if the node already exists. */
+    node = ConfGetNode(name);
+    if (node != NULL) {
+        if (!node->allow_override) {
             return 0;
         }
-        HashTableRemove(conf_hash, conf_node, sizeof(*conf_node));
+        else {
+            if (node->val != NULL)
+                SCFree(node->val);
+            node->val = SCStrdup(val);
+            node->allow_override = allow_override;
+            return 1;
+        }
+    }
+    else {
+        char *tokstr = SCStrdup(name);
+        token = strtok_r(tokstr, ".", &saveptr);
+        node = ConfNodeLookupChild(parent, token);
+        for (;;) {
+            if (node == NULL) {
+                node = ConfNodeNew();
+                node->name = SCStrdup(token);
+                node->parent = parent;
+                TAILQ_INSERT_TAIL(&parent->head, node, next);
+                parent = node;
+            }
+            else {
+                parent = node;
+            }
+            token = strtok_r(NULL, ".", &saveptr);
+            if (token == NULL) {
+                if (!node->allow_override)
+                    break;
+                if (node->val != NULL)
+                    SCFree(node->val);
+                node->val = SCStrdup(val);
+                node->allow_override = allow_override;
+                break;
+            }
+            else {
+                node = ConfNodeLookupChild(parent, token);
+            }
+        }
+        SCFree(tokstr);
     }
 
-    conf_node = ConfNodeNew();
-    if (conf_node == NULL) {
-        return 0;
-    }
-    conf_node->name = strdup(name);
-    conf_node->val = strdup(val);
-    conf_node->allow_override = allow_override;
-
-    if (HashTableAdd(conf_hash, conf_node, sizeof(*conf_node)) != 0) {
-        fprintf(stderr, "ERROR: Failed to set configuration parameter %s\n",
-            name);
-        exit(1);
-    }
     SCLogDebug("configuration parameter '%s' set", name);
 
     return 1;
 }
 
 /**
- * \brief Retrieve a configuration value.
+ * \brief Retrieve the value of a configuration node.
+ *
+ * This function will return the value for a configuration node based
+ * on the full name of the node.  It is possible that the value
+ * returned could be NULL, this could happen if the requested node
+ * does exist but is not a node that contains a value, but contains
+ * children ConfNodes instead.
  *
  * \param name Name of configuration parameter to get.
  * \param vptr Pointer that will be set to the configuration value parameter.
@@ -258,21 +221,13 @@ ConfSet(char *name, char *val, int allow_override)
 int
 ConfGet(char *name, char **vptr)
 {
-    ConfNode lookup_key;
-    ConfNode *conf_node;
-
-    if (conf_hash == NULL)
-        return 0;
-
-    lookup_key.name = name;
-
-    conf_node = HashTableLookup(conf_hash, &lookup_key, sizeof(lookup_key));
-    if (conf_node == NULL) {
+    ConfNode *node = ConfGetNode(name);
+    if (node == NULL) {
         SCLogDebug("failed to lookup configuration parameter '%s'", name);
         return 0;
     }
     else {
-        *vptr = conf_node->val;
+        *vptr = node->val;
         return 1;
     }
 }
@@ -323,20 +278,31 @@ ConfGetBool(char *name, int *val)
 {
     char *strval;
     char *trues[] = {"1", "yes", "true", "on"};
-    int i;
+    size_t u;
 
     *val = 0;
     if (ConfGet(name, &strval) != 1)
         return 0;
 
-    for (i = 0; i < sizeof(trues) / sizeof(trues[0]); i++) {
-        if (strcasecmp(strval, trues[i]) == 0) {
+    for (u = 0; u < sizeof(trues) / sizeof(trues[0]); u++) {
+        if (strcasecmp(strval, trues[u]) == 0) {
             *val = 1;
             break;
         }
     }
 
     return 1;
+}
+
+/**
+ * \brief Remove (and SCFree) the provided configuration node.
+ */
+void
+ConfNodeRemove(ConfNode *node)
+{
+    if (node->parent != NULL)
+        TAILQ_REMOVE(&node->parent->head, node, next);
+    ConfNodeFree(node);
 }
 
 /**
@@ -350,13 +316,15 @@ ConfGetBool(char *name, int *val)
 int
 ConfRemove(char *name)
 {
-    ConfNode cn;
+    ConfNode *node;
 
-    cn.name = name;
-    if (HashTableRemove(conf_hash, &cn, sizeof(cn)) == 0)
-        return 1;
-    else
+    node = ConfGetNode(name);
+    if (node == NULL)
         return 0;
+    else {
+        ConfNodeRemove(node);
+        return 1;
+    }
 }
 
 /**
@@ -365,8 +333,8 @@ ConfRemove(char *name)
 void
 ConfCreateContextBackup(void)
 {
-    backup_conf_hash = conf_hash;
-    conf_hash = NULL;
+    root_backup = root;
+    root = NULL;
 
     return;
 }
@@ -378,7 +346,7 @@ ConfCreateContextBackup(void)
 void
 ConfRestoreContextBackup(void)
 {
-    conf_hash = backup_conf_hash;
+    root = root_backup;
 
     return;
 }
@@ -389,11 +357,8 @@ ConfRestoreContextBackup(void)
 void
 ConfDeInit(void)
 {
-    if (conf_hash == NULL)
-        return;
-
-    HashTableFree(conf_hash);
-    conf_hash = NULL;
+    if (root != NULL)
+        ConfNodeFree(root);
 
     SCLogDebug("configuration module de-initialized");
 }
@@ -406,9 +371,9 @@ ConfPrintNameArray(char **name_arr, int level)
 
     name[0] = '\0';
     for (i = 0; i <= level; i++) {
-        strcat(name, name_arr[i]);
+        strlcat(name, name_arr[i], sizeof(name));
         if (i < level)
-            strcat(name, ".");
+            strlcat(name, ".", sizeof(name));
     }
 
     return name;
@@ -427,12 +392,17 @@ ConfNodeDump(ConfNode *node, const char *prefix)
 
     level++;
     TAILQ_FOREACH(child, &node->head, next) {
-        name[level] = strdup(child->name);
-        if (child->val != NULL)
+        name[level] = SCStrdup(child->name);
+        if (prefix == NULL) {
+            printf("%s = %s\n", ConfPrintNameArray(name, level),
+                child->val);
+        }
+        else {
             printf("%s.%s = %s\n", prefix,
                 ConfPrintNameArray(name, level), child->val);
+        }
         ConfNodeDump(child, prefix);
-        free(name[level]);
+        SCFree(name[level]);
     }
     level--;
 }
@@ -443,22 +413,7 @@ ConfNodeDump(ConfNode *node, const char *prefix)
 void
 ConfDump(void)
 {
-    HashTableBucket *b;
-    ConfNode *cn;
-    int i;
-
-    for (i = 0; i < conf_hash->array_size; i++) {
-        if (conf_hash->array[i] != NULL) {
-            b = (HashTableBucket *)conf_hash->array[i];
-            while (b != NULL) {
-                cn = (ConfNode *)b->data;
-                if (cn->val != NULL)
-                    printf("%s = %s\n", cn->name, cn->val);
-                ConfNodeDump(cn, cn->name);
-                b = b->next;
-            }
-        }
-    }
+    ConfNodeDump(root, NULL);
 }
 
 /**
@@ -546,38 +501,6 @@ ConfTestSetAndGet(void)
     return 1;
 }
 
-static int
-ConfTestSetGetNode(void)
-{
-    ConfNode *set;
-    ConfNode *get;
-    char key[] = "some-key";
-    char val[] = "some-val";
-
-    set = ConfNodeNew();
-    if (set == NULL)
-        return 0;
-    set->name = strdup(key);
-    set->val = strdup(val);
-    if (ConfSetNode(set) != 1)
-        return 0;
-
-    get = ConfGetNode(key);
-    if (get == NULL)
-        return 0;
-    if (strcmp(get->name, key) != 0)
-        return 0;
-    if (strcmp(get->val, val) != 0)
-        return 0;
-
-    ConfRemove(key);
-    get = ConfGetNode(key);
-    if (get != NULL)
-        return 0;
-
-    return 1;
-}
-
 /**
  * Test that overriding a value is allowed provided allow_override is
  * true and that the config parameter gets the new value.
@@ -640,13 +563,14 @@ ConfTestOverrideValue2(void)
 static int
 ConfTestGetInt(void)
 {
-    char name[] = "some-int";
+    char name[] = "some-int.x";
     intmax_t val;
 
     if (ConfSet(name, "0", 1) != 1)
         return 0;
     if (ConfGetInt(name, &val) != 1)
         return 0;
+    return 1;
     if (val != 0)
         return 0;
 
@@ -693,10 +617,10 @@ ConfTestGetBool(void)
         "no", "NO",
     };
     int val;
-    int i;
+    size_t u;
 
-    for (i = 0; i < sizeof(trues) / sizeof(trues[0]); i++) {
-        if (ConfSet(name, trues[i], 1) != 1)
+    for (u = 0; u < sizeof(trues) / sizeof(trues[0]); u++) {
+        if (ConfSet(name, trues[u], 1) != 1)
             return 0;
         if (ConfGetBool(name, &val) != 1)
             return 0;
@@ -704,8 +628,8 @@ ConfTestGetBool(void)
             return 0;
     }
 
-    for (i = 0; i < sizeof(falses) / sizeof(falses[0]); i++) {
-        if (ConfSet(name, falses[i], 1) != 1)
+    for (u = 0; u < sizeof(falses) / sizeof(falses[0]); u++) {
+        if (ConfSet(name, falses[u], 1) != 1)
             return 0;
         if (ConfGetBool(name, &val) != 1)
             return 0;
@@ -720,15 +644,15 @@ static int
 ConfNodeLookupChildTest(void)
 {
     char *test_vals[] = { "one", "two", "three" };
-    int i;
+    size_t u;
 
     ConfNode *parent = ConfNodeNew();
     ConfNode *child;
 
-    for (i = 0; i < sizeof(test_vals)/sizeof(test_vals[0]); i++) {
+    for (u = 0; u < sizeof(test_vals)/sizeof(test_vals[0]); u++) {
         child = ConfNodeNew();
-        child->name = strdup(test_vals[i]);
-        child->val = strdup(test_vals[i]);
+        child->name = SCStrdup(test_vals[u]);
+        child->val = SCStrdup(test_vals[u]);
         TAILQ_INSERT_TAIL(&parent->head, child, next);
     }
 
@@ -769,16 +693,16 @@ static int
 ConfNodeLookupChildValueTest(void)
 {
     char *test_vals[] = { "one", "two", "three" };
-    int i;
+    size_t u;
 
     ConfNode *parent = ConfNodeNew();
     ConfNode *child;
     const char *value;
 
-    for (i = 0; i < sizeof(test_vals)/sizeof(test_vals[0]); i++) {
+    for (u = 0; u < sizeof(test_vals)/sizeof(test_vals[0]); u++) {
         child = ConfNodeNew();
-        child->name = strdup(test_vals[i]);
-        child->val = strdup(test_vals[i]);
+        child->name = SCStrdup(test_vals[u]);
+        child->val = SCStrdup(test_vals[u]);
         TAILQ_INSERT_TAIL(&parent->head, child, next);
     }
 
@@ -809,11 +733,73 @@ ConfNodeLookupChildValueTest(void)
     return 1;
 }
 
+/**
+ * Test the removal of a configuration node.
+ */
+static int
+ConfNodeRemoveTest(void)
+{
+    ConfCreateContextBackup();
+    ConfInit();
+
+    if (ConfSet("some.nested.parameter", "blah", 1) != 1)
+        return 0;
+
+    ConfNode *node = ConfGetNode("some.nested.parameter");
+    if (node == NULL)
+        return 0;
+    ConfNodeRemove(node);
+
+    node = ConfGetNode("some.nested.parameter");
+    if (node != NULL)
+        return 0;
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return 1;
+}
+
+static int
+ConfSetTest(void)
+{
+    ConfCreateContextBackup();
+    ConfInit();
+
+    /* Set some value with 2 levels. */
+    if (ConfSet("one.two", "three", 1) != 1)
+        return 0;
+    ConfNode *n = ConfGetNode("one.two");
+    if (n == NULL)
+        return 0;
+
+    /* Set another 2 level parameter with the same first level, this
+     * used to trigger a bug that caused the second level of the name
+     * to become a first level node. */
+    if (ConfSet("one.three", "four", 1) != 1)
+        return 0;
+
+    n = ConfGetNode("one.three");
+    if (n == NULL)
+        return 0;
+
+    /* A top level node of "three" should not exist. */
+    n = ConfGetNode("three");
+    if (n != NULL)
+        return 0;
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return 1;
+}
+
+
 void
 ConfRegisterTests(void)
 {
     UtRegisterTest("ConfTestGetNonExistant", ConfTestGetNonExistant, 1);
-    UtRegisterTest("ConfTestSetGetNode", ConfTestSetGetNode, 1);
+    UtRegisterTest("ConfSetTest", ConfSetTest, 1);
     UtRegisterTest("ConfTestSetAndGet", ConfTestSetAndGet, 1);
     UtRegisterTest("ConfTestOverrideValue1", ConfTestOverrideValue1, 1);
     UtRegisterTest("ConfTestOverrideValue2", ConfTestOverrideValue2, 1);
@@ -821,6 +807,7 @@ ConfRegisterTests(void)
     UtRegisterTest("ConfTestGetBool", ConfTestGetBool, 1);
     UtRegisterTest("ConfNodeLookupChildTest", ConfNodeLookupChildTest, 1);
     UtRegisterTest("ConfNodeLookupChildValueTest", ConfNodeLookupChildValueTest, 1);
+    UtRegisterTest("ConfNodeRemoveTest", ConfNodeRemoveTest, 1);
 }
 
 #endif /* UNITTESTS */

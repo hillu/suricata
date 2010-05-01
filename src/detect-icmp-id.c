@@ -1,7 +1,7 @@
+/* Copyright (c) 2009 Open Information Security Foundation */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
- *
- * \file detect-icmp-id.c
+ * \file
  * \author Gerardo Iglesias Galvan <iglesiasg@gmail.com>
  *
  * "icmp_id" keyword support
@@ -10,7 +10,9 @@
 #include "suricata-common.h"
 #include "debug.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
 
 #include "detect-icmp-id.h"
 
@@ -24,7 +26,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectIcmpIdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectIcmpIdSetup(DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectIcmpIdSetup(DetectEngineCtx *, Signature *, char *);
 void DetectIcmpIdRegisterTests(void);
 void DetectIcmpIdFree(void *);
 
@@ -44,13 +46,13 @@ void DetectIcmpIdRegister (void) {
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if (parse_regex == NULL) {
-        SCLogDebug("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
@@ -75,6 +77,10 @@ int DetectIcmpIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
     DetectIcmpIdData *iid = (DetectIcmpIdData *)m->ctx;
 
     if (PKT_IS_ICMPV4(p)) {
+        SCLogDebug("ICMPV4_GET_ID(p) %"PRIu16" (network byte order), "
+                "%"PRIu16" (host byte order)", ICMPV4_GET_ID(p),
+                ntohs(ICMPV4_GET_ID(p)));
+
         switch (ICMPV4_GET_TYPE(p)){
             case ICMP_ECHOREPLY:
             case ICMP_ECHO:
@@ -105,7 +111,8 @@ int DetectIcmpIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
         return 0;
     }
 
-    if (pid == iid->id) return 1;
+    if (pid == iid->id)
+        return 1;
 
     return 0;
 }
@@ -127,7 +134,7 @@ DetectIcmpIdData *DetectIcmpIdParse (char *icmpidstr) {
 
     ret = pcre_exec(parse_regex, parse_regex_study, icmpidstr, strlen(icmpidstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1 || ret > 4) {
-        SCLogDebug("DetectIcmpIdParse: parse error, ret %" PRId32 ", string %s\n", ret, icmpidstr);
+        SCLogError(SC_ERR_PCRE_MATCH, "Parse error %s", icmpidstr);
         goto error;
     }
 
@@ -136,40 +143,44 @@ DetectIcmpIdData *DetectIcmpIdParse (char *icmpidstr) {
     for (i = 1; i < ret; i++) {
         res = pcre_get_substring((char *)icmpidstr, ov, MAX_SUBSTRINGS, i, &str_ptr);
         if (res < 0) {
-            SCLogDebug("DetectIcmpIdParse: pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
         substr[i-1] = (char *)str_ptr;
     }
 
-    iid = malloc(sizeof(DetectIcmpIdData));
+    iid = SCMalloc(sizeof(DetectIcmpIdData));
     if (iid == NULL) {
-        SCLogDebug("DetectIcmpIdParse: malloc failed");
+        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto error;
     }
     iid->id = 0;
 
-    if (strlen(substr[0]) != 0) {
+    if (substr[0]!= NULL && strlen(substr[0]) != 0) {
         if (substr[2] == NULL) {
-            SCLogDebug("DetectIcmpIdParse: Missing close quote in input");
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Missing close quote in input");
             goto error;
         }
     } else {
         if (substr[2] != NULL) {
-            SCLogDebug("DetectIcmpIdParse: Missing open quote in input");
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Missing open quote in input");
             goto error;
         }
     }
-    ByteExtractStringUint16(&iid->id, 10, 0, substr[1]);
+
+    /** \todo can ByteExtractStringUint16 do this? */
+    uint16_t id = 0;
+    ByteExtractStringUint16(&id, 10, 0, substr[1]);
+    iid->id = htons(id);
 
     for (i = 0; i < 3; i++) {
-        if (substr[i] != NULL) free(substr[i]);
+        if (substr[i] != NULL) SCFree(substr[i]);
     }
     return iid;
 
 error:
     for (i = 0; i < 3; i++) {
-        if (substr[i] != NULL) free(substr[i]);
+        if (substr[i] != NULL) SCFree(substr[i]);
     }
     if (iid != NULL) DetectIcmpIdFree(iid);
     return NULL;
@@ -181,13 +192,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param icmpidstr pointer to the user provided icmp_id option
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectIcmpIdSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *icmpidstr) {
+static int DetectIcmpIdSetup (DetectEngineCtx *de_ctx, Signature *s, char *icmpidstr) {
     DetectIcmpIdData *iid = NULL;
     SigMatch *sm = NULL;
 
@@ -200,13 +210,13 @@ int DetectIcmpIdSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char 
     sm->type = DETECT_ICMP_ID;
     sm->ctx = (void *)iid;
 
-    SigMatchAppend(s, m, sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
     if (iid != NULL) DetectIcmpIdFree(iid);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 
 }
@@ -218,7 +228,7 @@ error:
  */
 void DetectIcmpIdFree (void *ptr) {
     DetectIcmpIdData *iid = (DetectIcmpIdData *)ptr;
-    free(iid);
+    SCFree(iid);
 }
 
 #ifdef UNITTESTS
@@ -233,7 +243,7 @@ void DetectIcmpIdFree (void *ptr) {
 int DetectIcmpIdParseTest01 (void) {
     DetectIcmpIdData *iid = NULL;
     iid = DetectIcmpIdParse("300");
-    if (iid != NULL && iid->id == 300) {
+    if (iid != NULL && iid->id == htons(300)) {
         DetectIcmpIdFree(iid);
         return 1;
     }
@@ -247,7 +257,7 @@ int DetectIcmpIdParseTest01 (void) {
 int DetectIcmpIdParseTest02 (void) {
     DetectIcmpIdData *iid = NULL;
     iid = DetectIcmpIdParse("  300  ");
-    if (iid != NULL && iid->id == 300) {
+    if (iid != NULL && iid->id == htons(300)) {
         DetectIcmpIdFree(iid);
         return 1;
     }
@@ -261,7 +271,7 @@ int DetectIcmpIdParseTest02 (void) {
 int DetectIcmpIdParseTest03 (void) {
     DetectIcmpIdData *iid = NULL;
     iid = DetectIcmpIdParse("\"300\"");
-    if (iid != NULL && iid->id == 300) {
+    if (iid != NULL && iid->id == htons(300)) {
         DetectIcmpIdFree(iid);
         return 1;
     }
@@ -275,7 +285,7 @@ int DetectIcmpIdParseTest03 (void) {
 int DetectIcmpIdParseTest04 (void) {
     DetectIcmpIdData *iid = NULL;
     iid = DetectIcmpIdParse("   \"   300 \"");
-    if (iid != NULL && iid->id == 300) {
+    if (iid != NULL && iid->id == htons(300)) {
         DetectIcmpIdFree(iid);
         return 1;
     }
@@ -345,12 +355,12 @@ int DetectIcmpIdMatchTest01 (void) {
 
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any (icmp_id:5461; sid:1;)");
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any (icmp_id:21781; sid:1;)");
     if (s == NULL) {
         goto end;
     }
 
-    s = s->next = SigInit(de_ctx, "alert icmp any any -> any any (icmp_id:5000; sid:2;)");
+    s = s->next = SigInit(de_ctx, "alert icmp any any -> any any (icmp_id:21782; sid:2;)");
     if (s == NULL) {
         goto end;
     }

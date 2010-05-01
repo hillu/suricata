@@ -733,9 +733,20 @@ ac_includes_default="\
 # include <unistd.h>
 #endif"
 
+enable_option_checking=no
 ac_subst_vars='am__EXEEXT_FALSE
 am__EXEEXT_TRUE
 LTLIBOBJS
+BUILD_LIBHTP_FALSE
+BUILD_LIBHTP_TRUE
+subdirs
+LIBPRELUDE_CONFIG_PREFIX
+LIBPRELUDE_PREFIX
+LIBPRELUDE_LIBS
+LIBPRELUDE_LDFLAGS
+LIBPRELUDE_PTHREAD_CFLAGS
+LIBPRELUDE_CFLAGS
+LIBPRELUDE_CONFIG
 LIBOBJS
 CPP
 OTOOL64
@@ -853,6 +864,8 @@ enable_fast_install
 with_gnu_ld
 enable_libtool_lock
 enable_gccprotect
+enable_gccprofile
+enable_gccmarch_native
 with_libpcre_includes
 with_libpcre_libraries
 with_libyaml_includes
@@ -864,6 +877,9 @@ with_libnfnetlink_includes
 with_libnfnetlink_libraries
 with_libnetfilter_queue_includes
 with_libnetfilter_queue_libraries
+enable_ipfw
+enable_prelude
+with_libprelude_prefix
 with_libnet_includes
 with_libnet_libraries
 enable_pfring
@@ -872,9 +888,14 @@ with_libpfring_libraries
 with_libpcap_includes
 with_libpcap_libraries
 enable_unittests
+enable_unified_native_timeval
 enable_debug
+enable_nonbundled_htp
 with_libhtp_includes
 with_libhtp_libraries
+enable_cuda
+with_cuda_includes
+with_cuda_libraries
 '
       ac_precious_vars='build_alias
 host_alias
@@ -885,7 +906,7 @@ LDFLAGS
 LIBS
 CPPFLAGS
 CPP'
-
+ac_subdirs_all='libhtp'
 
 # Initialize some variables set by options.
 ac_init_help=
@@ -1510,10 +1531,17 @@ Optional Features:
                           optimize for fast installation [default=yes]
   --disable-libtool-lock  avoid locking (might break parallel builds)
   --enable-gccprotect  Detect and use gcc hardening options
+  --enable-gccprofile Enable gcc profile info i.e -pg flag is set
+  --enable-gccmarch-native Enable gcc march=native gcc 4.2 and later only
   --enable-nfqueue  Enable NFQUEUE support for inline IDP
+  --enable-ipfw  Enable FreeBSD IPFW support for inline IDP
+  --enable-prelude  Enable Prelude support for alerts
   --enable-pfring  Enable Native PF_RING support
   --enable-unittests  Enable compilation of the unit tests
+  --enable-unified-native-timeval  Use native timeval for unified outputs
   --enable-debug  Enable debug output
+  --enable-nonbundled-htp Enable the use of an already installed version of htp
+  --enable-cuda  Enable CUDA pattern matching
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -1531,6 +1559,8 @@ Optional Packages:
   --with-libnfnetlink-libraries=DIR    libnfnetlink library directory
   --with-libnetfilter_queue-includes=DIR  libnetfilter_queue include directory
   --with-libnetfilter_queue-libraries=DIR    libnetfilter_queue library directory
+  --with-libprelude-prefix=PFX
+                          Prefix where libprelude is installed (optional)
   --with-libnet-includes=DIR     libnet include directory
   --with-libnet-libraries=DIR    libnet library directory
   --with-libpfring-includes=DIR  libpfring include directory
@@ -1539,6 +1569,8 @@ Optional Packages:
   --with-libpcap-libraries=DIR    libpcap library directory
   --with-libhtp-includes=DIR  libhtp include directory
   --with-libhtp-libraries=DIR    libhtp library directory
+  --with-cuda-includes=DIR  cuda include directory
+  --with-cuda-libraries=DIR    cuda library directory
 
 Some influential environment variables:
   CC          C compiler command
@@ -2846,7 +2878,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=0.1
+ VERSION=0.8.2
 
 
 cat >>confdefs.h <<_ACEOF
@@ -4706,13 +4738,13 @@ if test "${lt_cv_nm_interface+set}" = set; then :
 else
   lt_cv_nm_interface="BSD nm"
   echo "int some_variable = 0;" > conftest.$ac_ext
-  (eval echo "\"\$as_me:4709: $ac_compile\"" >&5)
+  (eval echo "\"\$as_me:4741: $ac_compile\"" >&5)
   (eval "$ac_compile" 2>conftest.err)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:4712: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
+  (eval echo "\"\$as_me:4744: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
   (eval "$NM \"conftest.$ac_objext\"" 2>conftest.err > conftest.out)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:4715: output\"" >&5)
+  (eval echo "\"\$as_me:4747: output\"" >&5)
   cat conftest.out >&5
   if $GREP 'External.*some_variable' conftest.out > /dev/null; then
     lt_cv_nm_interface="MS dumpbin"
@@ -5918,7 +5950,7 @@ ia64-*-hpux*)
   ;;
 *-*-irix6*)
   # Find out which ABI we are using.
-  echo '#line 5921 "configure"' > conftest.$ac_ext
+  echo '#line 5953 "configure"' > conftest.$ac_ext
   if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
   (eval $ac_compile) 2>&5
   ac_status=$?
@@ -7419,6 +7451,10 @@ _lt_linker_boilerplate=`cat conftest.err`
 $RM -r conftest*
 
 
+## CAVEAT EMPTOR:
+## There is no encapsulation within the following macros, do not change
+## the running order or otherwise move them around unless you know exactly
+## what you are doing...
 if test -n "$compiler"; then
 
 lt_prog_compiler_no_builtin_flag=
@@ -7444,11 +7480,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7447: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7483: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:7451: \$? = $ac_status" >&5
+   echo "$as_me:7487: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -7783,11 +7819,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7786: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7822: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:7790: \$? = $ac_status" >&5
+   echo "$as_me:7826: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -7888,11 +7924,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7891: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7927: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:7895: \$? = $ac_status" >&5
+   echo "$as_me:7931: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -7943,11 +7979,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7946: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7982: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:7950: \$? = $ac_status" >&5
+   echo "$as_me:7986: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -10326,7 +10362,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 10329 "configure"
+#line 10365 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -10422,7 +10458,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 10425 "configure"
+#line 10461 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -10652,7 +10688,25 @@ CC="$lt_save_CC"
 
 
 
+
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking gcc version" >&5
+$as_echo_n "checking gcc version... " >&6; }
+            gccver=$($CC -dumpversion)
+            gccvermajor=$(echo $gccver | cut -d . -f1)
+            gccverminor=$(echo $gccver | cut -d . -f2)
+            gccvernum=$(expr $gccvermajor "*" 100 + $gccverminor)
+    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $gccver" >&5
+$as_echo "$gccver" >&6; }
+
+    if test "$gccvernum" -ge "400"; then
+                        CFLAGS="$CFLAGS -Wextra"
+    else
+            CFLAGS="$CFLAGS -W"
+    fi
+
     CFLAGS="$CFLAGS -Wall -fno-strict-aliasing"
+    CFLAGS="$CFLAGS -Wno-unused-parameter"
 
 # Checks for programs.
     for ac_prog in gawk mawk nawk awk
@@ -11544,103 +11598,11 @@ $as_echo "no" >&6; }
   SET_MAKE="MAKE=${MAKE-make}"
 fi
 
-    if test -n "$ac_tool_prefix"; then
-  # Extract the first word of "${ac_tool_prefix}ranlib", so it can be a program name with args.
-set dummy ${ac_tool_prefix}ranlib; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if test "${ac_cv_prog_RANLIB+set}" = set; then :
-  $as_echo_n "(cached) " >&6
-else
-  if test -n "$RANLIB"; then
-  ac_cv_prog_RANLIB="$RANLIB" # Let the user override the test.
-else
-as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
-    ac_cv_prog_RANLIB="${ac_tool_prefix}ranlib"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-fi
-fi
-RANLIB=$ac_cv_prog_RANLIB
-if test -n "$RANLIB"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $RANLIB" >&5
-$as_echo "$RANLIB" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-
-fi
-if test -z "$ac_cv_prog_RANLIB"; then
-  ac_ct_RANLIB=$RANLIB
-  # Extract the first word of "ranlib", so it can be a program name with args.
-set dummy ranlib; ac_word=$2
-{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
-$as_echo_n "checking for $ac_word... " >&6; }
-if test "${ac_cv_prog_ac_ct_RANLIB+set}" = set; then :
-  $as_echo_n "(cached) " >&6
-else
-  if test -n "$ac_ct_RANLIB"; then
-  ac_cv_prog_ac_ct_RANLIB="$ac_ct_RANLIB" # Let the user override the test.
-else
-as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
-for as_dir in $PATH
-do
-  IFS=$as_save_IFS
-  test -z "$as_dir" && as_dir=.
-    for ac_exec_ext in '' $ac_executable_extensions; do
-  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
-    ac_cv_prog_ac_ct_RANLIB="ranlib"
-    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
-    break 2
-  fi
-done
-  done
-IFS=$as_save_IFS
-
-fi
-fi
-ac_ct_RANLIB=$ac_cv_prog_ac_ct_RANLIB
-if test -n "$ac_ct_RANLIB"; then
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_ct_RANLIB" >&5
-$as_echo "$ac_ct_RANLIB" >&6; }
-else
-  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-fi
-
-  if test "x$ac_ct_RANLIB" = x; then
-    RANLIB=":"
-  else
-    case $cross_compiling:$ac_tool_warned in
-yes:)
-{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: using cross tools not prefixed with host triplet" >&5
-$as_echo "$as_me: WARNING: using cross tools not prefixed with host triplet" >&2;}
-ac_tool_warned=yes ;;
-esac
-    RANLIB=$ac_ct_RANLIB
-  fi
-else
-  RANLIB="$ac_cv_prog_RANLIB"
-fi
-
 
 # Checks for libraries.
 
 # Checks for header files.
-    for ac_header in arpa/inet.h inttypes.h limits.h netinet/in.h stdint.h stdlib.h string.h sys/socket.h sys/time.h unistd.h
+    for ac_header in arpa/inet.h inttypes.h limits.h netdb.h netinet/in.h poll.h signal.h stdint.h stdlib.h string.h syslog.h sys/prctl.h sys/socket.h sys/syscall.h sys/time.h unistd.h windows.h winsock2.h ws2tcpip.h
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
 ac_fn_c_check_header_mongrel "$LINENO" "$ac_header" "$as_ac_Header" "$ac_includes_default"
@@ -12258,6 +12220,10 @@ $as_echo_n "checking host os... " >&6; }
            *-*-linux*)
                     #for now do nothing
                     ;;
+           *-*-mingw32*)
+                    CFLAGS="${CFLAGS} -DOS_WIN32"
+                    LDFLAGS="${LDFLAGS} -lws2_32"
+                    ;;
 	   *)
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unsupported OS this may or may not work" >&5
 $as_echo "$as_me: WARNING: unsupported OS this may or may not work" >&2;}
@@ -12419,6 +12385,39 @@ rm -f core conftest.err conftest.$ac_objext \
         CFLAGS="${CFLAGS} ${SECCFLAGS}"
         LDFLAGS="${LDFLAGS} ${SECLDFLAGS}"
     fi
+
+#enable profile generation
+    # Check whether --enable-gccprofile was given.
+if test "${enable_gccprofile+set}" = set; then :
+  enableval=$enable_gccprofile;  enable_gccprofile=yes
+
+fi
+
+
+    if test "$enable_gccprofile" = "yes"; then
+    CFLAGS="${CFLAGS} -pg"
+    fi
+
+#enable gcc march=native gcc 4.2 or later
+    # Check whether --enable-gccmarch_native was given.
+if test "${enable_gccmarch_native+set}" = set; then :
+  enableval=$enable_gccmarch_native;  enable_gccmarch_native=yes
+
+fi
+
+
+    if test "$enable_gccmarch_native" = "yes"; then
+        if test "$gccvernum" -ge "402"; then
+                                CFLAGS="$CFLAGS -march=native"
+        else
+                echo
+                echo "   You specified --enable-gccmarch-native but looks like you are running gcc < 4.2"
+                echo "   Please update your version of gcc or remove this option from configure."
+                echo
+                exit 1
+        fi
+    fi
+
 #libpcre
 
 # Check whether --with-libpcre_includes was given.
@@ -12510,6 +12509,34 @@ fi
     echo
     exit 1
     fi
+
+   cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+ #include <pcre.h>
+int
+main ()
+{
+ int eo = 0; eo |= PCRE_EXTRA_MATCH_LIMIT_RECURSION;
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+   pcre_match_limit_recursion_available=yes
+else
+  :
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+   if test "$pcre_match_limit_recursion_available" != "yes"; then
+    CFLAGS="${CFLAGS} -DNO_PCRE_MATCH_RLIMIT"
+    echo
+    echo "   Warning! pcre extra opt PCRE_EXTRA_MATCH_LIMIT_RECURSION not found"
+    echo "   This could lead to potential DoS please upgrade to pcre >= 6.5"
+    echo "   Continuing for now...."
+    echo "   from www.pcre.org."
+    echo
+   fi
 
 #libyaml
 
@@ -12890,6 +12917,286 @@ fi
     fi
     fi
 
+#enable support for IPFW
+    # Check whether --enable-ipfw was given.
+if test "${enable_ipfw+set}" = set; then :
+  enableval=$enable_ipfw;  enable_ipfw=yes
+
+fi
+
+    if test "$enable_ipfw" = "yes"; then
+        CFLAGS="$CFLAGS -DIPFW"
+    fi
+
+#prelude
+
+    # Check whether --enable-prelude was given.
+if test "${enable_prelude+set}" = set; then :
+  enableval=$enable_prelude;  enable_prelude=yes
+
+fi
+
+    if test "$enable_prelude" = "yes"; then
+        CFLAGS="$CFLAGS -DPRELUDE"
+
+# Check whether --with-libprelude-prefix was given.
+if test "${with_libprelude_prefix+set}" = set; then :
+  withval=$with_libprelude_prefix; libprelude_config_prefix="$withval"
+else
+  libprelude_config_prefix=""
+fi
+
+
+  if test x$libprelude_config_prefix != x ; then
+     if test x${LIBPRELUDE_CONFIG+set} != xset ; then
+        LIBPRELUDE_CONFIG=$libprelude_config_prefix/bin/libprelude-config
+     fi
+  fi
+
+  # Extract the first word of "libprelude-config", so it can be a program name with args.
+set dummy libprelude-config; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if test "${ac_cv_path_LIBPRELUDE_CONFIG+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $LIBPRELUDE_CONFIG in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_LIBPRELUDE_CONFIG="$LIBPRELUDE_CONFIG" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if { test -f "$as_dir/$ac_word$ac_exec_ext" && $as_test_x "$as_dir/$ac_word$ac_exec_ext"; }; then
+    ac_cv_path_LIBPRELUDE_CONFIG="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  test -z "$ac_cv_path_LIBPRELUDE_CONFIG" && ac_cv_path_LIBPRELUDE_CONFIG="no"
+  ;;
+esac
+fi
+LIBPRELUDE_CONFIG=$ac_cv_path_LIBPRELUDE_CONFIG
+if test -n "$LIBPRELUDE_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $LIBPRELUDE_CONFIG" >&5
+$as_echo "$LIBPRELUDE_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+  if test "$LIBPRELUDE_CONFIG" != "no"; then
+	if $($LIBPRELUDE_CONFIG --thread > /dev/null 2>&1); then
+		LIBPRELUDE_PTHREAD_CFLAGS=`$LIBPRELUDE_CONFIG --thread --cflags`
+
+		if test xno = xtrue || test xno = xyes; then
+			libprelude_config_args="--thread"
+		else
+			libprelude_config_args="--no-thread"
+		fi
+	else
+		LIBPRELUDE_PTHREAD_CFLAGS=`$LIBPRELUDE_CONFIG --pthread-cflags`
+	fi
+  fi
+
+  min_libprelude_version=0.9.9
+  { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libprelude - version >= $min_libprelude_version" >&5
+$as_echo_n "checking for libprelude - version >= $min_libprelude_version... " >&6; }
+  no_libprelude=""
+  if test "$LIBPRELUDE_CONFIG" = "no" ; then
+    no_libprelude=yes
+  else
+    LIBPRELUDE_CFLAGS=`$LIBPRELUDE_CONFIG $libprelude_config_args --cflags`
+    LIBPRELUDE_LDFLAGS=`$LIBPRELUDE_CONFIG $libprelude_config_args --ldflags`
+    LIBPRELUDE_LIBS=`$LIBPRELUDE_CONFIG $libprelude_config_args --libs`
+    LIBPRELUDE_PREFIX=`$LIBPRELUDE_CONFIG $libprelude_config_args --prefix`
+    LIBPRELUDE_CONFIG_PREFIX=`$LIBPRELUDE_CONFIG $libprelude_config_args --config-prefix`
+    libprelude_config_version=`$LIBPRELUDE_CONFIG $libprelude_config_args --version`
+
+
+      ac_save_CFLAGS="$CFLAGS"
+      ac_save_LDFLAGS="$LDFLAGS"
+      ac_save_LIBS="$LIBS"
+      CFLAGS="$CFLAGS $LIBPRELUDE_CFLAGS"
+      LDFLAGS="$LDFLAGS $LIBPRELUDE_LDFLAGS"
+      LIBS="$LIBS $LIBPRELUDE_LIBS"
+      rm -f conf.libpreludetest
+      if test "$cross_compiling" = yes; then :
+  echo $ac_n "cross compiling; assumed OK... $ac_c"
+else
+  cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libprelude/prelude.h>
+
+int
+main ()
+{
+    system ("touch conf.libpreludetest");
+
+    if( strcmp( prelude_check_version(NULL), "$libprelude_config_version" ) )
+    {
+      printf("\n*** 'libprelude-config --version' returned %s, but LIBPRELUDE (%s)\n",
+             "$libprelude_config_version", prelude_check_version(NULL) );
+      printf("*** was found! If libprelude-config was correct, then it is best\n");
+      printf("*** to remove the old version of LIBPRELUDE. You may also be able to fix the error\n");
+      printf("*** by modifying your LD_LIBRARY_PATH enviroment variable, or by editing\n");
+      printf("*** /etc/ld.so.conf. Make sure you have run ldconfig if that is\n");
+      printf("*** required on your system.\n");
+      printf("*** If libprelude-config was wrong, set the environment variable LIBPRELUDE_CONFIG\n");
+      printf("*** to point to the correct copy of libprelude-config, and remove the file config.cache\n");
+      printf("*** before re-running configure\n");
+    }
+    else if ( strcmp(prelude_check_version(NULL), LIBPRELUDE_VERSION ) ) {
+        printf("\n*** LIBPRELUDE header file (version %s) does not match\n", LIBPRELUDE_VERSION);
+        printf("*** library (version %s)\n", prelude_check_version(NULL) );
+    }
+    else {
+      if ( prelude_check_version( "$min_libprelude_version" ) )
+        return 0;
+      else {
+        printf("no\n*** An old version of LIBPRELUDE (%s) was found.\n",
+                prelude_check_version(NULL) );
+        printf("*** You need a version of LIBPRELUDE newer than %s. The latest version of\n",
+               "$min_libprelude_version" );
+        printf("*** LIBPRELUDE is always available from http://www.prelude-ids.com/development/download/\n");
+        printf("*** \n");
+        printf("*** If you have already installed a sufficiently new version, this error\n");
+        printf("*** probably means that the wrong copy of the libprelude-config shell script is\n");
+        printf("*** being found. The easiest way to fix this is to remove the old version\n");
+        printf("*** of LIBPRELUDE, but you can also set the LIBPRELUDE_CONFIG environment to point to the\n");
+        printf("*** correct copy of libprelude-config. (In this case, you will have to\n");
+        printf("*** modify your LD_LIBRARY_PATH enviroment variable, or edit /etc/ld.so.conf\n");
+        printf("*** so that the correct libraries are found at run-time))\n");
+      }
+    }
+    return 1;
+}
+
+_ACEOF
+if ac_fn_c_try_run "$LINENO"; then :
+
+else
+  no_libprelude=yes
+fi
+rm -f core *.core core.conftest.* gmon.out bb.out conftest$ac_exeext \
+  conftest.$ac_objext conftest.beam conftest.$ac_ext
+fi
+
+       CFLAGS="$ac_save_CFLAGS"
+       LIBS="$ac_save_LIBS"
+       LDFLAGS="$ac_save_LDFLAGS"
+  fi
+
+  if test "x$no_libprelude" = x ; then
+     { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+     :
+  else
+     if test -f conf.libpreludetest ; then
+        :
+     else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+     fi
+     if test "$LIBPRELUDE_CONFIG" = "no" ; then
+       echo "*** The libprelude-config script installed by LIBPRELUDE could not be found"
+       echo "*** If LIBPRELUDE was installed in PREFIX, make sure PREFIX/bin is in"
+       echo "*** your path, or set the LIBPRELUDE_CONFIG environment variable to the"
+       echo "*** full path to libprelude-config."
+     else
+       if test -f conf.libpreludetest ; then
+        :
+       else
+          echo "*** Could not run libprelude test program, checking why..."
+          CFLAGS="$CFLAGS $LIBPRELUDE_CFLAGS"
+          LDFLAGS="$LDFLAGS $LIBPRELUDE_LDFLAGS"
+          LIBS="$LIBS $LIBPRELUDE_LIBS"
+          cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <libprelude/prelude.h>
+
+int
+main ()
+{
+ return !!prelude_check_version(NULL);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+   echo "*** The test program compiled, but did not run. This usually means"
+          echo "*** that the run-time linker is not finding LIBPRELUDE or finding the wrong"
+          echo "*** version of LIBPRELUDE. If it is not finding LIBPRELUDE, you'll need to set your"
+          echo "*** LD_LIBRARY_PATH environment variable, or edit /etc/ld.so.conf to point"
+          echo "*** to the installed location  Also, make sure you have run ldconfig if that"
+          echo "*** is required on your system"
+          echo "***"
+          echo "*** If you have an old version installed, it is best to remove it, although"
+          echo "*** you may also be able to get things to work by modifying LD_LIBRARY_PATH"
+          echo "***"
+else
+   echo "*** The test program failed to compile or link. See the file config.log for the"
+          echo "*** exact error that occured. This usually means LIBPRELUDE was incorrectly installed"
+          echo "*** or that you have moved LIBPRELUDE since it was installed. In the latter case, you"
+          echo "*** may want to edit the libprelude-config script: $LIBPRELUDE_CONFIG"
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+          CFLAGS="$ac_save_CFLAGS"
+          LDFLAGS="$ac_save_LDFLAGS"
+          LIBS="$ac_save_LIBS"
+       fi
+     fi
+     LIBPRELUDE_CFLAGS=""
+     LIBPRELUDE_LDFLAGS=""
+     LIBPRELUDE_LIBS=""
+     as_fn_error "Cannot find libprelude: Is libprelude-config in the path?" "$LINENO" 5
+  fi
+  rm -f conf.libpreludetest
+
+
+
+
+
+
+
+
+$as_echo "#define PRELUDE_APPLICATION_USE_LIBTOOL2 /**/" >>confdefs.h
+
+
+
+        if test "x${LIBPRELUDE_CFLAGS}" != "x"; then
+            CPPFLAGS="${CPPFLAGS} ${LIBPRELUDE_CFLAGS}"
+        fi
+
+        if test "x${LIBPRELUDE_LDFLAGS}" != "x"; then
+            LDFLAGS="${LDFLAGS} ${LIBPRELUDE_LDFLAGS}"
+        fi
+
+        if test "x${LIBPRELUDE_LIBS}" != "x"; then
+            LDFLAGS="${LDFLAGS} ${LIBPRELUDE_LIBS}"
+        fi
+
+    fi
+
+
 #libnet
 
 # Check whether --with-libnet_includes was given.
@@ -12910,44 +13217,53 @@ fi
 
 
     if test "x$with_libnet_includes" != "xno"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libnet_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libnet_includes}"
+        libnet_dir="${with_libnet_includes}"
+    else
+        libnet_dir="/usr/include /usr/local/include /usr/local/include/libnet11 /opt/local/include"
     fi
 
     if test "x$with_libnet_libraries" != "xno"; then
-    LDFLAGS="${LDFLAGS} -L${with_libnet_libraries}"
+        LDFLAGS="${LDFLAGS} -L${with_libnet_libraries}"
     fi
 
+    LIBNET_DETECT_FAIL="no"
     LIBNET_INC_DIR=""
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking \"for libnet.h version 1.1.x\"" >&5
-$as_echo_n "checking \"for libnet.h version 1.1.x\"... " >&6; }
-    libnet_dir="/usr/include /usr/local/include /usr/local/include/libnet11 /opt/local/include"
+
     for i in $libnet_dir; do
     if test -r "$i/libnet.h"; then
-    LIBNET_INC_DIR="$i"
+        LIBNET_INC_DIR="$i"
     fi
     done
 
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libnet.h version 1.1.x" >&5
+$as_echo_n "checking for libnet.h version 1.1.x... " >&6; }
     if test "$LIBNET_INC_DIR" != ""; then
-    if eval "grep LIBNET_VERSION $LIBNET_INC_DIR/libnet.h | grep -v 1.1 >/dev/null"; then
+        if eval "grep LIBNET_VERSION $LIBNET_INC_DIR/libnet.h | grep -v 1.1 >/dev/null"; then
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+            LIBNET_DETECT_FAIL="yes"
 
             echo
+            echo "*************************************************************************"
+            echo "   Warning! libnet version 1.1.x could not be found in " $libnet_dir
+            echo "   Reject keywords will not be supported."
+            echo "   If you require reject support plese install libnet 1.1.x. "
+            echo "   If libnet is not installed in a non-standard location please use the"
+            echo "   --with-libnet-includes and --with-libnet-libraries configure options"
+            echo "*************************************************************************"
             echo
-            echo "**********************************************"
-            echo "  ERROR: unable to find" "libnet 1.1.x (libnet.h)"
-            echo "  checked in the following places"
-            for i in `echo $tmp`; do
-            echo "        $i"
-            done
-            echo "**********************************************"
-            echo
-            exit 1
 
-    fi
+        else
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+        fi
 
-    #CentOS, Fedora, Ubuntu-LTS, Ubuntu all set defines to the same values. libnet-config seems
-    #to have been depreciated but all distro's seem to include it as part of the package.
-    LLIBNET=""
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libnet_write in -lnet" >&5
+        #CentOS, Fedora, Ubuntu-LTS, Ubuntu all set defines to the same values. libnet-config seems
+        #to have been depreciated but all distro's seem to include it as part of the package.
+        if test "$LIBNET_DETECT_FAIL" = "no"; then
+            LLIBNET=""
+            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libnet_write in -lnet" >&5
 $as_echo_n "checking for libnet_write in -lnet... " >&6; }
 if test "${ac_cv_lib_net_libnet_write+set}" = set; then :
   $as_echo_n "(cached) " >&6
@@ -12994,25 +13310,35 @@ else
   LLIBNET="no"
 fi
 
-    if test "$LLIBNET" != "no"; then
-    CFLAGS="${CFLAGS} -D_BSD_SOURCE -D__BSD_SOURCE -D__FAVOR_BSD -DHAVE_NET_ETHERNET_H"
-    fi
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $i" >&5
-$as_echo "$i" >&6; }
-    else
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-    as_fn_error "\"libnet 1.1.x could not be found.  please download and install the library from http://sourceforge.net/projects/libnet-dev/\"" "$LINENO" 5
-    fi
+            if test "$LLIBNET" != "no"; then
+                CFLAGS="${CFLAGS} -DHAVE_LIBNET11 -D_BSD_SOURCE -D__BSD_SOURCE -D__FAVOR_BSD -DHAVE_NET_ETHERNET_H"
+            else
+            #if we displayed a warning already no reason to do it again.
+                if test "$LIBNET_DETECT_FAIL" = "no"; then
+                    LIBNET_DETECT_FAIL="yes"
 
-# see if we have the patched libnet 1.1
-# http://www.inliniac.net/blog/2007/10/16/libnet-11-ipv6-fixes-and-additions.html
-    LLIBNET=""
+            echo
+            echo "*************************************************************************"
+            echo "   Warning! libnet version 1.1.x could not be found in " $libnet_dir
+            echo "   Reject keywords will not be supported."
+            echo "   If you require reject support plese install libnet 1.1.x. "
+            echo "   If libnet is not installed in a non-standard location please use the"
+            echo "   --with-libnet-includes and --with-libnet-libraries configure options"
+            echo "*************************************************************************"
+            echo
 
-#To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
-#see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
-    TMPLIBS="${LIBS}"
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libnet_build_icmpv6_unreach in -lnet" >&5
+                fi
+            fi
+
+            # see if we have the patched libnet 1.1
+            # http://www.inliniac.net/blog/2007/10/16/libnet-11-ipv6-fixes-and-additions.html
+            #
+            # To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+            # see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+            if test "$LIBNET_DETECT_FAIL" = "no"; then
+                LLIBNET=""
+                TMPLIBS="${LIBS}"
+                { $as_echo "$as_me:${as_lineno-$LINENO}: checking for libnet_build_icmpv6_unreach in -lnet" >&5
 $as_echo_n "checking for libnet_build_icmpv6_unreach in -lnet... " >&6; }
 if test "${ac_cv_lib_net_libnet_build_icmpv6_unreach+set}" = set; then :
   $as_echo_n "(cached) " >&6
@@ -13059,11 +13385,26 @@ else
   LLIBNET="no"
 fi
 
-    if test "$LLIBNET" != "no"; then
-    CFLAGS="$CFLAGS -DHAVE_LIBNET_ICMPV6_UNREACH"
-    fi
-    LIBS="${TMPLIBS}"
+                if test "$LLIBNET" != "no"; then
+                    CFLAGS="$CFLAGS -DHAVE_LIBNET_ICMPV6_UNREACH"
+                fi
+                LIBS="${TMPLIBS}"
+            fi
+        fi
+    else
+        LIBNET_DETECT_FAIL="yes"
 
+            echo
+            echo "*************************************************************************"
+            echo "   Warning! libnet version 1.1.x could not be found in " $libnet_dir
+            echo "   Reject keywords will not be supported."
+            echo "   If you require reject support plese install libnet 1.1.x. "
+            echo "   If libnet is not installed in a non-standard location please use the"
+            echo "   --with-libnet-includes and --with-libnet-libraries configure options"
+            echo "*************************************************************************"
+            echo
+
+    fi
 # libpfring (currently only supported for libpcap enabled pfring)
 # Error on the side of caution. If libpfring enabled pcap is being used and we don't link against -lpfring compilation will fail.
     # Check whether --enable-pfring was given.
@@ -13075,6 +13416,8 @@ fi
     if test "$enable_pfring" = "yes"; then
     CFLAGS="$CFLAGS -DHAVE_PFRING"
     fi
+
+#We have to set CFLAGS for AC_TRY_COMPILE as it doesn't pay attention to CPPFLAGS
 
 # Check whether --with-libpfring_includes was given.
 if test "${with_libpfring_includes+set}" = set; then :
@@ -13101,9 +13444,9 @@ fi
     fi
 
     LIBPFRING=""
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_open in -lpfring" >&5
-$as_echo_n "checking for pfring_open in -lpfring... " >&6; }
-if test "${ac_cv_lib_pfring_pfring_open+set}" = set; then :
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_set_cluster in -lpfring" >&5
+$as_echo_n "checking for pfring_set_cluster in -lpfring... " >&6; }
+if test "${ac_cv_lib_pfring_pfring_set_cluster+set}" = set; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
@@ -13117,27 +13460,27 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 #ifdef __cplusplus
 extern "C"
 #endif
-char pfring_open ();
+char pfring_set_cluster ();
 int
 main ()
 {
-return pfring_open ();
+return pfring_set_cluster ();
   ;
   return 0;
 }
 _ACEOF
 if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pfring_pfring_open=yes
+  ac_cv_lib_pfring_pfring_set_cluster=yes
 else
-  ac_cv_lib_pfring_pfring_open=no
+  ac_cv_lib_pfring_pfring_set_cluster=no
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
 LIBS=$ac_check_lib_save_LIBS
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_open" >&5
-$as_echo "$ac_cv_lib_pfring_pfring_open" >&6; }
-if test "x$ac_cv_lib_pfring_pfring_open" = x""yes; then :
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_set_cluster" >&5
+$as_echo "$ac_cv_lib_pfring_pfring_set_cluster" >&6; }
+if test "x$ac_cv_lib_pfring_pfring_set_cluster" = x""yes; then :
   cat >>confdefs.h <<_ACEOF
 #define HAVE_LIBPFRING 1
 _ACEOF
@@ -13151,12 +13494,35 @@ fi
     if test "$LIBPFRING" = "no"; then
         if test "enable_pfring" = "yes"; then
         echo
-        echo "   ERROR! --enable-pfring was passed but the library was not found, go get it"
+        echo "   ERROR! --enable-pfring was passed but the library was not found or version is >4, go get it"
         echo "   from http://www.ntop.org/PF_RING.html"
         echo
         exit 1
         fi
     fi
+
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+ #include <pfring.h>
+int
+main ()
+{
+ pfring *pd; pd = pfring_open("eth1", 1,  1515, 1); pfring_set_cluster(pd, 99, cluster_round_robin);
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+   pfring_cluster_type_available=yes
+else
+  :
+
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+    if test "$pfring_cluster_type_available" = "yes"; then
+     CFLAGS="${CFLAGS} -DHAVE_PFRING_CLUSTER_TYPE"
+    fi
+
 
 # libpcap
 
@@ -13319,6 +13685,17 @@ fi
     CFLAGS="${CFLAGS} -DUNITTESTS"
     fi
 
+# enable native timeval for unified alert output
+    # Check whether --enable-unified-native-timeval was given.
+if test "${enable_unified_native_timeval+set}" = set; then :
+  enableval=$enable_unified_native_timeval;  enable_unified_native_timeval=yes
+
+fi
+
+    if test "$enable_unified_native_timeval" = "yes"; then
+    CFLAGS="${CFLAGS} -DUNIFIED_NATIVE_TIMEVAL"
+    fi
+
 # enable debug output
     # Check whether --enable-debug was given.
 if test "${enable_debug+set}" = set; then :
@@ -13331,6 +13708,15 @@ fi
     fi
 
 #libhtp
+    # Check whether --enable-nonbundled-htp was given.
+if test "${enable_nonbundled_htp+set}" = set; then :
+  enableval=$enable_nonbundled_htp; enable_non_bundled_htp=yes
+else
+  enable_non_bundled_htp=no
+
+fi
+
+    if test "$enable_non_bundled_htp" = "yes"; then
 
 # Check whether --with-libhtp_includes was given.
 if test "${with_libhtp_includes+set}" = set; then :
@@ -13419,8 +13805,123 @@ fi
     echo
     exit 1
     fi
+    fi
 
-    #LDFLAGS="${LDFLAGS}  -lhtp"
+   #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
+
+
+subdirs="$subdirs libhtp"
+
+    if test "$enable_non_bundled_htp" = "no"; then
+  BUILD_LIBHTP_TRUE=
+  BUILD_LIBHTP_FALSE='#'
+else
+  BUILD_LIBHTP_TRUE='#'
+  BUILD_LIBHTP_FALSE=
+fi
+
+
+# enable CUDA output
+    # Check whether --enable-cuda was given.
+if test "${enable_cuda+set}" = set; then :
+  enableval=$enable_cuda;  enable_cuda=yes
+
+fi
+
+
+# Check whether --with-cuda_includes was given.
+if test "${with_cuda_includes+set}" = set; then :
+  withval=$with_cuda_includes; with_cuda_includes="$withval"
+else
+  with_cuda_includes=no
+fi
+
+
+# Check whether --with-cuda_libraries was given.
+if test "${with_cuda_libraries+set}" = set; then :
+  withval=$with_cuda_libraries; with_cuda_libraries="$withval"
+else
+  with_cuda_libraries="no"
+fi
+
+
+    if test "$enable_cuda" = "yes"; then
+        CFLAGS="${CFLAGS} -D__SC_CUDA_SUPPORT__"
+
+        if test "$with_cuda_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_cuda_includes}"
+        else
+            CPPFLAGS="${CPPFLAGS} -I/usr/include/cuda"
+        fi
+
+        if test "$with_cuda_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS} -L${with_cuda_libraries}"
+        fi
+
+        ac_fn_c_check_header_mongrel "$LINENO" "cuda.h" "ac_cv_header_cuda_h" "$ac_includes_default"
+if test "x$ac_cv_header_cuda_h" = x""yes; then :
+
+else
+  as_fn_error "cuda.h not found ..." "$LINENO" 5
+fi
+
+
+
+        LIBCUDA=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for cuArray3DCreate in -lcuda" >&5
+$as_echo_n "checking for cuArray3DCreate in -lcuda... " >&6; }
+if test "${ac_cv_lib_cuda_cuArray3DCreate+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lcuda  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char cuArray3DCreate ();
+int
+main ()
+{
+return cuArray3DCreate ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_cuda_cuArray3DCreate=yes
+else
+  ac_cv_lib_cuda_cuArray3DCreate=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_cuda_cuArray3DCreate" >&5
+$as_echo "$ac_cv_lib_cuda_cuArray3DCreate" >&6; }
+if test "x$ac_cv_lib_cuda_cuArray3DCreate" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBCUDA 1
+_ACEOF
+
+  LIBS="-lcuda $LIBS"
+
+else
+  LIBCUDA="no"
+fi
+
+        if test "$LIBCUDA" = "no"; then
+            echo
+            echo "   ERROR! libcuda library not found"
+            echo
+            exit 1
+        fi
+    fi
 
 
 
@@ -13544,6 +14045,10 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${am__fastdepCC_TRUE}" && test -z "${am__fastdepCC_FALSE}"; then
   as_fn_error "conditional \"am__fastdepCC\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${BUILD_LIBHTP_TRUE}" && test -z "${BUILD_LIBHTP_FALSE}"; then
+  as_fn_error "conditional \"BUILD_LIBHTP\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 
@@ -15744,9 +16249,153 @@ if test "$no_create" != yes; then
   # would make configure fail if this is the last instruction.
   $ac_cs_success || as_fn_exit $?
 fi
+
+#
+# CONFIG_SUBDIRS section.
+#
+if test "$no_recursion" != yes; then
+
+  # Remove --cache-file, --srcdir, and --disable-option-checking arguments
+  # so they do not pile up.
+  ac_sub_configure_args=
+  ac_prev=
+  eval "set x $ac_configure_args"
+  shift
+  for ac_arg
+  do
+    if test -n "$ac_prev"; then
+      ac_prev=
+      continue
+    fi
+    case $ac_arg in
+    -cache-file | --cache-file | --cache-fil | --cache-fi \
+    | --cache-f | --cache- | --cache | --cach | --cac | --ca | --c)
+      ac_prev=cache_file ;;
+    -cache-file=* | --cache-file=* | --cache-fil=* | --cache-fi=* \
+    | --cache-f=* | --cache-=* | --cache=* | --cach=* | --cac=* | --ca=* \
+    | --c=*)
+      ;;
+    --config-cache | -C)
+      ;;
+    -srcdir | --srcdir | --srcdi | --srcd | --src | --sr)
+      ac_prev=srcdir ;;
+    -srcdir=* | --srcdir=* | --srcdi=* | --srcd=* | --src=* | --sr=*)
+      ;;
+    -prefix | --prefix | --prefi | --pref | --pre | --pr | --p)
+      ac_prev=prefix ;;
+    -prefix=* | --prefix=* | --prefi=* | --pref=* | --pre=* | --pr=* | --p=*)
+      ;;
+    --disable-option-checking)
+      ;;
+    *)
+      case $ac_arg in
+      *\'*) ac_arg=`$as_echo "$ac_arg" | sed "s/'/'\\\\\\\\''/g"` ;;
+      esac
+      as_fn_append ac_sub_configure_args " '$ac_arg'" ;;
+    esac
+  done
+
+  # Always prepend --prefix to ensure using the same prefix
+  # in subdir configurations.
+  ac_arg="--prefix=$prefix"
+  case $ac_arg in
+  *\'*) ac_arg=`$as_echo "$ac_arg" | sed "s/'/'\\\\\\\\''/g"` ;;
+  esac
+  ac_sub_configure_args="'$ac_arg' $ac_sub_configure_args"
+
+  # Pass --silent
+  if test "$silent" = yes; then
+    ac_sub_configure_args="--silent $ac_sub_configure_args"
+  fi
+
+  # Always prepend --disable-option-checking to silence warnings, since
+  # different subdirs can have different --enable and --with options.
+  ac_sub_configure_args="--disable-option-checking $ac_sub_configure_args"
+
+  ac_popdir=`pwd`
+  for ac_dir in : $subdirs; do test "x$ac_dir" = x: && continue
+
+    # Do not complain, so a configure script can configure whichever
+    # parts of a large source tree are present.
+    test -d "$srcdir/$ac_dir" || continue
+
+    ac_msg="=== configuring in $ac_dir (`pwd`/$ac_dir)"
+    $as_echo "$as_me:${as_lineno-$LINENO}: $ac_msg" >&5
+    $as_echo "$ac_msg" >&6
+    as_dir="$ac_dir"; as_fn_mkdir_p
+    ac_builddir=.
+
+case "$ac_dir" in
+.) ac_dir_suffix= ac_top_builddir_sub=. ac_top_build_prefix= ;;
+*)
+  ac_dir_suffix=/`$as_echo "$ac_dir" | sed 's|^\.[\\/]||'`
+  # A ".." for each directory in $ac_dir_suffix.
+  ac_top_builddir_sub=`$as_echo "$ac_dir_suffix" | sed 's|/[^\\/]*|/..|g;s|/||'`
+  case $ac_top_builddir_sub in
+  "") ac_top_builddir_sub=. ac_top_build_prefix= ;;
+  *)  ac_top_build_prefix=$ac_top_builddir_sub/ ;;
+  esac ;;
+esac
+ac_abs_top_builddir=$ac_pwd
+ac_abs_builddir=$ac_pwd$ac_dir_suffix
+# for backward compatibility:
+ac_top_builddir=$ac_top_build_prefix
+
+case $srcdir in
+  .)  # We are building in place.
+    ac_srcdir=.
+    ac_top_srcdir=$ac_top_builddir_sub
+    ac_abs_top_srcdir=$ac_pwd ;;
+  [\\/]* | ?:[\\/]* )  # Absolute name.
+    ac_srcdir=$srcdir$ac_dir_suffix;
+    ac_top_srcdir=$srcdir
+    ac_abs_top_srcdir=$srcdir ;;
+  *) # Relative name.
+    ac_srcdir=$ac_top_build_prefix$srcdir$ac_dir_suffix
+    ac_top_srcdir=$ac_top_build_prefix$srcdir
+    ac_abs_top_srcdir=$ac_pwd/$srcdir ;;
+esac
+ac_abs_srcdir=$ac_abs_top_srcdir$ac_dir_suffix
+
+
+    cd "$ac_dir"
+
+    # Check for guested configure; otherwise get Cygnus style configure.
+    if test -f "$ac_srcdir/configure.gnu"; then
+      ac_sub_configure=$ac_srcdir/configure.gnu
+    elif test -f "$ac_srcdir/configure"; then
+      ac_sub_configure=$ac_srcdir/configure
+    elif test -f "$ac_srcdir/configure.in"; then
+      # This should be Cygnus configure.
+      ac_sub_configure=$ac_aux_dir/configure
+    else
+      { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: no configuration information is in $ac_dir" >&5
+$as_echo "$as_me: WARNING: no configuration information is in $ac_dir" >&2;}
+      ac_sub_configure=
+    fi
+
+    # The recursion is here.
+    if test -n "$ac_sub_configure"; then
+      # Make the cache file name correct relative to the subdirectory.
+      case $cache_file in
+      [\\/]* | ?:[\\/]* ) ac_sub_cache_file=$cache_file ;;
+      *) # Relative name.
+	ac_sub_cache_file=$ac_top_build_prefix$cache_file ;;
+      esac
+
+      { $as_echo "$as_me:${as_lineno-$LINENO}: running $SHELL $ac_sub_configure $ac_sub_configure_args --cache-file=$ac_sub_cache_file --srcdir=$ac_srcdir" >&5
+$as_echo "$as_me: running $SHELL $ac_sub_configure $ac_sub_configure_args --cache-file=$ac_sub_cache_file --srcdir=$ac_srcdir" >&6;}
+      # The eval makes quoting arguments work.
+      eval "\$SHELL \"\$ac_sub_configure\" $ac_sub_configure_args \
+	   --cache-file=\"\$ac_sub_cache_file\" --srcdir=\"\$ac_srcdir\"" ||
+	as_fn_error "$ac_sub_configure failed for $ac_dir" "$LINENO" 5
+    fi
+
+    cd "$ac_popdir"
+  done
+fi
 if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
   { $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unrecognized options: $ac_unrecognized_opts" >&5
 $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
-
 

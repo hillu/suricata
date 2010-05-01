@@ -8,7 +8,10 @@
 #include "suricata-common.h"
 #include "stream-tcp.h"
 #include "util-unittest.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "detect-ttl.h"
 #include "util-debug.h"
 
@@ -22,7 +25,7 @@ static pcre_extra *parse_regex_study;
 
 /*prototypes*/
 int DetectTtlMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectTtlSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectTtlSetup (DetectEngineCtx *, Signature *, char *);
 void DetectTtlFree (void *);
 void DetectTtlRegisterTests (void);
 
@@ -43,20 +46,20 @@ void DetectTtlRegister(void) {
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if (parse_regex == NULL) {
-        SCLogDebug("pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
 
 error:
-    if (parse_regex != NULL) free(parse_regex);
-    if (parse_regex_study != NULL) free(parse_regex_study);
+    if (parse_regex != NULL) SCFree(parse_regex);
+    if (parse_regex_study != NULL) SCFree(parse_regex_study);
     return;
 }
 
@@ -119,14 +122,14 @@ DetectTtlData *DetectTtlParse (char *ttlstr) {
 
     ret = pcre_exec(parse_regex, parse_regex_study, ttlstr, strlen(ttlstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 2 || ret > 4) {
-        SCLogDebug("DetectTtlSetup: parse error, ret %" PRId32 "", ret);
+        SCLogError(SC_ERR_PCRE_MATCH, "parse error, ret %" PRId32 "", ret);
         goto error;
     }
     const char *str_ptr;
 
     res = pcre_get_substring((char *) ttlstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectTtlSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     arg1 = (char *) str_ptr;
@@ -134,7 +137,7 @@ DetectTtlData *DetectTtlParse (char *ttlstr) {
 
     res = pcre_get_substring((char *) ttlstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectTtlSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     arg2 = (char *) str_ptr;
@@ -142,15 +145,15 @@ DetectTtlData *DetectTtlParse (char *ttlstr) {
 
     res = pcre_get_substring((char *) ttlstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectTtlSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     arg3 = (char *) str_ptr;
     SCLogDebug("Arg3 \"%s\"", arg3);
 
-    ttld = malloc(sizeof (DetectTtlData));
+    ttld = SCMalloc(sizeof (DetectTtlData));
     if (ttld == NULL) {
-        SCLogDebug("DetectTtlSetup malloc failed");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
     ttld->ttl1 = 0;
@@ -199,16 +202,16 @@ DetectTtlData *DetectTtlParse (char *ttlstr) {
             break;
     }
 
-    free(arg1);
-    free(arg2);
-    free(arg3);
+    SCFree(arg1);
+    SCFree(arg2);
+    SCFree(arg3);
     return ttld;
 
 error:
-    if (ttld) free(ttld);
-    if (arg1) free(arg1);
-    if (arg2) free(arg2);
-    if (arg3) free(arg3);
+    if (ttld) SCFree(ttld);
+    if (arg1) SCFree(arg1);
+    if (arg2) SCFree(arg2);
+    if (arg3) SCFree(arg3);
     return NULL;
 }
 
@@ -217,13 +220,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param ttlstr pointer to the user provided ttl options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *ttlstr) {
+static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, char *ttlstr) {
 
     DetectTtlData *ttld = NULL;
     SigMatch *sm = NULL;
@@ -239,13 +241,13 @@ int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *tt
     sm->type = DETECT_TTL;
     sm->ctx = (void *)ttld;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
     if (ttld != NULL) DetectTtlFree(ttld);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 }
 
@@ -256,7 +258,7 @@ error:
  */
 void DetectTtlFree(void *ptr) {
     DetectTtlData *ttld = (DetectTtlData *)ptr;
-    free(ttld);
+    SCFree(ttld);
 }
 
 #ifdef UNITTESTS
@@ -410,7 +412,7 @@ static int DetectTtlParseTest06 (void) {
     ttld = DetectTtlParse(" 1 = 2 ");
     if (ttld == NULL)
         res = 1;
-    if (ttld) free(ttld);
+    if (ttld) SCFree(ttld);
 
     return res;
 }
@@ -428,7 +430,7 @@ static int DetectTtlParseTest07 (void) {
     if (ttld == NULL)
         res = 1;
 
-    if (ttld) free(ttld);
+    if (ttld) SCFree(ttld);
 
     return res;
 }
@@ -461,7 +463,7 @@ static int DetectTtlSetpTest01(void) {
     }
 
 cleanup:
-    if (ttld) free(ttld);
+    if (ttld) SCFree(ttld);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);

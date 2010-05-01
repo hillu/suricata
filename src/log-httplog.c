@@ -20,52 +20,64 @@
 
 #include "util-debug.h"
 
+#include "output.h"
+#include "log-httplog.h"
+#include "app-layer-htp.h"
+#include <htp/dslib.h>
+#include "app-layer.h"
+
 #define DEFAULT_LOG_FILENAME "http.log"
 
-TmEcode LogHttplog (ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode LogHttplogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode LogHttplogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode LogHttplogThreadInit(ThreadVars *, void *, void **);
-TmEcode LogHttplogThreadDeinit(ThreadVars *, void *);
-void LogHttplogExitPrintStats(ThreadVars *, void *);
-int LogHttplogOpenFileCtx(LogFileCtx* , char *);
+#define MODULE_NAME "LogHttpLog"
 
-void TmModuleLogHttplogRegister (void) {
-    tmm_modules[TMM_LOGHTTPLOG].name = "LogHttplog";
-    tmm_modules[TMM_LOGHTTPLOG].ThreadInit = LogHttplogThreadInit;
-    tmm_modules[TMM_LOGHTTPLOG].Func = LogHttplog;
-    tmm_modules[TMM_LOGHTTPLOG].ThreadExitPrintStats = LogHttplogExitPrintStats;
-    tmm_modules[TMM_LOGHTTPLOG].ThreadDeinit = LogHttplogThreadDeinit;
+TmEcode LogHttpLog (ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode LogHttpLogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode LogHttpLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode LogHttpLogThreadInit(ThreadVars *, void *, void **);
+TmEcode LogHttpLogThreadDeinit(ThreadVars *, void *);
+void LogHttpLogExitPrintStats(ThreadVars *, void *);
+int LogHttpLogOpenFileCtx(LogFileCtx* , const char *);
+static void LogHttpLogDeInitCtx(OutputCtx *);
+
+void TmModuleLogHttpLogRegister (void) {
+    tmm_modules[TMM_LOGHTTPLOG].name = MODULE_NAME;
+    tmm_modules[TMM_LOGHTTPLOG].ThreadInit = LogHttpLogThreadInit;
+    tmm_modules[TMM_LOGHTTPLOG].Func = LogHttpLog;
+    tmm_modules[TMM_LOGHTTPLOG].ThreadExitPrintStats = LogHttpLogExitPrintStats;
+    tmm_modules[TMM_LOGHTTPLOG].ThreadDeinit = LogHttpLogThreadDeinit;
     tmm_modules[TMM_LOGHTTPLOG].RegisterTests = NULL;
+
+    OutputRegisterModule(MODULE_NAME, "http-log", LogHttpLogInitCtx);
 }
 
-void TmModuleLogHttplogIPv4Register (void) {
-    tmm_modules[TMM_LOGHTTPLOG4].name = "LogHttplogIPv4";
-    tmm_modules[TMM_LOGHTTPLOG4].ThreadInit = LogHttplogThreadInit;
-    tmm_modules[TMM_LOGHTTPLOG4].Func = LogHttplogIPv4;
-    tmm_modules[TMM_LOGHTTPLOG4].ThreadExitPrintStats = LogHttplogExitPrintStats;
-    tmm_modules[TMM_LOGHTTPLOG4].ThreadDeinit = LogHttplogThreadDeinit;
+void TmModuleLogHttpLogIPv4Register (void) {
+    tmm_modules[TMM_LOGHTTPLOG4].name = "LogHttpLogIPv4";
+    tmm_modules[TMM_LOGHTTPLOG4].ThreadInit = LogHttpLogThreadInit;
+    tmm_modules[TMM_LOGHTTPLOG4].Func = LogHttpLogIPv4;
+    tmm_modules[TMM_LOGHTTPLOG4].ThreadExitPrintStats = LogHttpLogExitPrintStats;
+    tmm_modules[TMM_LOGHTTPLOG4].ThreadDeinit = LogHttpLogThreadDeinit;
     tmm_modules[TMM_LOGHTTPLOG4].RegisterTests = NULL;
 }
 
-void TmModuleLogHttplogIPv6Register (void) {
-    tmm_modules[TMM_LOGHTTPLOG6].name = "LogHttplogIPv6";
-    tmm_modules[TMM_LOGHTTPLOG6].ThreadInit = LogHttplogThreadInit;
-    tmm_modules[TMM_LOGHTTPLOG6].Func = LogHttplogIPv6;
-    tmm_modules[TMM_LOGHTTPLOG6].ThreadExitPrintStats = LogHttplogExitPrintStats;
-    tmm_modules[TMM_LOGHTTPLOG6].ThreadDeinit = LogHttplogThreadDeinit;
+void TmModuleLogHttpLogIPv6Register (void) {
+    tmm_modules[TMM_LOGHTTPLOG6].name = "LogHttpLogIPv6";
+    tmm_modules[TMM_LOGHTTPLOG6].ThreadInit = LogHttpLogThreadInit;
+    tmm_modules[TMM_LOGHTTPLOG6].Func = LogHttpLogIPv6;
+    tmm_modules[TMM_LOGHTTPLOG6].ThreadExitPrintStats = LogHttpLogExitPrintStats;
+    tmm_modules[TMM_LOGHTTPLOG6].ThreadDeinit = LogHttpLogThreadDeinit;
     tmm_modules[TMM_LOGHTTPLOG6].RegisterTests = NULL;
 }
 
-typedef struct LogHttplogThread_ {
+typedef struct LogHttpLogThread_ {
     LogFileCtx *file_ctx;
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */
     uint32_t uri_cnt;
-} LogHttplogThread;
+} LogHttpLogThread;
 
 static void CreateTimeString (const struct timeval *ts, char *str, size_t size) {
     time_t time = ts->tv_sec;
-    struct tm *t = gmtime(&time);
+    struct tm local_tm;
+    struct tm *t = gmtime_r(&time, &local_tm);
     uint32_t sec = ts->tv_sec % 86400;
 
     snprintf(str, size, "%02d/%02d/%02d-%02d:%02d:%02d.%06u",
@@ -74,143 +86,283 @@ static void CreateTimeString (const struct timeval *ts, char *str, size_t size) 
         (uint32_t) ts->tv_usec);
 }
 
-TmEcode LogHttplogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    LogHttplogThread *aft = (LogHttplogThread *)data;
-    int i;
+    SCEnter();
+    LogHttpLogThread *aft = (LogHttpLogThread *)data;
     char timebuf[64];
+    size_t idx = 0;
 
-    /* XXX add a better check for this */
-    if (p->http_uri.cnt == 0)
-        return TM_ECODE_OK;
+    /* no flow, no htp state */
+    if (p->flow == NULL) {
+        SCReturnInt(TM_ECODE_OK);
+    }
 
-    PktVar *pv_hn = PktVarGet(p, "http_host");
-    PktVar *pv_ua = PktVarGet(p, "http_ua");
+    /* check if we have HTTP state or not */
+    SCMutexLock(&p->flow->m);
+    uint16_t proto = AppLayerGetProtoFromPacket(p);
+    if (proto != ALPROTO_HTTP)
+        goto end;
+
+    HtpState *htp_state = (HtpState *)AppLayerGetProtoStateFromPacket(p);
+    if (htp_state == NULL) {
+        SCLogDebug("no http state, so no request logging");
+        goto end;
+    }
+
+    if (htp_state->connp == NULL)
+        goto end;
+
+    if (!(htp_state->flags & HTP_FLAG_NEW_REQUEST)) {
+        SCLogDebug("no new http request , so no request logging");
+        goto end;
+    }
+    htp_tx_t *tx = NULL;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     char srcip[16], dstip[16];
-    inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
-    inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+    Port sp;
+    Port dp;
+    if ((PKT_IS_TOSERVER(p))) {
+        inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
+        inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+        sp = p->sp;
+        dp = p->dp;
+    } else {
+        inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), srcip, sizeof(srcip));
+        inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), dstip, sizeof(dstip));
+        sp = p->dp;
+        dp = p->sp;
+    }
 
     SCMutexLock(&aft->file_ctx->fp_mutex);
-    for (i = 0; i < p->http_uri.cnt; i++) {
+    for (idx = htp_state->new_in_tx_index;
+         idx < list_size(htp_state->connp->conn->transactions); idx++)
+    {
+        tx = list_get(htp_state->connp->conn->transactions, idx);
+        if (tx == NULL) {
+            SCLogDebug("tx is NULL not logging !!");
+            continue;
+        }
+
+        SCLogDebug("got a HTTP request and now logging !!");
         /* time */
         fprintf(aft->file_ctx->fp, "%s ", timebuf);
+
         /* hostname */
-        if (pv_hn != NULL) PrintRawUriFp(aft->file_ctx->fp, pv_hn->value, pv_hn->value_len);
-        else fprintf(aft->file_ctx->fp, "<hostname unknown>");
+        if (tx->parsed_uri != NULL &&
+                tx->parsed_uri->hostname != NULL)
+        {
+            PrintRawUriFp(aft->file_ctx->fp,
+                    (uint8_t *)bstr_ptr(tx->parsed_uri->hostname),
+                    bstr_len(tx->parsed_uri->hostname));
+        } else {
+            fprintf(aft->file_ctx->fp, "<hostname unknown>");
+        }
         fprintf(aft->file_ctx->fp, " [**] ");
+
         /* uri */
-        PrintRawUriFp(aft->file_ctx->fp, p->http_uri.raw[i], p->http_uri.raw_size[i]);
+        if (tx->request_uri != NULL) {
+            PrintRawUriFp(aft->file_ctx->fp,
+                            (uint8_t *)bstr_ptr(tx->request_uri),
+                            bstr_len(tx->request_uri));
+        }
         fprintf(aft->file_ctx->fp, " [**] ");
+
         /* user agent */
-        if (pv_ua != NULL) PrintRawUriFp(aft->file_ctx->fp, pv_ua->value, pv_ua->value_len);
-        else fprintf(aft->file_ctx->fp, "<useragent unknown>");
+        htp_header_t *h_user_agent = table_getc(tx->request_headers, "user-agent");
+        if (h_user_agent != NULL) {
+            PrintRawUriFp(aft->file_ctx->fp,
+                            (uint8_t *)bstr_ptr(h_user_agent->value),
+                            bstr_len(h_user_agent->value));
+        } else {
+            fprintf(aft->file_ctx->fp, "<useragent unknown>");
+        }
+
         /* ip/tcp header info */
-        fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n", srcip, p->sp, dstip, p->dp);
+        fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
+                srcip, sp, dstip, dp);
+
+        aft->uri_cnt ++;
     }
     fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
-    aft->uri_cnt += p->http_uri.cnt;
-    return TM_ECODE_OK;
+    htp_state->flags &= ~HTP_FLAG_NEW_REQUEST;
+end:
+    SCMutexUnlock(&p->flow->m);
+    SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogHttplogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    LogHttplogThread *aft = (LogHttplogThread *)data;
-    int i;
+    SCEnter();
+    LogHttpLogThread *aft = (LogHttpLogThread *)data;
     char timebuf[64];
+    size_t idx = 0;
 
-    /* XXX add a better check for this */
-    if (p->http_uri.cnt == 0)
-        return TM_ECODE_OK;
+    /* no flow, no htp state */
+    if (p->flow == NULL) {
+        SCReturnInt(TM_ECODE_OK);
+    }
 
-    PktVar *pv_hn = PktVarGet(p, "http_host");
-    PktVar *pv_ua = PktVarGet(p, "http_ua");
+    /* check if we have HTTP state or not */
+    SCMutexLock(&p->flow->m);
+    uint16_t proto = AppLayerGetProtoFromPacket(p);
+    if (proto != ALPROTO_HTTP)
+        goto end;
+
+    HtpState *htp_state = (HtpState *)AppLayerGetProtoStateFromPacket(p);
+    if (htp_state == NULL) {
+        SCLogDebug("no http state, so no request logging");
+        goto end;
+    }
+
+    if (htp_state->connp == NULL)
+        goto end;
+
+    if (!(htp_state->flags & HTP_FLAG_NEW_REQUEST)) {
+        SCLogDebug("no new http request , so no request logging");
+        goto end;
+    }
+    htp_tx_t *tx = NULL;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     char srcip[46], dstip[46];
-    inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
-    inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+    Port sp;
+    Port dp;
 
+    if ((PKT_IS_TOSERVER(p))) {
+        inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
+        inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+        sp = p->sp;
+        dp = p->dp;
+    } else {
+        inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
+        inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+        sp = p->dp;
+        dp = p->sp;
+    }
     SCMutexLock(&aft->file_ctx->fp_mutex);
-    for (i = 0; i < p->http_uri.cnt; i++) {
+    for (idx = htp_state->new_in_tx_index;
+         idx < list_size(htp_state->connp->conn->transactions); idx++)
+    {
+        tx = list_get(htp_state->connp->conn->transactions, idx);
+        if (tx == NULL) {
+            SCLogDebug("tx is NULL not logging !!");
+            continue;
+        }
+
+        SCLogDebug("got a HTTP request and now logging !!");
         /* time */
         fprintf(aft->file_ctx->fp, "%s ", timebuf);
+
         /* hostname */
-        if (pv_hn != NULL) PrintRawUriFp(aft->file_ctx->fp, pv_hn->value, pv_hn->value_len);
-        else fprintf(aft->file_ctx->fp, "<hostname unknown>");
+        if (tx->parsed_uri != NULL &&
+                tx->parsed_uri->hostname != NULL)
+        {
+            PrintRawUriFp(aft->file_ctx->fp,
+                    (uint8_t *)bstr_ptr(tx->parsed_uri->hostname),
+                    bstr_len(tx->parsed_uri->hostname));
+        } else {
+            fprintf(aft->file_ctx->fp, "<hostname unknown>");
+        }
         fprintf(aft->file_ctx->fp, " [**] ");
+
         /* uri */
-        PrintRawUriFp(aft->file_ctx->fp, p->http_uri.raw[i], p->http_uri.raw_size[i]);
+        if (tx->request_uri != NULL) {
+            PrintRawUriFp(aft->file_ctx->fp,
+                            (uint8_t *)bstr_ptr(tx->request_uri),
+                            bstr_len(tx->request_uri));
+        }
         fprintf(aft->file_ctx->fp, " [**] ");
+
         /* user agent */
-        if (pv_ua != NULL) PrintRawUriFp(aft->file_ctx->fp, pv_ua->value, pv_ua->value_len);
-        else fprintf(aft->file_ctx->fp, "<useragent unknown>");
+        htp_header_t *h_user_agent = table_getc(tx->request_headers, "user-agent");
+        if (h_user_agent != NULL) {
+            PrintRawUriFp(aft->file_ctx->fp,
+                            (uint8_t *)bstr_ptr(h_user_agent->value),
+                            bstr_len(h_user_agent->value));
+        } else {
+            fprintf(aft->file_ctx->fp, "<useragent unknown>");
+        }
+
         /* ip/tcp header info */
-        fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n", srcip, p->sp, dstip, p->dp);
+        fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
+                srcip, sp, dstip, dp);
+
+        aft->uri_cnt++;
     }
     fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
-    aft->uri_cnt += p->http_uri.cnt;
-    return TM_ECODE_OK;
+    htp_state->flags &= ~HTP_FLAG_NEW_REQUEST;
+end:
+    SCMutexUnlock(&p->flow->m);
+    SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogHttplog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
-    if (!(PKT_IS_TCP(p)))
-        return TM_ECODE_OK;
+    SCEnter();
 
-    if (PKT_IS_IPV4(p)) {
-        return LogHttplogIPv4(tv, p, data, pq);
-    } else if (PKT_IS_IPV6(p)) {
-        return LogHttplogIPv6(tv, p, data, pq);
+    /* no flow, no htp state */
+    if (p->flow == NULL) {
+        SCReturnInt(TM_ECODE_OK);
     }
 
-    return TM_ECODE_OK;
+    if (!(PKT_IS_TCP(p))) {
+        SCReturnInt(TM_ECODE_OK);
+    }
+
+    if (PKT_IS_IPV4(p)) {
+        SCReturnInt(LogHttpLogIPv4(tv, p, data, pq));
+    } else if (PKT_IS_IPV6(p)) {
+        SCReturnInt(LogHttpLogIPv6(tv, p, data, pq));
+    }
+
+    SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogHttplogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode LogHttpLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    LogHttplogThread *aft = malloc(sizeof(LogHttplogThread));
+    LogHttpLogThread *aft = SCMalloc(sizeof(LogHttpLogThread));
     if (aft == NULL) {
         return TM_ECODE_FAILED;
     }
-    memset(aft, 0, sizeof(LogHttplogThread));
+    memset(aft, 0, sizeof(LogHttpLogThread));
 
     if(initdata == NULL)
     {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC_ERROR, "Error getting context for "
-                   "HTTPLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for HTTPLog.  \"initdata\" argument NULL");
+        SCFree(aft);
         return TM_ECODE_FAILED;
     }
     /** Use the Ouptut Context (file pointer and mutex) */
-    aft->file_ctx=(LogFileCtx*) initdata;
+    aft->file_ctx= ((OutputCtx *)initdata)->data;
 
     *data = (void *)aft;
     return TM_ECODE_OK;
 }
 
-TmEcode LogHttplogThreadDeinit(ThreadVars *t, void *data)
+TmEcode LogHttpLogThreadDeinit(ThreadVars *t, void *data)
 {
-    LogHttplogThread *aft = (LogHttplogThread *)data;
+    LogHttpLogThread *aft = (LogHttpLogThread *)data;
     if (aft == NULL) {
         return TM_ECODE_OK;
     }
 
     /* clear memory */
-    memset(aft, 0, sizeof(LogHttplogThread));
+    memset(aft, 0, sizeof(LogHttpLogThread));
 
-    free(aft);
+    SCFree(aft);
     return TM_ECODE_OK;
 }
 
-void LogHttplogExitPrintStats(ThreadVars *tv, void *data) {
-    LogHttplogThread *aft = (LogHttplogThread *)data;
+void LogHttpLogExitPrintStats(ThreadVars *tv, void *data) {
+    LogHttpLogThread *aft = (LogHttpLogThread *)data;
     if (aft == NULL) {
         return;
     }
@@ -218,34 +370,49 @@ void LogHttplogExitPrintStats(ThreadVars *tv, void *data) {
     SCLogInfo("(%s) HTTP requests %" PRIu32 "", tv->name, aft->uri_cnt);
 }
 
-/** \brief Create a new file_ctx from config_file (if specified)
- *  \param config_file for loading separate configs
+/** \brief Create a new http log LogFileCtx.
+ *  \param conf Pointer to ConfNode containing this loggers configuration.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-LogFileCtx *LogHttplogInitCtx(char *config_file)
+OutputCtx *LogHttpLogInitCtx(ConfNode *conf)
 {
     int ret=0;
     LogFileCtx* file_ctx=LogFileNewCtx();
 
     if(file_ctx == NULL)
     {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC_ERROR, "LogHttplogInitCtx: Couldn't "
+        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "LogHttpLogInitCtx: Couldn't "
                    "create new file_ctx");
         return NULL;
     }
 
-    /** fill the new LogFileCtx with the specific LogHttplog configuration */
-    ret=LogHttplogOpenFileCtx(file_ctx, config_file);
+    const char *filename = ConfNodeLookupChildValue(conf, "filename");
+    if (filename == NULL)
+        filename = DEFAULT_LOG_FILENAME;
+
+    /** fill the new LogFileCtx with the specific LogHttpLog configuration */
+    ret=LogHttpLogOpenFileCtx(file_ctx, filename);
 
     if(ret < 0)
         return NULL;
 
-    /** In LogHttplogOpenFileCtx the second parameter should be the configuration file to use
-    * but it's not implemented yet, so passing NULL to load the default
-    * configuration
-    */
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (output_ctx == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "Failed to allocate OutputCtx for LogHttpLog");
+        exit(EXIT_FAILURE);
+    }
+    output_ctx->data = file_ctx;
+    output_ctx->DeInit = LogHttpLogDeInitCtx;
 
-    return file_ctx;
+    return output_ctx;
+}
+
+static void LogHttpLogDeInitCtx(OutputCtx *output_ctx)
+{
+    LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
+    LogFileFreeCtx(logfile_ctx);
+    free(output_ctx);
 }
 
 /** \brief Read the config set the file pointer, open the file
@@ -253,30 +420,19 @@ LogFileCtx *LogHttplogInitCtx(char *config_file)
  *  \param config_file for loading separate configs
  *  \return -1 if failure, 0 if succesful
  * */
-int LogHttplogOpenFileCtx(LogFileCtx *file_ctx, char *config_file)
+int LogHttpLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename)
 {
-    if(config_file == NULL)
-    {
-        /** Separate config files not implemented at the moment,
-        * but it must be able to load from separate config file.
-        * Load the default configuration.
-        */
+    char log_path[PATH_MAX], *log_dir;
+    if (ConfGet("default-log-dir", &log_dir) != 1)
+        log_dir = DEFAULT_LOG_DIR;
+    snprintf(log_path, PATH_MAX, "%s/%s", log_dir, filename);
 
-        char log_path[PATH_MAX], *log_dir;
-        if (ConfGet("default-log-dir", &log_dir) != 1)
-            log_dir = DEFAULT_LOG_DIR;
-        snprintf(log_path, PATH_MAX, "%s/%s", log_dir, DEFAULT_LOG_FILENAME);
+    file_ctx->fp = fopen(log_path, "w");
 
-        file_ctx->fp = fopen(log_path, "w");
-
-        if (file_ctx->fp == NULL) {
-            SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
-                       strerror(errno));
-            return -1;
-        }
-        if(file_ctx->config_file == NULL)
-            file_ctx->config_file = strdup("configfile.lh");
-            /** Remember the config file (or NULL if not indicated) */
+    if (file_ctx->fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "ERROR: failed to open %s: %s", log_path,
+            strerror(errno));
+        return -1;
     }
 
     return 0;

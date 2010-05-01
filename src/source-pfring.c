@@ -15,6 +15,7 @@
 #include "tm-modules.h"
 #include "tm-threads.h"
 #include "source-pfring.h"
+#include "util-debug.h"
 
 TmEcode ReceivePfring(ThreadVars *, Packet *, void *, PacketQueue *);
 TmEcode ReceivePfringThreadInit(ThreadVars *, void *, void **);
@@ -23,6 +24,8 @@ TmEcode ReceivePfringThreadDeinit(ThreadVars *, void *);
 
 TmEcode DecodePfringThreadInit(ThreadVars *, void *, void **);
 TmEcode DecodePfring(ThreadVars *, Packet *, void *, PacketQueue *);
+
+extern int max_pending_packets;
 
 #ifndef HAVE_PFRING
 
@@ -55,8 +58,8 @@ void TmModuleDecodePfringRegister (void) {
  */
 TmEcode NoPfringSupportExit(ThreadVars *tv, void *initdata, void **data)
 {
-    printf("Error creating thread %s: you do not have support for pfring "
-           "enabled please recompile with --enable-pfring\n", tv->name);
+    SCLogError(SC_ERR_NO_PF_RING,"Error creating thread %s: you do not have support for pfring "
+               "enabled please recompile with --enable-pfring", tv->name);
     exit(EXIT_FAILURE);
 }
 
@@ -72,11 +75,13 @@ typedef struct PfringThreadVars_
 
     uint8_t cluster_id;
     char *interface;
-
     /* counters */
     uint32_t pkts;
     uint64_t bytes;
-    //uint32_t errs;
+
+#ifdef HAVE_PFRING_CLUSTER_TYPE
+    cluster_type ctype;
+#endif /* HAVE_PFRING_CLUSTER_TYPE */
 
     ThreadVars *tv;
 } PfringThreadVars;
@@ -125,6 +130,13 @@ void PfringProcessPacket(void *user, struct pfring_pkthdr *h, u_char *pkt, Packe
     //TmqDebugList();
     //printf("PfringProcessPacket: pending %" PRIu32 "\n", pending);
 
+    /* We need this otherwise the other queues can't seem to keep up on busy networks */
+    SCMutexLock(&mutex_pending);
+    if (pending > max_pending_packets) {
+        SCondWait(&cond_pending, &mutex_pending);
+    }
+    SCMutexUnlock(&mutex_pending);
+
     p->ts.tv_sec = h->ts.tv_sec;
     p->ts.tv_usec = h->ts.tv_usec;
 
@@ -159,7 +171,7 @@ TmEcode ReceivePfring(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
     int r;
 
     if (TmThreadsCheckFlag(tv, THV_KILL) || TmThreadsCheckFlag(tv, THV_PAUSE)) {
-        printf("ReceivePfring: interrupted.\n");
+        SCLogInfo("interrupted.");
         return TM_ECODE_OK;
     }
 
@@ -170,7 +182,7 @@ TmEcode ReceivePfring(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
         //        hdr.parsed_pkt.ipv4_src,hdr.parsed_pkt.l4_src_port, hdr.parsed_pkt.ipv4_dst,hdr.parsed_pkt.l4_dst_port);
         PfringProcessPacket(ptv, &hdr, buffer,p);
     }else{
-        printf("RecievePfring: pfring_recv error  %" PRId32 "\n", r);
+        SCLogError(SC_ERR_PF_RING_RECV,"pfring_recv error  %" PRId32 "", r);
         return TM_ECODE_FAILED;
     }
 
@@ -195,46 +207,62 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
     int rc;
     u_int32_t version;
     char *tmpclusterid;
+    char *tmpctype;
 
-    PfringThreadVars *ptv = malloc(sizeof(PfringThreadVars));
+    PfringThreadVars *ptv = SCMalloc(sizeof(PfringThreadVars));
     if (ptv == NULL) {
         return TM_ECODE_FAILED;
     }
     memset(ptv, 0, sizeof(PfringThreadVars));
 
     ptv->tv = tv;
-    if (ConfGet("pfring.clusterid", &tmpclusterid) != 1){
-        printf("could not get pfring.clusterid\n");
+    if (ConfGet("pfring.cluster-id", &tmpclusterid) != 1){
+        SCLogError(SC_ERR_PF_RING_GET_CLUSTERID_FAILED,"could not get pfring.cluster-id");
         return TM_ECODE_FAILED;
     }else{
         ptv->cluster_id = (uint8_t)atoi(tmpclusterid);
-        printf("ReceivePfringThreadInit: going to use clusterid %" PRId32 "\n", ptv->cluster_id);
+        SCLogInfo("Going to use cluster-id %" PRId32 "", ptv->cluster_id);
     }
 
     if (ConfGet("pfring.interface", &ptv->interface) != 1){
-         printf("ReceivePfringThreadInit: Could not get pfring.interface\n");
+         SCLogError(SC_ERR_PF_RING_GET_INTERFACE_FAILED,"Could not get pfring.interface");
          return TM_ECODE_FAILED;
     }else{
-         printf("ReceivePfringThreadInit: going to use interface %s\n",ptv->interface);
+         SCLogInfo("going to use interface %s",ptv->interface);
     }
 
     ptv->pd = pfring_open(ptv->interface, LIBPFRING_PROMISC, LIBPFRING_SNAPLEN, LIBPFRING_REENTRANT);
     if(ptv->pd == NULL) {
-        printf("pfring_open error\n");
+        SCLogError(SC_ERR_PF_RING_OPEN,"pfring_open error");
         return TM_ECODE_FAILED;
     } else {
         pfring_set_application_name(ptv->pd, PROG_NAME);
         pfring_version(ptv->pd, &version);
 
-        printf("Using PF_RING v.%d.%d.%d\n",
-                (version & 0xFFFF0000) >> 16,
-                (version & 0x0000FF00) >> 8,
-                version & 0x000000FF);
+        SCLogInfo("Using PF_RING v.%d.%d.%d",
+                 (version & 0xFFFF0000) >> 16,
+                 (version & 0x0000FF00) >> 8,
+                 version & 0x000000FF);
     }
 
+#ifdef HAVE_PFRING_CLUSTER_TYPE
+    if (ConfGet("pfring.cluster-type", &tmpctype) != 1) {
+        SCLogError(SC_ERR_GET_CLUSTER_TYPE_FAILED,"Could not get pfring.cluster-type");
+        return TM_ECODE_FAILED;
+    } else if (strncmp(tmpctype, "cluster_round_robin", 19) == 0 || strncmp(tmpctype, "cluster_flow", 12) == 0) {
+        SCLogInfo("pfring cluster type %s",tmpctype);
+        ptv->ctype = (cluster_type)tmpctype;
+        rc = pfring_set_cluster(ptv->pd, ptv->cluster_id, ptv->ctype);
+    } else {
+        SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
+        return TM_ECODE_FAILED;
+    }
+#else
     rc = pfring_set_cluster(ptv->pd, ptv->cluster_id);
+#endif /* HAVE_PFRING_CLUSTER_TYPE */
+
     if(rc != 0){
-        printf("pfring_set_cluster returned %d\n", rc);
+        SCLogError(SC_ERR_PF_RING_SET_CLUSTER_FAILED,"pfring_set_cluster returned %d", rc);
         return TM_ECODE_FAILED;
     }
 
@@ -249,9 +277,22 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
  */
 void ReceivePfringThreadExitStats(ThreadVars *tv, void *data) {
     PfringThreadVars *ptv = (PfringThreadVars *)data;
+    pfring_stat pfring_s;
 
-    printf(" - (%s) Packets %" PRIu32 ", bytes %" PRIu64 ".\n", tv->name, ptv->pkts, ptv->bytes);
-    return;
+    if(pfring_stats(ptv->pd, &pfring_s) < 0) {
+        SCLogError(SC_ERR_STAT,"(%s) Failed to get pfring stats", tv->name);
+        SCLogInfo("(%s) Packets %" PRIu32 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
+
+        return;
+    } else {
+        SCLogInfo("(%s) Packets %" PRIu32 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
+
+        SCLogInfo("(%s) Pfring Total:%" PRIu64 " Recv:%" PRIu64 " Drop:%" PRIu64 " (%02.1f%%).", tv->name,
+        (uint64_t)pfring_s.recv + (uint64_t)pfring_s.drop, (uint64_t)pfring_s.recv,
+        (uint64_t)pfring_s.drop, ((float)pfring_s.drop/(float)(pfring_s.drop + pfring_s.recv))*100);
+
+        return;
+    }
 }
 
 /**
@@ -314,8 +355,8 @@ TmEcode DecodePfringThreadInit(ThreadVars *tv, void *initdata, void **data)
 {
     DecodeThreadVars *dtv = NULL;
 
-    if ( (dtv = malloc(sizeof(DecodeThreadVars))) == NULL) {
-        printf("Error Allocating memory\n");
+    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,"Error Allocating memory");
         return TM_ECODE_FAILED;
     }
     memset(dtv, 0, sizeof(DecodeThreadVars));

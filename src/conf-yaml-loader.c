@@ -14,18 +14,8 @@
 #include "util-debug.h"
 #include "util-unittest.h"
 
-/* Define to print the current YAML state. */
-#undef PRINT_STATES
-#ifdef PRINT_STATES
-#define DPRINT_STATE(x) do { SCLogDebug x ; } while (0)
-#else
-#define DPRINT_STATE(x)
-#endif /* PRINT_STATES */
-
-/* Defines the maximum number of levels YAML may nest.  This is
- * primarily used for construction of lookup-keys for configuration
- * values. */
-#define MAX_LEVELS 16
+#define YAML_VERSION_MAJOR 1
+#define YAML_VERSION_MINOR 1
 
 /* Sometimes we'll have to create a node name on the fly (integer
  * conversion, etc), so this is a default length to allocate that will
@@ -36,55 +26,18 @@
 enum conf_state {
     CONF_KEY = 0,
     CONF_VAL,
-    CONF_SEQ,
 };
-
-/**
- * \brief Return the name of the current configuration key value.
- *
- * This function returns the current value of the configuration key.
- * This is all the key components joined together with a ".".
- *
- * NOTE: This function is not re-entrant safe, but we do not expect to
- * be loading configuration files concurrently.
- */
-static char *
-GetKeyName(char **key, int level)
-{
-    /* Statically allocate a string that should be large enough. */
-    static char print_key[1024];
-    int i;
-
-    print_key[0] = '\0';
-
-    for (i = 0; i <= level; i++) {
-        if (key[i] == NULL)
-            break;
-        if (strlen(key[i]) + strlen(print_key) + 2 > sizeof(print_key)) {
-            /* Overflow. */
-            return NULL;
-        }
-        else {
-            strncat(print_key, key[i], strlen(key[i]));
-            if (i < level)
-                strncat(print_key, ".", 1);
-        }
-    }
-
-    return print_key;
-}
 
 /**
  * \brief Parse a YAML layer.
  *
- * This will eventually replace ConfYamlParse but for now its just
- * used to load lists.
- *
  * \param parser A pointer to an active yaml_parser_t.
  * \param parent The parent configuration node.
+ *
+ * \retval 0 on success, -1 on failure.
  */
-static void
-ConfYamlParse2(yaml_parser_t *parser, ConfNode *parent, int inseq)
+static int
+ConfYamlParse(yaml_parser_t *parser, ConfNode *parent, int inseq)
 {
     ConfNode *node = parent;
     yaml_event_t event;
@@ -94,53 +47,99 @@ ConfYamlParse2(yaml_parser_t *parser, ConfNode *parent, int inseq)
 
     while (!done) {
         if (!yaml_parser_parse(parser, &event)) {
-            fprintf(stderr, "Failed to parse configuration file: %s\n",
-                parser->problem);
-            exit(EXIT_FAILURE);
+            fprintf(stderr,
+                "Failed to parse configuration file at line %zu: %s\n",
+                parser->problem_mark.line, parser->problem);
+            return -1;
         }
 
-        if (event.type == YAML_SCALAR_EVENT) {
+        if (event.type == YAML_DOCUMENT_START_EVENT) {
+            /* Verify YAML version - its more likely to be a valid
+             * Suricata configuration file if the version is
+             * correct. */
+            yaml_version_directive_t *ver =
+                event.data.document_start.version_directive;
+            if (ver == NULL) {
+                fprintf(stderr, "ERROR: Invalid configuration file.\n\n");
+                fprintf(stderr, "The configuration file must begin with the following two lines:\n\n");
+                fprintf(stderr, "%%YAML 1.1\n---\n\n");
+                goto fail;
+            }
+            int major = event.data.document_start.version_directive->major;
+            int minor = event.data.document_start.version_directive->minor;
+            if (!(major == YAML_VERSION_MAJOR && minor == YAML_VERSION_MINOR)) {
+                fprintf(stderr, "ERROR: Invalid YAML version.  Must be 1.1\n");
+                goto fail;
+            }
+        }
+        else if (event.type == YAML_SCALAR_EVENT) {
             char *value = (char *)event.data.scalar.value;
+            SCLogDebug("event.type = YAML_SCALAR_EVENT (%s) inseq=%d",
+                value, inseq);
             if (inseq) {
                 ConfNode *seq_node = ConfNodeNew();
-                seq_node->name = calloc(1, DEFAULT_NAME_LEN);
+                seq_node->name = SCCalloc(1, DEFAULT_NAME_LEN);
                 snprintf(seq_node->name, DEFAULT_NAME_LEN, "%d", seq_idx++);
-                seq_node->val = strdup(value);
+                seq_node->val = SCStrdup(value);
                 TAILQ_INSERT_TAIL(&parent->head, seq_node, next);
             }
             else {
                 if (state == CONF_KEY) {
-                    node = ConfNodeNew();
-                    node->name = strdup((char *)event.data.scalar.value);
-                    TAILQ_INSERT_TAIL(&parent->head, node, next);
+                    if (parent->is_seq) {
+                        if (parent->val == NULL) {
+                            parent->val = SCStrdup(value);
+                        }
+                    }
+                    ConfNode *n0 = ConfNodeLookupChild(parent, value);
+                    if (n0 != NULL) {
+                        node = n0;
+                    }
+                    else {
+                        node = ConfNodeNew();
+                        node->name = SCStrdup(value);
+                        TAILQ_INSERT_TAIL(&parent->head, node, next);
+                    }
                     state = CONF_VAL;
                 }
                 else {
-                    node->val = strdup((char *)event.data.scalar.value);
+                    if (node->allow_override) {
+                        if (node->val != NULL)
+                            SCFree(node->val);
+                        node->val = SCStrdup(value);
+                    }
                     state = CONF_KEY;
                 }
             }
         }
         else if (event.type == YAML_SEQUENCE_START_EVENT) {
-            state = CONF_SEQ;
+            SCLogDebug("event.type = YAML_SEQUENCE_START_EVENT");
+            if (ConfYamlParse(parser, node, 1) != 0)
+                goto fail;
+            state = CONF_KEY;
         }
         else if (event.type == YAML_SEQUENCE_END_EVENT) {
-            return;
+            SCLogDebug("event.type = YAML_SEQUENCE_END_EVENT");
+            return 0;
         }
         else if (event.type == YAML_MAPPING_START_EVENT) {
+            SCLogDebug("event.type = YAML_MAPPING_START_EVENT");
             if (inseq) {
                 ConfNode *seq_node = ConfNodeNew();
-                seq_node->name = calloc(1, DEFAULT_NAME_LEN);
+                seq_node->is_seq = 1;
+                seq_node->name = SCCalloc(1, DEFAULT_NAME_LEN);
                 snprintf(seq_node->name, DEFAULT_NAME_LEN, "%d", seq_idx++);
                 TAILQ_INSERT_TAIL(&node->head, seq_node, next);
-                ConfYamlParse2(parser, seq_node, 0);
+                if (ConfYamlParse(parser, seq_node, 0) != 0)
+                    goto fail;
             }
             else {
-                ConfYamlParse2(parser, node, inseq);
+                if (ConfYamlParse(parser, node, inseq) != 0)
+                    goto fail;
             }
-            state ^= CONF_VAL;
+            state = CONF_KEY;
         }
         else if (event.type == YAML_MAPPING_END_EVENT) {
+            SCLogDebug("event.type = YAML_MAPPING_END_EVENT");
             done = 1;
         }
         else if (event.type == YAML_STREAM_END_EVENT) {
@@ -148,145 +147,75 @@ ConfYamlParse2(yaml_parser_t *parser, ConfNode *parent, int inseq)
         }
 
         yaml_event_delete(&event);
-    }
-}
+        continue;
 
-/**
- * \brief Process a YAML parser.
- *
- * Loads a configuration from a setup YAML parser.
- *
- * \param parser A YAML parser setup for processing.
- */
-static void
-ConfYamlParse(yaml_parser_t *parser)
-{
-    yaml_event_t event;
-    int done;
-    int level;
-    int state;
-    int inseq;
-    char *key[MAX_LEVELS];
-
-    memset(key, 0, sizeof(key));
-
-    state = CONF_KEY;
-    done = 0;
-    level = -1;
-    inseq = 0;
-    while (!done) {
-        if (!yaml_parser_parse(parser, &event)) {
-            fprintf(stderr, "Failed to parse configuration file: %s\n",
-                parser->problem);
-            exit(EXIT_FAILURE);
-        }
-        switch (event.type) {
-        case YAML_STREAM_START_EVENT:
-            break;
-        case YAML_STREAM_END_EVENT:
-            done = 1;
-            break;
-        case YAML_DOCUMENT_START_EVENT:
-            /* Ignored. */
-            break;
-        case YAML_DOCUMENT_END_EVENT:
-            /* Ignored. */
-            break;
-        case YAML_SEQUENCE_START_EVENT: {
-            ConfNode *new;
-            new = ConfNodeNew();
-            new->name = strdup(GetKeyName(key, level));
-            ConfYamlParse2(parser, new, 1);
-            ConfSetNode(new);
-            state = CONF_KEY;
-            break;
-        }
-        case YAML_SEQUENCE_END_EVENT:
-            break;
-        case YAML_MAPPING_START_EVENT:
-            level++;
-            if (level == MAX_LEVELS) {
-                fprintf(stderr,
-                    "Reached maximum configuration nesting level.\n");
-                exit(EXIT_FAILURE);
-            }
-
-            /* Since we are entering a new mapping, state goes back to key. */
-            state = CONF_KEY;
-
-            break;
-        case YAML_MAPPING_END_EVENT:
-            if (level > -1) {
-                free(key[level]);
-                key[level] = NULL;
-            }
-            level--;
-            break;
-        case YAML_SCALAR_EVENT:
-            if (state == CONF_KEY) {
-                if (key[level] != NULL)
-                    free(key[level]);
-                key[level] = strdup((char *)event.data.scalar.value);
-
-                /* Move state to expecting a value. */
-                state = CONF_VAL;
-            }
-            else if (state == CONF_VAL) {
-                ConfSet(GetKeyName(key, level), (char *)event.data.scalar.value,
-                    1);
-                state = CONF_KEY;
-            }
-            break;
-        case YAML_ALIAS_EVENT:
-            break;
-        case YAML_NO_EVENT:
-            break;
-        }
+    fail:
         yaml_event_delete(&event);
+        return -1;
     }
+
+    return 0;
 }
 
 /**
  * \brief Load configuration from a YAML file.
+ *
+ * This function will load a configuration file.  On failure -1 will
+ * be returned and it is suggested that the program then exit.  Any
+ * errors while loading the configuration file will have already been
+ * logged.
+ *
+ * \param filename Filename of configuration file to load.
+ *
+ * \retval 0 on success, -1 on failure.
  */
-void
+int
 ConfYamlLoadFile(const char *filename)
 {
     FILE *infile;
     yaml_parser_t parser;
+    int ret;
+    ConfNode *root = ConfGetRootNode();
 
     if (yaml_parser_initialize(&parser) != 1) {
         fprintf(stderr, "Failed to initialize yaml parser.\n");
-        exit(EXIT_FAILURE);
+        return -1;
     }
 
     infile = fopen(filename, "r");
     if (infile == NULL) {
         fprintf(stderr, "Failed to open file: %s: %s\n", filename,
             strerror(errno));
-        exit(EXIT_FAILURE);
+        yaml_parser_delete(&parser);
+        return -1;
     }
     yaml_parser_set_input_file(&parser, infile);
-    ConfYamlParse(&parser);
+    ret = ConfYamlParse(&parser, root, 0);
     yaml_parser_delete(&parser);
     fclose(infile);
+
+    return ret;
 }
 
 /**
  * \brief Load configuration from a YAML string.
  */
-void
+int
 ConfYamlLoadString(const char *string, size_t len)
 {
+    ConfNode *root = ConfGetRootNode();
     yaml_parser_t parser;
+    int ret;
 
     if (yaml_parser_initialize(&parser) != 1) {
         fprintf(stderr, "Failed to initialize yaml parser.\n");
         exit(EXIT_FAILURE);
     }
     yaml_parser_set_input_string(&parser, (const unsigned char *)string, len);
-    ConfYamlParse(&parser);
+    ret = ConfYamlParse(&parser, root, 0);
     yaml_parser_delete(&parser);
+
+    return ret;
 }
 
 #ifdef UNITTESTS
@@ -295,6 +224,8 @@ static int
 ConfYamlRuleFileTest(void)
 {
     char input[] = "\
+%YAML 1.1\n\
+---\n\
 rule-files:\n\
   - netbios.rules\n\
   - x11.rules\n\
@@ -302,8 +233,12 @@ rule-files:\n\
 default-log-dir: /tmp\n\
 ";
 
-    ConfNode *node;
+    ConfCreateContextBackup();
+    ConfInit();
+
     ConfYamlLoadString(input, strlen(input));
+
+    ConfNode *node;
     node = ConfGetNode("rule-files");
     if (node == NULL)
         return 0;
@@ -326,6 +261,9 @@ default-log-dir: /tmp\n\
         i++;
     }
 
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
     return 1;
 }
 
@@ -333,6 +271,8 @@ static int
 ConfYamlLoggingOutputTest(void)
 {
     char input[] = "\
+%YAML 1.1\n\
+---\n\
 logging:\n\
   output:\n\
     - interface: console\n\
@@ -341,6 +281,9 @@ logging:\n\
       facility: local4\n\
       log-level: info\n\
 ";
+
+    ConfCreateContextBackup();
+    ConfInit();
 
     ConfYamlLoadString(input, strlen(input));
 
@@ -393,6 +336,119 @@ logging:\n\
     if (strcmp(output_param->val, "info") != 0)
         return 0;
 
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return 1;
+}
+
+/**
+ * Try to load something that is not a valid YAML file.
+ */
+static int
+ConfYamlNonYamlFileTest(void)
+{
+    ConfCreateContextBackup();
+    ConfInit();
+
+    if (ConfYamlLoadFile("/etc/passwd") != -1)
+        return 0;
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return 1;
+}
+
+static int
+ConfYamlBadYamlVersionTest(void)
+{
+    char input[] = "\
+%YAML 9.9\n\
+---\n\
+logging:\n\
+  output:\n\
+    - interface: console\n\
+      log-level: error\n\
+    - interface: syslog\n\
+      facility: local4\n\
+      log-level: info\n\
+";
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    if (ConfYamlLoadString(input, strlen(input)) != -1)
+        return 0;
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return 1;
+}
+
+static int
+ConfYamlSecondLevelSequenceTest(void)
+{
+    char input[] = "\
+%YAML 1.1\n\
+---\n\
+libhtp:\n\
+  server-config:\n\
+    - apache-php:\n\
+        address: [\"192.168.1.0/24\"]\n\
+        personality: [\"Apache_2_2\", \"PHP_5_3\"]\n\
+        path-parsing: [\"compress_separators\", \"lowercase\"]\n\
+    - iis-php:\n\
+        address:\n\
+          - 192.168.0.0/24\n\
+\n\
+        personality:\n\
+          - IIS_7_0\n\
+          - PHP_5_3\n\
+\n\
+        path-parsing:\n\
+          - compress_separators\n\
+";
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    if (ConfYamlLoadString(input, strlen(input)) != 0)
+        return 0;
+
+    ConfNode *outputs;
+    outputs = ConfGetNode("libhtp.server-config");
+    if (outputs == NULL)
+        return 0;
+
+    ConfNode *node;
+
+    node = TAILQ_FIRST(&outputs->head);
+    if (node == NULL)
+        return 0;
+    if (strcmp(node->name, "0") != 0)
+        return 0;
+    node = TAILQ_FIRST(&node->head);
+    if (node == NULL)
+        return 0;
+    if (strcmp(node->name, "apache-php") != 0)
+        return 0;
+
+    node = ConfNodeLookupChild(node, "address");
+    if (node == NULL)
+        return 0;
+    node = TAILQ_FIRST(&node->head);
+    if (node == NULL)
+        return 0;
+    if (strcmp(node->name, "0") != 0)
+        return 0;
+    if (strcmp(node->val, "192.168.1.0/24") != 0)
+        return 0;
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
     return 1;
 }
 
@@ -404,5 +460,9 @@ ConfYamlRegisterTests(void)
 #ifdef UNITTESTS
     UtRegisterTest("ConfYamlRuleFileTest", ConfYamlRuleFileTest, 1);
     UtRegisterTest("ConfYamlLoggingOutputTest", ConfYamlLoggingOutputTest, 1);
+    UtRegisterTest("ConfYamlNonYamlFileTest", ConfYamlNonYamlFileTest, 1);
+    UtRegisterTest("ConfYamlBadYamlVersionTest", ConfYamlBadYamlVersionTest, 1);
+    UtRegisterTest("ConfYamlSecondLevelSequenceTest",
+        ConfYamlSecondLevelSequenceTest, 1);
 #endif /* UNITTESTS */
 }

@@ -12,6 +12,7 @@
 #include "util-unittest.h"
 #include "util-error.h"
 #include "util-debug.h"
+#include "util-fmemopen.h"
 
 /* Regex to parse the classtype argument from a Signature.  The first substring
  * holds the classtype name, the second substring holds the classtype the
@@ -76,7 +77,7 @@ static inline int SCClassConfInitContext(DetectEngineCtx *de_ctx)
                                           SCClassConfClasstypeHashCompareFunc,
                                           SCClassConfClasstypeHashFree);
     if (de_ctx->class_conf_ht == NULL) {
-        SCLogError(SC_ERR_HASH_TABLE_INIT_FAILED, "Error initializing the hash "
+        SCLogError(SC_ERR_HASH_TABLE_INIT, "Error initializing the hash "
                    "table");
         return -1;
     }
@@ -88,7 +89,7 @@ static inline int SCClassConfInitContext(DetectEngineCtx *de_ctx)
     if (fd == NULL) {
         filename = SCClassConfGetConfFilename();
         if ( (fd = fopen(filename, "r")) == NULL) {
-            SCLogError(SC_ERR_FOPEN_ERROR, "Error opening file: \"%s\": %s", filename, strerror(errno));
+            SCLogError(SC_ERR_FOPEN, "Error opening file: \"%s\": %s", filename, strerror(errno));
             goto error;
         }
     }
@@ -126,8 +127,9 @@ static inline int SCClassConfInitContext(DetectEngineCtx *de_ctx)
 /**
  * \brief Releases resources used by the Classification Config API.
  */
-static void SCClassConfDeInitContext(void)
+static void SCClassConfDeInitContext(DetectEngineCtx *de_ctx)
 {
+
     fclose(fd);
     default_file_path = SC_CLASS_CONF_DEF_CONF_FILEPATH;
     fd = NULL;
@@ -144,7 +146,7 @@ static char *SCClassConfStringToLowercase(const char *str)
     char *new_str = NULL;
     char *temp_str = NULL;
 
-    if ( (new_str = strdup(str)) == NULL) {
+    if ( (new_str = SCStrdup(str)) == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
@@ -225,11 +227,21 @@ static inline int SCClassConfAddClasstype(char *rawstr, DetectEngineCtx *de_ctx)
             SCLogDebug("HashTable Add failed");
     } else {
         SCLogDebug("Duplicate classtype found inside classification.config");
+        if (ct_new->classtype_desc) free(ct_new->classtype_desc);
+        if (ct_new->classtype) free (ct_new->classtype);
+        free(ct_new);
     }
 
+    if (ct_name) free((char *)ct_name);
+    if (ct_desc) free((char *)ct_desc);
+    if (ct_priority_str) free((char *)ct_priority_str);
     return 0;
 
  error:
+    if (ct_name) free((char *)ct_name);
+    if (ct_desc) free((char *)ct_desc);
+    if (ct_priority_str) free((char *)ct_priority_str);
+
     return -1;
 }
 
@@ -308,7 +320,7 @@ SCClassConfClasstype *SCClassConfAllocClasstype(const char *classtype,
     if (classtype == NULL)
         return NULL;
 
-    if ( (ct = malloc(sizeof(SCClassConfClasstype))) == NULL) {
+    if ( (ct = SCMalloc(sizeof(SCClassConfClasstype))) == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
@@ -320,7 +332,7 @@ SCClassConfClasstype *SCClassConfAllocClasstype(const char *classtype,
     }
 
     if (classtype_desc != NULL &&
-        (ct->classtype_desc = strdup(classtype_desc)) == NULL) {
+        (ct->classtype_desc = SCStrdup(classtype_desc)) == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
@@ -339,12 +351,12 @@ void SCClassConfDeAllocClasstype(SCClassConfClasstype *ct)
 {
     if (ct != NULL) {
         if (ct->classtype != NULL)
-            free(ct->classtype);
+            SCFree(ct->classtype);
 
         if (ct->classtype_desc != NULL)
-            free(ct->classtype_desc);
+            SCFree(ct->classtype_desc);
 
-        free(ct);
+        SCFree(ct);
     }
 
     return;
@@ -447,7 +459,7 @@ void SCClassConfLoadClassficationConfigFile(DetectEngineCtx *de_ctx)
     }
 
     SCClassConfParseFile(de_ctx);
-    SCClassConfDeInitContext();
+    SCClassConfDeInitContext(de_ctx);
 
     return;
 }
@@ -471,9 +483,9 @@ void SCClassConfGenerateValidDummyClassConfigFD01(void)
         "config classification: unknown,Unknown are we,3\n"
         "config classification: bad-unknown,We think it's bad, 2\n";
 
-    fd = fmemopen((void *)buffer, strlen(buffer), "r");
+    fd = SCFmemopen((void *)buffer, strlen(buffer), "r");
     if (fd == NULL)
-        SCLogDebug("Error with fmemopen() called by Classifiation Config test code");
+        SCLogDebug("Error with SCFmemopen() called by Classifiation Config test code");
 
     return;
 }
@@ -495,9 +507,9 @@ void SCClassConfGenerateInValidDummyClassConfigFD02(void)
         "config classification: policy-violation,Potential Corporate "
         "config classification: bamboola,Unknown Traffic,3\n";
 
-    fd = fmemopen((void *)buffer, strlen(buffer), "r");
+    fd = SCFmemopen((void *)buffer, strlen(buffer), "r");
     if (fd == NULL)
-        SCLogDebug("Error with fmemopen() called by Classifiation Config test code");
+        SCLogDebug("Error with SCFmemopen() called by Classifiation Config test code");
 
     return;
 }
@@ -516,9 +528,9 @@ void SCClassConfGenerateInValidDummyClassConfigFD03(void)
         "config classification: _badunknown,Potentially Bad Traffic, 2\n"
         "config classification: misc-activity,Misc activity,-1\n";
 
-    fd = fmemopen((void *)buffer, strlen(buffer), "r");
+    fd = SCFmemopen((void *)buffer, strlen(buffer), "r");
     if (fd == NULL)
-        SCLogDebug("Error with fmemopen() called by Classifiation Config test code");
+        SCLogDebug("Error with SCFmemopen() called by Classifiation Config test code");
 
     return;
 }

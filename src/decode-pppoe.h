@@ -13,11 +13,14 @@
 
 #define PPPOE_SESSION_HEADER_LEN 8
 #define PPPOE_DISCOVERY_HEADER_MIN_LEN 6
+#define PPPOE_SESSION_GET_VERSION(hdr) ((hdr)->pppoe_version_type & 0xF0) >> 4
+#define PPPOE_SESSION_GET_TYPE(hdr) ((hdr)->pppoe_version_type & 0x0F)
+#define PPPOE_DISCOVERY_GET_VERSION(hdr) ((hdr)->pppoe_version_type & 0xF0) >> 4
+#define PPPOE_DISCOVERY_GET_TYPE(hdr) ((hdr)->pppoe_version_type & 0x0F)
 
 typedef struct PPPOESessionHdr_
 {
-    unsigned pppoe_version : 4;
-    unsigned pppoe_type : 4;
+    uint8_t pppoe_version_type;
     uint8_t pppoe_code;
     uint16_t session_id;
     uint16_t pppoe_length;
@@ -26,14 +29,13 @@ typedef struct PPPOESessionHdr_
 
 typedef struct PPPOEDiscoveryTag_
 {
-    uint16_t  pppoe_tag_type;
-    uint16_t  pppoe_tag_length;
+    uint16_t pppoe_tag_type;
+    uint16_t pppoe_tag_length;
 } PPPOEDiscoveryTag;
 
 typedef struct PPPOEDiscoveryHdr_
 {
-    unsigned pppoe_version : 4;
-    unsigned pppoe_type : 4;
+    uint8_t pppoe_version_type;
     uint8_t pppoe_code;
     uint16_t discovery_id;
     uint16_t pppoe_length;

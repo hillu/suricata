@@ -18,7 +18,7 @@ BloomFilter *BloomFilterInit(uint32_t size, uint8_t iter, uint32_t (*Hash)(void 
     }
 
     /* setup the filter */
-    bf = malloc(sizeof(BloomFilter));
+    bf = SCMalloc(sizeof(BloomFilter));
     if (bf == NULL)
         goto error;
     memset(bf,0,sizeof(BloomFilter));
@@ -27,7 +27,7 @@ BloomFilter *BloomFilterInit(uint32_t size, uint8_t iter, uint32_t (*Hash)(void 
     bf->Hash = Hash;
 
     /* setup the bitarray */
-    bf->bitarray = malloc((bf->bitarray_size/8)+1);
+    bf->bitarray = SCMalloc((bf->bitarray_size/8)+1);
     if (bf->bitarray == NULL)
         goto error;
     memset(bf->bitarray,0,(bf->bitarray_size/8)+1);
@@ -37,9 +37,9 @@ BloomFilter *BloomFilterInit(uint32_t size, uint8_t iter, uint32_t (*Hash)(void 
 error:
     if (bf != NULL) {
         if (bf->bitarray != NULL)
-            free(bf->bitarray);
+            SCFree(bf->bitarray);
 
-        free(bf);
+        SCFree(bf);
     }
     return NULL;
 }
@@ -47,9 +47,9 @@ error:
 void BloomFilterFree(BloomFilter *bf) {
     if (bf != NULL) {
         if (bf->bitarray != NULL)
-            free(bf->bitarray);
+            SCFree(bf->bitarray);
 
-        free(bf);
+        SCFree(bf);
     }
 }
 
@@ -107,7 +107,12 @@ uint32_t BloomFilterMemorySize(BloomFilter *bf) {
      return (sizeof(BloomFilter) + (bf->bitarray_size/8) + 1);
 }
 
-static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size) {
+/*
+ * ONLY TESTS BELOW THIS COMMENT
+ */
+
+#ifdef UNITTESTS
+static uint32_t BloomFilterTestHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size) {
      uint8_t *d = (uint8_t *)data;
      uint32_t i;
      uint32_t hash = 0;
@@ -123,13 +128,8 @@ static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t h
      return hash;
 }
 
-/*
- * ONLY TESTS BELOW THIS COMMENT
- */
-
-#ifdef UNITTESTS
 static int BloomFilterTestInit01 (void) {
-    BloomFilter *bf = BloomFilterInit(1024, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(1024, 4, BloomFilterTestHash);
     if (bf == NULL)
         return 0;
 
@@ -149,11 +149,11 @@ static int BloomFilterTestInit02 (void) {
 
 static int BloomFilterTestInit03 (void) {
     int result = 0;
-    BloomFilter *bf = BloomFilterInit(1024, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(1024, 4, BloomFilterTestHash);
     if (bf == NULL)
         return 0;
 
-    if (bf->Hash == BloomHash)
+    if (bf->Hash == BloomFilterTestHash)
         result = 1;
 
     BloomFilterFree(bf);
@@ -161,7 +161,7 @@ static int BloomFilterTestInit03 (void) {
 }
 
 static int BloomFilterTestInit04 (void) {
-    BloomFilter *bf = BloomFilterInit(1024, 0, BloomHash);
+    BloomFilter *bf = BloomFilterInit(1024, 0, BloomFilterTestHash);
     if (bf == NULL)
         return 1;
 
@@ -170,7 +170,7 @@ static int BloomFilterTestInit04 (void) {
 }
 
 static int BloomFilterTestInit05 (void) {
-    BloomFilter *bf = BloomFilterInit(0, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(0, 4, BloomFilterTestHash);
     if (bf == NULL)
         return 1;
 
@@ -180,7 +180,7 @@ static int BloomFilterTestInit05 (void) {
 
 static int BloomFilterTestAdd01 (void) {
     int result = 0;
-    BloomFilter *bf = BloomFilterInit(1024, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(1024, 4, BloomFilterTestHash);
     if (bf == NULL)
         return 0;
 
@@ -197,7 +197,7 @@ end:
 
 static int BloomFilterTestAdd02 (void) {
     int result = 0;
-    BloomFilter *bf = BloomFilterInit(1024, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(1024, 4, BloomFilterTestHash);
     if (bf == NULL)
         return 0;
 
@@ -214,7 +214,7 @@ end:
 
 static int BloomFilterTestFull01 (void) {
     int result = 0;
-    BloomFilter *bf = BloomFilterInit(32, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(32, 4, BloomFilterTestHash);
     if (bf == NULL)
         goto end;
 
@@ -235,7 +235,7 @@ end:
 
 static int BloomFilterTestFull02 (void) {
     int result = 0;
-    BloomFilter *bf = BloomFilterInit(32, 4, BloomHash);
+    BloomFilter *bf = BloomFilterInit(32, 4, BloomFilterTestHash);
     if (bf == NULL)
         goto end;
 

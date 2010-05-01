@@ -10,8 +10,7 @@
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 
-
-int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *msgstr);
+static int DetectMsgSetup (DetectEngineCtx *, Signature *, char *);
 void DetectMsgRegisterTests(void);
 
 void DetectMsgRegister (void) {
@@ -22,7 +21,7 @@ void DetectMsgRegister (void) {
     sigmatch_table[DETECT_MSG].RegisterTests = DetectMsgRegisterTests;
 }
 
-int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *msgstr)
+static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
 {
     char *str = NULL;
     uint16_t len;
@@ -32,15 +31,15 @@ int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *ms
 
     /* strip "'s */
     if (msgstr[0] == '\"' && msgstr[strlen(msgstr)-1] == '\"') {
-        str = strdup(msgstr+1);
+        str = SCStrdup(msgstr+1);
         str[strlen(msgstr)-2] = '\0';
     } else if (msgstr[1] == '\"' && msgstr[strlen(msgstr)-1] == '\"') {
         /* XXX do this parsing in a better way */
-        str = strdup(msgstr+2);
+        str = SCStrdup(msgstr+2);
         str[strlen(msgstr)-3] = '\0';
         //printf("DetectMsgSetup: format hack applied: \'%s\'\n", str);
     } else {
-        printf("DetectMsgSetup: format error \'%s\'\n", msgstr);
+        SCLogError(SC_ERR_INVALID_VALUE, "format error \'%s\'", msgstr);
         goto error;
     }
 
@@ -93,17 +92,17 @@ int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *ms
         }
     }
 
-    s->msg = malloc(len + 1);
+    s->msg = SCMalloc(len + 1);
     if (s->msg == NULL)
         goto error;
 
-    strncpy(s->msg, str, len + 1);
+    strlcpy(s->msg, str, len + 1);
 
-    free(str);
+    SCFree(str);
     return 0;
 
 error:
-    free(str);
+    SCFree(str);
     return -1;
 }
 

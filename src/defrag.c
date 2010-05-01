@@ -14,6 +14,7 @@
  * \todo pool for frag packet storage
  * \todo policy bsd-right
  * \todo profile hash function
+ * \todo log anomalies
  */
 
 #include <sys/time.h>
@@ -31,12 +32,13 @@
 #include "util-debug.h"
 #include "util-fix_checksum.h"
 #include "util-random.h"
+#include "stream-tcp-private.h"
+#include "stream-tcp-reassemble.h"
+#include "util-host-os-info.h"
 
 #ifdef UNITTESTS
 #include "util-unittest.h"
 #endif
-
-#define MAX(a, b) (a > b ? a : b)
 
 #define DEFAULT_DEFRAG_HASH_SIZE 0xffff
 
@@ -58,22 +60,22 @@
 
 /** Fragment reassembly policies. */
 enum defrag_policies {
-    POLICY_FIRST = 0,
-    POLICY_LAST,
-    POLICY_BSD,
-    POLICY_BSD_RIGHT,
-    POLICY_LINUX,
-    POLICY_WINDOWS,
-    POLICY_SOLARIS,
+    DEFRAG_POLICY_FIRST = 1,
+    DEFRAG_POLICY_LAST,
+    DEFRAG_POLICY_BSD,
+    DEFRAG_POLICY_BSD_RIGHT,
+    DEFRAG_POLICY_LINUX,
+    DEFRAG_POLICY_WINDOWS,
+    DEFRAG_POLICY_SOLARIS,
 
-    POLICY_DEFAULT = POLICY_BSD,
+    DEFRAG_POLICY_DEFAULT = DEFRAG_POLICY_BSD,
 };
 
 /**
  * A context for an instance of a fragmentation re-assembler, in case
  * we ever need more than one.
  */
-typedef struct _DefragContext {
+typedef struct DefragContext_ {
     uint64_t ip4_frags; /**< Number of IPv4 fragments seen. */
     uint64_t ip6_frags; /**< Number of IPv6 fragments seen. */
 
@@ -89,13 +91,12 @@ typedef struct _DefragContext {
     time_t timeout; /**< Default timeout. */
 
     uint8_t default_policy; /**< Default policy. */
-
 } DefragContext;
 
 /**
  * Storage for an individual fragment.
  */
-typedef struct _frag {
+typedef struct Frag_ {
     DefragContext *dc; /**< The defragmentation context this frag was
                         * allocated under. */
 
@@ -108,7 +109,7 @@ typedef struct _frag {
 
     uint8_t more_frags; /**< More frags? */
 
-    uint16_t ipv6_hdr_offset; /**< Offset in the packet where the IPv6
+    uint16_t ip_hdr_offset; /**< Offset in the packet where the IP
                                * header starts. */
     uint16_t frag_hdr_offset; /**< Offset in the packet where the frag
                                * header starts. */
@@ -123,14 +124,14 @@ typedef struct _frag {
 
     int8_t skip; /**< Skip this fragment during re-assembly. */
 
-    TAILQ_ENTRY(_frag) next; /**< Pointer to next fragment for tailq. */
+    TAILQ_ENTRY(Frag_) next; /**< Pointer to next fragment for tailq. */
 } Frag;
 
 /**
  * A defragmentation tracker.  Used to track fragments that make up a
  * single packet.
  */
-typedef struct _DefragTracker {
+typedef struct DefragTracker_ {
     DefragContext *dc; /**< The defragmentation context this tracker
                         * was allocated under. */
 
@@ -138,8 +139,8 @@ typedef struct _DefragTracker {
 
     struct timeval timeout; /**< When this tracker will timeout. */
 
-    uint8_t family; /**< Address family for this tracker, AF_INET or
-                     * AF_INET6. */
+    uint8_t af; /**< Address family for this tracker, AF_INET or
+                 * AF_INET6. */
 
     uint32_t id; /**< IP ID for this tracker.  32 bits for IPv6, 16
                   * for IPv4. */
@@ -152,7 +153,7 @@ typedef struct _DefragTracker {
     SCMutex lock; /**< Mutex for locking list operations on
                            * this tracker. */
 
-    TAILQ_HEAD(frag_tailq, _frag) frags; /**< Head of list of fragments. */
+    TAILQ_HEAD(frag_tailq, Frag_) frags; /**< Head of list of fragments. */
 } DefragTracker;
 
 /** A random value used for hash key generation. */
@@ -198,13 +199,13 @@ DefragHashFunc(HashListTable *ht, void *data, uint16_t datalen)
     DefragTracker *p = (DefragTracker *)data;
     uint32_t key;
 
-    if (p->family == AF_INET) {
-        key = (defrag_hash_rand + p->family +
+    if (p->af == AF_INET) {
+        key = (defrag_hash_rand + p->af +
             p->src_addr.addr_data32[0] + p->dst_addr.addr_data32[0]) %
             defrag_hash_size;
     }
-    else if (p->family == AF_INET6) {
-        key = (defrag_hash_rand + p->family +
+    else if (p->af == AF_INET6) {
+        key = (defrag_hash_rand + p->af +
             p->src_addr.addr_data32[0] + p->src_addr.addr_data32[1] +
             p->src_addr.addr_data32[2] + p->src_addr.addr_data32[3] +
             p->dst_addr.addr_data32[0] + p->dst_addr.addr_data32[1] +
@@ -228,7 +229,7 @@ DefragHashCompare(void *a, uint16_t a_len, void *b, uint16_t b_len)
     DefragTracker *dta = (DefragTracker *)a;
     DefragTracker *dtb = (DefragTracker *)b;
 
-    if (dta->family != dtb->family)
+    if (dta->af != dtb->af)
         return 0;
     else if (dta->id != dtb->id)
         return 0;
@@ -262,7 +263,7 @@ DefragFragReset(Frag *frag)
     DefragContext *dc = frag->dc;
 
     if (frag->pkt != NULL)
-        free(frag->pkt);
+        SCFree(frag->pkt);
     memset(frag, 0, sizeof(*frag));
     frag->dc = dc;
 }
@@ -276,7 +277,7 @@ DefragFragNew(void *arg)
     DefragContext *dc = arg;
     Frag *frag;
 
-    frag = calloc(1, sizeof(*frag));
+    frag = SCCalloc(1, sizeof(*frag));
     frag->dc = dc;
 
     return (void *)frag;
@@ -289,7 +290,7 @@ static void
 DefragFragFree(void *arg)
 {
     Frag *frag = arg;
-    free(frag);
+    SCFree(frag);
 }
 
 /**
@@ -306,7 +307,7 @@ DefragTrackerFreeFrags(DefragTracker *tracker)
     while ((frag = TAILQ_FIRST(&tracker->frags)) != NULL) {
         TAILQ_REMOVE(&tracker->frags, frag, next);
 
-        /* Don't free the frag, just give it back to its pool. */
+        /* Don't SCFree the frag, just give it back to its pool. */
         DefragFragReset(frag);
         PoolReturn(frag->dc->frag_pool, frag);
     }
@@ -345,11 +346,13 @@ DefragTrackerNew(void *arg)
     DefragContext *dc = arg;
     DefragTracker *tracker;
 
-    tracker = calloc(1, sizeof(*tracker));
+    tracker = SCCalloc(1, sizeof(*tracker));
     if (tracker == NULL)
         return NULL;
-    if (SCMutexInit(&tracker->lock, NULL) != 0)
+    if (SCMutexInit(&tracker->lock, NULL) != 0) {
+        SCFree(tracker);
         return NULL;
+    }
     tracker->dc = dc;
     TAILQ_INIT(&tracker->frags);
 
@@ -367,7 +370,7 @@ DefragTrackerFree(void *arg)
 
     SCMutexDestroy(&tracker->lock);
     DefragTrackerFreeFrags(tracker);
-    free(tracker);
+    SCFree(tracker);
 }
 
 /**
@@ -381,14 +384,14 @@ DefragContextNew(void)
 {
     DefragContext *dc;
 
-    dc = calloc(1, sizeof(*dc));
+    dc = SCCalloc(1, sizeof(*dc));
     if (dc == NULL)
         return NULL;
 
     /* Initialize the hash table. */
     dc->frag_table = HashListTableInit(DEFAULT_DEFRAG_HASH_SIZE, DefragHashFunc,
         DefragHashCompare, DefragHashFree);
-    if (dc == NULL) {
+    if (dc->frag_table == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC,
             "Defrag: Failed to initialize hash table.");
         exit(EXIT_FAILURE);
@@ -412,7 +415,7 @@ DefragContextNew(void)
         exit(EXIT_FAILURE);
     }
     if (SCMutexInit(&dc->tracker_pool_lock, NULL) != 0) {
-        SCLogError(SC_ERR_MEM_ALLOC,
+        SCLogError(SC_ERR_MUTEX,
             "Defrag: Failed to initialize tracker pool mutex.");
         exit(EXIT_FAILURE);
     }
@@ -428,7 +431,7 @@ DefragContextNew(void)
         exit(EXIT_FAILURE);
     }
     if (SCMutexInit(&dc->frag_pool_lock, NULL) != 0) {
-        SCLogError(SC_ERR_MEM_ALLOC,
+        SCLogError(SC_ERR_MUTEX,
             "Defrag: Failed to initialize frag pool mutex.");
         exit(EXIT_FAILURE);
     }
@@ -440,12 +443,12 @@ DefragContextNew(void)
     }
     else {
         if (timeout < TIMEOUT_MIN) {
-            SCLogError(SC_INVALID_ARGUMENT,
+            SCLogError(SC_ERR_INVALID_ARGUMENT,
                 "defrag: Timeout less than minimum allowed value.");
             exit(EXIT_FAILURE);
         }
         else if (timeout > TIMEOUT_MAX) {
-            SCLogError(SC_INVALID_ARGUMENT,
+            SCLogError(SC_ERR_INVALID_ARGUMENT,
                 "defrag: Tiemout greater than maximum allowed value.");
             exit(EXIT_FAILURE);
         }
@@ -462,381 +465,16 @@ DefragContextNew(void)
     return dc;
 }
 
-void DefragContextDestroy(DefragContext *dc) {
+static void
+DefragContextDestroy(DefragContext *dc)
+{
     if (dc == NULL)
         return;
 
     HashListTableFree(dc->frag_table);
     PoolFree(dc->frag_pool);
     PoolFree(dc->tracker_pool);
-    free(dc);
-}
-
-/**
- * Insert a new IPv4 fragment into a tracker.
- *
- * \todo Allocate packet buffers from a pool.
- */
-static void
-Defrag4InsertFrag(DefragContext *dc, DefragTracker *tracker, Packet *p)
-{
-    Frag *frag, *prev, *new;
-    uint16_t offset = IPV4_GET_IPOFFSET(p) << 3;
-    uint16_t len = IPV4_GET_IPLEN(p);
-    uint8_t hlen = IPV4_GET_HLEN(p);
-    uint8_t more_frags = IPV4_GET_MF(p);
-    int end = offset + len - hlen;
-
-    int ltrim = 0; /* Number of bytes to trim from front of packet. */
-
-    int remove = 0; /* Will be set if we need to remove a fragment. */
-
-    int before = 0; /* Set if fragment should be inserted before
-                     * instead of after. */
-
-    /* Lock this tracker as we'll be doing list operations on it. */
-    SCMutexLock(&tracker->lock);
-
-    /* Update timeout. */
-    tracker->timeout = p->ts;
-    tracker->timeout.tv_sec += dc->timeout;
-
-    prev = NULL;
-    if (!TAILQ_EMPTY(&tracker->frags)) {
-
-        /* First compare against the last frag.  In the normal case
-         * this new fragment should fall after the last frag. */
-        frag = TAILQ_LAST(&tracker->frags, frag_tailq);
-        if (offset >= frag->offset + frag->len - frag->hlen) {
-            prev = frag;
-            goto insert;
-        }
-
-        /* Find where in the list to add this fragment. */
-        TAILQ_FOREACH(frag, &tracker->frags, next) {
-            int prev_end = frag->offset + frag->len - frag->hlen;
-            prev = frag;
-            ltrim = 0;
-
-            switch (tracker->policy) {
-            case POLICY_LAST:
-                if (offset <= frag->offset) {
-                    goto insert;
-                }
-                break;
-            case POLICY_FIRST:
-                if ((offset >= frag->offset) && (end <= prev_end)) {
-                    /* Packet is wholly contained within a previous
-                     * packet. Drop. */
-                    goto done;
-                }
-                else if (offset < frag->offset) {
-                    before = 1;
-                    goto insert;
-                }
-                else if (offset < prev_end) {
-                    ltrim = prev_end - offset;
-                    goto insert;
-                }
-            case POLICY_SOLARIS:
-                if ((offset < frag->offset) && (end >= prev_end)) {
-                    remove = 1;
-                    goto insert;
-                }
-                /* Fall-through. */
-            case POLICY_WINDOWS:
-                if (offset < frag->offset) {
-                    if (end > prev_end) {
-                        /* Starts before previous frag, and ends after
-                         * previous drop.  Drop the previous
-                         * fragment. */
-                        remove = 1;
-                    }
-                    else {
-                        /* Fill hole before previous fragment, trim
-                         * this frags length. */
-                        len = hlen + (frag->offset - offset);
-                    }
-                    goto insert;
-                }
-                else if ((offset >= frag->offset) && (end <= prev_end)) {
-                    /* New frag is completey contained within a
-                     * previous frag, drop. */
-                    goto done;
-                }
-                else if ((offset == frag->offset) && (end > prev_end)) {
-                    /* This fragment is filling a hole afte the
-                     * previous frag.  Trim the front . */
-                    ltrim = end - prev_end;
-                    goto insert;
-                }
-                /* Fall-through. */
-            case POLICY_LINUX: {
-                if (offset == frag->offset) {
-                    if (end >= prev_end) {
-                        /* Fragment starts at same offset as previous
-                         * fragment and extends past the end of the
-                         * previous fragment.  Replace it
-                         * completely. */
-                        remove = 1;
-                        goto insert;
-                    }
-                    else if (end < prev_end) {
-                        /* Fragment starts at the same offset as
-                         * previous fragment but doesn't overlap it
-                         * completely, insert it after the previous
-                         * fragment and it will take precedence on
-                         * re-assembly. */
-                        goto insert;
-                    }
-                }
-                /* Fall-through. */
-            }
-            case POLICY_BSD:
-            default:
-                if (offset < prev_end) {
-                    /* Fragment overlaps with previous fragment,
-                     * process. */
-                    if (offset >= frag->offset) {
-                        if (end <= prev_end) {
-                            /* New fragment falls completely within a
-                             * previous fragment, new fragment will be
-                             * dropped. */
-                            goto done;
-                        }
-                        else {
-                            /* New fragment extends past the end of
-                             * the previous fragment.  Trim off the
-                             * front of the new fragment that overlaps
-                             * with the previous fragment. */
-                            ltrim = prev_end - offset;
-                        }
-                    }
-                    else {
-                        /* New fragment starts before the previous
-                         * fragment and extends to the end of past the
-                         * end of the previous fragment.  Remove the
-                         * previous fragment. */
-                        remove = 1;
-                    }
-                    goto insert;
-                }
-                break;
-            }
-        }
-    }
-
-insert:
-
-    if (len - hlen - ltrim == 0) {
-        /* No data left. */
-        goto done;
-    }
-
-    /* Allocate frag and insert. */
-    SCMutexLock(&dc->frag_pool_lock);
-    new = PoolGet(dc->frag_pool);
-    SCMutexUnlock(&dc->frag_pool_lock);
-    if (new == NULL)
-        goto done;
-    new->pkt = malloc(len);
-    if (new->pkt == NULL) {
-        SCMutexLock(&dc->frag_pool_lock);
-        PoolReturn(dc->frag_pool, new);
-        SCMutexUnlock(&dc->frag_pool_lock);
-        goto done;
-    }
-    BUG_ON(ltrim > len);
-    memcpy(new->pkt, (uint8_t *)p->ip4h + ltrim, len - ltrim);
-    new->offset = offset + ltrim;
-    new->len = len - ltrim;
-    new->hlen = hlen;
-    new->more_frags = more_frags;
-
-    if (prev) {
-        if (before) {
-            TAILQ_INSERT_BEFORE(prev, new, next);
-        }
-        else {
-            TAILQ_INSERT_AFTER(&tracker->frags, prev, new, next);
-        }
-    }
-    else
-        TAILQ_INSERT_HEAD(&tracker->frags, new, next);
-
-    if (remove) {
-        TAILQ_REMOVE(&tracker->frags, prev, next);
-        DefragFragReset(prev);
-        SCMutexLock(&dc->frag_pool_lock);
-        PoolReturn(dc->frag_pool, prev);
-        SCMutexUnlock(&dc->frag_pool_lock);
-    }
-
-done:
-    SCMutexUnlock(&tracker->lock);
-}
-
-static void
-Defrag6InsertFrag(DefragContext *dc, DefragTracker *tracker, Packet *p)
-{
-    int ltrim = 0;
-
-    /* We don't multiple by 8 here as this macro returns the value
-     * unshifted, which means its already the real offset. */
-    uint16_t frag_offset = IPV6_EXTHDR_GET_FH_OFFSET(p);
-
-    /* This is the offset of the start of the data in the packet that
-     * falls after the fragmentation header. */
-    uint16_t data_offset = (uint8_t *)p->ip6eh.ip6fh + sizeof(IPV6FragHdr) -
-        p->pkt;
-
-    /* The length of the (fragmented) data.  This is the length of the
-     * data that falls after the fragmentation header. */
-    uint16_t data_len = IPV6_GET_PLEN(p) - (
-        ((uint8_t *)p->ip6eh.ip6fh + sizeof(IPV6FragHdr)) -
-            ((uint8_t *)p->ip6h + sizeof(IPV6Hdr)));
-
-    /* Where the fragment ends. */
-    uint16_t frag_end = frag_offset + data_len;
-
-    /* Offset in the packet to the IPv6 header. */
-    uint16_t ipv6_hdr_offset = (uint8_t *)p->ip6h - p->pkt;
-
-    /* Offset in the packet to the IPv6 frag header. */
-    uint16_t frag_hdr_offset = (uint8_t *)p->ip6eh.ip6fh - p->pkt;
-
-    /* Lock this tracker as we'll be doing list operations on it. */
-    SCMutexLock(&tracker->lock);
-
-    /* Update timeout. */
-    tracker->timeout = p->ts;
-    tracker->timeout.tv_sec += dc->timeout;
-
-    Frag *prev = NULL, *next;;
-    if (!TAILQ_EMPTY(&tracker->frags)) {
-        TAILQ_FOREACH(prev, &tracker->frags, next) {
-            ltrim = 0;
-            next = TAILQ_NEXT(prev, next);
-
-            switch (tracker->policy) {
-            case POLICY_BSD:
-                if (frag_offset < prev->offset + prev->data_len) {
-                    if (frag_offset >= prev->offset) {
-                        ltrim = prev->offset + prev->data_len - frag_offset;
-                    }
-                    if ((next != NULL) && (frag_end > next->offset)) {
-                        next->ltrim = frag_end - next->offset;
-                    }
-                    if ((frag_offset < prev->offset) &&
-                        (frag_end >= prev->offset + prev->data_len)) {
-                        prev->skip = 1;
-                    }
-                    goto insert;
-                }
-                break;
-            case POLICY_LINUX:
-                if (frag_offset < prev->offset + prev->data_len) {
-                    if (frag_offset > prev->offset) {
-                        ltrim = prev->offset + prev->data_len - frag_offset;
-                    }
-                    if ((next != NULL) && (frag_end > next->offset)) {
-                        next->ltrim = frag_end - next->offset;
-                    }
-                    if ((frag_offset < prev->offset) &&
-                        (frag_end >= prev->offset + prev->data_len)) {
-                        prev->skip = 1;
-                    }
-                    goto insert;
-                }
-                break;
-            case POLICY_WINDOWS:
-                if (frag_offset < prev->offset + prev->data_len) {
-                    if (frag_offset >= prev->offset) {
-                        ltrim = prev->offset + prev->data_len - frag_offset;
-                    }
-                    if ((frag_offset < prev->offset) &&
-                        (frag_end > prev->offset + prev->data_len)) {
-                        prev->skip = 1;
-                    }
-                    goto insert;
-                }
-                break;
-            case POLICY_SOLARIS:
-                if (frag_offset < prev->offset + prev->data_len) {
-                    if (frag_offset >= prev->offset) {
-                        ltrim = prev->offset + prev->data_len - frag_offset;
-                    }
-                    if ((frag_offset < prev->offset) &&
-                        (frag_end >= prev->offset + prev->data_len)) {
-                        prev->skip = 1;
-                    }
-                    goto insert;
-                }
-                break;
-            case POLICY_FIRST:
-                if ((frag_offset >= prev->offset) &&
-                    (frag_end <= prev->offset + prev->data_len))
-                    goto done;
-                if (frag_offset < prev->offset)
-                    goto insert;
-                if (frag_offset < prev->offset + prev->data_len) {
-                    ltrim = prev->offset + prev->data_len - frag_offset;
-                    goto insert;
-                }
-                break;
-            case POLICY_LAST:
-                if (frag_offset <= prev->offset) {
-                    if (frag_end > prev->offset)
-                        prev->ltrim = frag_end - prev->offset;
-                    goto insert;
-                }
-                break;
-            default:
-                break;
-            }
-        }
-    }
-insert:
-
-    if (data_len - ltrim <= 0) {
-        goto done;
-    }
-
-    /* Allocate fragment and insert. */
-    SCMutexLock(&dc->frag_pool_lock);
-    Frag *new = PoolGet(dc->frag_pool);
-    SCMutexUnlock(&dc->frag_pool_lock);
-    if (new == NULL)
-        goto done;
-    new->pkt = malloc(p->pktlen);
-    if (new->pkt == NULL) {
-        SCMutexLock(&dc->frag_pool_lock);
-        PoolReturn(dc->frag_pool, new);
-        SCMutexUnlock(&dc->frag_pool_lock);
-        goto done;
-    }
-    memcpy(new->pkt, p->pkt + ltrim, p->pktlen - ltrim);
-    new->len = p->pktlen - ltrim;
-    new->offset = frag_offset + ltrim;
-    new->data_offset = data_offset;
-    new->data_len = data_len - ltrim;
-    new->ipv6_hdr_offset = ipv6_hdr_offset;
-    new->frag_hdr_offset = frag_hdr_offset;
-
-    Frag *frag;
-    TAILQ_FOREACH(frag, &tracker->frags, next) {
-        if (frag_offset < frag->offset)
-            break;
-    }
-    if (frag == NULL) {
-        TAILQ_INSERT_TAIL(&tracker->frags, new, next);
-    }
-    else {
-        TAILQ_INSERT_BEFORE(frag, new, next);
-    }
-
-done:
-    SCMutexUnlock(&tracker->lock);
+    SCFree(dc);
 }
 
 /**
@@ -848,144 +486,11 @@ static Packet *
 Defrag4Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
     Packet *p)
 {
-    Frag *frag, *prev = NULL;
-    Packet *rp = NULL;
-    int offset = 0;
-    int hlen = 0;
-    int len = 0;
-
-    /* Lock the tracker. */
-    SCMutexLock(&tracker->lock);
-
-    /* Should not be here unless we have seen the last fragment. */
-    if (!tracker->seen_last)
-        return NULL;
-
-    /* Check that we have all the data. */
-    TAILQ_FOREACH(frag, &tracker->frags, next) {
-        if (frag == TAILQ_FIRST(&tracker->frags)) {
-            /* First frag should have an offset of 0. */
-            if (frag->offset != 0) {
-                goto done;
-            }
-            len = frag->len - frag->hlen;
-            hlen = frag->hlen;
-        }
-        else {
-            if ((frag->offset - frag->hlen) <= len) {
-                len = MAX(len, frag->offset + frag->len - frag->hlen);
-            }
-            else {
-                goto done;
-            }
-        }
-    }
-
-    /* Length (ip_len) of re-assembled packet.  The length of the IP
-     * header was added when we hit the first fragment above. */
-    len += hlen;
-
-    if (tv == NULL) {
-        /* Unit test. */
-        rp = SetupPkt();
-    }
-    else {
-        /* Not really a tunnel packet, but more of a pseudo packet.
-         * But for the most part we should get the same result. */
-        rp = TunnelPktSetup(tv, NULL, p, (uint8_t *)p->ip4h, IPV4_GET_IPLEN(p),
-            IPV4_GET_IPPROTO(p));
-    }
-
-    if (rp == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate packet for fragmentation re-assembly, dumping fragments.");
-        SCMutexLock(&dc->frag_table_lock);
-        HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
-        SCMutexUnlock(&dc->frag_table_lock);
-        DefragTrackerReset(tracker);
-        SCMutexLock(&dc->tracker_pool_lock);
-        PoolReturn(dc->tracker_pool, tracker);
-        SCMutexUnlock(&dc->tracker_pool_lock);
-        goto done;
-    }
-
-    offset = 0;
-    prev = NULL;
-
-    TAILQ_FOREACH(frag, &tracker->frags, next) {
-        if (frag->offset == 0) {
-            /* This is the first packet.  We use this packets IP
-             * header. */
-            memcpy(rp->pkt, frag->pkt, frag->len);
-            hlen = frag->hlen;
-            offset = frag->len - frag->hlen;
-        }
-        else {
-            /* Subsequent packets, copy them in minus their IP header. */
-
-            int diff = 0;
-            switch (tracker->policy) {
-            case POLICY_LAST:
-            case POLICY_FIRST:
-            case POLICY_WINDOWS:
-            case POLICY_SOLARIS:
-                memcpy(rp->pkt + hlen + frag->offset,
-                    frag->pkt + frag->hlen,
-                    frag->len - frag->hlen);
-                break;
-            case POLICY_LINUX:
-                if (frag->offset == prev->offset) {
-                    memcpy(rp->pkt + hlen + frag->offset,
-                        frag->pkt + frag->hlen,
-                        frag->len - frag->hlen);
-                    break;
-                }
-            case POLICY_BSD:
-            default:
-                if (frag->offset < offset)
-                    diff = offset - frag->offset;
-                memcpy(rp->pkt + hlen + frag->offset + diff,
-                    frag->pkt + frag->hlen + diff,
-                    frag->len - frag->hlen - diff);
-                offset = frag->offset + frag->len - frag->hlen;
-                break;
-            }
-        }
-        prev = frag;
-    }
-    rp->pktlen = hlen + offset;
-    rp->ip4h = (IPV4Hdr *)rp->pkt;
-
-    /* Checksum fixup. */
-    int old = rp->ip4h->ip_len + rp->ip4h->ip_off;
-    rp->ip4h->ip_len = htons(offset + hlen);
-    rp->ip4h->ip_off = 0;
-    rp->ip4h->ip_csum = FixChecksum(rp->ip4h->ip_csum,
-        old, rp->ip4h->ip_len + rp->ip4h->ip_off);
-
-    /* Remove the frag tracker. */
-    HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
-    DefragTrackerReset(tracker);
-    SCMutexLock(&dc->tracker_pool_lock);
-    PoolReturn(dc->tracker_pool, tracker);
-    SCMutexUnlock(&dc->tracker_pool_lock);
-
-done:
-    SCMutexUnlock(&tracker->lock);
-    return rp;
-}
-
-static Packet *
-Defrag6Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
-    Packet *p)
-{
     Packet *rp = NULL;
 
     /* Should not be here unless we have seen the last fragment. */
     if (!tracker->seen_last)
         return NULL;
-
-    /* Lock the tracker. */
-    SCMutexLock(&tracker->lock);
 
     /* Check that we have all the data. Relies on the fact that
      * fragments are inserted if frag_offset order. */
@@ -1014,7 +519,125 @@ Defrag6Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
     }
 
     /* Allocate a Packet for the reassembled packet.  On failure we
-     * free all the resources held by this tracker. */
+     * SCFree all the resources held by this tracker. */
+    if (tv == NULL) {
+        /* Unit test. */
+        rp = SetupPkt();
+    }
+    else {
+        /* Not really a tunnel packet, but more of a pseudo packet.
+         * But for the most part we should get the same result. */
+        rp = TunnelPktSetup(tv, NULL, p, (uint8_t *)p->ip4h, IPV4_GET_IPLEN(p),
+            IPV4_GET_IPPROTO(p));
+    }
+    if (rp == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate packet for fragmentation re-assembly, dumping fragments.");
+        goto remove_tracker;
+    }
+
+    int fragmentable_offset = 0;
+    int fragmentable_len = 0;
+    int hlen = 0;
+    int ip_hdr_offset = 0;
+    TAILQ_FOREACH(frag, &tracker->frags, next) {
+        if (frag->skip)
+            continue;
+        if (frag->data_len - frag->ltrim <= 0)
+            continue;
+        if (frag->offset == 0) {
+            /* This is the first packet, we use this packets link and
+             * IPv4 header. We also copy in its data. */
+            memcpy(rp->pkt, frag->pkt, frag->len);
+            rp->ip4h = (IPV4Hdr *)(rp->pkt + frag->ip_hdr_offset);
+            hlen = frag->hlen;
+            ip_hdr_offset = frag->ip_hdr_offset;
+
+            /* This is the start of the fragmentable portion of the
+             * first packet.  All fragment offsets are relative to
+             * this. */
+            fragmentable_offset = frag->ip_hdr_offset + frag->hlen;
+            fragmentable_len = frag->data_len;
+        }
+        else {
+            int pkt_end = fragmentable_offset + frag->offset + frag->data_len;
+            if (pkt_end > (int)sizeof(rp->pkt)) {
+                SCLogWarning(SC_ERR_REASSEMBLY, "Failed re-assemble fragmented packet, exceeds size of packet buffer.");
+                goto remove_tracker;
+            }
+            memcpy(rp->pkt + fragmentable_offset + frag->offset + frag->ltrim,
+                frag->pkt + frag->data_offset + frag->ltrim,
+                frag->data_len - frag->ltrim);
+            if (frag->offset + frag->data_len > fragmentable_len)
+                fragmentable_len = frag->offset + frag->data_len;
+        }
+    }
+    BUG_ON(rp->ip4h == NULL);
+
+    int old = rp->ip4h->ip_len + rp->ip4h->ip_off;
+    rp->ip4h->ip_len = htons(fragmentable_len + hlen);
+    rp->ip4h->ip_off = 0;
+    rp->ip4h->ip_csum = FixChecksum(rp->ip4h->ip_csum,
+        old, rp->ip4h->ip_len + rp->ip4h->ip_off);
+    rp->pktlen = ip_hdr_offset + hlen + fragmentable_len;
+    IPV4_CACHE_INIT(rp);
+
+remove_tracker:
+    /* Remove the frag tracker. */
+    SCMutexLock(&dc->frag_table_lock);
+    HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
+    SCMutexUnlock(&dc->frag_table_lock);
+    DefragTrackerReset(tracker);
+    SCMutexLock(&dc->tracker_pool_lock);
+    PoolReturn(dc->tracker_pool, tracker);
+    SCMutexUnlock(&dc->tracker_pool_lock);
+
+done:
+    return rp;
+}
+
+/**
+ * Attempt to re-assemble a packet.
+ *
+ * \param tracker The defragmentation tracker to reassemble from.
+ */
+static Packet *
+Defrag6Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
+    Packet *p)
+{
+    Packet *rp = NULL;
+
+    /* Should not be here unless we have seen the last fragment. */
+    if (!tracker->seen_last)
+        return NULL;
+
+    /* Check that we have all the data. Relies on the fact that
+     * fragments are inserted if frag_offset order. */
+    Frag *frag;
+    int len = 0;
+    TAILQ_FOREACH(frag, &tracker->frags, next) {
+        if (frag->skip)
+            continue;
+
+        if (frag == TAILQ_FIRST(&tracker->frags)) {
+            if (frag->offset != 0) {
+                goto done;
+            }
+            len = frag->data_len;
+        }
+        else {
+            if (frag->offset > len) {
+                /* This fragment starts after the end of the previous
+                 * fragment.  We have a hole. */
+                goto done;
+            }
+            else {
+                len += frag->data_len;
+            }
+        }
+    }
+
+    /* Allocate a Packet for the reassembled packet.  On failure we
+     * SCFree all the resources held by this tracker. */
     if (tv == NULL) {
         /* Unit test. */
         rp = SetupPkt();
@@ -1027,25 +650,23 @@ Defrag6Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
     }
     if (rp == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate packet for fragmentation re-assembly, dumping fragments.");
-        SCMutexLock(&dc->frag_table_lock);
-        HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
-        SCMutexUnlock(&dc->frag_table_lock);
-        DefragTrackerReset(tracker);
-        SCMutexLock(&dc->tracker_pool_lock);
-        PoolReturn(dc->tracker_pool, tracker);
-        SCMutexUnlock(&dc->tracker_pool_lock);
-        goto done;
+        goto remove_tracker;
     }
 
-    int payload_len = 0;
     int fragmentable_offset = 0;
-    int pktlen = 0;
+    int fragmentable_len = 0;
+    int ip_hdr_offset = 0;
+    uint8_t next_hdr = 0;
     TAILQ_FOREACH(frag, &tracker->frags, next) {
         if (frag->skip)
             continue;
         if (frag->data_len - frag->ltrim <= 0)
             continue;
         if (frag->offset == 0) {
+            IPV6FragHdr *frag_hdr = (IPV6FragHdr *)(frag->pkt +
+                frag->frag_hdr_offset);
+            next_hdr = frag_hdr->ip6fh_nxt;
+
             /* This is the first packet, we use this packets link and
              * IPv6 headers. We also copy in its data, but remove the
              * fragmentation header. */
@@ -1053,32 +674,275 @@ Defrag6Reassemble(ThreadVars *tv, DefragContext *dc, DefragTracker *tracker,
             memcpy(rp->pkt + frag->frag_hdr_offset,
                 frag->pkt + frag->frag_hdr_offset + sizeof(IPV6FragHdr),
                 frag->data_len);
-            rp->ip6h = (IPV6Hdr *)(rp->pkt + frag->ipv6_hdr_offset);
-            payload_len = ntohs(rp->ip6h->s_ip6_plen) - sizeof(IPV6FragHdr);
+            rp->ip6h = (IPV6Hdr *)(rp->pkt + frag->ip_hdr_offset);
+            ip_hdr_offset = frag->ip_hdr_offset;
 
             /* This is the start of the fragmentable portion of the
              * first packet.  All fragment offsets are relative to
              * this. */
             fragmentable_offset = frag->frag_hdr_offset;
-
-            pktlen = frag->ipv6_hdr_offset + sizeof(IPV6Hdr);
+            fragmentable_len = frag->data_len;
         }
         else {
             memcpy(rp->pkt + fragmentable_offset + frag->offset + frag->ltrim,
                 frag->pkt + frag->data_offset + frag->ltrim,
                 frag->data_len - frag->ltrim);
-            payload_len += frag->data_len - frag->ltrim;
+            if (frag->offset + frag->data_len > fragmentable_len)
+                fragmentable_len = frag->offset + frag->data_len;
         }
     }
     BUG_ON(rp->ip6h == NULL);
-    rp->ip6h->s_ip6_plen = htons(payload_len);
-    rp->pktlen = pktlen + payload_len;
+    rp->ip6h->s_ip6_plen = htons(fragmentable_len);
+    rp->ip6h->s_ip6_nxt = next_hdr;
+    rp->pktlen = ip_hdr_offset + sizeof(IPV6Hdr) + fragmentable_len;
+    IPV6_CACHE_INIT(rp);
+
+remove_tracker:
+    /* Remove the frag tracker. */
+    SCMutexLock(&dc->frag_table_lock);
+    HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
+    SCMutexUnlock(&dc->frag_table_lock);
+    DefragTrackerReset(tracker);
+    SCMutexLock(&dc->tracker_pool_lock);
+    PoolReturn(dc->tracker_pool, tracker);
+    SCMutexUnlock(&dc->tracker_pool_lock);
 
 done:
-    SCMutexUnlock(&tracker->lock);
     return rp;
 }
 
+/**
+ * Insert a new IPv4/IPv6 fragment into a tracker.
+ *
+ * \todo Allocate packet buffers from a pool.
+ */
+static Packet *
+DefragInsertFrag(ThreadVars *tv, DecodeThreadVars *dtv, DefragContext *dc,
+    DefragTracker *tracker, Packet *p)
+{
+    Packet *r = NULL;
+    int ltrim = 0;
+
+    uint8_t more_frags;
+    uint16_t frag_offset;
+
+    /* IPv4 header length - IPv4 only. */
+    uint16_t hlen = 0;
+
+    /* This is the offset of the start of the data in the packet that
+     * falls after the IP header. */
+    uint16_t data_offset;
+
+    /* The length of the (fragmented) data.  This is the length of the
+     * data that falls after the IP header. */
+    uint16_t data_len;
+
+    /* Where the fragment ends. */
+    uint16_t frag_end;
+
+    /* Offset in the packet to the IPv6 header. */
+    uint16_t ip_hdr_offset;
+
+    /* Offset in the packet to the IPv6 frag header. IPv6 only. */
+    uint16_t frag_hdr_offset = 0;
+
+    if (tracker->af == AF_INET) {
+        more_frags = IPV4_GET_MF(p);
+        frag_offset = IPV4_GET_IPOFFSET(p) << 3;
+        hlen = IPV4_GET_HLEN(p);
+        data_offset = (uint8_t *)p->ip4h + hlen - p->pkt;
+        data_len = IPV4_GET_IPLEN(p) - hlen;
+        frag_end = frag_offset + data_len;
+        ip_hdr_offset = (uint8_t *)p->ip4h - p->pkt;
+
+        /* Ignore fragment if the end of packet extends past the
+         * maximum size of a packet. */
+        if (IPV4_HEADER_LEN + frag_offset + data_len > IPV4_MAXPACKET_LEN) {
+            /** \todo Perhaps log something? */
+            return NULL;;
+        }
+    }
+    else if (tracker->af == AF_INET6) {
+        more_frags = IPV6_EXTHDR_GET_FH_FLAG(p);
+        frag_offset = IPV6_EXTHDR_GET_FH_OFFSET(p);
+        data_offset = (uint8_t *)p->ip6eh.ip6fh + sizeof(IPV6FragHdr) - p->pkt;
+        data_len = IPV6_GET_PLEN(p) - (
+            ((uint8_t *)p->ip6eh.ip6fh + sizeof(IPV6FragHdr)) -
+                ((uint8_t *)p->ip6h + sizeof(IPV6Hdr)));
+        frag_end = frag_offset + data_len;
+        ip_hdr_offset = (uint8_t *)p->ip6h - p->pkt;
+        frag_hdr_offset = (uint8_t *)p->ip6eh.ip6fh - p->pkt;
+
+        /* Ignore fragment if the end of packet extends past the
+         * maximum size of a packet. */
+        if (frag_offset + data_len > IPV6_MAXPACKET) {
+            /** \todo Perhaps log something? */
+            return NULL;
+        }
+    }
+    else {
+        /* Abort - should not happen. */
+        SCLogWarning(SC_ERR_INVALID_ARGUMENT, "Invalid address family, aborting.");
+        return NULL;
+    }
+
+    /* Lock this tracker as we'll be doing list operations on it. */
+    SCMutexLock(&tracker->lock);
+
+    /* Update timeout. */
+    tracker->timeout = p->ts;
+    tracker->timeout.tv_sec += dc->timeout;
+
+    Frag *prev = NULL, *next;;
+    if (!TAILQ_EMPTY(&tracker->frags)) {
+        TAILQ_FOREACH(prev, &tracker->frags, next) {
+            ltrim = 0;
+            next = TAILQ_NEXT(prev, next);
+
+            switch (tracker->policy) {
+            case DEFRAG_POLICY_BSD:
+                if (frag_offset < prev->offset + prev->data_len) {
+                    if (frag_offset >= prev->offset) {
+                        ltrim = prev->offset + prev->data_len - frag_offset;
+                    }
+                    if ((next != NULL) && (frag_end > next->offset)) {
+                        next->ltrim = frag_end - next->offset;
+                    }
+                    if ((frag_offset < prev->offset) &&
+                        (frag_end >= prev->offset + prev->data_len)) {
+                        prev->skip = 1;
+                    }
+                    goto insert;
+                }
+                break;
+            case DEFRAG_POLICY_LINUX:
+                if (frag_offset < prev->offset + prev->data_len) {
+                    if (frag_offset > prev->offset) {
+                        ltrim = prev->offset + prev->data_len - frag_offset;
+                    }
+                    if ((next != NULL) && (frag_end > next->offset)) {
+                        next->ltrim = frag_end - next->offset;
+                    }
+                    if ((frag_offset < prev->offset) &&
+                        (frag_end >= prev->offset + prev->data_len)) {
+                        prev->skip = 1;
+                    }
+                    goto insert;
+                }
+                break;
+            case DEFRAG_POLICY_WINDOWS:
+                if (frag_offset < prev->offset + prev->data_len) {
+                    if (frag_offset >= prev->offset) {
+                        ltrim = prev->offset + prev->data_len - frag_offset;
+                    }
+                    if ((frag_offset < prev->offset) &&
+                        (frag_end > prev->offset + prev->data_len)) {
+                        prev->skip = 1;
+                    }
+                    goto insert;
+                }
+                break;
+            case DEFRAG_POLICY_SOLARIS:
+                if (frag_offset < prev->offset + prev->data_len) {
+                    if (frag_offset >= prev->offset) {
+                        ltrim = prev->offset + prev->data_len - frag_offset;
+                    }
+                    if ((frag_offset < prev->offset) &&
+                        (frag_end >= prev->offset + prev->data_len)) {
+                        prev->skip = 1;
+                    }
+                    goto insert;
+                }
+                break;
+            case DEFRAG_POLICY_FIRST:
+                if ((frag_offset >= prev->offset) &&
+                    (frag_end <= prev->offset + prev->data_len))
+                    goto done;
+                if (frag_offset < prev->offset)
+                    goto insert;
+                if (frag_offset < prev->offset + prev->data_len) {
+                    ltrim = prev->offset + prev->data_len - frag_offset;
+                    goto insert;
+                }
+                break;
+            case DEFRAG_POLICY_LAST:
+                if (frag_offset <= prev->offset) {
+                    if (frag_end > prev->offset)
+                        prev->ltrim = frag_end - prev->offset;
+                    goto insert;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+    }
+insert:
+
+    if (data_len - ltrim <= 0) {
+        goto done;
+    }
+
+    /* Allocate fragment and insert. */
+    SCMutexLock(&dc->frag_pool_lock);
+    Frag *new = PoolGet(dc->frag_pool);
+    SCMutexUnlock(&dc->frag_pool_lock);
+    if (new == NULL) {
+        goto done;
+    }
+    new->pkt = SCMalloc(p->pktlen);
+    if (new->pkt == NULL) {
+        SCMutexLock(&dc->frag_pool_lock);
+        PoolReturn(dc->frag_pool, new);
+        SCMutexUnlock(&dc->frag_pool_lock);
+        goto done;
+    }
+    memcpy(new->pkt, p->pkt + ltrim, p->pktlen - ltrim);
+    new->len = p->pktlen - ltrim;
+    new->hlen = hlen;
+    new->offset = frag_offset + ltrim;
+    new->data_offset = data_offset;
+    new->data_len = data_len - ltrim;
+    new->ip_hdr_offset = ip_hdr_offset;
+    new->frag_hdr_offset = frag_hdr_offset;
+
+    Frag *frag;
+    TAILQ_FOREACH(frag, &tracker->frags, next) {
+        if (frag_offset < frag->offset)
+            break;
+    }
+    if (frag == NULL) {
+        TAILQ_INSERT_TAIL(&tracker->frags, new, next);
+    }
+    else {
+        TAILQ_INSERT_BEFORE(frag, new, next);
+    }
+
+    if (!more_frags) {
+        tracker->seen_last = 1;
+    }
+
+    if (tracker->seen_last) {
+        if (tracker->af == AF_INET) {
+            r = Defrag4Reassemble(tv, dc, tracker, p);
+            if (r != NULL && tv != NULL && dtv != NULL) {
+                SCPerfCounterIncr(dtv->counter_defrag_ipv4_reassembled,
+                    tv->sc_perf_pca);
+            }
+        }
+        else if (tracker->af == AF_INET6) {
+            r = Defrag6Reassemble(tv, dc, tracker, p);
+            if (r != NULL && tv != NULL && dtv != NULL) {
+                SCPerfCounterIncr(dtv->counter_defrag_ipv6_reassembled,
+                    tv->sc_perf_pca);
+            }
+        }
+    }
+
+done:
+    SCMutexUnlock(&tracker->lock);
+    return r;
+}
 
 /**
  * \brief Timeout a tracker.
@@ -1093,20 +957,31 @@ done:
  * \param p Packet that triggered this timeout run, used for timestamp.
  */
 static void
-DefragTimeoutTracker(DefragContext *dc, Packet *p)
+DefragTimeoutTracker(ThreadVars *tv, DecodeThreadVars *dtv, DefragContext *dc,
+    Packet *p)
 {
-    struct timeval tv = p->ts;
+    struct timeval now = p->ts;
 
     HashListTableBucket *next = HashListTableGetListHead(dc->frag_table);
     DefragTracker *tracker;
     while (next != NULL) {
         tracker = HashListTableGetListData(next);
 
-        if (timercmp(&tracker->timeout, &tv, <)) {
+        if (timercmp(&tracker->timeout, &now, <)) {
             /* Tracker has timeout out. */
             HashListTableRemove(dc->frag_table, tracker, sizeof(tracker));
             DefragTrackerReset(tracker);
             PoolReturn(dc->tracker_pool, tracker);
+            if (tv != NULL && dtv != NULL) {
+                if (tracker->af == AF_INET) {
+                    SCPerfCounterIncr(dtv->counter_defrag_ipv4_timeouts,
+                        tv->sc_perf_pca);
+                }
+                else if (tracker->af == AF_INET6) {
+                    SCPerfCounterIncr(dtv->counter_defrag_ipv6_timeouts,
+                        tv->sc_perf_pca);
+                }
+            }
             return;
         }
 
@@ -1114,54 +989,120 @@ DefragTimeoutTracker(DefragContext *dc, Packet *p)
     }
 }
 
-DefragTracker *
-DefragGetTracker(DefragContext *dc, DefragTracker *lookup_key, Packet *p)
+/**
+ * \brief Get the defrag policy based on the destination address of
+ * the packet.
+ *
+ * \param p The packet used to get the destination address.
+ *
+ * \retval The defrag policy to use.
+ */
+static uint8_t
+DefragGetOsPolicy(Packet *p, uint8_t default_policy)
+{
+    uint8_t policy;
+
+    if (PKT_IS_IPV4(p)) {
+        policy = SCHInfoGetIPv4HostOSFlavour((uint8_t *)GET_IPV4_DST_ADDR_PTR(p));
+    }
+    else if (PKT_IS_IPV6(p)) {
+        policy = SCHInfoGetIPv6HostOSFlavour((uint8_t *)GET_IPV6_DST_ADDR(p));
+    }
+    else
+        policy = default_policy;
+
+    /* Map the OS policies returned from the configured host info to
+     * defrag specific policies. */
+    switch (policy) {
+        /* BSD. */
+    case OS_POLICY_BSD:
+    case OS_POLICY_HPUX10:
+    case OS_POLICY_IRIX:
+        return DEFRAG_POLICY_BSD;
+
+        /* BSD-Right. */
+    case OS_POLICY_BSD_RIGHT:
+        return DEFRAG_POLICY_BSD_RIGHT;
+
+        /* Linux. */
+    case OS_POLICY_OLD_LINUX:
+    case OS_POLICY_LINUX:
+        return DEFRAG_POLICY_LINUX;
+
+        /* First. */
+    case OS_POLICY_OLD_SOLARIS:
+    case OS_POLICY_HPUX11:
+    case OS_POLICY_MACOS:
+    case OS_POLICY_FIRST:
+        return DEFRAG_POLICY_FIRST;
+
+        /* Solaris. */
+    case OS_POLICY_SOLARIS:
+        return DEFRAG_POLICY_SOLARIS;
+
+        /* Windows. */
+    case OS_POLICY_WINDOWS:
+    case OS_POLICY_VISTA:
+    case OS_POLICY_WINDOWS2K3:
+        return DEFRAG_POLICY_WINDOWS;
+
+        /* Last. */
+    case OS_POLICY_LAST:
+        return DEFRAG_POLICY_LAST;
+
+    default:
+        return default_policy;
+    }
+}
+
+static DefragTracker *
+DefragGetTracker(ThreadVars *tv, DecodeThreadVars *dtv, DefragContext *dc,
+    DefragTracker *lookup_key, Packet *p)
 {
     DefragTracker *tracker;
 
     SCMutexLock(&dc->frag_table_lock);
     tracker = HashListTableLookup(dc->frag_table, lookup_key,
         sizeof(*lookup_key));
-    SCMutexUnlock(&dc->frag_table_lock);
     if (tracker == NULL) {
         SCMutexLock(&dc->tracker_pool_lock);
         tracker = PoolGet(dc->tracker_pool);
         if (tracker == NULL) {
             /* Timeout trackers and try again. */
-            DefragTimeoutTracker(dc, p);
+            DefragTimeoutTracker(tv, dtv, dc, p);
             tracker = PoolGet(dc->tracker_pool);
         }
         SCMutexUnlock(&dc->tracker_pool_lock);
         if (tracker == NULL) {
             /* Report memory error - actually a pool allocation error. */
             SCLogError(SC_ERR_MEM_ALLOC, "Defrag: Failed to allocate tracker.");
-            return NULL;
+            goto done;
         }
         DefragTrackerReset(tracker);
-        tracker->family = lookup_key->family;
+        tracker->af = lookup_key->af;
         tracker->id = lookup_key->id;
         tracker->src_addr = lookup_key->src_addr;
         tracker->dst_addr = lookup_key->dst_addr;
+        tracker->policy = DefragGetOsPolicy(p, dc->default_policy);
 
-        /* XXX Do policy lookup. */
-        tracker->policy = dc->default_policy;
-
-        SCMutexLock(&dc->frag_table_lock);
         if (HashListTableAdd(dc->frag_table, tracker, sizeof(*tracker)) != 0) {
             /* Failed to add new tracker. */
-            SCMutexUnlock(&dc->frag_table_lock);
             SCLogError(SC_ERR_MEM_ALLOC,
                 "Defrag: Failed to add new tracker to hash table.");
-            return NULL;
+            SCMutexLock(&dc->tracker_pool_lock);
+            PoolReturn(dc->tracker_pool, tracker);
+            SCMutexUnlock(&dc->tracker_pool_lock);
+            goto done;
         }
-        SCMutexUnlock(&dc->frag_table_lock);
     }
 
+done:
+    SCMutexUnlock(&dc->frag_table_lock);
     return tracker;
 }
 
 /**
- * \brief Entry point for IPv4 fragments.
+ * \brief Entry point for IPv4 and IPv6 fragments.
  *
  * \param tv ThreadVars for the calling decoder.
  * \param dc A DefragContext to use, may be NULL for the default.
@@ -1172,95 +1113,61 @@ DefragGetTracker(DefragContext *dc, DefragTracker *lookup_key, Packet *p)
  *     NULL is returned.
  */
 Packet *
-Defrag4(ThreadVars *tv, DefragContext *dc, Packet *p)
+Defrag(ThreadVars *tv, DecodeThreadVars *dtv, DefragContext *dc, Packet *p)
 {
     uint16_t frag_offset;
-    int more_frags;
+    uint8_t more_frags;
     DefragTracker *tracker, lookup;
+    uint32_t id;
+    int af;
 
     /* If no DefragContext was passed in, use the global one.  Passing
      * one in is primarily useful for unit tests. */
     if (dc == NULL)
         dc = defrag_context;
 
-    more_frags = IPV4_GET_MF(p);
-    frag_offset = IPV4_GET_IPOFFSET(p);
+    if (PKT_IS_IPV4(p)) {
+        af = AF_INET;
+        more_frags = IPV4_GET_MF(p);
+        frag_offset = IPV4_GET_IPOFFSET(p);
+        id = IPV4_GET_IPID(p);
+    }
+    else if (PKT_IS_IPV6(p)) {
+        af = AF_INET6;
+        frag_offset = IPV6_EXTHDR_GET_FH_OFFSET(p);
+        more_frags = IPV6_EXTHDR_GET_FH_FLAG(p);
+        id = IPV6_EXTHDR_GET_FH_ID(p);
+    }
+    else {
+        return NULL;
+    }
 
     if (frag_offset == 0 && more_frags == 0) {
         return NULL;
     }
 
-    /* Create a lookup key. */
-    lookup.family = AF_INET;
-    lookup.id = IPV4_GET_IPID(p);
-    lookup.src_addr = p->src;
-    lookup.dst_addr = p->dst;
-
-    tracker = DefragGetTracker(dc, &lookup, p);
-    if (tracker == NULL)
-        return NULL;
-
-    if (!more_frags) {
-        tracker->seen_last = 1;
-    }
-    Defrag4InsertFrag(dc, tracker, p);
-    if (tracker->seen_last) {
-        Packet *rp = Defrag4Reassemble(tv, dc, tracker, p);
-        return rp;
+    if (tv != NULL && dtv != NULL) {
+        if (af == AF_INET) {
+            SCPerfCounterIncr(dtv->counter_defrag_ipv4_fragments,
+                tv->sc_perf_pca);
+        }
+        else if (af == AF_INET6) {
+            SCPerfCounterIncr(dtv->counter_defrag_ipv6_fragments,
+                tv->sc_perf_pca);
+        }
     }
 
-    return NULL;
-}
-
-/**
- * \brief Entry point for IPv4 fragments.
- *
- * \param tv ThreadVars for the calling decoder.
- * \param dc A DefragContext to use, may be NULL for the default.
- * \param p The packet fragment.
- *
- * \retval A new Packet resembling the re-assembled packet if the most
- *     recent fragment allowed the packet to be re-assembled, otherwise
- *     NULL is returned.
- */
-Packet *
-Defrag6(ThreadVars *tv, DefragContext *dc, Packet *p)
-{
-    uint16_t frag_offset;
-    uint8_t more_frags;
-    uint32_t id;
-    DefragTracker *tracker, lookup;
-
-    /* If no DefragContext was passed in, use the global one.  Passing
-     * one in is primarily useful for unit tests. */
-    if (dc == NULL)
-        dc = defrag_context;
-
-    frag_offset = IPV6_EXTHDR_GET_FH_OFFSET(p);
-    more_frags = IPV6_EXTHDR_GET_FH_FLAG(p);
-    id = IPV6_EXTHDR_GET_FH_ID(p);
-
     /* Create a lookup key. */
-    lookup.family = AF_INET6;
+    lookup.af = af;
     lookup.id = id;
     lookup.src_addr = p->src;
     lookup.dst_addr = p->dst;
 
-    tracker = DefragGetTracker(dc, &lookup, p);
+    tracker = DefragGetTracker(tv, dtv, dc, &lookup, p);
     if (tracker == NULL)
         return NULL;
 
-    if (!more_frags) {
-        tracker->seen_last = 1;
-    }
-    Defrag6InsertFrag(dc, tracker, p);
-    if (tracker->seen_last) {
-        Packet *rp = Defrag6Reassemble(tv, dc, tracker, p);
-        return rp;
-    }
-
-
-    return NULL;
+    return DefragInsertFrag(tv, dtv, dc, tracker, p);
 }
 
 void
@@ -1302,7 +1209,7 @@ BuildTestPacket(uint16_t id, uint16_t off, int mf, const char content,
     int hlen = 20;
     int ttl = 64;
 
-    p = calloc(1, sizeof(*p));
+    p = SCCalloc(1, sizeof(*p));
     if (p == NULL)
         return NULL;
     gettimeofday(&p->ts, NULL);
@@ -1350,7 +1257,7 @@ BuildTestPacket(uint16_t id, uint16_t off, int mf, const char content,
     return p;
 error:
     if (p != NULL)
-        free(p);
+        SCFree(p);
     return NULL;
 }
 
@@ -1360,7 +1267,7 @@ IPV6BuildTestPacket(uint32_t id, uint16_t off, int mf, const char content,
 {
     Packet *p = NULL;
 
-    p = calloc(1, sizeof(*p));
+    p = SCCalloc(1, sizeof(*p));
     if (p == NULL)
         return NULL;
     gettimeofday(&p->ts, NULL);
@@ -1408,7 +1315,7 @@ IPV6BuildTestPacket(uint32_t id, uint16_t off, int mf, const char content,
 error:
     fprintf(stderr, "Error building test packet.\n");
     if (p != NULL)
-        free(p);
+        SCFree(p);
     return NULL;
 }
 
@@ -1442,12 +1349,18 @@ DefragInOrderSimpleTest(void)
     if (p3 == NULL)
         goto end;
 
-    if (Defrag4(NULL, dc, p1) != NULL)
+    if (Defrag(NULL, NULL, dc, p1) != NULL)
         goto end;
-    if (Defrag4(NULL, dc, p2) != NULL)
+    if (Defrag(NULL, NULL, dc, p2) != NULL)
         goto end;
-    reassembled = Defrag4(NULL, dc, p3);
+
+    reassembled = Defrag(NULL, NULL, dc, p3);
     if (reassembled == NULL)
+        goto end;
+
+    if (IPV4_GET_HLEN(reassembled) != 20)
+        goto end;
+    if (IPV4_GET_IPLEN(reassembled) != 39)
         goto end;
 
     /* 20 bytes in we should find 8 bytes of A. */
@@ -1470,16 +1383,96 @@ DefragInOrderSimpleTest(void)
 
     ret = 1;
 end:
+
     if (dc != NULL)
         DefragContextDestroy(dc);
     if (p1 != NULL)
-        free(p1);
+        SCFree(p1);
     if (p2 != NULL)
-        free(p2);
+        SCFree(p2);
     if (p3 != NULL)
-        free(p3);
+        SCFree(p3);
     if (reassembled != NULL)
-        free(reassembled);
+        SCFree(reassembled);
+
+    DefragDestroy();
+    return ret;
+}
+
+/**
+ * Simple fragmented packet in reverse order.
+ */
+static int
+DefragReverseSimpleTest(void)
+{
+    DefragContext *dc = NULL;
+    Packet *p1 = NULL, *p2 = NULL, *p3 = NULL;
+    Packet *reassembled = NULL;
+    int id = 12;
+    int i;
+    int ret = 0;
+
+    DefragInit();
+
+    dc = DefragContextNew();
+    if (dc == NULL)
+        goto end;
+
+    p1 = BuildTestPacket(id, 0, 1, 'A', 8);
+    if (p1 == NULL)
+        goto end;
+    p2 = BuildTestPacket(id, 1, 1, 'B', 8);
+    if (p2 == NULL)
+        goto end;
+    p3 = BuildTestPacket(id, 2, 0, 'C', 3);
+    if (p3 == NULL)
+        goto end;
+
+    if (Defrag(NULL, NULL, dc, p3) != NULL)
+        goto end;
+    if (Defrag(NULL, NULL, dc, p2) != NULL)
+        goto end;
+
+    reassembled = Defrag(NULL, NULL, dc, p1);
+    if (reassembled == NULL)
+        goto end;
+
+    if (IPV4_GET_HLEN(reassembled) != 20)
+        goto end;
+    if (IPV4_GET_IPLEN(reassembled) != 39)
+        goto end;
+
+    /* 20 bytes in we should find 8 bytes of A. */
+    for (i = 20; i < 20 + 8; i++) {
+        if (reassembled->pkt[i] != 'A')
+            goto end;
+    }
+
+    /* 28 bytes in we should find 8 bytes of B. */
+    for (i = 28; i < 28 + 8; i++) {
+        if (reassembled->pkt[i] != 'B')
+            goto end;
+    }
+
+    /* And 36 bytes in we should find 3 bytes of C. */
+    for (i = 36; i < 36 + 3; i++) {
+        if (reassembled->pkt[i] != 'C')
+            goto end;
+    }
+
+    ret = 1;
+end:
+
+    if (dc != NULL)
+        DefragContextDestroy(dc);
+    if (p1 != NULL)
+        SCFree(p1);
+    if (p2 != NULL)
+        SCFree(p2);
+    if (p3 != NULL)
+        SCFree(p3);
+    if (reassembled != NULL)
+        SCFree(reassembled);
 
     DefragDestroy();
     return ret;
@@ -1515,11 +1508,83 @@ IPV6DefragInOrderSimpleTest(void)
     if (p3 == NULL)
         goto end;
 
-    if (Defrag6(NULL, dc, p1) != NULL)
+    if (Defrag(NULL, NULL, dc, p1) != NULL)
         goto end;
-    if (Defrag6(NULL, dc, p2) != NULL)
+    if (Defrag(NULL, NULL, dc, p2) != NULL)
         goto end;
-    reassembled = Defrag6(NULL, dc, p3);
+    reassembled = Defrag(NULL, NULL, dc, p3);
+    if (reassembled == NULL)
+        goto end;
+
+    if (IPV6_GET_PLEN(reassembled) != 19)
+        goto end;
+
+    /* 40 bytes in we should find 8 bytes of A. */
+    for (i = 40; i < 40 + 8; i++) {
+        if (reassembled->pkt[i] != 'A')
+            goto end;
+    }
+
+    /* 28 bytes in we should find 8 bytes of B. */
+    for (i = 48; i < 48 + 8; i++) {
+        if (reassembled->pkt[i] != 'B')
+            goto end;
+    }
+
+    /* And 36 bytes in we should find 3 bytes of C. */
+    for (i = 56; i < 56 + 3; i++) {
+        if (reassembled->pkt[i] != 'C')
+            goto end;
+    }
+
+    ret = 1;
+end:
+    if (dc != NULL)
+        DefragContextDestroy(dc);
+    if (p1 != NULL)
+        SCFree(p1);
+    if (p2 != NULL)
+        SCFree(p2);
+    if (p3 != NULL)
+        SCFree(p3);
+    if (reassembled != NULL)
+        SCFree(reassembled);
+
+    DefragDestroy();
+    return ret;
+}
+
+static int
+IPV6DefragReverseSimpleTest(void)
+{
+    DefragContext *dc = NULL;
+    Packet *p1 = NULL, *p2 = NULL, *p3 = NULL;
+    Packet *reassembled = NULL;
+    int id = 12;
+    int i;
+    int ret = 0;
+
+    DefragInit();
+
+    dc = DefragContextNew();
+    if (dc == NULL)
+        goto end;
+
+    p1 = IPV6BuildTestPacket(id, 0, 1, 'A', 8);
+    if (p1 == NULL)
+        goto end;
+    p2 = IPV6BuildTestPacket(id, 1, 1, 'B', 8);
+    if (p2 == NULL)
+        goto end;
+    p3 = IPV6BuildTestPacket(id, 2, 0, 'C', 3);
+    if (p3 == NULL)
+        goto end;
+
+    if (Defrag(NULL, NULL, dc, p3) != NULL)
+        goto end;
+    if (Defrag(NULL, NULL, dc, p2) != NULL)
+        goto end;
+    reassembled = Defrag(NULL, NULL, dc, p1);
     if (reassembled == NULL)
         goto end;
 
@@ -1546,13 +1611,13 @@ end:
     if (dc != NULL)
         DefragContextDestroy(dc);
     if (p1 != NULL)
-        free(p1);
+        SCFree(p1);
     if (p2 != NULL)
-        free(p2);
+        SCFree(p2);
     if (p3 != NULL)
-        free(p3);
+        SCFree(p3);
     if (reassembled != NULL)
-        free(reassembled);
+        SCFree(reassembled);
 
     DefragDestroy();
     return ret;
@@ -1641,27 +1706,41 @@ DefragDoSturgesNovakTest(int policy, u_char *expected, size_t expected_len)
 
     /* Send all but the last. */
     for (i = 0; i < 16; i++) {
-        Packet *tp = Defrag4(NULL, dc, packets[i]);
+        Packet *tp = Defrag(NULL, NULL, dc, packets[i]);
         if (tp != NULL) {
-            free(tp);
+            SCFree(tp);
             goto end;
         }
     }
 
     /* And now the last one. */
-    Packet *reassembled = Defrag4(NULL, dc, packets[16]);
+    Packet *reassembled = Defrag(NULL, NULL, dc, packets[16]);
     if (reassembled == NULL)
         goto end;
+
+    if (IPV4_GET_HLEN(reassembled) != 20)
+        goto end;
+    if (IPV4_GET_IPLEN(reassembled) != 20 + 192)
+        goto end;
+
     if (memcmp(reassembled->pkt + 20, expected, expected_len) != 0)
         goto end;
-    free(reassembled);
+    SCFree(reassembled);
+
+    /* Make sure the tracker was released back to the pool. */
+    if (dc->tracker_pool->outstanding != 0)
+        return 0;
+
+    /* Make sure all frags were returned back to the pool. */
+    if (dc->frag_pool->outstanding != 0)
+        return 0;
 
     ret = 1;
 end:
     if (dc != NULL)
         DefragContextDestroy(dc);
     for (i = 0; i < 17; i++) {
-        free(packets[i]);
+        SCFree(packets[i]);
     }
     DefragDestroy();
     return ret;
@@ -1750,101 +1829,113 @@ IPV6DefragDoSturgesNovakTest(int policy, u_char *expected, size_t expected_len)
 
     /* Send all but the last. */
     Packet *tp;
-    tp = Defrag6(NULL, dc, packets[0]);
+    tp = Defrag(NULL, NULL, dc, packets[0]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[1]);
+    tp = Defrag(NULL, NULL, dc, packets[1]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[2]);
+    tp = Defrag(NULL, NULL, dc, packets[2]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[3]);
+    tp = Defrag(NULL, NULL, dc, packets[3]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[4]);
+    tp = Defrag(NULL, NULL, dc, packets[4]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[5]);
+    tp = Defrag(NULL, NULL, dc, packets[5]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[6]);
+    tp = Defrag(NULL, NULL, dc, packets[6]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[7]);
+    tp = Defrag(NULL, NULL, dc, packets[7]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[8]);
+    tp = Defrag(NULL, NULL, dc, packets[8]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[9]);
+    tp = Defrag(NULL, NULL, dc, packets[9]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[10]);
+    tp = Defrag(NULL, NULL, dc, packets[10]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[11]);
+    tp = Defrag(NULL, NULL, dc, packets[11]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[12]);
+    tp = Defrag(NULL, NULL, dc, packets[12]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[13]);
+    tp = Defrag(NULL, NULL, dc, packets[13]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[14]);
+    tp = Defrag(NULL, NULL, dc, packets[14]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
-    tp = Defrag6(NULL, dc, packets[15]);
+    tp = Defrag(NULL, NULL, dc, packets[15]);
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
 
     /* And now the last one. */
-    Packet *reassembled = Defrag6(NULL, dc, packets[16]);
+    Packet *reassembled = Defrag(NULL, NULL, dc, packets[16]);
     if (reassembled == NULL)
         goto end;
     if (memcmp(reassembled->pkt + 40, expected, expected_len) != 0)
         goto end;
-    free(reassembled);
+
+    if (IPV6_GET_PLEN(reassembled) != 192)
+        goto end;
+
+    SCFree(reassembled);
+
+    /* Make sure the tracker was released back to the pool. */
+    if (dc->tracker_pool->outstanding != 0)
+        return 0;
+
+    /* Make sure all frags were returned to the pool. */
+    if (dc->frag_pool->outstanding != 0)
+        return 0;
 
     ret = 1;
 end:
     if (dc != NULL)
         DefragContextDestroy(dc);
     for (i = 0; i < 17; i++) {
-        free(packets[i]);
+        SCFree(packets[i]);
     }
     DefragDestroy();
     return ret;
@@ -1881,7 +1972,7 @@ DefragSturgesNovakBsdTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_BSD, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_BSD, expected, sizeof(expected));
 }
 
 static int
@@ -1915,7 +2006,7 @@ IPV6DefragSturgesNovakBsdTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_BSD, expected, sizeof(expected));
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_BSD, expected, sizeof(expected));
 }
 
 static int
@@ -1949,7 +2040,7 @@ DefragSturgesNovakLinuxTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_LINUX, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_LINUX, expected, sizeof(expected));
 }
 
 static int
@@ -1983,7 +2074,7 @@ IPV6DefragSturgesNovakLinuxTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_LINUX, expected,
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_LINUX, expected,
         sizeof(expected));
 }
 
@@ -2018,7 +2109,7 @@ DefragSturgesNovakWindowsTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_WINDOWS, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_WINDOWS, expected, sizeof(expected));
 }
 
 static int
@@ -2052,7 +2143,7 @@ IPV6DefragSturgesNovakWindowsTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_WINDOWS, expected,
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_WINDOWS, expected,
         sizeof(expected));
 }
 
@@ -2087,7 +2178,7 @@ DefragSturgesNovakSolarisTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_SOLARIS, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_SOLARIS, expected, sizeof(expected));
 }
 
 static int
@@ -2121,7 +2212,7 @@ IPV6DefragSturgesNovakSolarisTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_SOLARIS, expected,
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_SOLARIS, expected,
         sizeof(expected));
 }
 
@@ -2156,7 +2247,7 @@ DefragSturgesNovakFirstTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_FIRST, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_FIRST, expected, sizeof(expected));
 }
 
 static int
@@ -2190,7 +2281,7 @@ IPV6DefragSturgesNovakFirstTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_FIRST, expected,
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_FIRST, expected,
         sizeof(expected));
 }
 
@@ -2225,7 +2316,7 @@ DefragSturgesNovakLastTest(void)
         "QQQQQQQQ"
     };
 
-    return DefragDoSturgesNovakTest(POLICY_LAST, expected, sizeof(expected));
+    return DefragDoSturgesNovakTest(DEFRAG_POLICY_LAST, expected, sizeof(expected));
 }
 
 static int
@@ -2259,7 +2350,7 @@ IPV6DefragSturgesNovakLastTest(void)
         "QQQQQQQQ"
     };
 
-    return IPV6DefragDoSturgesNovakTest(POLICY_LAST, expected,
+    return IPV6DefragDoSturgesNovakTest(DEFRAG_POLICY_LAST, expected,
         sizeof(expected));
 }
 
@@ -2285,12 +2376,12 @@ DefragTimeoutTest(void)
         if (p == NULL)
             goto end;
 
-        Packet *tp = Defrag4(NULL, dc, p);
+        Packet *tp = Defrag(NULL, NULL, dc, p);
 
-        free(p);
+        SCFree(p);
 
         if (tp != NULL) {
-            free(tp);
+            SCFree(tp);
             goto end;
         }
     }
@@ -2302,12 +2393,12 @@ DefragTimeoutTest(void)
         goto end;
 
     p->ts.tv_sec += dc->timeout;
-    Packet *tp = Defrag4(NULL, dc, p);
+    Packet *tp = Defrag(NULL, NULL, dc, p);
 
-    free(p);
+    SCFree(p);
 
     if (tp != NULL) {
-        free(tp);
+        SCFree(tp);
         goto end;
     }
 
@@ -2338,6 +2429,90 @@ end:
     return ret;
 }
 
+/**
+ * QA found that if you send a packet where more frags is 0, offset is
+ * > 0 and there is no data in the packet that the re-assembler will
+ * fail.  The fix was simple, but this unit test is just to make sure
+ * its not introduced.
+ */
+static int
+DefragIPv4NoDataTest(void)
+{
+    DefragContext *dc = NULL;
+    Packet *p = NULL;
+    int id = 12;
+    int ret = 0;
+
+    DefragInit();
+
+    dc = DefragContextNew();
+    if (dc == NULL)
+        goto end;
+
+    /* This packet has an offset > 0, more frags set to 0 and no data. */
+    p = BuildTestPacket(id, 1, 0, 'A', 0);
+    if (p == NULL)
+        goto end;
+
+    /* We do not expect a packet returned. */
+    if (Defrag(NULL, NULL, dc, p) != NULL)
+        goto end;
+
+    /* The fragment should have been ignored so no fragments should
+     * have been allocated from the pool. */
+    if (dc->frag_pool->outstanding != 0)
+        return 0;
+
+    ret = 1;
+end:
+    if (dc != NULL)
+        DefragContextDestroy(dc);
+    if (p != NULL)
+        SCFree(p);
+
+    DefragDestroy();
+    return ret;
+}
+
+static int
+DefragIPv4TooLargeTest(void)
+{
+    DefragContext *dc = NULL;
+    Packet *p = NULL;
+    int ret = 0;
+
+    DefragInit();
+
+    dc = DefragContextNew();
+    if (dc == NULL)
+        goto end;
+
+    /* Create a fragment that would extend past the max allowable size
+     * for an IPv4 packet. */
+    p = BuildTestPacket(1, 8183, 0, 'A', 71);
+    if (p == NULL)
+        goto end;
+
+    /* We do not expect a packet returned. */
+    if (Defrag(NULL, NULL, dc, p) != NULL)
+        goto end;
+
+    /* The fragment should have been ignored so no fragments should have
+     * been allocated from the pool. */
+    if (dc->frag_pool->outstanding != 0)
+        return 0;
+
+    ret = 1;
+end:
+    if (dc != NULL)
+        DefragContextDestroy(dc);
+    if (p != NULL)
+        SCFree(p);
+
+    DefragDestroy();
+    return ret;
+}
+
 #endif /* UNITTESTS */
 
 void
@@ -2346,6 +2521,8 @@ DefragRegisterTests(void)
 #ifdef UNITTESTS
     UtRegisterTest("DefragInOrderSimpleTest",
         DefragInOrderSimpleTest, 1);
+    UtRegisterTest("DefragReverseSimpleTest",
+        DefragReverseSimpleTest, 1);
     UtRegisterTest("DefragSturgesNovakBsdTest",
         DefragSturgesNovakBsdTest, 1);
     UtRegisterTest("DefragSturgesNovakLinuxTest",
@@ -2359,8 +2536,13 @@ DefragRegisterTests(void)
     UtRegisterTest("DefragSturgesNovakLastTest",
         DefragSturgesNovakLastTest, 1);
 
+    UtRegisterTest("DefragIPv4NoDataTest", DefragIPv4NoDataTest, 1);
+    UtRegisterTest("DefragIPv4TooLargeTest", DefragIPv4TooLargeTest, 1);
+
     UtRegisterTest("IPV6DefragInOrderSimpleTest",
         IPV6DefragInOrderSimpleTest, 1);
+    UtRegisterTest("IPV6DefragReverseSimpleTest",
+        IPV6DefragReverseSimpleTest, 1);
     UtRegisterTest("IPV6DefragSturgesNovakBsdTest",
         IPV6DefragSturgesNovakBsdTest, 1);
     UtRegisterTest("IPV6DefragSturgesNovakLinuxTest",

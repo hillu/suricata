@@ -15,6 +15,8 @@
 
 #include "tmqh-packetpool.h"
 
+extern int max_pending_packets;
+
 void TmqhPacketpoolRegister (void) {
     tmqh_table[TMQH_PACKETPOOL].name = "packetpool";
     tmqh_table[TMQH_PACKETPOOL].InHandler = TmqhInputPacketpool;
@@ -85,7 +87,15 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
             }
         } else {
             //printf("TmqhOutputPacketpool: NOT IS_TUNNEL_ROOT_PKT\n");
-            if (p->root->tunnel_verdicted == 1 && TUNNEL_PKT_TPR(p) == 1) {
+
+            /* the p->root != NULL here seems unnecessary: IS_TUNNEL_PKT checks
+             * that p->tunnel_pkt == 1, IS_TUNNEL_ROOT_PKT checks that +
+             * p->root == NULL. So when we are here p->root can only be
+             * non-NULL, right? CLANG thinks differently. May be a FP, but
+             * better safe than sorry. VJ */
+            if (p->root != NULL && p->root->tunnel_verdicted == 1 &&
+                    TUNNEL_PKT_TPR(p) == 1)
+            {
                 //printf("TmqhOutputPacketpool: p->root->tunnel_verdicted == 1 && TUNNEL_PKT_TPR(p) == 1\n");
                 /* the root is ready and we are the last tunnel packet,
                  * lets enqueue them both. */
@@ -137,7 +147,7 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
     } else {
         printf("TmqhOutputPacketpool: warning, trying to subtract from 0 pending counter.\n");
     }
-    if (pending <= MAX_PENDING)
+    if (pending <= max_pending_packets)
         SCCondSignal(&cond_pending);
     SCMutexUnlock(&mutex_pending);
 }

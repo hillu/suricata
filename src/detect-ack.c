@@ -20,14 +20,14 @@
 
 #include "util-byte.h"
 #include "util-unittest.h"
+#include "util-debug.h"
 
-static int DetectAckSetup(DetectEngineCtx *, Signature *s, SigMatch *m,
-                          char *sidstr);
-static int DetectAckMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                          Packet *p, Signature *s, SigMatch *m);
+/* prototypes */
+static int DetectAckSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectAckMatch(ThreadVars *, DetectEngineThreadCtx *,
+                          Packet *, Signature *, SigMatch *);
 static void DetectAckRegisterTests(void);
-static void DetectAckFree(void *ptr);
-
+static void DetectAckFree(void *);
 
 void DetectAckRegister(void) {
     sigmatch_table[DETECT_ACK].name = "ack";
@@ -74,17 +74,14 @@ static int DetectAckMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s,
-                          SigMatch *m, char *optstr)
+static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
 {
-    DetectAckData *data = malloc(sizeof(DetectAckData));
+    DetectAckData *data;
     SigMatch *sm = NULL;
 
-    //printf("DetectAckSetup: \'%s\'\n", optstr);
-
-    data = malloc(sizeof(DetectAckData));
+    data = SCMalloc(sizeof(DetectAckData));
     if (data == NULL) {
-        printf("DetectAckSetup: malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
 
@@ -100,12 +97,12 @@ static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s,
     }
     sm->ctx = data;
 
-    SigMatchAppend(s, m, sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
-    if (data) free(data);
+    if (data) SCFree(data);
     return -1;
 
 }
@@ -119,7 +116,7 @@ error:
 static void DetectAckFree(void *ptr)
 {
     DetectAckData *data = (DetectAckData *)ptr;
-    free(data);
+    SCFree(data);
 }
 
 

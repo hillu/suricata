@@ -7,7 +7,10 @@
 #include "suricata-common.h"
 #include "suricata.h"
 #include "decode.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "flow-var.h"
 #include "decode-events.h"
 
@@ -35,7 +38,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 static int DetectFlagsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-static int DetectFlagsSetup (DetectEngineCtx *, Signature *s, SigMatch *m, char *str);
+static int DetectFlagsSetup (DetectEngineCtx *, Signature *, char *);
 static void DetectFlagsFree(void *);
 
 /**
@@ -56,14 +59,14 @@ void DetectFlagsRegister (void) {
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
     {
-        printf("pcre compile of \"%s\" failed at offset %" PRId32 ": %s\n", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if(eb != NULL)
     {
-        printf("pcre study failed: %s\n", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
@@ -160,7 +163,7 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1) {
-        SCLogDebug("pcre match failed");
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre match failed");
         goto error;
     }
 
@@ -168,7 +171,7 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
 
         res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS,i + 1, &str_ptr);
         if (res < 0) {
-            SCLogDebug("pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
 
@@ -180,9 +183,9 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
         goto error;
     }
 
-    de = malloc(sizeof(DetectFlagsData));
+    de = SCMalloc(sizeof(DetectFlagsData));
     if (de == NULL) {
-        printf("DetectFlagsSetup malloc failed\n");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
 
@@ -229,11 +232,11 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
                     found++;
                     break;
                 case '1':
-                    de->flags |= TH_RES1;
+                    de->flags |= TH_CWR;
                     found++;
                     break;
                 case '2':
-                    de->flags |= TH_RES2;
+                    de->flags |= TH_ECN;
                     found++;
                     break;
                 case '0':
@@ -293,11 +296,11 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
                 found++;
                 break;
             case '1':
-                de->flags |= TH_RES1;
+                de->flags |= TH_CWR;
                 found++;
                 break;
             case '2':
-                de->flags |= TH_RES2;
+                de->flags |= TH_ECN;
                 found++;
                 break;
             case '0':
@@ -374,11 +377,11 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
                     ignore++;
                     break;
                 case '1':
-                    de->ignored_flags &= ~TH_RES1;
+                    de->ignored_flags &= ~TH_CWR;
                     ignore++;
                     break;
                 case '2':
-                    de->ignored_flags &= ~TH_RES2;
+                    de->ignored_flags &= ~TH_ECN;
                     ignore++;
                     break;
                 case '0':
@@ -396,16 +399,16 @@ static DetectFlagsData *DetectFlagsParse (char *rawstr)
     }
 
     for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
 
     SCReturnPtr(de, "DetectFlagsData");
 
 error:
     for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) free(args[i]);
+        if (args[i] != NULL) SCFree(args[i]);
     }
-    if (de) free(de);
+    if (de) SCFree(de);
     SCReturnPtr(NULL, "DetectFlagsData");
 }
 
@@ -421,7 +424,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFlagsSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *rawstr)
+static int DetectFlagsSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectFlagsData *de = NULL;
     SigMatch *sm = NULL;
@@ -437,12 +440,12 @@ static int DetectFlagsSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m,
     sm->type = DETECT_FLAGS;
     sm->ctx = (void *)de;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
     return 0;
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return -1;
 }
 
@@ -454,7 +457,7 @@ error:
  */
 static void DetectFlagsFree(void *de_ptr) {
     DetectFlagsData *de = (DetectFlagsData *)de_ptr;
-    if(de) free(de);
+    if(de) SCFree(de);
 }
 
 /*
@@ -535,14 +538,14 @@ static int FlagsTestParse03 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -585,14 +588,14 @@ static int FlagsTestParse04 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -635,14 +638,14 @@ static int FlagsTestParse05 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -685,14 +688,14 @@ static int FlagsTestParse06 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -735,14 +738,14 @@ static int FlagsTestParse07 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -785,14 +788,14 @@ static int FlagsTestParse08 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -835,14 +838,14 @@ static int FlagsTestParse09 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -885,14 +888,14 @@ static int FlagsTestParse10 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -935,14 +938,14 @@ static int FlagsTestParse11 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 
@@ -987,14 +990,14 @@ static int FlagsTestParse12 (void) {
     ret = DetectFlagsMatch(&tv,NULL,&p,NULL,sm);
 
     if(ret) {
-        if (de) free(de);
-        if (sm) free(sm);
+        if (de) SCFree(de);
+        if (sm) SCFree(sm);
         return 1;
     }
 
 error:
-    if (de) free(de);
-    if (sm) free(sm);
+    if (de) SCFree(de);
+    if (sm) SCFree(sm);
     return 0;
 }
 

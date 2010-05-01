@@ -8,6 +8,42 @@
 #ifndef __THREADS_H__
 #define __THREADS_H__
 
+#ifdef OS_FREEBSD
+
+#include <sys/thr.h>
+#define PRIO_LOW 2
+#define PRIO_MEDIUM 0
+#define PRIO_HIGH -2
+
+#elif OS_DARWIN
+
+#include <mach/mach_init.h>
+#define PRIO_LOW 2
+#define PRIO_MEDIUM 0
+#define PRIO_HIGH -2
+
+#elif OS_WIN32
+
+#define PRIO_LOW THREAD_PRIORITY_LOWEST
+#define PRIO_MEDIUM THREAD_PRIORITY_NORMAL
+#define PRIO_HIGH THREAD_PRIORITY_HIGHEST
+
+#else /* LINUX */
+
+#if HAVE_SYS_SYSCALL_H
+#include <sys/syscall.h>
+#endif
+#if HAVE_SYS_PRCTL_H
+#include <sys/prctl.h>
+#define THREAD_NAME_LEN 16
+#endif
+
+#define PRIO_LOW 2
+#define PRIO_MEDIUM  0
+#define PRIO_HIGH -2
+
+#endif /* OS_FREEBSD */
+
 #include <pthread.h>
 
 /** The mutex/spinlock/condition definitions and functions are used
@@ -23,6 +59,35 @@
 #define SCMutex pthread_mutex_t
 #define SCMutexAttr pthread_mutexattr_t
 #define SCMutexDestroy pthread_mutex_destroy
+
+/** Get the Current Thread Id */
+#ifdef OS_FREEBSD
+#define SCGetThreadIdLong(...) ({ \
+    long tmpthid; \
+    thr_self(&tmpthid); \
+    u_long tid = (u_long)tmpthid; \
+    tid; \
+})
+#elif OS_WIN32
+#define SCGetThreadIdLong(...) ({ \
+    u_long tid = (u_long)GetCurrentThreadId(); \
+	tid; \
+})
+#elif OS_DARWIN
+#define SCGetThreadIdLong(...) ({ \
+    thread_port_t tpid; \
+    tpid = mach_thread_self(); \
+    u_long tid = (u_long)tpid; \
+    tid; \
+})
+#else
+#define SCGetThreadIdLong(...) ({ \
+   pid_t tmpthid; \
+   tmpthid = syscall(SYS_gettid); \
+   u_long tid = (u_long)tmpthid; \
+   tid; \
+})
+#endif /* OS FREEBSD */
 
 /** Mutex Functions */
 #ifdef DBG_THREADS
@@ -125,6 +190,7 @@
 #define SCCondInit pthread_cond_init
 #define SCCondSignal pthread_cond_signal
 #define SCCondTimedwait pthread_cond_timedwait
+#define SCCondDestroy pthread_cond_destroy
 
 #ifdef DBG_THREAD
 #define SCondWait_dbg(cond, mut) ({ \
@@ -258,7 +324,36 @@
 #define SCSpinDestroy(spin)                     pthread_spin_destroy(spin)
 #endif /* DBG_THREADS */
 
+/*
+ * OS specific macro's for setting the thread name. "top" can display
+ * this name.
+ */
+#ifdef OS_FREEBSD /* FreeBSD */
+/** \todo Add implementation for FreeBSD */
+#define SCSetThreadName(n)
+#elif OS_WIN32 /* Windows */
+/** \todo Add implementation for Windows */
+#define SCSetThreadName(n)
+#elif OS_DARWIN /* Mac OS X */
+/** \todo Add implementation for MacOS */
+#define SCSetThreadName(n)
+#else /* Linux */
+/**
+ * \brief Set the threads name
+ */
+#define SCSetThreadName(n) ({ \
+    char tname[THREAD_NAME_LEN + 1] = ""; \
+    if (strlen(n) > THREAD_NAME_LEN) \
+        SCLogDebug("Thread name is too long, truncating it..."); \
+    strlcpy(tname, n, THREAD_NAME_LEN); \
+    int ret = 0; \
+    if ((ret = prctl(PR_SET_NAME, tname, 0, 0, 0)) < 0) \
+        SCLogDebug("Error setting thread name \"%s\": %s", tname, strerror(errno)); \
+    ret; \
+})
+#endif
 
 void ThreadMacrosRegisterTests(void);
+
 #endif /* __THREADS_H__ */
 

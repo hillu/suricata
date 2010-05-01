@@ -1,5 +1,7 @@
-/**Copyright (c) 2009 Open Information Security Foundation
- *
+/* Copyright (c) 2009 Open Information Security Foundation */
+
+/**
+ * \file
  * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
  *
  * Stream size for the engine.
@@ -8,7 +10,10 @@
 #include "suricata-common.h"
 #include "stream-tcp.h"
 #include "util-unittest.h"
+
 #include "detect.h"
+#include "detect-parse.h"
+
 #include "flow.h"
 #include "detect-stream_size.h"
 #include "stream-tcp-private.h"
@@ -24,7 +29,7 @@ static pcre_extra *parse_regex_study;
 
 /*prototypes*/
 int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, SigMatch *, char *);
+static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, char *);
 void DetectStreamSizeFree(void *);
 void DetectStreamSizeRegisterTests(void);
 
@@ -45,20 +50,20 @@ void DetectStreamSizeRegister(void) {
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if (parse_regex == NULL) {
-        SCLogDebug("pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
         goto error;
     }
 
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s", eb);
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
     return;
 
 error:
-    if (parse_regex != NULL) free(parse_regex);
-    if (parse_regex_study != NULL) free(parse_regex_study);
+    if (parse_regex != NULL) SCFree(parse_regex);
+    if (parse_regex_study != NULL) SCFree(parse_regex_study);
     return;
 }
 
@@ -182,7 +187,7 @@ DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
 
     ret = pcre_exec(parse_regex, parse_regex_study, streamstr, strlen(streamstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 4) {
-        SCLogDebug("DetectStreamSizeSetup: parse error, ret %" PRId32 "", ret);
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, streamstr);
         goto error;
     }
 
@@ -190,28 +195,28 @@ DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
 
     res = pcre_get_substring((char *)streamstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectStreamSizeSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     arg = (char *)str_ptr;
 
     res = pcre_get_substring((char *)streamstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectStreamSizeSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     mode = (char *)str_ptr;
 
     res = pcre_get_substring((char *)streamstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
     if (res < 0) {
-        SCLogDebug("DetectStreamSizeSetup: pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
     value = (char *)str_ptr;
 
-    sd = malloc(sizeof(DetectStreamSizeData));
+    sd = SCMalloc(sizeof(DetectStreamSizeData));
     if (sd == NULL) {
-        SCLogDebug("DetectStreamSizeSetup malloc failed");
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
         goto error;
     }
     sd->ssize = 0;
@@ -227,6 +232,7 @@ DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
     else if (strcmp("!=", mode)) sd->mode = DETECTSSIZE_NEQ;
     else if (mode[0] == '=') sd->mode = DETECTSSIZE_EQ;
     else {
+        SCLogError(SC_ERR_INVALID_OPERATOR, "Invalid operator");
         goto error;
     }
 
@@ -268,15 +274,15 @@ DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
         goto error;
     }
 
-    if (mode != NULL) free(mode);
-    if (arg != NULL) free(arg);
-    if (value != NULL) free(value);
+    if (mode != NULL) SCFree(mode);
+    if (arg != NULL) SCFree(arg);
+    if (value != NULL) SCFree(value);
     return sd;
 
 error:
-    if (mode != NULL) free(mode);
-    if (arg != NULL) free(arg);
-    if (value != NULL) free(value);
+    if (mode != NULL) SCFree(mode);
+    if (arg != NULL) SCFree(arg);
+    if (value != NULL) SCFree(value);
     if (sd != NULL) DetectStreamSizeFree(sd);
 
     return NULL;
@@ -287,13 +293,12 @@ error:
  *
  * \param de_ctx pointer to the Detection Engine Context
  * \param s pointer to the Current Signature
- * \param m pointer to the Current SigMatch
  * \param streamstr pointer to the user provided stream size options
  *
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, char *streamstr) {
+static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *streamstr) {
 
     DetectStreamSizeData *sd = NULL;
     SigMatch *sm = NULL;
@@ -309,13 +314,13 @@ int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, SigMatch *m, c
     sm->type = DETECT_STREAM_SIZE;
     sm->ctx = (void *)sd;
 
-    SigMatchAppend(s,m,sm);
+    SigMatchAppendPacket(s, sm);
 
     return 0;
 
 error:
     if (sd != NULL) DetectStreamSizeFree(sd);
-    if (sm != NULL) free(sm);
+    if (sm != NULL) SCFree(sm);
     return -1;
 }
 
@@ -326,7 +331,7 @@ error:
  */
 void DetectStreamSizeFree(void *ptr) {
     DetectStreamSizeData *sd = (DetectStreamSizeData *)ptr;
-    free(sd);
+    SCFree(sd);
 }
 
 #ifdef UNITTESTS
@@ -399,16 +404,19 @@ static int DetectStreamSizeParseTest03 (void) {
     if (sd != NULL) {
         if (!(sd->flags & STREAM_SIZE_CLIENT)) {
             printf("sd->flags not STREAM_SIZE_CLIENT: ");
+            DetectStreamSizeFree(sd);
             return 0;
         }
 
         if (sd->mode != DETECTSSIZE_GT) {
             printf("sd->mode not DETECTSSIZE_GT: ");
+            DetectStreamSizeFree(sd);
             return 0;
         }
 
         if (sd->ssize != 8) {
             printf("sd->ssize is %"PRIu32", not 8: ", sd->ssize);
+            DetectStreamSizeFree(sd);
             return 0;
         }
     } else {
@@ -428,6 +436,7 @@ static int DetectStreamSizeParseTest03 (void) {
     if (result == 0) {
         printf("result 0 != 1: ");
     }
+    DetectStreamSizeFree(sd);
     return result;
 }
 
