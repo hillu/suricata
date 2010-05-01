@@ -10,6 +10,7 @@ Build-Depends: debhelper (>= 7),
     libpcre3-dev,
     libyaml-dev,
     libnetfilter-queue-dev,
+    libprelude-dev,
     zlib1g-dev | libz-dev
 Standards-Version: 3.8.4
 Homepage: http://www.openinfosecfoundation.org/
