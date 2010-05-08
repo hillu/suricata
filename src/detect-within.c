@@ -1,7 +1,26 @@
-/* WITHIN part of the detection engine. */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/** \file
- *  \author Victor Julien <victor@inliniac.net>
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Implements the within keyword
  */
 
 #include "suricata-common.h"
@@ -52,7 +71,8 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
      * SigMatch (it can be the same as this one) */
     SigMatch *pm = SigMatchGetLastPattern(s);
     if (pm == NULL) {
-        SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "depth needs two preceeding content (or uricontent) options");
+        SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "depth needs"
+                   "two preceeding content or uricontent options");
         if (dubbed) SCFree(str);
         return -1;
     }
@@ -80,14 +100,15 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
             ud->flags |= DETECT_URICONTENT_WITHIN;
 
             if (ud->flags & DETECT_URICONTENT_DISTANCE) {
-                if (ud->distance > (ud->uricontent_len + ud->within)) {
+                if ((ud->distance + ud->uricontent_len) > ud->within) {
                     ud->within = ud->distance + ud->uricontent_len;
                 }
             }
 
             pm = DetectUricontentGetLastPattern(s->umatch_tail->prev);
             if (pm == NULL) {
-                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two preceeding content options");
+                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two"
+                           " preceeding content or uricontent options");
                 goto error;
             }
 
@@ -122,14 +143,15 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
             cd->flags |= DETECT_CONTENT_WITHIN;
 
             if (cd->flags & DETECT_CONTENT_DISTANCE) {
-                if (cd->distance > (cd->content_len + cd->within)) {
+                if ((cd->distance + cd->content_len) > cd->within) {
                     cd->within = cd->distance + cd->content_len;
                 }
             }
 
             pm = DetectContentGetLastPattern(s->pmatch_tail->prev);
             if (pm == NULL) {
-                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two preceeding content options");
+                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two"
+                           " preceeding content or uricontent options");
                 goto error;
             }
 
@@ -144,7 +166,7 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
         break;
 
         default:
-            SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two preceeding content (or uricontent) options");
+            SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two preceeding content or uricontent options");
             if (dubbed) SCFree(str);
                 return -1;
         break;

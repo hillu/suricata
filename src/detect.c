@@ -1,4 +1,27 @@
-/* Basic detection engine */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Basic detection engine
+ */
 
 #include "suricata-common.h"
 #include "suricata.h"
@@ -10,6 +33,7 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 
+#include "detect-engine-alert.h"
 #include "detect-engine-siggroup.h"
 #include "detect-engine-address.h"
 #include "detect-engine-proto.h"
@@ -83,6 +107,7 @@
 #include "detect-urilen.h"
 #include "detect-detection-filter.h"
 #include "detect-http-client-body.h"
+#include "detect-http-header.h"
 
 #include "util-rule-vars.h"
 
@@ -113,6 +138,8 @@
 #include "util-cuda-handlers.h"
 #include "util-mpm-b2g-cuda.h"
 #include "util-cuda.h"
+#include "util-privs.h"
+
 
 SigMatch *SigMatchAlloc(void);
 void DetectExitPrintStats(ThreadVars *tv, void *data);
@@ -132,6 +159,7 @@ void TmModuleDetectRegister (void) {
     tmm_modules[TMM_DETECT].ThreadExitPrintStats = DetectExitPrintStats;
     tmm_modules[TMM_DETECT].ThreadDeinit = DetectThreadDeinit;
     tmm_modules[TMM_DETECT].RegisterTests = SigRegisterTests;
+    tmm_modules[TMM_DETECT].cap_flags = 0;
 }
 
 void DetectExitPrintStats(ThreadVars *tv, void *data) {
@@ -362,58 +390,22 @@ int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
     SCSigOrderSignatures(de_ctx);
     SCSigSignatureOrderingModuleCleanup(de_ctx);
 
+    Signature *s = de_ctx->sig_list;
+
+    /* Assign the unique order id of signatures after sorting,
+     * so the IP Only engine process them in order too */
+    SigIntId sig_id = 0;
+    while (s != NULL) {
+        s->order_id = sig_id++;
+        s = s->next;
+    }
+
     /* Setup the signature group lookup structure and pattern matchers */
     SigGroupBuild(de_ctx);
     SCReturnInt(0);
 }
 
-/**
- * \brief Check if a certain sid alerted, this is used in the test functions
- *
- * \param p   Packet on which we want to check if the signature alerted or not
- * \param sid Signature id of the signature that thas to be checked for a match
- *
- * \retval match A value > 0 on a match; 0 on no match
- */
-int PacketAlertCheck(Packet *p, uint32_t sid)
-{
-    uint16_t i = 0;
-    int match = 0;
-
-    for (i = 0; i < p->alerts.cnt; i++) {
-        if (p->alerts.alerts[i].sid == sid)
-            match++;
-    }
-
-    return match;
-}
-
-int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p)
-{
-    if (p->alerts.cnt == PACKET_ALERT_MAX)
-        return 0;
-
-    SCLogDebug("sid %"PRIu32"", s->id);
-
-    if (s->gid > 1)
-        p->alerts.alerts[p->alerts.cnt].gid = s->gid;
-    else
-        p->alerts.alerts[p->alerts.cnt].gid = 1;
-
-    p->alerts.alerts[p->alerts.cnt].sid = s->id;
-    p->alerts.alerts[p->alerts.cnt].rev = s->rev;
-    p->alerts.alerts[p->alerts.cnt].prio = s->prio;
-    p->alerts.alerts[p->alerts.cnt].msg = s->msg;
-    p->alerts.alerts[p->alerts.cnt].class_msg = s->class_msg;
-    p->alerts.alerts[p->alerts.cnt].references = s->references;
-    p->alerts.cnt++;
-
-    SCPerfCounterIncr(det_ctx->counter_alerts, det_ctx->tv->sc_perf_pca);
-
-    return 0;
-}
-
-inline SigGroupHead *SigMatchSignaturesGetSgh(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p) {
+SigGroupHead *SigMatchSignaturesGetSgh(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p) {
     SCEnter();
 
     int ds,f;
@@ -482,8 +474,12 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
     void *alstate = NULL;
     uint8_t flags = 0;
     uint32_t cnt = 0;
+    int i = 0;
 
     SCEnter();
+
+    /* when we start there are no alerts yet. Only this function may set them */
+    p->alerts.cnt = 0;
 
     det_ctx->pkts++;
 
@@ -519,6 +515,10 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                                    (p->flowflags & FLOW_PKT_TOCLIENT &&
                                    (p->flow->flags & FLOW_TOCLIENT_IPONLY_SET)))) {
         /* Get the result of the first IPOnlyMatch() */
+        if (p->flow->flags & FLOW_ACTION_PASS) {
+            /* if it matched a "pass" rule, we have to let it go */
+            p->action |= ACTION_PASS;
+        }
         if (p->flow->flags & FLOW_ACTION_DROP) p->action |= ACTION_DROP;
     } else {
         /* Even without flow we should match the packet src/dst */
@@ -682,9 +682,9 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
 
             fmatch = 1;
             if (!(s->flags & SIG_FLAG_NOALERT)) {
-                PacketAlertHandle(de_ctx, det_ctx, s, p);
                 /* set verdict on packet */
                 p->action |= s->action;
+                PacketAlertAppend(det_ctx, s, p);
             }
         } else {
             /* reset offset */
@@ -720,9 +720,10 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                                 if (!(s->flags & SIG_FLAG_NOALERT)) {
                                     /* only add once */
                                     if (rmatch == 0) {
-                                        PacketAlertHandle(de_ctx, det_ctx, s, p);
                                         /* set verdict on packet */
                                         p->action |= s->action;
+
+                                        PacketAlertAppend(det_ctx, s, p);
                                     }
                                 }
                                 rmatch = fmatch = 1;
@@ -734,11 +735,13 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                             rmatch = 0;
                         }
                     }
+
                     /* Limit the number of times we do this recursive thing.
                      * XXX is this a sane limit? Should it be configurable? */
                     if (det_ctx->pkt_cnt == 10)
                         break;
                 } while (rmatch);
+
             } else {
                 sm = s->match;
 
@@ -764,12 +767,10 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                         if (sm == NULL) {
                             fmatch = 1;
                             if (!(s->flags & SIG_FLAG_NOALERT)) {
-
-                                /* set flowbit for this match */
-                                PacketAlertHandle(de_ctx, det_ctx, s, p);
-
                                 /* set verdict on packet */
                                 p->action |= s->action;
+
+                                PacketAlertAppend(det_ctx, s, p);
                             }
                         }
                     } else {
@@ -777,15 +778,40 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                         sm = NULL;
                     }
                 }
+
                 SCLogDebug("match functions done, sm %p", sm);
             }
         }
     }
 
+    /* so now let's iterate the alerts and remove the ones after a pass rule
+     * matched (if any) */
+end:
+    SCLogDebug("(p->action & ation pass)) = %"PRIu8, (p->action & ACTION_PASS));
+    for (i = 0; i < p->alerts.cnt; i++) {
+        SCLogDebug("Sig->num: %"PRIu16, p->alerts.alerts[i].num);
+        s = de_ctx->sig_array[p->alerts.alerts[i].num];
+
+        int res = PacketAlertHandle(de_ctx, det_ctx, s, p, i);
+        /* Thresholding might remove one alert */
+        if (res == 0) {
+            i--;
+        } else {
+            if (p->alerts.alerts[i].action & ACTION_PASS) {
+                /* Ok, reset the alert cnt to end in the previous of pass
+                 * so we ignore the rest with less prio */
+                p->alerts.cnt = i;
+                break;
+            }
+        }
+        /* Because we removed the alert from the array, we should
+         * have compacted the array and decreased cnt by one, so
+         * process again the same position (with different alert now) */
+    }
+
     /* cleanup pkt specific part of the patternmatcher */
     PacketPatternCleanup(th_v, det_ctx);
 
-end:
     if (p->flow != NULL) {
         SCMutexLock(&p->flow->m);
         p->flow->use_cnt--;
@@ -2551,7 +2577,7 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
     for (ds = 0; ds < DSIZE_STATES; ds++) {
         for (f = 0; f < FLOW_STATES; f++) {
             for (proto = 0; proto < 256; proto++) {
-                if (proto != 6)
+                if (proto != 17)
                     continue;
 
                 for (global_src_gr = de_ctx->dsize_gh[ds].flow_gh[f].src_gh[proto]->ipv4_head; global_src_gr != NULL;
@@ -2570,6 +2596,8 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                             global_dst_gr = global_dst_gr->next)
                     {
                         printf(" 2 Dst Addr: "); DetectAddressPrint(global_dst_gr);
+                        printf("\n");
+
                         //printf(" (sh %p) ", global_dst_gr->sh);
                         if (global_dst_gr->sh) {
                             if (global_dst_gr->sh->flags & ADDRESS_SIGGROUPHEAD_COPY) {
@@ -2586,7 +2614,7 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                             DetectPort *dp = sp->dst_ph;
                             for ( ; dp != NULL; dp = dp->next) {
                                 printf("   4 Dst port(range): "); DetectPortPrint(dp);
-                                printf(" (sigs %" PRIu32 ", maxlen %" PRIu32 ")", dp->sh->sig_cnt, dp->sh->mpm_content_maxlen);
+                                printf(" (sigs %" PRIu32 ", sgh %p, maxlen %" PRIu32 ")", dp->sh->sig_cnt, dp->sh, dp->sh->mpm_content_maxlen);
 #ifdef PRINTSIGS
                                 printf(" - ");
                                 for (u = 0; u < dp->sh->sig_cnt; u++) {
@@ -2630,7 +2658,7 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                         }
                     }
                 }
-//#if 0
+#if 0
                 for (global_src_gr = de_ctx->dsize_gh[ds].flow_gh[f].src_gh[proto]->ipv6_head; global_src_gr != NULL;
                         global_src_gr = global_src_gr->next)
                 {
@@ -2809,7 +2837,7 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
                         }
                     }
                 }
-//#endif
+#endif
             }
         }
     }
@@ -2961,6 +2989,7 @@ void SigTableSetup(void) {
     DetectTlsVersionRegister();
     DetectUrilenRegister();
     DetectDetectionFilterRegister();
+    DetectHttpHeaderRegister();
     DetectHttpClientBodyRegister();
 
     uint8_t i = 0;

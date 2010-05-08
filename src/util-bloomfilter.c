@@ -1,6 +1,27 @@
-/* Copyright (c) 2008 by Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/* Bitwise bloom filter implementation. */
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Bitwise bloom filter implementation
+ */
 
 #include "suricata-common.h"
 #include "util-bloomfilter.h"
@@ -75,22 +96,6 @@ int BloomFilterAdd(BloomFilter *bf, void *data, uint16_t datalen) {
     }
 
     return 0;
-}
-
-inline int BloomFilterTest(BloomFilter *bf, void *data, uint16_t datalen) {
-    uint8_t iter = 0;
-    uint32_t hash = 0;
-    int hit = 1;
-
-    for (iter = 0; iter < bf->hash_iterations; iter++) {
-        hash = bf->Hash(data, datalen, iter, bf->bitarray_size);
-        if (!(bf->bitarray[hash/8] & (1<<hash%8))) {
-            hit = 0;
-            break;
-        }
-    }
-
-    return hit;
 }
 
 uint32_t BloomFilterMemoryCnt(BloomFilter *bf) {

@@ -1,10 +1,28 @@
-/* Copyright (c) 2009 Open Information Security Foundation */
-
-/** \file
- *  \author Breno Silva <breno.silva@gmail.com>
- *  \author Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
  */
 
+/**
+ * \file
+ *
+ *  \author Breno Silva <breno.silva@gmail.com>
+ *  \author Victor Julien <victor@inliniac.net>
+ *
+ *  Threshold part of the detection engine.
+ */
 
 #include "suricata-common.h"
 #include "debug.h"
@@ -42,10 +60,11 @@
  * \param p Packet structure
  *
  */
-void PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-                       Signature *s, Packet *p)
+int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                       Signature *s, Packet *p, uint16_t pos)
 {
     SCEnter();
+    int ret = 0;
 
     /* retrieve the sig match data */
     DetectThresholdData *td = SigGetThresholdType(s,p);
@@ -54,12 +73,18 @@ void PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
 
     /* if have none just alert, otherwise handle thresholding */
     if (td == NULL) {
-        PacketAlertAppend(det_ctx, s, p);
-    } else    {
-        PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+        //PacketAlertAppend(det_ctx, s, p);
+        /* Already inserted so get out */
+        ret = 1;
+    } else {
+        ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+        if (ret == 0) {
+            /* It doesn't match threshold, remove it */
+            PacketAlertRemove(p, pos);
+        }
     }
 
-    SCReturn;
+    SCReturnInt(ret);
 }
 
 /**
@@ -225,23 +250,24 @@ void ThresholdHashAdd(DetectEngineCtx *de_ctx, DetectThresholdEntry *tsh_ptr, Pa
  * \param s Signature structure
  *
  */
-void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
                           DetectThresholdData *td, Packet *p, Signature *s)
 {
     SCEnter();
+    int ret = 0;
 
     struct timeval ts;
     DetectThresholdEntry *lookup_tsh = NULL;
     DetectThresholdEntry *ste = NULL;
 
     if (td == NULL)
-        SCReturn;
+        SCReturnInt(ret);
 
     /* setup the Entry we use to search our hash with */
     ste = SCMalloc(sizeof(DetectThresholdEntry));
     if (ste == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed: %s", strerror(errno));
-        SCReturn;
+        SCReturnInt(ret);
     }
     memset(ste, 0x00, sizeof(ste));
 
@@ -279,20 +305,20 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
             if (lookup_tsh != NULL)  {
                 if ((ts.tv_sec - lookup_tsh->tv_sec1) < td->seconds) {
                     if (lookup_tsh->current_count < td->count) {
-                        PacketAlertAppend(det_ctx, s, p);
+                        ret = 1;
                     }
                     lookup_tsh->current_count++;
                 } else    {
                     lookup_tsh->tv_sec1 = ts.tv_sec;
                     lookup_tsh->current_count = 1;
 
-                    PacketAlertAppend(det_ctx, s, p);
+                    ret = 1;
                 }
             } else {
                 ste->tv_sec1 = ts.tv_sec;
                 ste->current_count = 1;
 
-                PacketAlertAppend(det_ctx, s, p);
+                ret = 1;
 
                 ThresholdHashAdd(de_ctx, ste, p);
                 ste = NULL;
@@ -309,7 +335,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                     lookup_tsh->current_count++;
 
                     if (lookup_tsh->current_count >= td->count) {
-                        PacketAlertAppend(det_ctx, s, p);
+                        ret = 1;
                         lookup_tsh->current_count = 0;
                     }
                 } else {
@@ -321,7 +347,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                 ste->tv_sec1 = ts.tv_sec;
 
                 if (td->count == 1)  {
-                    PacketAlertAppend(det_ctx, s, p);
+                    ret = 1;
                     ste->current_count = 0;
                 } else {
                     ThresholdHashAdd(de_ctx,ste,p);
@@ -339,7 +365,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                 if ((ts.tv_sec - lookup_tsh->tv_sec1) < td->seconds) {
                     lookup_tsh->current_count++;
                     if (lookup_tsh->current_count == td->count)    {
-                        PacketAlertAppend(det_ctx, s, p);
+                        ret = 1;
                     }
                 } else    {
                     lookup_tsh->tv_sec1 = ts.tv_sec;
@@ -350,7 +376,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                 ste->tv_sec1 = ts.tv_sec;
 
                 if (td->count == 1)  {
-                    PacketAlertAppend(det_ctx, s, p);
+                    ret = 1;
                     ste->current_count = 0;
                 } else {
                     ThresholdHashAdd(de_ctx,ste,p);
@@ -369,7 +395,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                 if ((ts.tv_sec - lookup_tsh->tv_sec1) < td->seconds) {
                     lookup_tsh->current_count++;
                     if (lookup_tsh->current_count >= td->count) {
-                        PacketAlertAppend(det_ctx, s, p);
+                        ret = 1;
                     }
                 } else {
                     lookup_tsh->tv_sec1 = ts.tv_sec;
@@ -380,7 +406,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
                 ste->tv_sec1 = ts.tv_sec;
 
                 if (td->count == 1) {
-                    PacketAlertAppend(det_ctx, s, p);
+                    ret = 1;
                 }
                 ThresholdHashAdd(de_ctx, ste, p);
                 ste = NULL;
@@ -394,7 +420,7 @@ void PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ct
         SCFree(ste);
 
     ThresholdTimeoutRemove(de_ctx);
-    SCReturn;
+    SCReturnInt(ret);
 }
 
 void ThresholdFreeFunc(void *data)

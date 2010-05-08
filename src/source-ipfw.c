@@ -1,7 +1,26 @@
-/* Copyright (c) 2009 Open Information Security Foundation */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/** \file
- *  \author Nick Rogness <nick@rogness.net>
+/**
+ * \file
+ *
+ * \author Nick Rogness <nick@rogness.net>
+ *
+ * IPFW packet acquisition support
  */
 
 #include "suricata-common.h"
@@ -16,6 +35,7 @@
 #include "source-ipfw.h"
 #include "util-debug.h"
 #include "conf.h"
+#include "util-privs.h"
 
 #define IPFW_ACCEPT 0
 #define IPFW_DROP 1
@@ -40,6 +60,8 @@ void TmModuleReceiveIPFWRegister (void) {
     tmm_modules[TMM_RECEIVEIPFW].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_RECEIVEIPFW].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEIPFW].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVEIPFW].cap_flags = SC_CAP_NET_ADMIN | SC_CAP_NET_RAW |
+        SC_CAP_NET_BIND_SERVICE | SC_CAP_NET_BROADCAST; /** \todo untested */
 }
 
 void TmModuleVerdictIPFWRegister (void) {
@@ -49,6 +71,8 @@ void TmModuleVerdictIPFWRegister (void) {
     tmm_modules[TMM_VERDICTIPFW].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_VERDICTIPFW].ThreadDeinit = NULL;
     tmm_modules[TMM_VERDICTIPFW].RegisterTests = NULL;
+    tmm_modules[TMM_VERDICTIPFW].cap_flags = SC_CAP_NET_ADMIN | SC_CAP_NET_RAW |
+        SC_CAP_NET_BIND_SERVICE; /** \todo untested */
 }
 
 void TmModuleDecodeIPFWRegister (void) {
@@ -58,6 +82,7 @@ void TmModuleDecodeIPFWRegister (void) {
     tmm_modules[TMM_DECODEIPFW].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODEIPFW].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEIPFW].RegisterTests = NULL;
+    tmm_modules[TMM_DECODEIPFW].cap_flags = 0;
 }
 
 TmEcode NoIPFWSupportExit(ThreadVars *tv, void *initdata, void **data) {

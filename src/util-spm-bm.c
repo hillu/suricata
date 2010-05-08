@@ -1,11 +1,30 @@
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
+ * \file
  *
  * \author Pablo Rincon Crespo <pablo.rincon.crespo@gmail.com>
  *
+ * Boyer Moore simple pattern matcher implementation
+ *
  * Boyer Moore algorithm has a really good performance. It need to arrays
  * of context for each pattern that hold applicable shifts on the text
- * to seach in, bassed on characters not available in the pattern
+ * to seach in, based on characters not available in the pattern
  * and combinations of characters that start a sufix on the pattern.
  * If possible, we should store the context of patterns that we are going
  * to search for multiple times, so we don't spend time on rebuilding them.
@@ -19,6 +38,23 @@
 #include <time.h>
 #include <limits.h>
 #include <string.h>
+
+/**
+ * \brief Given a BmCtx structure, recreate the pre/suffixes for
+ *        nocase
+ *
+ * \retval BmCtx pointer to the already created BmCtx (with BoyerMooreCtxInit())
+ * \param str pointer to the pattern string
+ * \param size length of the string
+ */
+void BoyerMooreCtxToNocase(BmCtx *bm_ctx, uint8_t *needle, uint32_t needle_len) {
+
+    /* Prepare bad chars with nocase chars */
+    PreBmBcNocase(needle, needle_len, bm_ctx->bmBc);
+
+    /* Prepare good Suffixes with nocase chars */
+    PreBmGsNocase(needle, needle_len, bm_ctx->bmGs);
+}
 
 /**
  * \brief Setup a Booyer More context.
@@ -57,7 +93,7 @@ BmCtx *BoyerMooreCtxInit(uint8_t *needle, uint32_t needle_len) {
  * \param size length of the string
  * \param result pointer to an empty array that will hold the badchars
  */
-inline void PreBmBc(const uint8_t *x, int32_t m, int32_t *bmBc) {
+void PreBmBc(const uint8_t *x, int32_t m, int32_t *bmBc) {
     int32_t i;
 
     for (i = 0; i < 256; ++i) {
@@ -75,7 +111,7 @@ inline void PreBmBc(const uint8_t *x, int32_t m, int32_t *bmBc) {
  * \param m length of the string
  * \param suff pointer to an empty array that will hold the prefixes (shifts)
  */
-inline void BoyerMooreSuffixes(const uint8_t *x, int32_t m, int32_t *suff) {
+void BoyerMooreSuffixes(const uint8_t *x, int32_t m, int32_t *suff) {
     int32_t f = 0, g, i;
     suff[m - 1] = m;
     g = m - 1;
@@ -100,7 +136,7 @@ inline void BoyerMooreSuffixes(const uint8_t *x, int32_t m, int32_t *suff) {
  * \param m length of the string
  * \param bmGs pointer to an empty array that will hold the prefixes (shifts)
  */
-inline void PreBmGs(const uint8_t *x, int32_t m, int32_t *bmGs) {
+void PreBmGs(const uint8_t *x, int32_t m, int32_t *bmGs) {
     int32_t i, j;
     int32_t *suff;
 
@@ -132,7 +168,7 @@ inline void PreBmGs(const uint8_t *x, int32_t m, int32_t *bmGs) {
  * \param size length of the string
  * \param result pointer to an empty array that will hold the badchars
  */
-inline void PreBmBcNocase(const uint8_t *x, int32_t m, int32_t *bmBc) {
+void PreBmBcNocase(const uint8_t *x, int32_t m, int32_t *bmBc) {
     int32_t i;
 
     for (i = 0; i < 256; ++i) {
@@ -143,7 +179,7 @@ inline void PreBmBcNocase(const uint8_t *x, int32_t m, int32_t *bmBc) {
     }
 }
 
-inline void BoyerMooreSuffixesNocase(const uint8_t *x, int32_t m, int32_t *suff) {
+void BoyerMooreSuffixesNocase(const uint8_t *x, int32_t m, int32_t *suff) {
     int32_t f = 0, g, i;
 
     suff[m - 1] = m;
@@ -172,7 +208,7 @@ inline void BoyerMooreSuffixesNocase(const uint8_t *x, int32_t m, int32_t *suff)
  * \param m length of the string
  * \param bmGs pointer to an empty array that will hold the prefixes (shifts)
  */
-inline void PreBmGsNocase(const uint8_t *x, int32_t m, int32_t *bmGs) {
+void PreBmGsNocase(const uint8_t *x, int32_t m, int32_t *bmGs) {
     int32_t i, j;
     int32_t* suff;
 
@@ -215,7 +251,7 @@ inline void PreBmGsNocase(const uint8_t *x, int32_t m, int32_t *bmGs) {
  *
  * \retval ptr to start of the match; NULL if no match
  */
-inline uint8_t *BoyerMoore(uint8_t *x, int32_t m, uint8_t *y, int32_t n, int32_t *bmGs, int32_t *bmBc) {
+uint8_t *BoyerMoore(uint8_t *x, int32_t m, uint8_t *y, int32_t n, int32_t *bmGs, int32_t *bmBc) {
    int i, j, m1, m2;
 #if 0
     printf("\nBad:\n");
@@ -259,7 +295,7 @@ inline uint8_t *BoyerMoore(uint8_t *x, int32_t m, uint8_t *y, int32_t n, int32_t
  *
  * \retval ptr to start of the match; NULL if no match
  */
-inline uint8_t *BoyerMooreNocase(uint8_t *x, int32_t m, uint8_t *y, int32_t n, int32_t *bmGs, int32_t *bmBc) {
+uint8_t *BoyerMooreNocase(uint8_t *x, int32_t m, uint8_t *y, int32_t n, int32_t *bmGs, int32_t *bmBc) {
     int i, j, m1, m2;
 #if 0
     printf("\nBad:\n");

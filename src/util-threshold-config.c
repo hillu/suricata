@@ -1,6 +1,28 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
- *  \author Breno Silva Pinto <breno.silva@gmail.com>
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Breno Silva Pinto <breno.silva@gmail.com>
+ *
+ * \todo Need to support suppress
+ *
+ * Implements Threshold support
  */
 
 #include "suricata-common.h"
@@ -18,8 +40,6 @@
 #include "util-fmemopen.h"
 
 /* File descriptor for unittests */
-
-/** \todo Need to support suppress */
 
 #define DETECT_THRESHOLD_REGEX "^\\s*(event_filter|threshold)\\s*gen_id\\s*(\\d+)\\s*,\\s*sig_id\\s*(\\d+)\\s*,\\s*type\\s*(limit|both|threshold)\\s*,\\s*track\\s*(by_dst|by_src)\\s*,\\s*count\\s*(\\d+)\\s*,\\s*seconds\\s*(\\d+)\\s*$"
 
@@ -62,7 +82,7 @@ char *SCThresholdConfGetConfFilename(void)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-inline int SCThresholdConfInitContext(DetectEngineCtx *de_ctx, FILE *utfd)
+int SCThresholdConfInitContext(DetectEngineCtx *de_ctx, FILE *utfd)
 {
     char *filename = NULL;
     const char *eb = NULL;
@@ -124,7 +144,7 @@ void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-inline int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
+int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
 {
     const char *th_gid = NULL;
     const char *th_sid = NULL;
@@ -409,7 +429,7 @@ int SCThresholdConfIsLineBlankOrComment(char *line)
  * \param de_ctx Pointer to the Detection Engine Context.
  * \param fd Pointer to file descriptor.
  */
-inline void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
+void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
 {
     char line[1024];
 

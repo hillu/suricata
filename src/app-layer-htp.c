@@ -1,13 +1,28 @@
-/* Copyright (c) 2009 Open Information Security Foundation */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
 /**
- * \file   This file provides a HTTP protocol support for the engine using
- *         HTP library.
+ * \file
  *
  * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
  * \author Pablo Rincon <pablo.rincon.crespo@gmail.com>
  * \author Brian Rectanus <brectanu@gmail.com>
  *
+ * This file provides a HTTP protocol support for the engine using HTP library.
  */
 
 #include "suricata-common.h"
@@ -703,8 +718,8 @@ static int HTPCallbackResponse(htp_connp_t *connp) {
     hstate->body.operation = HTP_BODY_RESPONSE;
     hstate->body.pcre_flags = HTP_PCRE_NONE;
 
-    /* Clear the trasactions which are processed by the engine from libhtp.
-       This helps in reducing the meory consumptions of libhtp */
+    /* Clear the transactions which are processed by the engine from libhtp.
+       This helps in reducing the memory consumptions of libhtp */
     for (idx = 0; idx < hstate->new_in_tx_index; idx++) {
         htp_tx_t *tx = list_get(hstate->connp->conn->transactions, idx);
         if (tx != NULL)

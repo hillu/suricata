@@ -3,7 +3,7 @@
 AC_INIT(configure.in)
 
     AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 0.8.2)
+    AM_INIT_AUTOMAKE(suricata, 0.9.0)
 
     AC_LANG_C
     AC_PROG_CC_C99
@@ -313,6 +313,10 @@ AC_INIT(configure.in)
     CFLAGS="$CFLAGS -DNFQ"
 
 #libnfnetlink
+case $host in
+*-*-mingw32*)
+;;
+*)
     AC_ARG_WITH(libnfnetlink_includes,
             [  --with-libnfnetlink-includes=DIR  libnfnetlink include directory],
             [with_libnfnetlink_includes="$withval"],[with_libnfnetlink_includes=no])
@@ -343,6 +347,8 @@ AC_INIT(configure.in)
     echo
     exit 
     fi
+;;
+esac
 
 #libnetfilter_queue
     AC_ARG_WITH(libnetfilter_queue_includes,
@@ -365,7 +371,25 @@ AC_INIT(configure.in)
 #LDFLAGS="${LDFLAGS} -lnetfilter_queue"
 
     NFQ=""
+
+case $host in
+*-*-mingw32*)
+    AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",-lws2_32)
+
+    AC_ARG_WITH(netfilterforwin_includes,
+            [  --with-netfilterforwin-includes=DIR  netfilterforwin include directory],
+            [with_netfilterforwin_includes="$withval"],[with_netfilterforwin_includes=no])
+
+    if test "$with_netfilterforwin_includes" != "no"; then
+    CPPFLAGS="${CPPFLAGS} -I${with_netfilterforwin_includes}"
+    else
+    CPPFLAGS="${CPPFLAGS} -I../../netfilterforwin"
+    fi
+;;
+*)
     AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",)
+;;
+esac
 
     if test "$NFQ" = "no"; then
     echo
@@ -674,6 +698,42 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
         fi
     fi
 
+# Check for libcap-ng
+
+    AC_ARG_WITH(libcap_ng_includes,
+            [  --with-libcap_ng-includes=DIR  libcap_ng include directory],
+            [with_libcap-ng_includes="$withval"],[with_libcap_ng_includes=no])
+    AC_ARG_WITH(libcap_ng_libraries,
+            [  --with-libcap_ng-libraries=DIR    libcap_ng library directory],
+            [with_libcap_ng_libraries="$withval"],[with_libcap_ng_libraries="no"])
+
+    if test "$with_libcap_ng_includes" != "no"; then
+    CPPFLAGS="${CPPFLAGS} -I${with_libcap_ng_includes}"
+    fi
+
+    if test "$with_libcap_ng_libraries" != "no"; then
+    LDFLAGS="${LDFLAGS}  -L${with_libcap_ng_libraries}"
+    fi
+
+    AC_CHECK_HEADER(cap-ng.h,,LIBCAP_NG="no")
+    if test "$LIBCAP_NG" != "no"; then
+        LIBCAP_NG=""
+        AC_CHECK_LIB(cap-ng,capng_clear,,LIBCAP_NG="no")
+    fi
+
+    if test "$LIBCAP_NG" != "no"; then
+    CFLAGS="${CFLAGS} -DHAVE_LIBCAP_NG"
+    fi
+
+    if test "$LIBCAP_NG" = "no"; then
+    echo
+    echo "   WARNING!  libcap-ng library not found, go get it"
+    echo "   from http://people.redhat.com/sgrubb/libcap-ng/"
+    echo "   or check your package manager."
+    echo
+    echo "   Suricata will be built without support for dropping privs."
+    echo
+    fi
 
 AC_SUBST(CFLAGS)
 AC_SUBST(LDFLAGS)

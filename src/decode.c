@@ -1,6 +1,27 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/* Decode the raw packet */
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Decode the raw packet
+ */
 
 #include "suricata-common.h"
 #include "decode.h"
@@ -21,26 +42,6 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
             SCLogInfo("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", p->tunnel_proto);
             break;
     }
-}
-
-/** \brief Set the No payload inspection Flag for the packet.
- *
- * \param p Packet to set the flag in
- */
-inline void DecodeSetNoPayloadInspectionFlag(Packet *p) {
-    SCEnter();
-    p->flags |= PKT_NOPAYLOAD_INSPECTION;
-    SCReturn;
-}
-
-/** \brief Set the No packet inspection Flag for the packet.
- *
- * \param p Packet to set the flag in
- */
-inline void DecodeSetNoPacketInspectionFlag(Packet *p) {
-    SCEnter();
-    p->flags |= PKT_NOPACKET_INSPECTION;
-    SCReturn;
 }
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)

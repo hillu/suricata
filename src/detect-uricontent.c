@@ -1,12 +1,27 @@
-/* Copyright (C) 2008 by Victor Julien <victor@inliniac.net>
- * Copyright (c) 2009 Open Information Security Foundation */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
 /**
- * \file   Simple uricontent match part of the detection engine.
+ * \file
  *
  * \author  Victor Julien <victor@inliniac.net>
  * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
  *
+ * Simple uricontent match part of the detection engine.
  */
 
 #include "suricata-common.h"
@@ -105,8 +120,10 @@ void DetectUricontentPrint(DetectUricontentData *cd)
     SCLogDebug("Within: %"PRIi32, cd->within);
     SCLogDebug("Distance: %"PRIi32, cd->distance);
     SCLogDebug("flags: %u ", cd->flags);
-    SCLogDebug("negated: %s ", cd->flags & DETECT_URICONTENT_NEGATED ? "true" : "false");
-    SCLogDebug("relative match next: %s ", cd->flags & DETECT_URICONTENT_RELATIVE_NEXT ? "true" : "false");
+    SCLogDebug("negated: %s ",
+            cd->flags & DETECT_URICONTENT_NEGATED ? "true" : "false");
+    SCLogDebug("relative match next: %s ",
+            cd->flags & DETECT_URICONTENT_RELATIVE_NEXT ? "true" : "false");
     SCLogDebug("-----------");
 }
 
@@ -316,7 +333,8 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
     s->flags |= SIG_FLAG_APPLAYER;
 
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                " keywords.");
         goto error;
     }
 
@@ -976,6 +994,7 @@ static int DetectUriSigTest04(void) {
         s->pmatch != NULL ||
         s->match != NULL)
     {
+        printf("sig 1 failed to parse: ");
         goto end;
     }
 
@@ -987,6 +1006,7 @@ static int DetectUriSigTest04(void) {
         s->pmatch == NULL ||
         s->match != NULL)
     {
+        printf("sig 2 failed to parse: ");
         goto end;
     }
 
@@ -997,10 +1017,12 @@ static int DetectUriSigTest04(void) {
     if (s == NULL ||
         s->umatch == NULL ||
         s->pmatch == NULL ||
-        ((DetectContentData*)s->pmatch->ctx)->depth != 8||
-        ((DetectContentData*)s->pmatch->ctx)->offset != 5 ||
+        ((DetectContentData *)s->pmatch->ctx)->depth != 10 ||
+        ((DetectContentData *)s->pmatch->ctx)->offset != 5 ||
         s->match != NULL)
     {
+        printf("sig 3 failed to parse: ");
+        DetectContentPrint((DetectContentData *) s->pmatch_tail->ctx);
         goto end;
     }
 
@@ -1011,10 +1033,11 @@ static int DetectUriSigTest04(void) {
     if (s == NULL ||
         s->umatch == NULL ||
         s->pmatch == NULL ||
-        ((DetectUricontentData*)s->umatch->ctx)->depth != 8||
-        ((DetectUricontentData*)s->umatch->ctx)->offset != 5 ||
+        ((DetectUricontentData *)s->umatch->ctx)->depth != 10 ||
+        ((DetectUricontentData *)s->umatch->ctx)->offset != 5 ||
         s->match != NULL)
     {
+        printf("sig 4 failed to parse: ");
         goto end;
     }
 
@@ -1023,6 +1046,7 @@ static int DetectUriSigTest04(void) {
                                    "uricontent:\"foo\"; content:\"bar\";"
                                    " depth:10; offset: 5; within:3; sid:1;)");
     if (s != NULL) {
+        printf("sig 5 failed to parse: ");
         goto end;
     }
 
@@ -1031,6 +1055,7 @@ static int DetectUriSigTest04(void) {
                                    "uricontent:\"foo\"; content:\"bar\";"
                                    " depth:10; offset: 5; distance:3; sid:1;)");
     if (s != NULL) {
+        printf("sig 6 failed to parse: ");
         goto end;
     }
 
@@ -1043,11 +1068,12 @@ static int DetectUriSigTest04(void) {
         goto end;
     } else if (s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 8 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->within != 30 ||
             s->match != NULL)
     {
+        printf("sig 7 failed to parse: ");
         DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
         goto end;
     }
@@ -1061,11 +1087,12 @@ static int DetectUriSigTest04(void) {
         goto end;
     } else if (s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 8 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->umatch_tail->ctx)->within != 30 ||
             s->match != NULL)
     {
+        printf("sig 8 failed to parse: ");
         DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
         goto end;
     }
@@ -1080,11 +1107,12 @@ static int DetectUriSigTest04(void) {
     } else if (
             s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 8 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->distance != 30 ||
             s->match != NULL)
     {
+        printf("sig 9 failed to parse: ");
         DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
         goto end;
     }
@@ -1099,11 +1127,12 @@ static int DetectUriSigTest04(void) {
     } else if (
             s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 8 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->umatch_tail->ctx)->distance != 30 ||
             s->match != NULL)
     {
+        printf("sig 10 failed to parse: ");
         DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
         goto end;
     }
@@ -1116,17 +1145,26 @@ static int DetectUriSigTest04(void) {
                                    "within:60; content:\"two_contents\";"
                                    " within:70; distance:45; sid:1;)");
     if (s == NULL) {
+        printf("sig 10 failed to parse: ");
         goto end;
-    } else if (s->umatch == NULL ||
-            s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 8 ||
+    }
+
+    if (s->umatch == NULL || s->pmatch == NULL) {
+        printf("umatch %p or pmatch %p: ", s->umatch, s->pmatch);
+        goto end;
+    }
+
+    if (    ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectContentData*) s->umatch_tail->ctx)->distance != 30 ||
-            ((DetectContentData*) s->umatch_tail->ctx)->within != 60 ||
+            ((DetectUricontentData*) s->umatch_tail->ctx)->distance != 30 ||
+            ((DetectUricontentData*) s->umatch_tail->ctx)->within != 60 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->distance != 45 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->within != 70 ||
             s->match != NULL) {
+        printf("sig 10 failed to parse, content not setup properly: ");
+        DetectContentPrint((DetectContentData*) s->pmatch->ctx);
         DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
+        DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
         goto end;
     }
 
@@ -1224,13 +1262,13 @@ static int DetectUriSigTest05(void) {
     }
 
     if ((PacketAlertCheck(&p, 1))) {
-        printf("sig: 1 alerted, but it should not\n");
+        printf("sig: 1 alerted, but it should not:");
         goto end;
     } else if (! PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should\n");
+        printf("sig: 2 did not alerted, but it should:");
         goto end;
     } else if (! (PacketAlertCheck(&p, 3))) {
-        printf("sig: 3 did not alerted, but it should\n");
+        printf("sig: 3 did not alerted, but it should:");
         goto end;
     }
 
@@ -1341,13 +1379,13 @@ static int DetectUriSigTest06(void) {
     }
 
     if ((PacketAlertCheck(&p, 1))) {
-        printf("sig: 1 alerted, but it should not\n");
+        printf("sig: 1 alerted, but it should not:");
         goto end;
     } else if (! PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should\n");
+        printf("sig: 2 did not alerted, but it should:");
         goto end;
     } else if (! (PacketAlertCheck(&p, 3))) {
-        printf("sig: 3 did not alerted, but it should\n");
+        printf("sig: 3 did not alerted, but it should:");
         goto end;
     }
 
@@ -1458,13 +1496,13 @@ static int DetectUriSigTest07(void) {
     }
 
     if (PacketAlertCheck(&p, 1)) {
-        printf("sig: 1 alerted, but it should not\n");
+        printf("sig: 1 alerted, but it should not:");
         goto end;
     } else if (PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should\n");
+        printf("sig: 2 alerted, but it should not:");
         goto end;
     } else if (PacketAlertCheck(&p, 3)) {
-        printf("sig: 3 did not alerted, but it should\n");
+        printf("sig: 3 alerted, but it should not:");
         goto end;
     }
 

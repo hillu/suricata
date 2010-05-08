@@ -1,4 +1,25 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ */
 
 #ifndef __DECODE_H__
 #define __DECODE_H__
@@ -165,6 +186,9 @@ typedef uint16_t Port;
 /* structure to store the sids/gids/etc the detection engine
  * found in this packet */
 typedef struct PacketAlert_ {
+    SigIntId num; /* Internal num, used for sorting */
+    SigIntId order_id; /* Internal num, used for sorting */
+    uint8_t action; /* Internal num, used for sorting */
     uint32_t  gid;
     uint32_t sid;
     uint8_t  rev;
@@ -297,6 +321,9 @@ typedef struct Packet_
 
     /* IPS action to take */
     uint8_t action;
+
+    /** packet number in the pcap file, matches wireshark */
+    uint64_t pcap_cnt;
 
     /* double linked list ptrs */
     struct Packet_ *next;
@@ -484,8 +511,22 @@ void DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t,
 Packet *SetupPkt (void);
 Packet *TunnelPktSetup(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, uint8_t);
 
-inline void DecodeSetNoPayloadInspectionFlag(Packet *);
-inline void DecodeSetNoPacketInspectionFlag(Packet *);
+/** \brief Set the No payload inspection Flag for the packet.
+ *
+ * \param p Packet to set the flag in
+ */
+#define DecodeSetNoPayloadInspectionFlag(p) { \
+    (p)->flags |= PKT_NOPAYLOAD_INSPECTION; \
+}
+
+/** \brief Set the No packet inspection Flag for the packet.
+ *
+ * \param p Packet to set the flag in
+ */
+#define DecodeSetNoPacketInspectionFlag(p) { \
+    (p)->flags |= PKT_NOPACKET_INSPECTION; \
+}
+
 
 #define DECODER_SET_EVENT(p, e)   ((p)->events[(e/8)] |= (1<<(e%8)))
 #define DECODER_ISSET_EVENT(p, e) ((p)->events[(e/8)] & (1<<(e%8)))

@@ -1,11 +1,28 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
-
-/* alert debuglog
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
  *
- * TODO
- * - figure out a way to (thread) safely print detection engine info
- *   - maybe by having a log queue in the packet
- *   - maybe by accessing it just and hoping threading doesn't hurt
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * \todo figure out a way to (thread) safely print detection engine info
+ * \todo maybe by having a log queue in the packet
+ * \todo maybe by accessing it just and hoping threading doesn't hurt
  */
 
 #include "suricata-common.h"
@@ -28,6 +45,7 @@
 
 #include "output.h"
 #include "alert-debuglog.h"
+#include "util-privs.h"
 
 #define DEFAULT_LOG_FILENAME "alert-debug.log"
 
@@ -48,6 +66,7 @@ void TmModuleAlertDebugLogRegister (void) {
     tmm_modules[TMM_ALERTDEBUGLOG].ThreadExitPrintStats = AlertDebugLogExitPrintStats;
     tmm_modules[TMM_ALERTDEBUGLOG].ThreadDeinit = AlertDebugLogThreadDeinit;
     tmm_modules[TMM_ALERTDEBUGLOG].RegisterTests = NULL;
+    tmm_modules[TMM_ALERTDEBUGLOG].cap_flags = 0;
 
     OutputRegisterModule(MODULE_NAME, "alert-debug", AlertDebugLogInitCtx);
 }
@@ -84,6 +103,9 @@ TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
 
     fprintf(aft->file_ctx->fp, "+================\n");
     fprintf(aft->file_ctx->fp, "TIME:              %s\n", timebuf);
+    if (p->pcap_cnt > 0) {
+        fprintf(aft->file_ctx->fp, "PCAP PKT NUM:      %"PRIu64"\n", p->pcap_cnt);
+    }
     fprintf(aft->file_ctx->fp, "ALERT CNT:         %" PRIu32 "\n", p->alerts.cnt);
 
     for (i = 0; i < p->alerts.cnt; i++) {
@@ -104,9 +126,13 @@ TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
     fprintf(aft->file_ctx->fp, "SRC IP:            %s\n", srcip);
     fprintf(aft->file_ctx->fp, "DST IP:            %s\n", dstip);
     fprintf(aft->file_ctx->fp, "PROTO:             %" PRIu32 "\n", IPV4_GET_IPPROTO(p));
-    if (IPV4_GET_IPPROTO(p) == IPPROTO_TCP || IPV4_GET_IPPROTO(p) == IPPROTO_UDP) {
+    if (PKT_IS_TCP(p) || PKT_IS_UDP(p)) {
         fprintf(aft->file_ctx->fp, "SRC PORT:          %" PRIu32 "\n", p->sp);
         fprintf(aft->file_ctx->fp, "DST PORT:          %" PRIu32 "\n", p->dp);
+        if (PKT_IS_TCP(p)) {
+            fprintf(aft->file_ctx->fp, "TCP SEQ:           %"PRIu32"\n", TCP_GET_SEQ(p));
+            fprintf(aft->file_ctx->fp, "TCP ACK:           %"PRIu32"\n", TCP_GET_ACK(p));
+        }
     }
 
     /* flow stuff */

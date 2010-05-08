@@ -1,5 +1,26 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ *
+ * Used for parsing a classification.config file
  */
 
 #include "suricata-common.h"
@@ -32,24 +53,7 @@ uint32_t SCClassConfClasstypeHashFunc(HashTable *ht, void *data, uint16_t datale
 char SCClassConfClasstypeHashCompareFunc(void *data1, uint16_t datalen1,
                                          void *data2, uint16_t datalen2);
 void SCClassConfClasstypeHashFree(void *ch);
-
-/**
- * \brief Returns the path for the Classification Config file.  We check if we
- *        can retrieve the path from the yaml conf file.  If it is not present,
- *        return the default path for the classification file which is
- *        "./classification.config".
- *
- * \retval log_filename Pointer to a string containing the path for the
- *                      Classification Config file.
- */
-static char *SCClassConfGetConfFilename(void)
-{
-    char *log_filename = (char *)default_file_path;
-
-    ConfGet("classification-file", &log_filename);
-
-    return log_filename;
-}
+static char *SCClassConfGetConfFilename(void);
 
 /**
  * \brief Inits the context to be used by the Classification Config parsing API.
@@ -65,7 +69,7 @@ static char *SCClassConfGetConfFilename(void)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-static inline int SCClassConfInitContext(DetectEngineCtx *de_ctx)
+int SCClassConfInitContext(DetectEngineCtx *de_ctx)
 {
     char *filename = NULL;
     const char *eb = NULL;
@@ -124,6 +128,25 @@ static inline int SCClassConfInitContext(DetectEngineCtx *de_ctx)
 //    return -1;
 }
 
+
+/**
+ * \brief Returns the path for the Classification Config file.  We check if we
+ *        can retrieve the path from the yaml conf file.  If it is not present,
+ *        return the default path for the classification file which is
+ *        "./classification.config".
+ *
+ * \retval log_filename Pointer to a string containing the path for the
+ *                      Classification Config file.
+ */
+static char *SCClassConfGetConfFilename(void)
+{
+    char *log_filename = (char *)default_file_path;
+
+    ConfGet("classification-file", &log_filename);
+
+    return log_filename;
+}
+
 /**
  * \brief Releases resources used by the Classification Config API.
  */
@@ -170,7 +193,7 @@ static char *SCClassConfStringToLowercase(const char *str)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-static inline int SCClassConfAddClasstype(char *rawstr, DetectEngineCtx *de_ctx)
+int SCClassConfAddClasstype(char *rawstr, DetectEngineCtx *de_ctx)
 {
     const char *ct_name = NULL;
     const char *ct_desc = NULL;
@@ -281,7 +304,7 @@ static int SCClassConfIsLineBlankOrComment(char *line)
  *
  * \param de_ctx Pointer to the Detection Engine Context.
  */
-static inline void SCClassConfParseFile(DetectEngineCtx *de_ctx)
+void SCClassConfParseFile(DetectEngineCtx *de_ctx)
 {
     char line[1024];
 

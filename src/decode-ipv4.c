@@ -1,7 +1,27 @@
-/** Copyright (c) 2009 Open Information Security Foundation
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
  *
  * \author Victor Julien <victor@inliniac.net>
  * \author Brian Rectanus <brectanu@gmail.com>
+ *
+ * Decode IPv4
  */
 
 #include "suricata-common.h"
@@ -12,63 +32,6 @@
 #include "defrag.h"
 #include "util-unittest.h"
 #include "util-debug.h"
-
-/**
- * \brief Calculates the checksum for the IP packet
- *
- * \param pkt  Pointer to the start of the IP packet
- * \param hlen Length of the IP header
- *
- * \retval csum Checksum for the IP packet
- */
-inline uint16_t IPV4CalculateChecksum(uint16_t *pkt, uint16_t hlen)
-{
-    uint32_t csum = pkt[0];
-
-    csum += pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[6] + pkt[7] + pkt[8] +
-        pkt[9];
-
-    hlen -= 20;
-    pkt += 10;
-
-    if (hlen == 0) {
-        ;
-    }
-    if (hlen == 4)
-        csum += pkt[0] + pkt[1];
-    else if (hlen == 8)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3];
-    else if (hlen == 12)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5];
-    else if (hlen == 16)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7];
-    else if (hlen == 20)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9];
-    else if (hlen == 24)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11];
-    else if (hlen == 28)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13];
-    else if (hlen == 32)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13] +
-            pkt[14] + pkt[15];
-    if (hlen == 36)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13] +
-            pkt[14] + pkt[15] + pkt[16] + pkt[17];
-    if (hlen == 40)
-        csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13] +
-            pkt[14] + pkt[15] + pkt[16] + pkt[17] + pkt[18] + pkt[19];
-
-    csum = (csum >> 16) + (csum & 0x0000FFFF);
-
-    return (uint16_t) ~csum;
-}
 
 /* Generic validation
  *

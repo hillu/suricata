@@ -1,7 +1,26 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
-
-/* httplog
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
  *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Implements http logging portion of the engine.
  */
 
 #include "suricata-common.h"
@@ -25,6 +44,7 @@
 #include "app-layer-htp.h"
 #include <htp/dslib.h>
 #include "app-layer.h"
+#include "util-privs.h"
 
 #define DEFAULT_LOG_FILENAME "http.log"
 
@@ -46,6 +66,7 @@ void TmModuleLogHttpLogRegister (void) {
     tmm_modules[TMM_LOGHTTPLOG].ThreadExitPrintStats = LogHttpLogExitPrintStats;
     tmm_modules[TMM_LOGHTTPLOG].ThreadDeinit = LogHttpLogThreadDeinit;
     tmm_modules[TMM_LOGHTTPLOG].RegisterTests = NULL;
+    tmm_modules[TMM_LOGHTTPLOG].cap_flags = 0;
 
     OutputRegisterModule(MODULE_NAME, "http-log", LogHttpLogInitCtx);
 }

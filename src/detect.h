@@ -1,3 +1,26 @@
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ */
+
 #ifndef __DETECT_H__
 #define __DETECT_H__
 
@@ -242,6 +265,8 @@ typedef struct Signature_ {
 
     /** number of sigmatches in the match and pmatch list */
     uint16_t sm_cnt;
+
+    SigIntId order_id;
 } Signature;
 
 typedef struct DetectEngineIPOnlyThreadCtx_ {
@@ -640,6 +665,7 @@ enum {
     DETECT_AL_HTTP_METHOD,
     DETECT_AL_URILEN,
     DETECT_AL_HTTP_CLIENT_BODY,
+    DETECT_AL_HTTP_HEADER,
 
     DETECT_DCE_IFACE,
     DETECT_DCE_OPNUM,
@@ -666,17 +692,11 @@ int SigGroupBuild(DetectEngineCtx *);
 int SigGroupCleanup();
 void SigAddressPrepareBidirectionals (DetectEngineCtx *);
 
-int PacketAlertAppend(DetectEngineThreadCtx *, Signature *s, Packet *);
-
 int SigLoadSignatures (DetectEngineCtx *, char *);
 void SigTableSetup(void);
-int PacketAlertCheck(Packet *p, uint32_t sid);
 int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx,
                        DetectEngineThreadCtx *det_ctx, Packet *p);
 
-int PacketAlertCheck(Packet *p, uint32_t sid);
-int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx,
-                       DetectEngineThreadCtx *det_ctx, Packet *p);
 int SignatureIsIPOnly(DetectEngineCtx *de_ctx, Signature *s);
 
 #endif /* __DETECT_H__ */

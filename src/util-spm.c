@@ -1,5 +1,22 @@
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
+ * \file
  *
  * \author Pablo Rincon Crespo <pablo.rincon.crespo@gmail.com>
  *
@@ -55,7 +72,7 @@
  * \param needle pattern to search for
  * \param needlelen length of the pattern
  */
-inline uint8_t *Bs2bmSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
+uint8_t *Bs2bmSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
     uint8_t badchars[ALPHABET_SIZE];
     Bs2BmBadchars(needle, needlelen, badchars);
 
@@ -70,7 +87,7 @@ inline uint8_t *Bs2bmSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, ui
  * \param needle pattern to search for
  * \param needlelen length of the pattern
  */
-inline uint8_t *Bs2bmNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
+uint8_t *Bs2bmNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
     uint8_t badchars[ALPHABET_SIZE];
     Bs2BmBadchars(needle, needlelen, badchars);
 
@@ -86,7 +103,7 @@ inline uint8_t *Bs2bmNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t *need
  * \param needle pattern to search for
  * \param needlelen length of the pattern
  */
-inline uint8_t *BoyerMooreSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
+uint8_t *BoyerMooreSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
     int32_t bmBc[ALPHABET_SIZE];
     int32_t *bmGs = SCMalloc(sizeof(int32_t)*(needlelen + 1));
 
@@ -108,7 +125,7 @@ inline uint8_t *BoyerMooreSearch(uint8_t *text, uint32_t textlen, uint8_t *needl
  * \param needle pattern to search for
  * \param needlelen length of the pattern
  */
-inline uint8_t *BoyerMooreNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
+uint8_t *BoyerMooreNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t *needle, uint32_t needlelen) {
     int32_t bmBc[ALPHABET_SIZE];
     int32_t *bmGs = SCMalloc(sizeof(int32_t)*(needlelen + 1));
 
@@ -138,7 +155,7 @@ inline uint8_t *BoyerMooreNocaseSearch(uint8_t *text, uint32_t textlen, uint8_t 
  * \param times If you are testing performance, se the numebr of times
  *              that you want to repeat the search
  */
-inline uint8_t *BasicSearchWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BasicSearchWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -157,7 +174,7 @@ inline uint8_t *BasicSearchWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *BasicSearchNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BasicSearchNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -173,7 +190,7 @@ inline uint8_t *BasicSearchNocaseWrapper(uint8_t *text, uint8_t *needle, int tim
     return ret;
 }
 
-inline uint8_t *Bs2bmWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *Bs2bmWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -192,7 +209,7 @@ inline uint8_t *Bs2bmWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *Bs2bmNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *Bs2bmNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -211,7 +228,7 @@ inline uint8_t *Bs2bmNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *BoyerMooreWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BoyerMooreWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -234,7 +251,7 @@ inline uint8_t *BoyerMooreWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *BoyerMooreNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BoyerMooreNocaseWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -265,7 +282,7 @@ inline uint8_t *BoyerMooreNocaseWrapper(uint8_t *text, uint8_t *needle, int time
  * \param times If you are testing performance, se the numebr of times
  *              that you want to repeat the search
  */
-inline uint8_t *BasicSearchCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BasicSearchCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -282,7 +299,7 @@ inline uint8_t *BasicSearchCtxWrapper(uint8_t *text, uint8_t *needle, int times)
     return ret;
 }
 
-inline uint8_t *BasicSearchNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BasicSearchNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -299,7 +316,7 @@ inline uint8_t *BasicSearchNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int 
     return ret;
 }
 
-inline uint8_t *Bs2bmCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *Bs2bmCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -319,7 +336,7 @@ inline uint8_t *Bs2bmCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *Bs2bmNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *Bs2bmNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -339,7 +356,7 @@ inline uint8_t *Bs2bmNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times)
     return ret;
 }
 
-inline uint8_t *BoyerMooreCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BoyerMooreCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -363,7 +380,7 @@ inline uint8_t *BoyerMooreCtxWrapper(uint8_t *text, uint8_t *needle, int times) 
     return ret;
 }
 
-inline uint8_t *RawCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *RawCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -379,7 +396,7 @@ inline uint8_t *RawCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     return ret;
 }
 
-inline uint8_t *BoyerMooreNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
+uint8_t *BoyerMooreNocaseCtxWrapper(uint8_t *text, uint8_t *needle, int times) {
     uint32_t textlen = strlen((char *)text);
     uint32_t needlelen = strlen((char *)needle);
 
@@ -479,6 +496,29 @@ int UtilSpmBoyerMooreSearchTest01() {
 int UtilSpmBoyerMooreSearchNocaseTest01() {
     uint8_t *needle = (uint8_t *)"OpQrSt";
     uint8_t *text = (uint8_t *)"aBcDeFgHiJkLmNoPqRsTuVwXyZ";
+    uint8_t *found = BoyerMooreNocaseWrapper(text, needle, 1);
+    //printf("found: %s\n", found);
+    if (found != NULL)
+        return 1;
+    else
+        return 0;
+}
+
+/**
+ * \test issue 130 (@redmine) check to ensure that the
+ *       problem is not the algorithm implementation
+ */
+int UtilSpmBoyerMooreSearchNocaseTestIssue130() {
+    uint8_t *needle = (uint8_t *)"WWW-Authenticate: ";
+    uint8_t *text = (uint8_t *)"Date: Mon, 23 Feb 2009 13:31:49 GMT"
+                "Server: Apache\r\n"
+                "Www-authenticate: Basic realm=\"Authentification user password\"\r\n"
+                "Vary: accept-language,accept-charset\r\n"
+                "Accept-ranges: bytes\r\n"
+                "Connection: close\r\n"
+                "Content-type: text/html; charset=iso-8859-1\r\n"
+                "Content-language: fr\r\n"
+                "Expires: Mon, 23 Feb 2009 13:31:49 GMT\r\n\r\n";
     uint8_t *found = BoyerMooreNocaseWrapper(text, needle, 1);
     //printf("found: %s\n", found);
     if (found != NULL)
@@ -2253,6 +2293,7 @@ void UtilSpmSearchRegistertests(void) {
 
     UtRegisterTest("UtilSpmBoyerMooreSearchTest01", UtilSpmBoyerMooreSearchTest01, 1);
     UtRegisterTest("UtilSpmBoyerMooreSearchNocaseTest01", UtilSpmBoyerMooreSearchNocaseTest01, 1);
+    UtRegisterTest("UtilSpmBoyerMooreSearchNocaseTestIssue130", UtilSpmBoyerMooreSearchNocaseTestIssue130, 1);
 
     UtRegisterTest("UtilSpmBs2bmSearchTest02", UtilSpmBs2bmSearchTest02, 1);
     UtRegisterTest("UtilSpmBs2bmSearchNocaseTest02", UtilSpmBs2bmSearchNocaseTest02, 1);

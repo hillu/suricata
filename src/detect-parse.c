@@ -1,4 +1,27 @@
-/* signature parser */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * signature parser
+ */
 
 #include "suricata-common.h"
 #include "debug.h"
@@ -29,6 +52,8 @@
 #include "string.h"
 #include "detect-parse.h"
 #include "detect-engine-iponly.h"
+
+extern int sc_set_caps;
 
 static pcre *config_pcre = NULL;
 static pcre *option_pcre = NULL;
@@ -506,6 +531,28 @@ int SigParsePort(Signature *s, const char *portstr, char flag)
     return 0;
 }
 
+/** \retval 1 valid
+ *  \retval 0 invalid
+ */
+static int SigParseActionRejectValidate(void) {
+#ifdef HAVE_LIBNET11
+#ifdef HAVE_LIBCAP_NG
+    if (sc_set_caps == TRUE) {
+        SCLogError(SC_ERR_LIBNET11_INCOMPATIBLE_WITH_LIBCAP_NG, "Libnet 1.1 is "
+            "incompatible with POSIX based capabilities with privs dropping. "
+            "For rejects to work, run as root/super user.");
+        return 0;
+    }
+#endif
+#else /* no libnet 1.1 */
+    SCLogError(SC_ERR_LIBNET_REQUIRED_FOR_ACTION, "Libnet 1.1.x is "
+            "required for action \"%s\" but is not compiled into Suricata",
+            action);
+    return 0;
+#endif
+    return 1;
+}
+
 /**
  * \brief Parses the action that has been used by the Signature and allots it
  *        to its Signatue instance.
@@ -527,30 +574,26 @@ int SigParseAction(Signature *s, const char *action) {
     } else if (strcasecmp(action, "pass") == 0) {
         s->action = ACTION_PASS;
         return 0;
-#ifdef HAVE_LIBNET11
     } else if (strcasecmp(action, "reject") == 0) {
+        if (!(SigParseActionRejectValidate()))
+            return -1;
         s->action = ACTION_REJECT;
         return 0;
     } else if (strcasecmp(action, "rejectsrc") == 0) {
+        if (!(SigParseActionRejectValidate()))
+            return -1;
         s->action = ACTION_REJECT;
         return 0;
     } else if (strcasecmp(action, "rejectdst") == 0) {
+        if (!(SigParseActionRejectValidate()))
+            return -1;
         s->action = ACTION_REJECT_DST;
         return 0;
     } else if (strcasecmp(action, "rejectboth") == 0) {
+        if (!(SigParseActionRejectValidate()))
+            return -1;
         s->action = ACTION_REJECT_BOTH;
         return 0;
-#else
-    } else if (strcasecmp(action, "reject") == 0 ||
-               strcasecmp(action, "rejectsrc") == 0 ||
-               strcasecmp(action, "rejectdst") == 0 ||
-               strcasecmp(action, "rejectboth") == 0)
-    {
-        SCLogError(SC_ERR_LIBNET_REQUIRED_FOR_ACTION, "Libnet 1.1.x is "
-                "required for action \"%s\" but is not compiled into Suricata",
-                action);
-        return -1;
-#endif /* HAVE_LIBNET11 */
     } else {
         SCLogError(SC_ERR_INVALID_ACTION,"An invalid action \"%s\" was given",action);
         return -1;
@@ -639,7 +682,7 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
 
     int ret = SigParseBasics(s, sigstr, &basics, addrs_direction);
     if (ret < 0) {
-        printf("SigParseBasics failed\n");
+        SCLogDebug("SigParseBasics failed");
         SCReturnInt(-1);
     }
 

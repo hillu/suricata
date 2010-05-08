@@ -1,4 +1,27 @@
-/* Copyright (c) 2009 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Live pcap packet acquisition support
+ */
 
 #if LIBPCAP_VERSION_MAJOR == 1
 #include <pcap/pcap.h>
@@ -19,6 +42,7 @@
 #include "conf.h"
 #include "util-debug.h"
 #include "util-error.h"
+#include "util-privs.h"
 
 extern int max_pending_packets;
 
@@ -63,6 +87,7 @@ void TmModuleReceivePcapRegister (void) {
     tmm_modules[TMM_RECEIVEPCAP].ThreadExitPrintStats = ReceivePcapThreadExitStats;
     tmm_modules[TMM_RECEIVEPCAP].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEPCAP].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVEPCAP].cap_flags = SC_CAP_NET_RAW;
 }
 
 /**
@@ -76,6 +101,7 @@ void TmModuleDecodePcapRegister (void) {
     tmm_modules[TMM_DECODEPCAP].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODEPCAP].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEPCAP].RegisterTests = NULL;
+    tmm_modules[TMM_DECODEPCAP].cap_flags = 0;
 }
 
 /**

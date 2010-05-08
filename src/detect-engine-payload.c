@@ -1,7 +1,26 @@
-/* Copyright (c) 2010 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/** \file
- *  \author Victor Julien <victor@inliniac.net>
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Performs payload matching functions
  */
 
 #include "suricata-common.h"
@@ -49,7 +68,7 @@
  *  \retval 0 no match
  *  \retval 1 match
  */
-static inline int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
+static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
         DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *sm,
         Packet *p, uint8_t *payload, uint32_t payload_len)
 {
@@ -131,7 +150,7 @@ static inline int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
 
                 /* update offset with prev_offset if we're searching for
                  * matches after the first occurence. */
-                SCLogDebug("offset %"PRIu32", prev_offset %"PRIu32, prev_offset, depth);
+                SCLogDebug("offset %"PRIu32", prev_offset %"PRIu32, offset, prev_offset);
                 offset += prev_offset;
 
                 SCLogDebug("offset %"PRIu32", depth %"PRIu32, offset, depth);
