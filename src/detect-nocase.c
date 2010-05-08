@@ -1,4 +1,27 @@
-/* NOCASE part of the detection engine. */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Implements the nocase keyword
+ */
 
 #include "suricata-common.h"
 #include "decode.h"
@@ -127,20 +150,23 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
     SCEnter();
 
     if (nullstr != NULL) {
-        SCLogError(SC_ERR_INVALID_VALUE, "nocase has no value");
+        SCLogError(SC_ERR_INVALID_VALUE, "nocase has value");
         SCReturnInt(-1);
     }
 
     /* Search for the first previous SigMatch that supports nocase */
     SigMatch *pm = SigMatchGetLastNocasePattern(s);
     if (pm == NULL) {
-        SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "nocase needs a preceeding "
-                "content, uricontent, http_client_body or http_cookie option");
+        SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "\"nocase\" needs a preceeding"
+                " content, uricontent, http_client_body or http_cookie option");
         SCReturnInt(-1);
     }
 
     DetectUricontentData *ud = NULL;
     DetectContentData *cd = NULL;
+    DetectHttpClientBodyData *dhcb = NULL;
+    DetectHttpCookieData *dhcd = NULL;
+
     switch (pm->type) {
         case DETECT_URICONTENT:
             ud = (DetectUricontentData *)pm->ctx;
@@ -149,6 +175,8 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
                 SCReturnInt(-1);
             }
             ud->flags |= DETECT_URICONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(ud->bm_ctx, ud->uricontent, ud->uricontent_len);
             break;
 
         case DETECT_CONTENT:
@@ -158,17 +186,23 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
                 SCReturnInt(-1);
             }
             cd->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(cd->bm_ctx, cd->content, cd->content_len);
             break;
         case DETECT_AL_HTTP_CLIENT_BODY:
-            ((DetectHttpClientBodyData *)(pm->ctx))->flags |= DETECT_AL_HTTP_CLIENT_BODY_NOCASE;
+            dhcb =(DetectHttpClientBodyData *) pm->ctx;
+            dhcb->flags |= DETECT_AL_HTTP_CLIENT_BODY_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhcb->bm_ctx, dhcb->content, dhcb->content_len);
             break;
         case DETECT_AL_HTTP_COOKIE:
-            ((DetectHttpCookieData *)(pm->ctx))->flags |= DETECT_AL_HTTP_COOKIE_NOCASE;
+            dhcd = (DetectHttpCookieData *) pm->ctx;
+            dhcd->flags |= DETECT_AL_HTTP_COOKIE_NOCASE;
             break;
             /* should never happen */
         default:
-            SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "nocase needs a preceeding "
-                    "content, uricontent, http_client_body or http_cookie option");
+            SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "\"nocase\" needs a"
+                    " preceeding content, uricontent, http_client_body or http_cookie option");
             SCReturnInt(-1);
             break;
     }

@@ -1,4 +1,31 @@
-/* Copyright (c) 2009 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author William Metcalf <william.metcalf@gmail.com>
+ *
+ * PF_RING packet acquisition support
+ *
+ * \todo remove requirement for setting cluster so old 3.x versions are supported
+ * \todo implement DNA support
+ * \todo Allow ring options such as snaplen etc, to be user configurable.
+ */
 
 #ifdef HAVE_PFRING
 #include <pfring.h>
@@ -16,6 +43,7 @@
 #include "tm-threads.h"
 #include "source-pfring.h"
 #include "util-debug.h"
+#include "util-privs.h"
 
 TmEcode ReceivePfring(ThreadVars *, Packet *, void *, PacketQueue *);
 TmEcode ReceivePfringThreadInit(ThreadVars *, void *, void **);
@@ -39,6 +67,8 @@ void TmModuleReceivePfringRegister (void) {
     tmm_modules[TMM_RECEIVEPFRING].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_RECEIVEPFRING].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEPFRING].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVEPFRING].cap_flags = SC_CAP_NET_ADMIN | SC_CAP_NET_RAW |
+        SC_CAP_NET_BIND_SERVICE | SC_CAP_NET_BROADCAST;
 }
 
 void TmModuleDecodePfringRegister (void) {
@@ -48,6 +78,7 @@ void TmModuleDecodePfringRegister (void) {
     tmm_modules[TMM_DECODEPFRING].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODEPFRING].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEPFRING].RegisterTests = NULL;
+    tmm_modules[TMM_DECODEPFRING].cap_flags = 0;
 }
 
 /**

@@ -1,8 +1,26 @@
-/* Copyright (c) 2009, 2010 Open Information Security Foundation. */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
 /**
- *  \file
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \file
+ *
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ *
+ * Implementation of radix trees
  */
 
 #include <stdio.h>
@@ -458,7 +476,7 @@ static inline SCRadixNode *SCRadixCreateNode()
  * \param node Pointer to a Radix tree node
  * \param tree Pointer to the Radix tree to which this node belongs
  */
-static inline void SCRadixReleaseNode(SCRadixNode *node, SCRadixTree *tree)
+static void SCRadixReleaseNode(SCRadixNode *node, SCRadixTree *tree)
 {
     if (node != NULL) {
         SCRadixReleasePrefix(node->prefix, tree);
@@ -822,7 +840,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
     }
 
     /* insert the netmask into the tree */
-    if (netmask != 255 || (netmask != 32 || (netmask == 32 && bitlen != 32)) || netmask != 128) {
+    if (netmask != 255 && (netmask != 32 || (netmask == 32 && bitlen != 32)) && netmask != 128) {
         node = new_node;
         parent = new_node->parent;
         while (parent != NULL && netmask < (parent->bit + 1)) {

@@ -1,9 +1,26 @@
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation.
+ * \file
  *
- * \author Victor Julien
+ * \author Victor Julien <victor@inliniac.net>
  *
- * \file Address part of the detection engine.
+ * Address part of the detection engine.
  *
  * \todo Move this out of the detection plugin structure
  *       rename to detect-engine-address.c
@@ -1475,6 +1492,7 @@ void DetectAddressPrint(DetectAddress *gr)
         inet_ntop(AF_INET, &in, mask, sizeof(mask));
 
         SCLogDebug("%s/%s", ip, mask);
+//        printf("%s/%s", ip, mask);
     } else if (gr->family == AF_INET6) {
         struct in6_addr in6;
         char ip[66], mask[66];
@@ -1485,6 +1503,7 @@ void DetectAddressPrint(DetectAddress *gr)
         inet_ntop(AF_INET6, &in6, mask, sizeof(mask));
 
         SCLogDebug("%s/%s", ip, mask);
+//        printf("%s/%s", ip, mask);
     }
 
     return;

@@ -1,12 +1,27 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
-/* Copyright (c) 2009 OISF */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/** \file
+/**
+ * \file
  *
- *  \author Victor Julien <victor@inliniac.net>
- *  \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
+ * \author Victor Julien <victor@inliniac.net>
+ * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
  *
- *  \todo - 4WHS: what if after the 2nd SYN we turn out to be normal 3WHS anyway?
+ * \todo - 4WHS: what if after the 2nd SYN we turn out to be normal 3WHS anyway?
  */
 
 #include "suricata-common.h"
@@ -36,6 +51,7 @@
 
 #include "app-layer-parser.h"
 #include "util-host-os-info.h"
+#include "util-privs.h"
 
 //#define DEBUG
 
@@ -93,6 +109,7 @@ void TmModuleStreamTcpRegister (void)
     tmm_modules[TMM_STREAMTCP].ThreadExitPrintStats = StreamTcpExitPrintStats;
     tmm_modules[TMM_STREAMTCP].ThreadDeinit = StreamTcpThreadDeinit;
     tmm_modules[TMM_STREAMTCP].RegisterTests = StreamTcpRegisterTests;
+    tmm_modules[TMM_STREAMTCP].cap_flags = 0;
 }
 
 void StreamTcpIncrMemuse(uint32_t size) {
@@ -385,7 +402,7 @@ TcpSession *StreamTcpNewSession (Packet *p)
     return ssn;
 }
 
-static inline void StreamTcpPacketSetState(Packet *p, TcpSession *ssn,
+static void StreamTcpPacketSetState(Packet *p, TcpSession *ssn,
                                            uint8_t state)
 {
     if (state == ssn->state)
@@ -405,7 +422,7 @@ static inline void StreamTcpPacketSetState(Packet *p, TcpSession *ssn,
  *  \param  ssn TcpSession to whom this packet belongs
  *  \param  p   Packet whose flag has to be changed
  */
-static inline void StreamTcpPacketSwitchDir(TcpSession *ssn, Packet *p)
+static void StreamTcpPacketSwitchDir(TcpSession *ssn, Packet *p)
 {
     SCLogDebug("ssn %p: switching pkt direction", ssn);
 
@@ -1640,7 +1657,8 @@ static int StreamTcpHandleFin(StreamTcpThread *stt, TcpSession *ssn, Packet *p)
         StreamTcpPacketSetState(p, ssn, TCP_CLOSE_WAIT);
         SCLogDebug("ssn %p: state changed to TCP_CLOSE_WAIT", ssn);
 
-        ssn->client.next_seq = TCP_GET_SEQ(p) + p->payload_len + 1;
+        if (SEQ_EQ(TCP_GET_SEQ(p), ssn->client.next_seq))
+            ssn->client.next_seq = TCP_GET_SEQ(p) + p->payload_len + 1;
         ssn->server.next_seq = TCP_GET_ACK(p);
         SCLogDebug("ssn %p: ssn->server.next_seq %" PRIu32 "", ssn,
                     ssn->server.next_seq);
@@ -1671,7 +1689,8 @@ static int StreamTcpHandleFin(StreamTcpThread *stt, TcpSession *ssn, Packet *p)
         StreamTcpPacketSetState(p, ssn, TCP_FIN_WAIT1);
         SCLogDebug("ssn %p: state changed to TCP_FIN_WAIT1", ssn);
 
-        ssn->server.next_seq = TCP_GET_SEQ(p) + p->payload_len + 1;
+        if (SEQ_EQ(TCP_GET_SEQ(p), ssn->server.next_seq))
+            ssn->server.next_seq = TCP_GET_SEQ(p) + p->payload_len + 1;
         ssn->client.next_seq = TCP_GET_ACK(p);
         SCLogDebug("ssn %p: ssn->server.next_seq %" PRIu32 "", ssn,
                     ssn->server.next_seq);

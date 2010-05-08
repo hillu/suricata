@@ -1,5 +1,22 @@
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
 /**
- * Copyright (c) 2009 Open Information Security Foundation
+ * \file
  *
  * \author Pablo Rincon Crespo <pablo.rincon.crespo@gmail.com>
  *
@@ -25,7 +42,7 @@
  *                 characters that can't be inside the needle_len. So the skips can be
  *                 faster
  */
-inline void Bs2BmBadchars(const uint8_t *needle, uint32_t needle_len, uint8_t *badchars) {
+void Bs2BmBadchars(const uint8_t *needle, uint32_t needle_len, uint8_t *badchars) {
     uint32_t i;
     for (i = 0; i < ALPHABET_SIZE; i++)
         badchars[i] = 1;
@@ -46,7 +63,7 @@ inline void Bs2BmBadchars(const uint8_t *needle, uint32_t needle_len, uint8_t *b
  *                 characters that can't be inside the needle_len. So the skips can be
  *                 faster
  */
-inline void Bs2BmBadcharsNocase(const uint8_t *needle, uint32_t needle_len, uint8_t *badchars) {
+void Bs2BmBadcharsNocase(const uint8_t *needle, uint32_t needle_len, uint8_t *badchars) {
     uint32_t i;
     for (i = 0; i < ALPHABET_SIZE; i++)
         badchars[i] = 1;
@@ -73,7 +90,7 @@ inline void Bs2BmBadcharsNocase(const uint8_t *needle, uint32_t needle_len, uint
  *
  * \retval ptr to start of the match; NULL if no match
  */
-inline uint8_t * Bs2Bm(const uint8_t *haystack, uint32_t haystack_len, const uint8_t *needle, uint32_t needle_len, uint8_t badchars[])
+uint8_t * Bs2Bm(const uint8_t *haystack, uint32_t haystack_len, const uint8_t *needle, uint32_t needle_len, uint8_t badchars[])
 {
     const uint8_t *h, *n;
     const uint8_t *hmax = haystack + haystack_len;
@@ -122,7 +139,7 @@ inline uint8_t * Bs2Bm(const uint8_t *haystack, uint32_t haystack_len, const uin
  *
  * \retval ptr to start of the match; NULL if no match
  */
-inline uint8_t *Bs2BmNocase(const uint8_t *haystack, uint32_t haystack_len, const uint8_t *needle, uint32_t needle_len, uint8_t badchars[])
+uint8_t *Bs2BmNocase(const uint8_t *haystack, uint32_t haystack_len, const uint8_t *needle, uint32_t needle_len, uint8_t badchars[])
 {
     const uint8_t *h, *n;
     const uint8_t *hmax = haystack + haystack_len;

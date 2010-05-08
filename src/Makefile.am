@@ -40,6 +40,7 @@ host.c host.h \
 reputation.c reputation.h \
 detect.c detect.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
+detect-engine-alert.c detect-engine-alert.h \
 detect-engine.c detect-engine.h \
 detect-rpc.c detect-rpc.h \
 detect-isdataat.c detect-isdataat.h \
@@ -104,6 +105,7 @@ detect-itype.c detect-itype.h \
 detect-icode.c detect-icode.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-method.c detect-http-method.h \
+detect-http-header.c detect-http-header.h \
 detect-tls-version.c detect-tls-version.h \
 detect-icmp-id.c detect-icmp-id.h \
 detect-icmp-seq.c detect-icmp-seq.h \
@@ -154,6 +156,7 @@ util-strlcatu.c \
 util-strlcpyu.c \
 util-cuda.c util-cuda.h \
 util-cuda-handlers.c util-cuda-handlers.h \
+util-privs.c util-privs.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -190,6 +193,7 @@ app-layer-ftp.c app-layer-ftp.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
+util-action.c util-action.h \
 win32-syslog.h
 
 # set the include path found by configure

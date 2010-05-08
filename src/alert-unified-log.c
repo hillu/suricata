@@ -1,15 +1,33 @@
-/* Copyright (c) 2008 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/* alert unified
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
  *
  * Logs alerts in a format compatible to Snort's unified1 format, so it should
  * be readable by Barnyard.
  *
- * TODO
- * - inspect error messages for threadsafety
- * - inspect gettimeofday for threadsafely
- * - implement configuration
+ * \todo inspect error messages for threadsafety
+ * \todo inspect gettimeofday for threadsafely
+ * \todo implement configuration
  */
+
 #include <string.h>
 
 #include "suricata-common.h"
@@ -30,6 +48,7 @@
 
 #include "output.h"
 #include "alert-unified-log.h"
+#include "util-privs.h"
 
 #define DEFAULT_LOG_FILENAME "unified.log"
 
@@ -54,6 +73,7 @@ void TmModuleAlertUnifiedLogRegister (void) {
     tmm_modules[TMM_ALERTUNIFIEDLOG].Func = AlertUnifiedLog;
     tmm_modules[TMM_ALERTUNIFIEDLOG].ThreadDeinit = AlertUnifiedLogThreadDeinit;
     tmm_modules[TMM_ALERTUNIFIEDLOG].RegisterTests = AlertUnifiedLogRegisterTests;
+    tmm_modules[TMM_ALERTUNIFIEDLOG].cap_flags = 0;
 
     OutputRegisterModule(MODULE_NAME, "unified-log", AlertUnifiedLogInitCtx);
 
@@ -280,7 +300,9 @@ TmEcode AlertUnifiedLogThreadDeinit(ThreadVars *t, void *data)
     }
 
     if (!(aun->file_ctx->flags & LOGFILE_ALERTS_PRINTED)) {
-        SCLogInfo("Alert unified 1 log module wrote %"PRIu64" alerts", aun->file_ctx->alerts);
+        SCLogInfo("Alert unified1 log module wrote %"PRIu64" alerts",
+                aun->file_ctx->alerts);
+
         /* Do not print it for each thread */
         aun->file_ctx->flags |= LOGFILE_ALERTS_PRINTED;
     }

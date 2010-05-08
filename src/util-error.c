@@ -1,5 +1,29 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ *
+ * Error utility functions
+ *
+ * \todo Needs refining of the error codes.  Renaming with a prefix of SC_ERR,
+ *       removal of duplicates and entries have to be made in util-error.c
  */
 
 #include "util-error.h"
@@ -18,12 +42,12 @@ const char * SCErrorToString(SCError err)
     switch (err) {
         CASE_CODE (SC_OK);
         CASE_CODE (SC_ERR_MEM_ALLOC);
+        CASE_CODE (SC_ERR_ACTION_ORDER);
         CASE_CODE (SC_ERR_PCRE_MATCH);
         CASE_CODE (SC_ERR_PCRE_GET_SUBSTRING);
         CASE_CODE (SC_ERR_PCRE_COMPILE);
         CASE_CODE (SC_ERR_PCRE_STUDY);
         CASE_CODE (SC_ERR_PCRE_PARSE);
-        CASE_CODE (SC_ERR_THREAD_NICE_PRIO);
         CASE_CODE (SC_ERR_LOG_MODULE_NOT_INIT);
         CASE_CODE (SC_ERR_LOG_FG_FILTER_MATCH);
         CASE_CODE (SC_ERR_PCAP_DISPATCH);
@@ -81,6 +105,10 @@ const char * SCErrorToString(SCError err)
         CASE_CODE (SC_ERR_UNIFIED2_ALERT_GENERIC);
         CASE_CODE (SC_ERR_FWRITE);
         CASE_CODE (SC_ERR_FOPEN);
+        CASE_CODE (SC_ERR_THREAD_NICE_PRIO);
+        CASE_CODE (SC_ERR_THREAD_SPAWN);
+        CASE_CODE (SC_ERR_THREAD_CREATE);
+        CASE_CODE (SC_ERR_THREAD_INIT);
         CASE_CODE (SC_ERR_THRESHOLD_HASH_ADD);
         CASE_CODE (SC_ERR_UNDEFINED_VAR);
         CASE_CODE (SC_ERR_RULE_KEYWORD_UNKNOWN);
@@ -143,6 +171,11 @@ const char * SCErrorToString(SCError err)
         CASE_CODE (SC_ERR_PIDFILE_OPEN);
         CASE_CODE (SC_ERR_PIDFILE_WRITE);
         CASE_CODE (SC_ERR_PIDFILE_DAEMON);
+        CASE_CODE (SC_ERR_UID_FAILED);
+        CASE_CODE (SC_ERR_GID_FAILED);
+        CASE_CODE (SC_ERR_CHANGING_CAPS_FAILED);
+        CASE_CODE (SC_ERR_LIBCAP_NG_REQUIRED);
+        CASE_CODE (SC_ERR_LIBNET11_INCOMPATIBLE_WITH_LIBCAP_NG);
 
         default:
             return "UNKNOWN_ERROR";

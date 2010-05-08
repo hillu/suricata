@@ -1,15 +1,33 @@
-/* Implementation of the SBNDMq pattern matching algorithm.
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
  *
- * Copyright (c) 2009 Victor Julien <victor@inliniac.net>
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Implementation of the SBNDMq pattern matching algorithm.
  *
  * Ideas:
  *  - B2g does a full match in the search of up to 'm' characters,
  *    in case of a case insensitive search we could say it's match if
  *    the pattern is of len 'm' or just compare the rest of the chars.
  *
- * TODO:
- *  - Try to get the S0 calculation right.
- *
+ * \todo Try to get the S0 calculation right.
  */
 
 //#define PRINTMATCH
@@ -45,7 +63,7 @@ void B2gThreadDestroyCtx(MpmCtx *, MpmThreadCtx *);
 int B2gAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
 int B2gAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
 int B2gPreparePatterns(MpmCtx *mpm_ctx);
-inline uint32_t B2gSearchWrap(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
+uint32_t B2gSearchWrap(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
 uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
 #ifdef B2G_SEARCH2
 uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
@@ -301,7 +319,7 @@ void B2gFreePattern(MpmCtx *mpm_ctx, B2gPattern *p) {
  *  \param sid signature id (internal id)
  *  \param flags pattern MPM_PATTERN_* flags
  */
-static inline int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
+static int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 
     SCLogDebug("ctx %p len %"PRIu16" pid %" PRIu32, ctx, patlen, pid);

@@ -1,6 +1,27 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
- *  \author Victor Julien <victor@inliniac.net>
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ *
+ * Thread management functions
  */
 
 #include "suricata-common.h"
@@ -16,7 +37,7 @@
 #include "util-debug.h"
 #include <pthread.h>
 #include <unistd.h>
-
+#include "util-privs.h"
 
 #ifdef OS_FREEBSD
 #include <sched.h>
@@ -74,39 +95,47 @@ typedef struct TmVarSlot_ {
     TmSlot *s;
 } TmVarSlot;
 
-/** \retval 1 flag is set
+/**
+ *  \brief Check if a thread flag is set
+ *
+ *  \retval 1 flag is set
  *  \retval 0 flag is not set
  */
-inline int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag) {
+int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag) {
     int r;
-    if (SCSpinLock(&tv->flags_spinlock) != 0) {
+    if (SCSpinLock(&(tv)->flags_spinlock) != 0) {
         SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return 0;
     }
-
     r = (tv->flags & flag);
-   SCSpinUnlock(&tv->flags_spinlock);
+    SCSpinUnlock(&tv->flags_spinlock);
     return r;
 }
 
-inline void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag) {
+/**
+ *  \brief Set a thread flag
+ */
+void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag) {
     if (SCSpinLock(&tv->flags_spinlock) != 0) {
         SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return;
     }
 
     tv->flags |= flag;
-   SCSpinUnlock(&tv->flags_spinlock);
+    SCSpinUnlock(&tv->flags_spinlock);
 }
 
-inline void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag) {
+/**
+ *  \brief Unset a thread flag
+ */
+void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag) {
     if (SCSpinLock(&tv->flags_spinlock) != 0) {
         SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
         return;
     }
 
     tv->flags &= ~flag;
-   SCSpinUnlock(&tv->flags_spinlock);
+    SCSpinUnlock(&tv->flags_spinlock);
 }
 
 /* 1 slot functions */
@@ -120,6 +149,9 @@ void *TmThreadsSlot1NoIn(void *td) {
 
     /* Set the thread name */
     SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
@@ -188,6 +220,9 @@ void *TmThreadsSlot1NoOut(void *td) {
     /* Set the thread name */
     SCSetThreadName(tv->name);
 
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
+
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
 
@@ -247,6 +282,9 @@ void *TmThreadsSlot1NoInOut(void *td) {
 
     /* Set the thread name */
     SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
@@ -311,6 +349,9 @@ void *TmThreadsSlot1(void *td) {
 
     /* Set the thread name */
     SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
@@ -431,6 +472,9 @@ void *TmThreadsSlotVar(void *td) {
 
     /* Set the thread name */
     SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
@@ -561,6 +605,7 @@ void Tm1SlotSetFunc(ThreadVars *tv, TmModule *tm, void *data) {
     s1->s.SlotFunc = tm->Func;
     s1->s.SlotThreadExitPrintStats = tm->ThreadExitPrintStats;
     s1->s.SlotThreadDeinit = tm->ThreadDeinit;
+    tv->cap_flags |= tm->cap_flags;
 }
 
 void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
@@ -576,6 +621,7 @@ void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
     slot->SlotFunc = tm->Func;
     slot->SlotThreadExitPrintStats = tm->ThreadExitPrintStats;
     slot->SlotThreadDeinit = tm->ThreadDeinit;
+    tv->cap_flags |= tm->cap_flags;
 
     if (s->s == NULL) {
         s->s = slot;
@@ -663,6 +709,7 @@ void TmThreadSetPrio(ThreadVars *tv)
         SCLogDebug("Nice value set to %"PRId32" for thread %s", tv->thread_priority, tv->name);
     }
 #endif /* OS_WIN32 */
+    SCReturn;
 }
 
 
@@ -1225,7 +1272,7 @@ static void TmThreadRestartThread(ThreadVars *tv)
     TmThreadsUnsetFlag(tv, THV_FAILED);
 
     if (TmThreadSpawn(tv) != TM_ECODE_OK) {
-        printf("Error: TmThreadSpawn failed\n");
+        SCLogError(SC_ERR_THREAD_SPAWN, "thread \"%s\" failed to spawn", tv->name);
         exit(EXIT_FAILURE);
     }
 
@@ -1268,9 +1315,11 @@ void TmThreadCheckThreadState(void)
     return;
 }
 
-/** \brief Used to check if all threads have finished their initialization.  On
+/**
+ *  \brief Used to check if all threads have finished their initialization.  On
  *         finding an un-initialized thread, it waits till that thread completes
  *         its initialization, before proceeding to the next thread.
+ *
  *  \retval TM_ECODE_OK all initialized properly
  *  \retval TM_ECODE_FAILED failure
  */
@@ -1291,11 +1340,13 @@ TmEcode TmThreadWaitOnThreadInit(void)
                 }
 
                 if (TmThreadsCheckFlag(tv, THV_FAILED)) {
-                    printf("Thread \"%s\" failed to initialize...\n", tv->name);
+                    SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" failed to "
+                            "initialize.", tv->name);
                     return TM_ECODE_FAILED;
                 }
                 if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
-                    printf("Thread \"%s\" closed on initialization...\n", tv->name);
+                    SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" closed on "
+                            "initialization.", tv->name);
                     return TM_ECODE_FAILED;
                 }
             }

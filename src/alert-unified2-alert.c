@@ -1,7 +1,27 @@
-/* Copyright (c) 2009 Open Information Security Foundation */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/** \file
- *  \author Breno Silva <breno.silva@gmail.com>
+/**
+ * \file
+ *
+ * \author Breno Silva <breno.silva@gmail.com>
+ *
+ * Logs alerts in a format compatible to Snort's unified2 format, so it should
+ * be readable by Barnyard2.
  */
 
 #include "suricata-common.h"
@@ -25,6 +45,7 @@
 
 #include "output.h"
 #include "alert-unified2-alert.h"
+#include "util-privs.h"
 
 #ifndef IPPROTO_SCTP
 #define IPPROTO_SCTP 132
@@ -138,6 +159,7 @@ void TmModuleUnified2AlertRegister (void) {
     tmm_modules[TMM_ALERTUNIFIED2ALERT].Func = Unified2Alert;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].ThreadDeinit = Unified2AlertThreadDeinit;
     tmm_modules[TMM_ALERTUNIFIED2ALERT].RegisterTests = Unified2RegisterTests;
+    tmm_modules[TMM_ALERTUNIFIED2ALERT].cap_flags = 0;
 
     OutputRegisterModule(MODULE_NAME, "unified2-alert", Unified2AlertInitCtx);
 }
@@ -556,7 +578,9 @@ TmEcode Unified2AlertThreadDeinit(ThreadVars *t, void *data)
     }
 
     if (!(aun->file_ctx->flags & LOGFILE_ALERTS_PRINTED)) {
-        SCLogInfo("Alert unified 2 module wrote %"PRIu64" alerts", aun->file_ctx->alerts);
+        SCLogInfo("Alert unified2 module wrote %"PRIu64" alerts",
+                aun->file_ctx->alerts);
+
         /* Do not print it for each thread */
         aun->file_ctx->flags |= LOGFILE_ALERTS_PRINTED;
     }

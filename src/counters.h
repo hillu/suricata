@@ -1,5 +1,24 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
  */
 
 #ifndef __COUNTERS_H__
@@ -221,13 +240,6 @@ SCPerfCounterArray *SCPerfGetCounterArrayRange(uint16_t, uint16_t, SCPerfContext
 SCPerfCounterArray * SCPerfGetAllCountersArray(SCPerfContext *);
 int SCPerfCounterDisplay(uint16_t, SCPerfContext *, int);
 
-/* functions used to update local counter values */
-inline void SCPerfCounterIncr(uint16_t, SCPerfCounterArray *);
-inline void SCPerfCounterAddUI64(uint16_t, SCPerfCounterArray *, uint64_t);
-inline void SCPerfCounterAddDouble(uint16_t, SCPerfCounterArray *, double);
-inline void SCPerfCounterSetUI64(uint16_t, SCPerfCounterArray *, uint64_t);
-inline void SCPerfCounterSetDouble(uint16_t, SCPerfCounterArray *, double);
-
 int SCPerfUpdateCounterArray(SCPerfCounterArray *, SCPerfContext *, int);
 double SCPerfGetLocalCounterValue(uint16_t, SCPerfCounterArray *);
 
@@ -238,6 +250,14 @@ void SCPerfReleaseResources(void);
 void SCPerfReleasePerfCounterS(SCPerfCounter *);
 void SCPerfReleasePCA(SCPerfCounterArray *);
 
+void SCPerfCounterSetUI64(uint16_t, SCPerfCounterArray *, uint64_t);
+void SCPerfCounterSetDouble(uint16_t, SCPerfCounterArray *, double);
+void SCPerfCounterIncr(uint16_t, SCPerfCounterArray *);
+
 void SCPerfRegisterTests(void);
+
+/* functions used to update local counter values */
+void SCPerfCounterAddUI64(uint16_t, SCPerfCounterArray *, uint64_t);
+void SCPerfCounterAddDouble(uint16_t, SCPerfCounterArray *, double);
 
 #endif /* __COUNTERS_H__ */

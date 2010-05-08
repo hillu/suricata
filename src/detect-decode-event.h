@@ -1,6 +1,24 @@
-/** Copyright (c) 2009 Open Information Security Foundation
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
- *  \author Breno Silva <breno.silva@gmail.com>
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Breno Silva <breno.silva@gmail.com>
  */
 
 #ifndef __DETECT_DECODE_EVENT_H__
@@ -44,7 +62,12 @@ struct DetectDecodeEvents_ {
     { "ipv6.exthdr_dupl_ah", IPV6_EXTHDR_DUPL_AH, },
     { "ipv6.exthdr_dupl_eh", IPV6_EXTHDR_DUPL_EH, },
     { "ipv6.exthdr_invalid_optlen", IPV6_EXTHDR_INVALID_OPTLEN, },
-    { "ipv4.wrong_ip_version", IPV4_WRONG_IP_VER, },
+    { "ipv6.wrong_ip_version", IPV6_WRONG_IP_VER, },
+    { "icmpv4.pkt_too_small", ICMPV4_PKT_TOO_SMALL, },
+    { "icmpv4.unknown_type", ICMPV4_UNKNOWN_TYPE, },
+    { "icmpv4.unknown_code", ICMPV4_UNKNOWN_CODE, },
+    { "icmpv4.ipv4_trunc_pkt", ICMPV4_IPV4_TRUNC_PKT, },
+    { "icmpv4.ipv4_unknown_ver", ICMPV4_IPV4_UNKNOWN_VER, },
     { "icmpv6.unknown_type", ICMPV6_UNKNOWN_TYPE,},
     { "icmpv6.unknown_code", ICMPV6_UNKNOWN_CODE,},
     { "icmpv6.pkt_too_small", ICMPV6_PKT_TOO_SMALL,},
@@ -61,11 +84,14 @@ struct DetectDecodeEvents_ {
     { "sll.pkt_too_small", SLL_PKT_TOO_SMALL, },
     { "ethernet.pkt_too_small", ETHERNET_PKT_TOO_SMALL, },
     { "ppp.pkt_too_small", PPP_PKT_TOO_SMALL, },
-    { "ppp.ju_pkt_too_small", PPPVJU_PKT_TOO_SMALL, },
+    { "ppp.vju_pkt_too_small", PPPVJU_PKT_TOO_SMALL, },
     { "ppp.ip4_pkt_too_small", PPPIPV4_PKT_TOO_SMALL, },
     { "ppp.ip6_pkt_too_small", PPPIPV6_PKT_TOO_SMALL, },
     { "ppp.wrong_type", PPP_WRONG_TYPE, }, /** unknown & invalid protocol */
     { "ppp.unsup_proto", PPP_UNSUP_PROTO, }, /** unsupported but valid protocol */
+    { "pppoe.pkt_too_small", PPPOE_PKT_TOO_SMALL, },
+    { "pppoe.wrong_code", PPPOE_WRONG_CODE, },
+    { "pppoe.malformed_tags", PPPOE_MALFORMED_TAGS, },
     { "gre.pkt_too_small", GRE_PKT_TOO_SMALL, },
     { "gre.wrong_version", GRE_WRONG_VERSION, },
     { "gre.version0_recur", GRE_VERSION0_RECUR, },

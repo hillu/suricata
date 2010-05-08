@@ -1,10 +1,25 @@
-/* Copyright (c) 2010 Pierre Chifflier <chifflier@edenwall.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
- * Some code borrowed from snort's prelude output plugin, originally
- * written by Yoann Vandoorselaere <yoann.v@prelude-ids.com>
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
  */
 
-/* alert Prelude
+/**
+ * \file
+ *
+ * \author Pierre Chifflier <chifflier@edenwall.com>
+ * \author Yoann Vandoorselaere <yoann.v@prelude-ids.com>
  *
  * Logs alerts to the Prelude system, using IDMEF (RFC 4765) messages.
  *
@@ -19,7 +34,6 @@
  *
  * This modules requires a Prelude profile to work (see man prelude-admin
  * and the Prelude Handbook for help).
- *
  */
 
 #include "suricata-common.h"
@@ -38,6 +52,7 @@
 #include "util-error.h"
 
 #include "output.h"
+#include "util-privs.h"
 
 #ifndef PRELUDE
 /** Handle the case where no PRELUDE support is compiled in.
@@ -117,6 +132,7 @@ void TmModuleAlertPreludeRegister (void) {
     tmm_modules[TMM_ALERTPRELUDE].Func = AlertPrelude;
     tmm_modules[TMM_ALERTPRELUDE].ThreadDeinit = AlertPreludeThreadDeinit;
     tmm_modules[TMM_ALERTPRELUDE].RegisterTests = AlertPreludeRegisterTests;
+    tmm_modules[TMM_ALERTPRELUDE].cap_flags = 0;
 
     OutputRegisterModule("AlertPrelude", "alert-prelude", AlertPreludeInitCtx);
 }

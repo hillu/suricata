@@ -1,6 +1,24 @@
-/**
- * Copyright (c) 2009 Open Information Security Foundation
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
  * \author Pablo Rincon Crespo <pablo.rincon.crespo@gmail.com>
  *
  * Signatures that only inspect IP addresses are processed here
@@ -926,6 +944,9 @@ void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
         /* The final results will be at io_tctx */
         io_tctx->sig_match_array[u] = dst->array[u] & src->array[u];
 
+        /* We have to move the logic of the signature checking
+         * to the main detect loop, in order to apply the
+         * priority of actions (pass, drop, reject, alert) */
         if (io_tctx->sig_match_array[u] != 0) {
             /* We have a match :) Let's see from which signum's */
             uint8_t bitarray = io_tctx->sig_match_array[u];
@@ -943,10 +964,6 @@ void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
                                u * 8 + i, s->id, s->msg);
 
                     if (!(s->flags & SIG_FLAG_NOALERT)) {
-                        PacketAlertHandle(de_ctx, det_ctx, s, p);
-                        /* set verdict on packet */
-                        p->action |= s->action;
-
                         if (p->flow != NULL) {
                             if (s->action & ACTION_DROP)
                                 p->flow->flags |= FLOW_ACTION_DROP;
@@ -956,7 +973,11 @@ void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
                                 p->flow->flags |= FLOW_ACTION_DROP;
                             if (s->action & ACTION_REJECT_BOTH)
                                 p->flow->flags |= FLOW_ACTION_DROP;
+                            if (s->action & ACTION_PASS)
+                                p->flow->flags |= FLOW_ACTION_PASS;
                         }
+                        p->action |= ACTION_PASS;
+                        PacketAlertAppend(det_ctx, s, p);
                     }
                 }
             }

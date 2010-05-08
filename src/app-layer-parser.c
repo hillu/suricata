@@ -1,4 +1,27 @@
-/* Copyright (c) 2009 Victor Julien */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * Generic App-layer parsing functions.
+ */
 
 #include "suricata-common.h"
 #include "debug.h"
@@ -706,10 +729,16 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
 
     uint16_t parser_idx = 0;
     AppLayerProto *p = &al_proto_table[proto];
+    TcpSession *ssn = NULL;
 
-    TcpSession *ssn = f->protoctx;
+    ssn = f->protoctx;
     if (ssn == NULL) {
         SCLogDebug("no TCP session");
+        goto error;
+    }
+
+    if (flags & STREAM_GAP) {
+        SCLogDebug("stream gap detected (missing packets), this is not yet supported.");
         goto error;
     }
 
@@ -873,13 +902,8 @@ void AppLayerParserCleanupState(TcpSession *ssn)
         return;
     }
 
-    AppLayerProto *p = &al_proto_table[ssn->alproto];
-    if (p->name == NULL) {
-        SCLogDebug("no parser state for %"PRIu16"", ssn->alproto);
-        return;
-    }
-
     /* free the parser protocol state */
+    AppLayerProto *p = &al_proto_table[ssn->alproto];
     if (p->StateFree != NULL && ssn->aldata != NULL) {
         if (ssn->aldata[p->storage_id] != NULL) {
             SCLogDebug("calling StateFree");

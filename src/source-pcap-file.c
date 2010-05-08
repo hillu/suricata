@@ -1,9 +1,26 @@
-/* Copyright (c) 2009 Victor Julien <victor@inliniac.net> */
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
-/* TODO
+/**
+ * \file
  *
+ * \author Victor Julien <victor@inliniac.net>
  *
- *
+ * File based pcap packet acquisition support
  */
 
 #if LIBPCAP_VERSION_MAJOR == 1
@@ -25,6 +42,7 @@
 #include "util-debug.h"
 #include "conf.h"
 #include "util-error.h"
+#include "util-privs.h"
 
 extern int max_pending_packets;
 
@@ -33,6 +51,7 @@ typedef struct PcapFileGlobalVars_ {
     void (*Decoder)(ThreadVars *, DecodeThreadVars *, Packet *, u_int8_t *, u_int16_t, PacketQueue *);
     int datalink;
     struct bpf_program filter;
+    uint64_t cnt; /** packet counter */
 } PcapFileGlobalVars;
 
 typedef struct PcapFileThreadVars_
@@ -66,6 +85,7 @@ void TmModuleReceivePcapFileRegister (void) {
     tmm_modules[TMM_RECEIVEPCAPFILE].ThreadExitPrintStats = ReceivePcapFileThreadExitStats;
     tmm_modules[TMM_RECEIVEPCAPFILE].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEPCAPFILE].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVEPCAPFILE].cap_flags = 0;
 }
 
 void TmModuleDecodePcapFileRegister (void) {
@@ -75,6 +95,7 @@ void TmModuleDecodePcapFileRegister (void) {
     tmm_modules[TMM_DECODEPCAPFILE].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODEPCAPFILE].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEPCAPFILE].RegisterTests = NULL;
+    tmm_modules[TMM_DECODEPCAPFILE].cap_flags = 0;
 }
 
 void PcapFileCallback(char *user, struct pcap_pkthdr *h, u_char *pkt) {
@@ -130,6 +151,8 @@ TmEcode ReceivePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) 
         EngineStop();
         SCReturnInt(TM_ECODE_FAILED);
     }
+    p->pcap_cnt = pcap_g.cnt;
+    pcap_g.cnt++;
 
     SCReturnInt(TM_ECODE_OK);
 }

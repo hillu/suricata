@@ -1,15 +1,33 @@
-/* 3 gram implementation of the (S)BNDMq pattern matching algorithm.
+/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
  *
- * Copyright (c) 2009 Victor Julien <victor@inliniac.net>
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Victor Julien <victor@inliniac.net>
+ *
+ * 3 gram implementation of the (S)BNDMq pattern matching algorithm.
  *
  * Ideas:
  *  - B3g does a full match in the search of up to 'm' characters,
  *    in case of a case insensitive search we could say it's match if
  *    the pattern is of len 'm' or just compare the rest of the chars.
  *
- * TODO:
- *  - Try to get the S0 calculation right.
- *
+ * \todo Try to get the S0 calculation right.
  */
 
 #include "suricata-common.h"
@@ -40,7 +58,7 @@ void B3gThreadDestroyCtx(MpmCtx *, MpmThreadCtx *);
 int B3gAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
 int B3gAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
 int B3gPreparePatterns(MpmCtx *);
-inline uint32_t B3gSearchWrap(MpmCtx *, MpmThreadCtx *, PatternMatcherQueue *, uint8_t *, uint16_t);
+uint32_t B3gSearchWrap(MpmCtx *, MpmThreadCtx *, PatternMatcherQueue *, uint8_t *, uint16_t);
 uint32_t B3gSearch1(MpmCtx *, MpmThreadCtx *, PatternMatcherQueue *, uint8_t *, uint16_t);
 uint32_t B3gSearch2(MpmCtx *, MpmThreadCtx *, PatternMatcherQueue *, uint8_t *, uint16_t);
 uint32_t B3gSearch12(MpmCtx *, MpmThreadCtx *, PatternMatcherQueue *, uint8_t *, uint16_t);
@@ -276,7 +294,7 @@ void B3gFreePattern(MpmCtx *mpm_ctx, B3gPattern *p) {
     if (p) {
         SCFree(p);
         mpm_ctx->memory_cnt--;
-        mpm_ctx->memory_size -= sizeof(B3gPattern); 
+        mpm_ctx->memory_size -= sizeof(B3gPattern);
     }
 }
 
@@ -288,7 +306,7 @@ void B3gFreePattern(MpmCtx *mpm_ctx, B3gPattern *p) {
  * pid: pattern id
  * sid: signature id (internal id)
  */
-static inline int B3gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
+static int B3gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
     B3gCtx *ctx = (B3gCtx *)mpm_ctx->ctx;
 
     if (patlen == 0)

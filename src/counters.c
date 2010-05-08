@@ -1,5 +1,26 @@
-/** Copyright (c) 2009 Open Information Security Foundation.
- *  \author Anoop Saldanha <poonaatsoc@gmail.com>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
+ *
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ *
+ * Performance counters
  */
 
 #include "suricata-common.h"
@@ -12,6 +33,7 @@
 #include "util-time.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "util-privs.h"
 
 /** \todo Get the default log directory from some global resource. */
 #define SC_PERF_DEFAULT_LOG_FILENAME "stats.log"
@@ -20,6 +42,215 @@
 #define SC_PERF_PCRE_TIMEBASED_INTERVAL "^(?:(\\d+)([shm]))(?:(\\d+)([shm]))?(?:(\\d+)([shm]))?$"
 
 static SCPerfOPIfaceContext *sc_perf_op_ctx = NULL;
+
+/**
+ * \brief Adds a value of type uint64_t to the local counter.
+ *
+ * \param id  ID of the counter as set by the API
+ * \param pca Counter array that holds the local counter for this TM
+ * \param x   Value to add to this local counter
+ */
+void SCPerfCounterAddUI64(uint16_t id, SCPerfCounterArray *pca, uint64_t x)
+{
+    if (!pca) {
+        SCLogDebug("counterarray is NULL");
+        return;
+    }
+    if ((id < 1) || (id > pca->size)) {
+        SCLogDebug("counter doesn't exist");
+        return;
+    }
+
+    switch (pca->head[id].pc->value->type) {
+        case SC_PERF_TYPE_UINT64:
+            pca->head[id].ui64_cnt += x;
+            break;
+        case SC_PERF_TYPE_DOUBLE:
+            pca->head[id].d_cnt += x;
+            break;
+    }
+
+    if (pca->head[id].syncs == ULONG_MAX) {
+        pca->head[id].syncs = 0;
+        pca->head[id].wrapped_syncs++;
+    }
+    pca->head[id].syncs++;
+
+    return;
+}
+
+/**
+ * \brief Adds a value of type double to the local counter
+ *
+ * \param id  ID of the counter as set by the API
+ * \param pca Counter array that holds the local counter for this TM
+ * \param x   Value to add to this local counter
+ */
+void SCPerfCounterAddDouble(uint16_t id, SCPerfCounterArray *pca, double x)
+{
+    if (!pca) {
+        SCLogDebug("counterarray is NULL");
+        return;
+    }
+    if ((id < 1) || (id > pca->size)) {
+        SCLogDebug("counter doesn't exist");
+        return;
+    }
+
+    /* incase you are trying to add a double to a counter of type SC_PERF_TYPE_UINT64
+     * it will be truncated */
+    switch (pca->head[id].pc->value->type) {
+        case SC_PERF_TYPE_UINT64:
+            pca->head[id].ui64_cnt += x;
+            break;
+        case SC_PERF_TYPE_DOUBLE:
+            pca->head[id].d_cnt += x;
+            break;
+    }
+
+    if (pca->head[id].syncs == ULONG_MAX) {
+        pca->head[id].syncs = 0;
+        pca->head[id].wrapped_syncs++;
+    }
+    pca->head[id].syncs++;
+
+    return;
+}
+
+/**
+ * \brief Increments the local counter
+ *
+ * \param id  Index of the counter in the counter array
+ * \param pca Counter array that holds the local counters for this TM
+ */
+void SCPerfCounterIncr(uint16_t id, SCPerfCounterArray *pca)
+{
+    if (pca == NULL) {
+        SCLogDebug("counterarray is NULL");
+        return;
+    }
+    if ((id < 1) || (id > pca->size)) {
+        SCLogDebug("counter doesn't exist");
+        return;
+    }
+
+    switch (pca->head[id].pc->value->type) {
+        case SC_PERF_TYPE_UINT64:
+            pca->head[id].ui64_cnt++;
+            break;
+        case SC_PERF_TYPE_DOUBLE:
+            pca->head[id].d_cnt++;
+            break;
+    }
+
+    if (pca->head[id].syncs == ULONG_MAX) {
+        pca->head[id].syncs = 0;
+        pca->head[id].wrapped_syncs++;
+    }
+    pca->head[id].syncs++;
+
+    return;
+}
+
+/**
+ * \brief Sets a value of type double to the local counter
+ *
+ * \param id  Index of the local counter in the counter array
+ * \param pca Pointer to the SCPerfCounterArray
+ * \param x   The value to set for the counter
+ */
+void SCPerfCounterSetUI64(uint16_t id, SCPerfCounterArray *pca,
+                                 uint64_t x)
+{
+    if (!pca) {
+        SCLogDebug("counterarray is NULL");
+        return;
+    }
+
+    if ((id < 1) || (id > pca->size)) {
+        SCLogDebug("counter doesn't exist");
+        return;
+    }
+
+    switch (pca->head[id].pc->value->type) {
+        case SC_PERF_TYPE_UINT64:
+            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
+                 (x > pca->head[id].ui64_cnt)) {
+                pca->head[id].ui64_cnt = x;
+            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
+                pca->head[id].ui64_cnt = x;
+            }
+
+            break;
+        case SC_PERF_TYPE_DOUBLE:
+            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
+                 (x > pca->head[id].d_cnt)) {
+                pca->head[id].d_cnt = x;
+            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
+                pca->head[id].d_cnt = x;
+            }
+
+            break;
+    }
+
+    if (pca->head[id].syncs == ULONG_MAX) {
+        pca->head[id].syncs = 0;
+        pca->head[id].wrapped_syncs++;
+    }
+    pca->head[id].syncs++;
+
+    return;
+}
+
+/**
+ * \brief Sets a local counter to an arg of type double
+ *
+ * \param id  Index of the local counter in the counter array
+ * \param pca Pointer to the SCPerfCounterArray
+ * \param x   The value to set for the counter
+ */
+void SCPerfCounterSetDouble(uint16_t id, SCPerfCounterArray *pca,
+                                   double x)
+{
+    if (!pca) {
+        SCLogDebug("counterarray is NULL");
+        return;
+    }
+
+    if ((id < 1) || (id > pca->size)) {
+        SCLogDebug("counter doesn't exist");
+        return;
+    }
+
+    switch (pca->head[id].pc->value->type) {
+        case SC_PERF_TYPE_UINT64:
+            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
+                 (x > pca->head[id].ui64_cnt)) {
+                pca->head[id].ui64_cnt = x;
+            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
+                pca->head[id].ui64_cnt = x;
+            }
+
+            break;
+        case SC_PERF_TYPE_DOUBLE:
+            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
+                 (x > pca->head[id].d_cnt)) {
+                pca->head[id].d_cnt = x;
+            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
+                pca->head[id].d_cnt = x;
+            }
+
+            break;
+    }
+
+    if (pca->head[id].syncs == ULONG_MAX) {
+        pca->head[id].syncs = 0;
+        pca->head[id].wrapped_syncs++;
+    }
+    pca->head[id].syncs++;
+
+    return;
+}
 
 /**
  * \brief Get the filename with path to the stats log file.
@@ -147,6 +378,11 @@ static void *SCPerfMgmtThread(void *arg)
     /* Set the thread name */
     SCSetThreadName(tv_local->name);
 
+    /* Set the threads capability */
+    tv_local->cap_flags = 0;
+
+    SCDropCaps(tv_local);
+
     if (sc_perf_op_ctx == NULL) {
         SCLogError(SC_ERR_PERF_STATS_NOT_INIT, "Perf Counter API not init"
                    "SCPerfInitCounterApi() has to be called first");
@@ -193,6 +429,11 @@ static void *SCPerfWakeupThread(void *arg)
 
     /* Set the thread name */
     SCSetThreadName(tv_local->name);
+
+    /* Set the threads capability */
+    tv_local->cap_flags = 0;
+
+    SCDropCaps(tv_local);
 
     if (sc_perf_op_ctx == NULL) {
         SCLogError(SC_ERR_PERF_STATS_NOT_INIT, "Perf Counter API not init"
@@ -1293,215 +1534,6 @@ int SCPerfCounterDisplay(uint16_t id, SCPerfContext *pctx, int disp)
 }
 
 /**
- * \brief Increments the local counter
- *
- * \param id  Index of the counter in the counter array
- * \param pca Counter array that holds the local counters for this TM
- */
-inline void SCPerfCounterIncr(uint16_t id, SCPerfCounterArray *pca)
-{
-    if (pca == NULL) {
-        SCLogDebug("counterarray is NULL");
-        return;
-    }
-    if ((id < 1) || (id > pca->size)) {
-        SCLogDebug("counter doesn't exist");
-        return;
-    }
-
-    switch (pca->head[id].pc->value->type) {
-        case SC_PERF_TYPE_UINT64:
-            pca->head[id].ui64_cnt++;
-            break;
-        case SC_PERF_TYPE_DOUBLE:
-            pca->head[id].d_cnt++;
-            break;
-    }
-
-    if (pca->head[id].syncs == ULONG_MAX) {
-        pca->head[id].syncs = 0;
-        pca->head[id].wrapped_syncs++;
-    }
-    pca->head[id].syncs++;
-
-    return;
-}
-
-/**
- * \brief Adds a value of type uint64_t to the local counter.
- *
- * \param id  ID of the counter as set by the API
- * \param pca Counter array that holds the local counter for this TM
- * \param x   Value to add to this local counter
- */
-inline void SCPerfCounterAddUI64(uint16_t id, SCPerfCounterArray *pca, uint64_t x)
-{
-    if (!pca) {
-        SCLogDebug("counterarray is NULL");
-        return;
-    }
-    if ((id < 1) || (id > pca->size)) {
-        SCLogDebug("counter doesn't exist");
-        return;
-    }
-
-    switch (pca->head[id].pc->value->type) {
-        case SC_PERF_TYPE_UINT64:
-            pca->head[id].ui64_cnt += x;
-            break;
-        case SC_PERF_TYPE_DOUBLE:
-            pca->head[id].d_cnt += x;
-            break;
-    }
-
-    if (pca->head[id].syncs == ULONG_MAX) {
-        pca->head[id].syncs = 0;
-        pca->head[id].wrapped_syncs++;
-    }
-    pca->head[id].syncs++;
-
-    return;
-}
-
-/**
- * \brief Adds a value of type double to the local counter
- *
- * \param id  ID of the counter as set by the API
- * \param pca Counter array that holds the local counter for this TM
- * \param x   Value to add to this local counter
- */
-inline void SCPerfCounterAddDouble(uint16_t id, SCPerfCounterArray *pca, double x)
-{
-    if (!pca) {
-        SCLogDebug("counterarray is NULL");
-        return;
-    }
-    if ((id < 1) || (id > pca->size)) {
-        SCLogDebug("counter doesn't exist");
-        return;
-    }
-
-    /* incase you are trying to add a double to a counter of type SC_PERF_TYPE_UINT64
-     * it will be truncated */
-    switch (pca->head[id].pc->value->type) {
-        case SC_PERF_TYPE_UINT64:
-            pca->head[id].ui64_cnt += x;
-            break;
-        case SC_PERF_TYPE_DOUBLE:
-            pca->head[id].d_cnt += x;
-            break;
-    }
-
-    if (pca->head[id].syncs == ULONG_MAX) {
-        pca->head[id].syncs = 0;
-        pca->head[id].wrapped_syncs++;
-    }
-    pca->head[id].syncs++;
-
-    return;
-}
-
-/**
- * \brief Sets a value of type double to the local counter
- *
- * \param id  Index of the local counter in the counter array
- * \param pca Pointer to the SCPerfCounterArray
- * \param x   The value to set for the counter
- */
-inline void SCPerfCounterSetUI64(uint16_t id, SCPerfCounterArray *pca,
-                                 uint64_t x)
-{
-    if (!pca) {
-        SCLogDebug("counterarray is NULL");
-        return;
-    }
-
-    if ((id < 1) || (id > pca->size)) {
-        SCLogDebug("counter doesn't exist");
-        return;
-    }
-
-    switch (pca->head[id].pc->value->type) {
-        case SC_PERF_TYPE_UINT64:
-            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
-                 (x > pca->head[id].ui64_cnt)) {
-                pca->head[id].ui64_cnt = x;
-            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
-                pca->head[id].ui64_cnt = x;
-            }
-
-            break;
-        case SC_PERF_TYPE_DOUBLE:
-            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
-                 (x > pca->head[id].d_cnt)) {
-                pca->head[id].d_cnt = x;
-            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
-                pca->head[id].d_cnt = x;
-            }
-
-            break;
-    }
-
-    if (pca->head[id].syncs == ULONG_MAX) {
-        pca->head[id].syncs = 0;
-        pca->head[id].wrapped_syncs++;
-    }
-    pca->head[id].syncs++;
-
-    return;
-}
-
-/**
- * \brief Sets a local counter to an arg of type double
- *
- * \param id  Index of the local counter in the counter array
- * \param pca Pointer to the SCPerfCounterArray
- * \param x   The value to set for the counter
- */
-inline void SCPerfCounterSetDouble(uint16_t id, SCPerfCounterArray *pca,
-                                   double x)
-{
-    if (!pca) {
-        SCLogDebug("counterarray is NULL");
-        return;
-    }
-
-    if ((id < 1) || (id > pca->size)) {
-        SCLogDebug("counter doesn't exist");
-        return;
-    }
-
-    switch (pca->head[id].pc->value->type) {
-        case SC_PERF_TYPE_UINT64:
-            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
-                 (x > pca->head[id].ui64_cnt)) {
-                pca->head[id].ui64_cnt = x;
-            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
-                pca->head[id].ui64_cnt = x;
-            }
-
-            break;
-        case SC_PERF_TYPE_DOUBLE:
-            if ( (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_MAXIMUM) &&
-                 (x > pca->head[id].d_cnt)) {
-                pca->head[id].d_cnt = x;
-            } else if (pca->head[id].pc->type_q->type & SC_PERF_TYPE_Q_NORMAL) {
-                pca->head[id].d_cnt = x;
-            }
-
-            break;
-    }
-
-    if (pca->head[id].syncs == ULONG_MAX) {
-        pca->head[id].syncs = 0;
-        pca->head[id].wrapped_syncs++;
-    }
-    pca->head[id].syncs++;
-
-    return;
-}
-
-/**
  * \brief Syncs the counter array with the global counter variables
  *
  * \param pca      Pointer to the SCPerfCounterArray
@@ -1657,9 +1689,7 @@ void SCPerfReleasePCA(SCPerfCounterArray *pca)
     return;
 }
 
-
 /*----------------------------------Unit_Tests--------------------------------*/
-
 
 static int SCPerfTestCounterReg01()
 {

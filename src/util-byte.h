@@ -1,4 +1,22 @@
-/** Copyright (c) 2009 Open Information Security Foundation
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+/**
+ * \file
  *
  * \author Brian Rectanus <brectanu@gmail.com>
  */
@@ -72,7 +90,7 @@ int ByteExtractUint64(uint64_t *res, int e, uint16_t len, const uint8_t *bytes);
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractUint32(uint32_t *res, int e, uint16_t len, const uint8_t *bytes);
+int ByteExtractUint32(uint32_t *res, int e, uint16_t len, const uint8_t *bytes);
 
 /**
  * Extract bytes from a byte string and convert to a unint16_t.
@@ -85,7 +103,7 @@ inline int ByteExtractUint32(uint32_t *res, int e, uint16_t len, const uint8_t *
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractUint16(uint16_t *res, int e, uint16_t len, const uint8_t *bytes);
+int ByteExtractUint16(uint16_t *res, int e, uint16_t len, const uint8_t *bytes);
 
 /**
  * Extract unsigned integer value from a string.
@@ -98,7 +116,7 @@ inline int ByteExtractUint16(uint16_t *res, int e, uint16_t len, const uint8_t *
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractString(uint64_t *res, int base, uint16_t len, const char *str);
+int ByteExtractString(uint64_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract unsigned integer value from a string as uint64_t.
@@ -112,7 +130,7 @@ inline int ByteExtractString(uint64_t *res, int base, uint16_t len, const char *
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringUint64(uint64_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringUint64(uint64_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract unsigned integer value from a string as uint32_t.
@@ -125,7 +143,7 @@ inline int ByteExtractStringUint64(uint64_t *res, int base, uint16_t len, const 
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringUint32(uint32_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringUint32(uint32_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract unsigned integer value from a string as uint16_t.
@@ -138,7 +156,7 @@ inline int ByteExtractStringUint32(uint32_t *res, int base, uint16_t len, const 
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringUint16(uint16_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringUint16(uint16_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract unsigned integer value from a string as uint8_t.
@@ -151,7 +169,7 @@ inline int ByteExtractStringUint16(uint16_t *res, int base, uint16_t len, const 
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringUint8(uint8_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringUint8(uint8_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract signed integer value from a string.
@@ -164,7 +182,7 @@ inline int ByteExtractStringUint8(uint8_t *res, int base, uint16_t len, const ch
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringSigned(int64_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringSigned(int64_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract signed integer value from a string as uint64_t.
@@ -177,7 +195,7 @@ inline int ByteExtractStringSigned(int64_t *res, int base, uint16_t len, const c
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringInt64(int64_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringInt64(int64_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract signed integer value from a string as uint32_t.
@@ -190,7 +208,7 @@ inline int ByteExtractStringInt64(int64_t *res, int base, uint16_t len, const ch
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringInt32(int32_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringInt32(int32_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract signed integer value from a string as uint16_t.
@@ -203,7 +221,7 @@ inline int ByteExtractStringInt32(int32_t *res, int base, uint16_t len, const ch
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringInt16(int16_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringInt16(int16_t *res, int base, uint16_t len, const char *str);
 
 /**
  * Extract signed integer value from a string as uint8_t.
@@ -216,11 +234,42 @@ inline int ByteExtractStringInt16(int16_t *res, int base, uint16_t len, const ch
  * \return n Number of bytes extracted on success
  * \return -1 On error
  */
-inline int ByteExtractStringInt8(int8_t *res, int base, uint16_t len, const char *str);
+int ByteExtractStringInt8(int8_t *res, int base, uint16_t len, const char *str);
 
 #ifdef UNITTESTS
 void ByteRegisterTests(void);
 #endif /* UNITTESTS */
+
+/** ------ Inline functions ----- */
+static inline int ByteExtract(uint64_t *res, int e, uint16_t len, const uint8_t *bytes)
+{
+    uint64_t b = 0;
+    int i;
+
+    if ((e != BYTE_BIG_ENDIAN) && (e != BYTE_LITTLE_ENDIAN)) {
+        /** \todo Need standard return values */
+        return -1;
+    }
+
+    *res = 0;
+
+    /* Go through each byte and merge it into the result in the correct order */
+    /** \todo Probably a more efficient way to do this. */
+    for (i = 0; i < len; i++) {
+
+        if (e == BYTE_LITTLE_ENDIAN) {
+            b = bytes[i];
+        }
+        else {
+            b = bytes[len - i - 1];
+        }
+
+        *res |= (b << ((i & 7) << 3));
+
+    }
+
+    return len;
+}
 
 
 #endif /* __UTIL_BYTE_H__ */

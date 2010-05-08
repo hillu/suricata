@@ -1,9 +1,26 @@
-/* Copyright (c) 2009,2010 Open Information Security Foundation */
+/* Copyright (C) 2007-2010 Open Information Security Foundation
+ *
+ * You can copy, redistribute or modify this Program under the terms of
+ * the GNU General Public License version 2 as published by the Free
+ * Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * version 2 along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
 
 /**
  * \file
  *
  * \author Kirby Kuehl <kkuehl@gmail.com>
+ *
+ * DCE/RPC parser and decoder
  */
 
 #include "suricata-common.h"
@@ -860,7 +877,7 @@ static uint32_t StubDataParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_le
  * A fast path for normal decoding is used when there is enough bytes
  * present to parse the entire header. A slow path is used to parse
  * fragmented packets.
- * \retval -1 if DCEPRC Header does not validate
+ * \retval -1 if DCERPC Header does not validate
  * \retval Number of bytes processed
  */
 static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
