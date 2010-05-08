@@ -4,14 +4,15 @@ Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Build-Depends: debhelper (>= 7),
     autotools-dev,
-    libhtp-dev,
+    libhtp-dev (>= 0.2.3),
     libnet1-dev | libnet-dev,
     libpcap-dev,
     libpcre3-dev,
     libyaml-dev,
     libnetfilter-queue-dev,
     libprelude-dev,
-    zlib1g-dev | libz-dev
+    zlib1g-dev | libz-dev,
+    libcap-ng-dev
 Standards-Version: 3.8.4
 Homepage: http://www.openinfosecfoundation.org/
 
