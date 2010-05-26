@@ -56,7 +56,8 @@ PROGRAMS = $(bin_PROGRAMS)
 am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	packet-queue.$(OBJEXT) threads.$(OBJEXT) source-nfq.$(OBJEXT) \
 	source-pcap.$(OBJEXT) source-pcap-file.$(OBJEXT) \
-	source-pfring.$(OBJEXT) source-ipfw.$(OBJEXT) decode.$(OBJEXT) \
+	source-pfring.$(OBJEXT) source-ipfw.$(OBJEXT) \
+	source-erf-file.$(OBJEXT) decode.$(OBJEXT) \
 	decode-ethernet.$(OBJEXT) decode-vlan.$(OBJEXT) \
 	decode-sll.$(OBJEXT) decode-gre.$(OBJEXT) decode-ppp.$(OBJEXT) \
 	decode-pppoe.$(OBJEXT) decode-ipv4.$(OBJEXT) \
@@ -77,23 +78,23 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	detect-engine-proto.$(OBJEXT) detect-engine-port.$(OBJEXT) \
 	detect-engine-siggroup.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
 	detect-engine-iponly.$(OBJEXT) detect-engine-payload.$(OBJEXT) \
-	detect-engine-uri.$(OBJEXT) detect-parse.$(OBJEXT) \
-	detect-ack.$(OBJEXT) detect-seq.$(OBJEXT) \
-	detect-content.$(OBJEXT) detect-uricontent.$(OBJEXT) \
-	detect-flowbits.$(OBJEXT) detect-flowvar.$(OBJEXT) \
-	detect-flowint.$(OBJEXT) detect-pktvar.$(OBJEXT) \
-	detect-pcre.$(OBJEXT) detect-depth.$(OBJEXT) \
-	detect-nocase.$(OBJEXT) detect-fast-pattern.$(OBJEXT) \
-	detect-recursive.$(OBJEXT) detect-rawbytes.$(OBJEXT) \
-	detect-bytetest.$(OBJEXT) detect-bytejump.$(OBJEXT) \
-	detect-sameip.$(OBJEXT) detect-ipproto.$(OBJEXT) \
-	detect-within.$(OBJEXT) detect-distance.$(OBJEXT) \
-	detect-offset.$(OBJEXT) detect-sid.$(OBJEXT) \
-	detect-priority.$(OBJEXT) detect-rev.$(OBJEXT) \
-	detect-classtype.$(OBJEXT) detect-reference.$(OBJEXT) \
-	detect-tag.$(OBJEXT) detect-threshold.$(OBJEXT) \
-	detect-metadata.$(OBJEXT) detect-msg.$(OBJEXT) \
-	detect-id.$(OBJEXT) detect-flow.$(OBJEXT) \
+	detect-engine-uri.$(OBJEXT) detect-engine-state.$(OBJEXT) \
+	detect-parse.$(OBJEXT) detect-ack.$(OBJEXT) \
+	detect-seq.$(OBJEXT) detect-content.$(OBJEXT) \
+	detect-uricontent.$(OBJEXT) detect-flowbits.$(OBJEXT) \
+	detect-flowvar.$(OBJEXT) detect-flowint.$(OBJEXT) \
+	detect-pktvar.$(OBJEXT) detect-pcre.$(OBJEXT) \
+	detect-depth.$(OBJEXT) detect-nocase.$(OBJEXT) \
+	detect-fast-pattern.$(OBJEXT) detect-recursive.$(OBJEXT) \
+	detect-rawbytes.$(OBJEXT) detect-bytetest.$(OBJEXT) \
+	detect-bytejump.$(OBJEXT) detect-sameip.$(OBJEXT) \
+	detect-ipproto.$(OBJEXT) detect-within.$(OBJEXT) \
+	detect-distance.$(OBJEXT) detect-offset.$(OBJEXT) \
+	detect-sid.$(OBJEXT) detect-priority.$(OBJEXT) \
+	detect-rev.$(OBJEXT) detect-classtype.$(OBJEXT) \
+	detect-reference.$(OBJEXT) detect-tag.$(OBJEXT) \
+	detect-threshold.$(OBJEXT) detect-metadata.$(OBJEXT) \
+	detect-msg.$(OBJEXT) detect-id.$(OBJEXT) detect-flow.$(OBJEXT) \
 	detect-dsize.$(OBJEXT) detect-stream_size.$(OBJEXT) \
 	detect-decode-event.$(OBJEXT) detect-ipopts.$(OBJEXT) \
 	detect-flags.$(OBJEXT) detect-fragbits.$(OBJEXT) \
@@ -106,30 +107,30 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	detect-icmp-seq.$(OBJEXT) detect-dce-iface.$(OBJEXT) \
 	detect-dce-opnum.$(OBJEXT) detect-dce-stub-data.$(OBJEXT) \
 	detect-urilen.$(OBJEXT) detect-detection-filter.$(OBJEXT) \
-	detect-http-client-body.$(OBJEXT) util-print.$(OBJEXT) \
-	util-fmemopen.$(OBJEXT) util-cpu.$(OBJEXT) \
-	util-pidfile.$(OBJEXT) util-mpm.$(OBJEXT) util-spm.$(OBJEXT) \
-	util-spm-bs.$(OBJEXT) util-spm-bs2bm.$(OBJEXT) \
-	util-spm-bm.$(OBJEXT) util-mpm-wumanber.$(OBJEXT) \
-	util-mpm-b2g.$(OBJEXT) util-mpm-b2g-cuda.$(OBJEXT) \
-	util-mpm-b3g.$(OBJEXT) util-cidr.$(OBJEXT) \
-	util-unittest.$(OBJEXT) util-unittest-helper.$(OBJEXT) \
-	util-hash.$(OBJEXT) util-hashlist.$(OBJEXT) \
-	util-bloomfilter.$(OBJEXT) util-bloomfilter-counting.$(OBJEXT) \
-	util-pool.$(OBJEXT) util-time.$(OBJEXT) util-var.$(OBJEXT) \
-	util-var-name.$(OBJEXT) util-byte.$(OBJEXT) \
-	util-debug.$(OBJEXT) util-debug-filters.$(OBJEXT) \
-	util-error.$(OBJEXT) util-enum.$(OBJEXT) \
-	util-radix-tree.$(OBJEXT) util-host-os-info.$(OBJEXT) \
-	util-rule-vars.$(OBJEXT) util-fix_checksum.$(OBJEXT) \
-	util-daemon.$(OBJEXT) util-random.$(OBJEXT) \
-	util-classification-config.$(OBJEXT) \
+	detect-http-client-body.$(OBJEXT) detect-asn1.$(OBJEXT) \
+	util-print.$(OBJEXT) util-fmemopen.$(OBJEXT) \
+	util-cpu.$(OBJEXT) util-pidfile.$(OBJEXT) util-mpm.$(OBJEXT) \
+	util-spm.$(OBJEXT) util-spm-bs.$(OBJEXT) \
+	util-spm-bs2bm.$(OBJEXT) util-spm-bm.$(OBJEXT) \
+	util-mpm-wumanber.$(OBJEXT) util-mpm-b2g.$(OBJEXT) \
+	util-mpm-b2g-cuda.$(OBJEXT) util-mpm-b3g.$(OBJEXT) \
+	util-cidr.$(OBJEXT) util-unittest.$(OBJEXT) \
+	util-unittest-helper.$(OBJEXT) util-hash.$(OBJEXT) \
+	util-hashlist.$(OBJEXT) util-bloomfilter.$(OBJEXT) \
+	util-bloomfilter-counting.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-time.$(OBJEXT) util-var.$(OBJEXT) util-var-name.$(OBJEXT) \
+	util-byte.$(OBJEXT) util-debug.$(OBJEXT) \
+	util-debug-filters.$(OBJEXT) util-error.$(OBJEXT) \
+	util-enum.$(OBJEXT) util-radix-tree.$(OBJEXT) \
+	util-host-os-info.$(OBJEXT) util-rule-vars.$(OBJEXT) \
+	util-fix_checksum.$(OBJEXT) util-daemon.$(OBJEXT) \
+	util-random.$(OBJEXT) util-classification-config.$(OBJEXT) \
 	util-threshold-config.$(OBJEXT) util-strlcatu.$(OBJEXT) \
 	util-strlcpyu.$(OBJEXT) util-cuda.$(OBJEXT) \
 	util-cuda-handlers.$(OBJEXT) util-privs.$(OBJEXT) \
-	tm-modules.$(OBJEXT) tm-queues.$(OBJEXT) \
-	tm-queuehandlers.$(OBJEXT) tm-threads.$(OBJEXT) \
-	tmqh-simple.$(OBJEXT) tmqh-nfq.$(OBJEXT) \
+	util-decode-asn1.$(OBJEXT) tm-modules.$(OBJEXT) \
+	tm-queues.$(OBJEXT) tm-queuehandlers.$(OBJEXT) \
+	tm-threads.$(OBJEXT) tmqh-simple.$(OBJEXT) tmqh-nfq.$(OBJEXT) \
 	tmqh-packetpool.$(OBJEXT) tmqh-flow.$(OBJEXT) \
 	alert-fastlog.$(OBJEXT) alert-debuglog.$(OBJEXT) \
 	alert-prelude.$(OBJEXT) alert-unified-log.$(OBJEXT) \
@@ -142,8 +143,9 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	app-layer-parser.$(OBJEXT) app-layer-htp.$(OBJEXT) \
 	app-layer-tls.$(OBJEXT) app-layer-smb.$(OBJEXT) \
 	app-layer-smb2.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
-	app-layer-ftp.$(OBJEXT) defrag.$(OBJEXT) output.$(OBJEXT) \
-	win32-misc.$(OBJEXT) util-action.$(OBJEXT)
+	app-layer-ftp.$(OBJEXT) app-layer-ssl.$(OBJEXT) \
+	defrag.$(OBJEXT) output.$(OBJEXT) win32-misc.$(OBJEXT) \
+	util-action.$(OBJEXT) util-profiling.$(OBJEXT)
 suricata_OBJECTS = $(am_suricata_OBJECTS)
 @BUILD_LIBHTP_TRUE@suricata_DEPENDENCIES =  \
 @BUILD_LIBHTP_TRUE@	$(top_builddir)/libhtp/htp/libhtp.la
@@ -200,6 +202,8 @@ INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 LD = @LD@
 LDFLAGS = @LDFLAGS@
+LIBHTPMINVERSION_CFLAGS = @LIBHTPMINVERSION_CFLAGS@
+LIBHTPMINVERSION_LIBS = @LIBHTPMINVERSION_LIBS@
 LIBOBJS = @LIBOBJS@
 LIBPRELUDE_CFLAGS = @LIBPRELUDE_CFLAGS@
 LIBPRELUDE_CONFIG = @LIBPRELUDE_CONFIG@
@@ -229,6 +233,7 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
+PKG_CONFIG = @PKG_CONFIG@
 RANLIB = @RANLIB@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
@@ -303,6 +308,7 @@ source-pcap.c source-pcap.h \
 source-pcap-file.c source-pcap-file.h \
 source-pfring.c source-pfring.h \
 source-ipfw.c source-ipfw.h \
+source-erf-file.c source-erf-file.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
 decode-vlan.c decode-vlan.h \
@@ -347,6 +353,7 @@ detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-iponly.c detect-engine-iponly.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-uri.c detect-engine-uri.h \
+detect-engine-state.c detect-engine-state.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
 detect-seq.c detect-seq.h \
@@ -405,6 +412,7 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-urilen.c detect-urilen.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-http-client-body.c detect-http-client-body.h \
+detect-asn1.c detect-asn1.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
 util-cpu.c util-cpu.h \
@@ -447,6 +455,7 @@ util-strlcpyu.c \
 util-cuda.c util-cuda.h \
 util-cuda-handlers.c util-cuda-handlers.h \
 util-privs.c util-privs.h \
+util-decode-asn1.c util-decode-asn1.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -480,11 +489,13 @@ app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-ftp.c app-layer-ftp.h \
+app-layer-ssl.c app-layer-ssl.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
 util-action.c util-action.h \
-win32-syslog.h
+win32-syslog.h \
+util-profiling.c util-profiling.h
 
 
 # set the include path found by configure
@@ -593,6 +604,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-parser.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smb.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smb2.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ssl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf-yaml-loader.Po@am__quote@
@@ -614,6 +626,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/defrag.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ack.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-asn1.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytejump.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytetest.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-classtype.Po@am__quote@
@@ -638,6 +651,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-proto.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-siggroup.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-sigorder.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-state.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-threshold.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-uri.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine.Po@am__quote@
@@ -706,6 +720,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/respond-reject-libnet11.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/respond-reject.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmodes.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-erf-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-ipfw.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-nfq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-pcap-file.Po@am__quote@
@@ -736,6 +751,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-daemon.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-debug-filters.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-debug.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-asn1.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-enum.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-error.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-fix_checksum.Po@am__quote@
@@ -752,6 +768,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pool.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-print.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-privs.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-profiling.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-radix-tree.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-random.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-rule-vars.Po@am__quote@

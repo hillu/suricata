@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -119,12 +119,6 @@ void PcapCallback(char *user, struct pcap_pkthdr *h, u_char *pkt) {
     PcapThreadVars *ptv = (PcapThreadVars *)user;
     ThreadVars *tv = ptv->tv;
 
-    SCMutexLock(&mutex_pending);
-    if (pending > max_pending_packets) {
-        SCondWait(&cond_pending, &mutex_pending);
-    }
-    SCMutexUnlock(&mutex_pending);
-
     Packet *p = tv->tmqh_in(tv);
     p->ts.tv_sec = h->ts.tv_sec;
     p->ts.tv_usec = h->ts.tv_usec;
@@ -201,10 +195,8 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
     }
 
     PcapThreadVars *ptv = SCMalloc(sizeof(PcapThreadVars));
-    if (ptv == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Couldn't allocate PcapThreadVars");
+    if (ptv == NULL)
         SCReturnInt(TM_ECODE_FAILED);
-    }
     memset(ptv, 0, sizeof(PcapThreadVars));
 
     ptv->tv = tv;
@@ -290,10 +282,8 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
     }
 
     PcapThreadVars *ptv = SCMalloc(sizeof(PcapThreadVars));
-    if (ptv == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Couldn't allocate PcapThreadVars");
+    if (ptv == NULL)
         SCReturnInt(TM_ECODE_FAILED);
-    }
     memset(ptv, 0, sizeof(PcapThreadVars));
 
     ptv->tv = tv;
@@ -430,10 +420,8 @@ TmEcode DecodePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCEnter();
     DecodeThreadVars *dtv = NULL;
 
-    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error Allocating memory");
+    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL)
         SCReturnInt(TM_ECODE_FAILED);
-    }
     memset(dtv, 0, sizeof(DecodeThreadVars));
 
     DecodeRegisterPerfCounters(dtv, tv);
@@ -441,6 +429,66 @@ TmEcode DecodePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
     *data = (void *)dtv;
 
     SCReturnInt(TM_ECODE_OK);
+}
+
+void PcapTranslateIPToDevice(char *pcap_dev, size_t len)
+{
+	char errbuf[PCAP_ERRBUF_SIZE];
+	pcap_if_t *alldevsp = NULL;
+	pcap_if_t *devsp = NULL;
+
+	struct addrinfo aiHints;
+	struct addrinfo *aiList = NULL;
+	int retVal = 0;
+
+	memset(&aiHints, 0, sizeof(aiHints));
+	aiHints.ai_family = AF_UNSPEC;
+	aiHints.ai_flags = AI_NUMERICHOST;
+
+	/* try to translate IP */
+	if ((retVal = getaddrinfo(pcap_dev, NULL, &aiHints, &aiList)) != 0) {
+		return;
+	}
+
+	if (pcap_findalldevs(&alldevsp, errbuf)) {
+		freeaddrinfo(aiList);
+		return;
+	}
+
+	for (devsp = alldevsp; devsp ; devsp = devsp->next) {
+		pcap_addr_t *ip = NULL;
+
+		for (ip = devsp->addresses; ip ; ip = ip->next) {
+
+			if (aiList->ai_family != ip->addr->sa_family) {
+				continue;
+			}
+
+			if (ip->addr->sa_family == AF_INET) {
+				if (memcmp(&((struct sockaddr_in*)aiList->ai_addr)->sin_addr, &((struct sockaddr_in*)ip->addr)->sin_addr, sizeof(struct in_addr))) {
+					continue;
+				}
+			} else if (ip->addr->sa_family == AF_INET6) {
+				if (memcmp(&((struct sockaddr_in6*)aiList->ai_addr)->sin6_addr, &((struct sockaddr_in6*)ip->addr)->sin6_addr, sizeof(struct in6_addr))) {
+					continue;
+				}
+			} else {
+				continue;
+			}
+
+			freeaddrinfo(aiList);
+
+			memset(pcap_dev, 0, len);
+			strlcpy(pcap_dev, devsp->name, ((strlen(devsp->name) < len) ? (strlen(devsp->name)) : (len-1)));
+
+			pcap_freealldevs(alldevsp);
+			return;
+		}
+	}
+
+	freeaddrinfo(aiList);
+
+	pcap_freealldevs(alldevsp);
 }
 
 /* eof */

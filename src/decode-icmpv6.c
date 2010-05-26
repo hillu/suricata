@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -166,6 +166,8 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
     p->proto = IPPROTO_ICMPV6;
     p->type = p->icmpv6h->type;
     p->code = p->icmpv6h->code;
+    p->payload_len = len - ICMPV6_HEADER_LEN;
+    p->payload = pkt + ICMPV6_HEADER_LEN;
 
     SCLogDebug("ICMPV6 TYPE %" PRIu32 " CODE %" PRIu32 "", p->icmpv6h->type,
                p->icmpv6h->code);
@@ -986,6 +988,54 @@ end:
     return retval;
 }
 
+/**\test icmpv6 packet decoding and setting up of payload_len and payload buufer
+ * \retval retval 0 = Error ; 1 = ok
+ */
+static int ICMPV6PayloadTest01(void)
+{
+    int retval = 0;
+    static uint8_t raw_ipv6[] = {
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x2d, 0x3a, 0xff,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x01, 0x00, 0x7b, 0x85, 0x00, 0x00, 0x00, 0x00,
+        0x60, 0x4b, 0xe8, 0xbd, 0x00, 0x00, 0x3b, 0xff,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00 };
+
+    Packet p;
+    IPV6Hdr ip6h;
+    ThreadVars tv;
+    DecodeThreadVars dtv;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&p, 0, sizeof(Packet));
+    memset(&dtv, 0, sizeof(DecodeThreadVars));
+    memset(&ip6h, 0, sizeof(IPV6Hdr));
+
+    FlowInitConfig(FLOW_QUIET);
+    DecodeIPV6(&tv, &dtv, &p, raw_ipv6, sizeof(raw_ipv6), NULL);
+    FlowShutdown();
+
+    if (p.payload == NULL) {
+        printf("payload == NULL, expected non-NULL: ");
+        goto end;
+    }
+
+    if (p.payload_len != 37) {
+        printf("payload_len %"PRIu16", expected 37: ", p.payload_len);
+        goto end;
+    }
+
+    retval = 1;
+end:
+    return retval;
+}
+
 #endif /* UNITTESTS */
 /**
  * \brief Registers ICMPV6 unit tests
@@ -1010,5 +1060,7 @@ void DecodeICMPV6RegisterTests(void)
     UtRegisterTest("ICMPV6TimeExceedTest02 (Invalid)", ICMPV6TimeExceedTest02, 1);
     UtRegisterTest("ICMPV6EchoReqTest02 (Invalid)", ICMPV6EchoReqTest02, 1);
     UtRegisterTest("ICMPV6EchoRepTest02 (Invalid)", ICMPV6EchoRepTest02, 1);
+
+    UtRegisterTest("ICMPV6PayloadTest01", ICMPV6PayloadTest01, 1);
 #endif /* UNITTESTS */
 }

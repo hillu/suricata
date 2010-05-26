@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -43,11 +43,15 @@
 #include "flow-util.h"
 #include "flow-var.h"
 #include "flow-private.h"
+
 #include "util-unittest.h"
 #include "util-byte.h"
 
 #include "util-debug.h"
 #include "util-privs.h"
+
+#include "detect.h"
+#include "detect-engine-state.h"
 
 //#define FLOW_DEFAULT_HASHSIZE    262144
 #define FLOW_DEFAULT_HASHSIZE    65536
@@ -155,7 +159,7 @@ static int FlowPrune (FlowQueue *q, struct timeval *ts)
     /* unlock list */
     SCMutexUnlock(&q->mutex_q);
 
-    if (SCMutexTrylock(&f->fb->m) != 0) {
+    if (SCSpinTrylock(&f->fb->s) != 0) {
         SCMutexUnlock(&f->m);
         SCLogDebug("cant lock 2");
         return 0;
@@ -210,7 +214,7 @@ static int FlowPrune (FlowQueue *q, struct timeval *ts)
 
     /* do the timeout check */
     if ((int32_t)(f->lastts.tv_sec + timeout) >= ts->tv_sec) {
-        SCMutexUnlock(&f->fb->m);
+        SCSpinUnlock(&f->fb->s);
         SCMutexUnlock(&f->m);
         SCLogDebug("timeout check failed");
         return 0;
@@ -220,7 +224,7 @@ static int FlowPrune (FlowQueue *q, struct timeval *ts)
      *  we are currently processing in one of the threads */
     if (f->use_cnt > 0) {
         SCLogDebug("timed out but use_cnt > 0: %"PRIu16", %p, proto %"PRIu8"", f->use_cnt, f, f->proto);
-        SCMutexUnlock(&f->fb->m);
+        SCSpinUnlock(&f->fb->s);
         SCMutexUnlock(&f->m);
         SCLogDebug("it is in one of the threads");
         return 0;
@@ -237,7 +241,7 @@ static int FlowPrune (FlowQueue *q, struct timeval *ts)
     f->hnext = NULL;
     f->hprev = NULL;
 
-    SCMutexUnlock(&f->fb->m);
+    SCSpinUnlock(&f->fb->s);
     f->fb = NULL;
 
     FlowClearMemory (f, f->protomap);
@@ -382,6 +386,24 @@ static inline int FlowGetPacketDirection(Flow *f, Packet *p) {
     return TOSERVER;
 }
 
+/**
+ *  \brief Check to update "seen" flags
+ *
+ *  \param p packet
+ *
+ *  \retval 1 true
+ *  \retval 0 false
+ */
+static inline int FlowUpdateSeenFlag(Packet *p) {
+    if (PKT_IS_ICMPV4(p)) {
+        if (ICMPV4_IS_ERROR_MSG(p)) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
 /** \brief Entry point for packet flow handling
  *
  * This is called for every packet.
@@ -405,11 +427,15 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
 
     /* update flags and counters */
     if (FlowGetPacketDirection(f,p) == TOSERVER) {
-        f->flags |= FLOW_TO_DST_SEEN;
+        if (FlowUpdateSeenFlag(p)) {
+            f->flags |= FLOW_TO_DST_SEEN;
+        }
         f->todstpktcnt++;
         p->flowflags |= FLOW_PKT_TOSERVER;
     } else {
-        f->flags |= FLOW_TO_SRC_SEEN;
+        if (FlowUpdateSeenFlag(p)) {
+            f->flags |= FLOW_TO_SRC_SEEN;
+        }
         f->tosrcpktcnt++;
         p->flowflags |= FLOW_PKT_TOCLIENT;
     }
@@ -504,14 +530,14 @@ void FlowInitConfig (char quiet)
     /* alloc hash memory */
     flow_hash = SCCalloc(flow_config.hash_size, sizeof(FlowBucket));
     if (flow_hash == NULL) {
-        printf("SCCalloc failed %s\n", strerror(errno));
-        exit(1);
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in FlowInitConfig. Exiting...");
+        exit(EXIT_FAILURE);
     }
     uint32_t i = 0;
 
     memset(flow_hash, 0, flow_config.hash_size * sizeof(FlowBucket));
     for (i = 0; i < flow_config.hash_size; i++)
-        SCMutexInit(&flow_hash[i].m, NULL);
+        SCSpinInit(&flow_hash[i].s, 0);
     flow_memuse += (flow_config.hash_size * sizeof(FlowBucket));
 
     if (quiet == FALSE)
@@ -620,7 +646,7 @@ void FlowShutdown(void) {
     if (flow_hash != NULL) {
         /* clean up flow mutexes */
         for (u = 0; u < flow_config.hash_size; u++) {
-            SCMutexDestroy(&flow_hash[u].m);
+            SCSpinDestroy(&flow_hash[u].s);
         }
         SCFree(flow_hash);
         flow_hash = NULL;
@@ -659,6 +685,7 @@ void *FlowManagerThread(void *td)
     uint32_t established_cnt = 0, new_cnt = 0, closing_cnt = 0, nowcnt;
     uint32_t sleeping = 0;
     uint8_t emerg = FALSE;
+    uint32_t last_sec = 0;
 
     memset(&ts, 0, sizeof(ts));
 
@@ -670,6 +697,8 @@ void *FlowManagerThread(void *td)
     th_v->cap_flags = 0;
     SCDropCaps(th_v);
 
+    FlowHashDebugInit();
+
     TmThreadsSetFlag(th_v, THV_INIT_DONE);
     while (1)
     {
@@ -677,10 +706,6 @@ void *FlowManagerThread(void *td)
 
         if (sleeping >= 100 || flow_flags & FLOW_EMERGENCY)
         {
-            /*uint32_t timeout_new = flow_config.timeout_new;
-            uint32_t timeout_est = flow_config.timeout_est;
-            printf("The Timeout values are %" PRIu32" and %"
-            PRIu32"\n", timeout_est, timeout_new);*/
             if (flow_flags & FLOW_EMERGENCY) {
                 emerg = TRUE;
                 SCLogDebug("Flow emergency mode entered...");
@@ -690,6 +715,11 @@ void *FlowManagerThread(void *td)
             memset(&ts, 0, sizeof(ts));
             TimeGet(&ts);
             SCLogDebug("ts %" PRIdMAX "", (intmax_t)ts.tv_sec);
+
+            if (((uint32_t)ts.tv_sec - last_sec) > 600) {
+                FlowHashDebugPrint((uint32_t)ts.tv_sec);
+                last_sec = (uint32_t)ts.tv_sec;
+            }
 
             /* see if we still have enough spare flows */
             FlowUpdateSpareFlows();
@@ -761,6 +791,8 @@ void *FlowManagerThread(void *td)
             }
         }
     }
+
+    FlowHashDebugDeinit();
 
     SCLogInfo("%" PRIu32 " new flows, %" PRIu32 " established flows were "
               "timed out, %"PRIu32" flows in closed state", new_cnt,
@@ -1295,7 +1327,7 @@ static int FlowTest03 (void) {
     memset(&ts, 0, sizeof(ts));
     memset(&fb, 0, sizeof(FlowBucket));
 
-    SCMutexInit(&fb.m, NULL);
+    SCSpinInit(&fb.s, 0);
     SCMutexInit(&f.m, NULL);
 
     TimeGet(&ts);
@@ -1306,12 +1338,12 @@ static int FlowTest03 (void) {
     f.proto = IPPROTO_TCP;
 
     if (FlowTestPrune(&f, &ts) != 1) {
-        SCMutexDestroy(&fb.m);
+        SCSpinDestroy(&fb.s);
         SCMutexDestroy(&f.m);
         return 0;
     }
 
-    SCMutexDestroy(&fb.m);
+    SCSpinDestroy(&fb.s);
     SCMutexDestroy(&f.m);
     return 1;
 }
@@ -1340,7 +1372,7 @@ static int FlowTest04 (void) {
     memset(&seg, 0, sizeof(TcpSegment));
     memset(&client, 0, sizeof(TcpSegment));
 
-    SCMutexInit(&fb.m, NULL);
+    SCSpinInit(&fb.s, 0);
     SCMutexInit(&f.m, NULL);
 
     TimeGet(&ts);
@@ -1358,12 +1390,12 @@ static int FlowTest04 (void) {
     f.proto = IPPROTO_TCP;
 
     if (FlowTestPrune(&f, &ts) != 1) {
-        SCMutexDestroy(&fb.m);
+        SCSpinDestroy(&fb.s);
         SCMutexDestroy(&f.m);
         return 0;
     }
 
-    SCMutexDestroy(&fb.m);
+    SCSpinDestroy(&fb.s);
     SCMutexDestroy(&f.m);
     return 1;
 
@@ -1388,7 +1420,7 @@ static int FlowTest05 (void) {
     memset(&ts, 0, sizeof(ts));
     memset(&fb, 0, sizeof(FlowBucket));
 
-    SCMutexInit(&fb.m, NULL);
+    SCSpinInit(&fb.s, 0);
     SCMutexInit(&f.m, NULL);
 
     TimeGet(&ts);
@@ -1400,12 +1432,12 @@ static int FlowTest05 (void) {
     f.flags = FLOW_EMERGENCY;
 
     if (FlowTestPrune(&f, &ts) != 1) {
-        SCMutexDestroy(&fb.m);
+        SCSpinDestroy(&fb.s);
         SCMutexDestroy(&f.m);
         return 0;
     }
 
-    SCMutexDestroy(&fb.m);
+    SCSpinDestroy(&fb.s);
     SCMutexDestroy(&f.m);
     return 1;
 }
@@ -1434,7 +1466,7 @@ static int FlowTest06 (void) {
     memset(&seg, 0, sizeof(TcpSegment));
     memset(&client, 0, sizeof(TcpSegment));
 
-    SCMutexInit(&fb.m, NULL);
+    SCSpinInit(&fb.s, 0);
     SCMutexInit(&f.m, NULL);
 
     TimeGet(&ts);
@@ -1453,12 +1485,12 @@ static int FlowTest06 (void) {
     f.flags = FLOW_EMERGENCY;
 
     if (FlowTestPrune(&f, &ts) != 1) {
-        SCMutexDestroy(&fb.m);
+        SCSpinDestroy(&fb.s);
         SCMutexDestroy(&f.m);
         return 0;
     }
 
-    SCMutexDestroy(&fb.m);
+    SCSpinDestroy(&fb.s);
     SCMutexDestroy(&f.m);
     return 1;
 

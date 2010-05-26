@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -50,6 +50,7 @@
 #include "detect-engine-mpm.h"
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
+#include "detect-engine-state.h"
 
 #include "tm-queuehandlers.h"
 #include "tm-queues.h"
@@ -82,6 +83,8 @@
 
 #include "source-pfring.h"
 
+#include "source-erf-file.h"
+
 #include "respond-reject.h"
 
 #include "flow.h"
@@ -97,6 +100,7 @@
 #include "app-layer-dcerpc.h"
 #include "app-layer-htp.h"
 #include "app-layer-ftp.h"
+#include "app-layer-ssl.h"
 
 #include "util-radix-tree.h"
 #include "util-host-os-info.h"
@@ -107,13 +111,14 @@
 #include "util-rule-vars.h"
 #include "util-classification-config.h"
 #include "util-threshold-config.h"
+#include "util-profiling.h"
 
 #include "defrag.h"
 
 #include "runmodes.h"
 
 #include "util-cuda.h"
-
+#include "util-decode-asn1.h"
 #include "util-debug.h"
 #include "util-error.h"
 #include "detect-engine-siggroup.h"
@@ -170,7 +175,7 @@ static void SignalHandlerSighup(/*@unused@*/ int sig) { sighup_count = 1; sigfla
 #define _GLOBAL_MEM_
 /* This counter doesn't complain realloc's(), it's gives
  * an aproximation for the startup */
-uint64_t global_mem = 0;
+size_t global_mem = 0;
 #ifdef DBG_MEM_ALLOC_SKIP_STARTUP
 uint8_t print_mem_flag = 0;
 #else
@@ -193,60 +198,6 @@ SignalHandlerSetup(int sig, void (*handler)())
 }
 #endif /* OS_WIN32 */
 
-Packet *SetupPktWait (void)
-{
-    Packet *p = NULL;
-    int r = 0;
-    do {
-        r = SCMutexLock(&packet_q.mutex_q);
-        p = PacketDequeue(&packet_q);
-        SCMutexUnlock(&packet_q.mutex_q);
-
-        if (p == NULL) {
-            //TmqDebugList();
-            usleep(1000); /* sleep 1ms */
-
-            /* XXX check for recv'd signals, so
-             * we can exit on signals received */
-        }
-    } while (p == NULL);
-
-    memset(p, 0, sizeof(Packet));
-
-    return p;
-}
-
-Packet *SetupPkt (void)
-{
-    Packet *p = NULL;
-    int r = 0;
-
-    r = SCMutexLock(&packet_q.mutex_q);
-    p = PacketDequeue(&packet_q);
-    r = SCMutexUnlock(&packet_q.mutex_q);
-
-    if (p == NULL) {
-        TmqDebugList();
-
-        p = SCMalloc(sizeof(Packet));
-        if (p == NULL) {
-            printf("ERROR: SCMalloc failed: %s\n", strerror(errno));
-            exit(EXIT_FAILURE);
-        }
-
-        memset(p, 0, sizeof(Packet));
-
-        r = SCMutexInit(&p->mutex_rtv_cnt, NULL);
-
-        SCLogDebug("allocated a new packet...");
-    }
-
-    /* reset the packet csum fields */
-    RESET_PACKET_CSUMS(p);
-
-    return p;
-}
-
 void GlobalInits()
 {
     memset(trans_q, 0, sizeof(trans_q));
@@ -264,70 +215,10 @@ void GlobalInits()
         exit(EXIT_FAILURE);
     }
 
-    SCMutexInit(&mutex_pending, NULL);
-    SCCondInit(&cond_pending, NULL);
-
     /* initialize packet queues Here! */
     memset(&packet_q,0,sizeof(packet_q));
     SCMutexInit(&packet_q.mutex_q, NULL);
     SCCondInit(&packet_q.cond_q, NULL);
-}
-
-/* \todo dtv not used. */
-Packet *TunnelPktSetup(ThreadVars *t, DecodeThreadVars *dtv, Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto)
-{
-    //printf("TunnelPktSetup: pkt %p, len %" PRIu32 ", proto %" PRIu32 "\n", pkt, len, proto);
-
-    /* get us a packet */
-    Packet *p = SetupPkt();
-    int r = 0;
-#if 0
-    do {
-        r = SCMutexLock(&packet_q.mutex_q);
-        p = PacketDequeue(&packet_q);
-        SCMutexUnlock(&packet_q.mutex_q);
-
-        if (p == NULL) {
-            //TmqDebugList();
-            usleep(1000); /* sleep 1ms */
-
-            /* XXX check for recv'd signals, so
-             * we can exit on signals received */
-        }
-    } while (p == NULL);
-#endif
-    r = SCMutexLock(&mutex_pending);
-    pending++;
-#ifdef DBG_PERF
-    if (pending > dbg_maxpending)
-        dbg_maxpending = pending;
-#endif /* DBG_PERF */
-    SCMutexUnlock(&mutex_pending);
-
-    /* set the root ptr to the lowest layer */
-    if (parent->root != NULL)
-        p->root = parent->root;
-    else
-        p->root = parent;
-
-    /* copy packet and set lenght, proto */
-    p->tunnel_proto = proto;
-    p->pktlen = len;
-    memcpy(&p->pkt, pkt, len);
-    p->recursion_level = parent->recursion_level + 1;
-
-    p->ts.tv_sec = parent->ts.tv_sec;
-    p->ts.tv_usec = parent->ts.tv_usec;
-
-    /* set tunnel flags */
-    SET_TUNNEL_PKT(p);
-    TUNNEL_INCR_PKT_TPR(p);
-
-    /* disable payload (not packet) inspection on the parent, as the payload
-     * is the packet we will now run through the system separately. We do
-     * check it against the ip/port/other header checks though */
-    DecodeSetNoPayloadInspectionFlag(parent);
-    return p;
 }
 
 /* XXX hack: make sure threads can stop the engine by calling this
@@ -357,10 +248,8 @@ static void SetBpfString(int optind, char *argv[]) {
         return;
 
     bpf_filter = SCMalloc(bpf_len);
-    if (bpf_filter == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "%s", strerror(errno));
-        exit(EXIT_FAILURE);
-    }
+    if (bpf_filter == NULL)
+        return;
     memset(bpf_filter, 0x00, bpf_len);
 
     tmpindex = optind;
@@ -385,10 +274,14 @@ void usage(const char *progname)
     printf("%s %s\n", PROG_NAME, PROG_VER);
     printf("USAGE: %s\n\n", progname);
     printf("\t-c <path>                    : path to configuration file\n");
-    printf("\t-i <dev>                     : run in pcap live mode\n");
+    printf("\t-i <dev or ip>               : run in pcap live mode\n");
     printf("\t-r <path>                    : run in pcap file/offline mode\n");
+#ifdef NFQ
     printf("\t-q <qid>                     : run in inline nfqueue mode\n");
+#endif /* NFQ */
+#ifdef IPFW
     printf("\t-d <divert port>             : run in inline ipfw divert mode\n");
+#endif /* IPFW */
     printf("\t-s <path>                    : path to signature file (optional)\n");
     printf("\t-l <dir>                     : default log directory\n");
     printf("\t-D                           : run as daemon\n");
@@ -401,9 +294,16 @@ void usage(const char *progname)
     printf("\t--pidfile <file>             : write pid to this file (only for daemon mode)\n");
     printf("\t--init-errors-fatal          : enable fatal failure on signature init error\n");
     printf("\t--dump-config                : show the running configuration\n");
+#ifdef HAVE_PFRING
     printf("\t--pfring-int <dev>           : run in pfring mode\n");
     printf("\t--pfring-cluster-id <id>     : pfring cluster id \n");
-    printf("\t--pfring-cluster-type <type> : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow");
+    printf("\t--pfring-cluster-type <type> : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow\n");
+#endif /* HAVE_PFRING */
+#ifdef HAVE_LIBCAP_NG
+    printf("\t--user <user>                : run suricata as this user after init\n");
+    printf("\t--group <group>              : run suricata as this group after init\n");
+#endif /* HAVE_LIBCAP_NG */
+    printf("\t--erf-in <path>              : process an ERF file\n");
     printf("\n");
     printf("\nTo run the engine with default configuration on "
             "interface eth0 with signature file \"signatures.rules\", run the "
@@ -415,7 +315,7 @@ int main(int argc, char **argv)
 {
     int opt;
     char *pcap_file = NULL;
-    char *pcap_dev = NULL;
+    char pcap_dev[128];
     char *pfring_dev = NULL;
     char *sig_file = NULL;
     char *nfq_id = NULL;
@@ -433,6 +333,7 @@ int main(int argc, char **argv)
     uint8_t do_setgid = FALSE;
     uint32_t userid = 0;
     uint32_t groupid = 0;
+    char *erf_file = NULL;
 
     char *log_dir;
     struct stat buf;
@@ -467,6 +368,7 @@ int main(int argc, char **argv)
         {"fatal-unittests", 0, 0, 0},
         {"user", required_argument, 0, 0},
         {"group", required_argument, 0, 0},
+        {"erf-in", required_argument, 0, 0},
         {NULL, 0, NULL, 0}
     };
 
@@ -479,23 +381,38 @@ int main(int argc, char **argv)
         switch (opt) {
         case 0:
             if(strcmp((long_opts[option_index]).name , "pfring-int") == 0){
+#ifdef HAVE_PFRING
                 run_mode = MODE_PFRING;
                 if (ConfSet("pfring.interface", optarg, 0) != 1) {
                     fprintf(stderr, "ERROR: Failed to set pfring interface.\n");
                     exit(EXIT_FAILURE);
                 }
+#else
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                exit(EXIT_FAILURE);
+#endif /* HAVE_PFRING */
             }
             else if(strcmp((long_opts[option_index]).name , "pfring-cluster-id") == 0){
+#ifdef HAVE_PFRING
                 if (ConfSet("pfring.cluster-id", optarg, 0) != 1) {
                     fprintf(stderr, "ERROR: Failed to set pfring cluster-id.\n");
                     exit(EXIT_FAILURE);
                 }
+#else
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                exit(EXIT_FAILURE);
+#endif /* HAVE_PFRING */
             }
             else if(strcmp((long_opts[option_index]).name , "pfring-cluster-type") == 0){
+#ifdef HAVE_PFRING
                 if (ConfSet("pfring.cluster-type", optarg, 0) != 1) {
                     fprintf(stderr, "ERROR: Failed to set pfring cluster-type.\n");
                     exit(EXIT_FAILURE);
                 }
+#else
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                exit(EXIT_FAILURE);
+#endif /* HAVE_PFRING */
             }
             else if(strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
                 if (ConfSet("engine.init_failure_fatal", "1", 0) != 1) {
@@ -546,6 +463,10 @@ int main(int argc, char **argv)
                 do_setgid = TRUE;
 #endif /* HAVE_LIBCAP_NG */
             }
+            else if (strcmp((long_opts[option_index]).name, "erf-in") == 0) {
+                run_mode = MODE_ERF_FILE;
+                erf_file = optarg;
+            }
             break;
         case 'c':
             conf_filename = optarg;
@@ -566,7 +487,8 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 exit(EXIT_FAILURE);
             }
-            pcap_dev = optarg;
+			memset(pcap_dev, 0, sizeof(pcap_dev));
+			      strncpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)) : (sizeof(pcap_dev)-1)));
             break;
         case 'l':
             if (ConfSet("default-log-dir", optarg, 0) != 1) {
@@ -581,6 +503,7 @@ int main(int argc, char **argv)
             }
             break;
         case 'q':
+#ifdef NFQ
             if (run_mode == MODE_UNKNOWN) {
                 run_mode = MODE_NFQ;
             } else {
@@ -590,8 +513,13 @@ int main(int argc, char **argv)
                 exit(EXIT_SUCCESS);
             }
             nfq_id = optarg;
+#else
+            SCLogError(SC_ERR_NFQ_NOSUPPORT,"NFQUEUE not enabled. Make sure to pass --enable-nfqueue to configure when building.");
+            exit(EXIT_FAILURE);
+#endif /* NFQ */
             break;
         case 'd':
+#ifdef IPFW
             if (run_mode == MODE_UNKNOWN) {
                 run_mode = MODE_IPFW;
             } else {
@@ -604,6 +532,10 @@ int main(int argc, char **argv)
                 fprintf(stderr, "ERROR: Failed to set ipfw_divert_port\n");
                 exit(EXIT_FAILURE);
             }
+#else
+            SCLogError(SC_ERR_IPFW_NOSUPPORT,"IPFW not enabled. Make sure to pass --enable-ipfw to configure when building.");
+            exit(EXIT_FAILURE);
+#endif /* IPFW */
             break;
         case 'r':
             if (run_mode == MODE_UNKNOWN) {
@@ -665,6 +597,7 @@ int main(int argc, char **argv)
 
     /* Initializations for global vars, queues, etc (memsets, mutex init..) */
     GlobalInits();
+    TimeInit();
 
     /* Load yaml configuration file if provided. */
     if (conf_filename != NULL) {
@@ -729,6 +662,9 @@ int main(int argc, char **argv)
     SigParsePrepare();
     //PatternMatchPrepare(mpm_ctx, MPM_B2G);
     SCPerfInitCounterApi();
+#ifdef PROFILING
+    SCProfilingInit();
+#endif /* PROFILING */
     SCReputationInitCtx();
 
     TmModuleReceiveNFQRegister();
@@ -760,6 +696,8 @@ int main(int argc, char **argv)
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
 #endif
+    TmModuleReceiveErfFileRegister();
+    TmModuleDecodeErfFileRegister();
     TmModuleDebugList();
 
     /** \todo we need an api for these */
@@ -770,13 +708,14 @@ int main(int argc, char **argv)
     RegisterSMBParsers();
     RegisterDCERPCParsers();
     RegisterFTPParsers();
+    RegisterSSLParsers();
     AppLayerParsersInitPostProcess();
 
 #ifdef UNITTESTS
 
     if (run_mode == MODE_UNITTEST) {
 #ifdef DBG_MEM_ALLOC
-    SCLogInfo("Memory used at startup: %"PRIu64, global_mem);
+    SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
 #endif
         /* test and initialize the unittesting subsystem */
         if(regex_arg == NULL){
@@ -817,6 +756,7 @@ int main(int argc, char **argv)
         DecodeTCPRegisterTests();
         DecodeUDPV4RegisterTests();
         DecodeGRERegisterTests();
+        DecodeAsn1RegisterTests();
         AlpDetectRegisterTests();
         ConfRegisterTests();
         ConfYamlRegisterTests();
@@ -835,10 +775,15 @@ int main(int argc, char **argv)
         UtilActionRegisterTests();
         SCClassConfRegisterTests();
         SCThresholdConfRegisterTests();
+        SSLParserRegisterTests();
 #ifdef __SC_CUDA_SUPPORT__
         SCCudaRegisterTests();
 #endif
         PayloadRegisterTests();
+#ifdef PROFILING
+        SCProfilingRegisterTests();
+#endif
+        DeStateRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
@@ -860,7 +805,7 @@ int main(int argc, char **argv)
         }
 
 #ifdef DBG_MEM_ALLOC
-        SCLogInfo("Total memory used (without SCFree()): %"PRIu64, global_mem);
+        SCLogInfo("Total memory used (without SCFree()): %"PRIdMAX, (intmax_t)global_mem);
 #endif
 
         exit(EXIT_SUCCESS);
@@ -889,7 +834,6 @@ int main(int argc, char **argv)
     SignalHandlerSetup(SIGINT, SignalHandlerSigint);
     SignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
     SignalHandlerSetup(SIGHUP, SignalHandlerSighup);
-#endif /* OS_WIN32 */
 
     /* Get the suricata user ID to given user ID */
     if (do_setuid == TRUE) {
@@ -908,6 +852,7 @@ int main(int argc, char **argv)
 
         sc_set_caps = TRUE;
     }
+#endif /* OS_WIN32 */
 
     /* pre allocate packets */
     SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)sizeof(Packet));
@@ -916,11 +861,10 @@ int main(int argc, char **argv)
         /* XXX pkt alloc function */
         Packet *p = SCMalloc(sizeof(Packet));
         if (p == NULL) {
-            printf("ERROR: SCMalloc failed: %s\n", strerror(errno));
+            SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
             exit(EXIT_FAILURE);
         }
-        memset(p, 0, sizeof(Packet));
-        SCMutexInit(&p->mutex_rtv_cnt, NULL);
+        PACKET_INITIALIZE(p);
 
         PacketEnqueue(&packet_q,p);
     }
@@ -945,6 +889,10 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
     }
 
+#ifdef PROFILING
+    SCProfilingInitRuleCounters(de_ctx);
+#endif /* PROFILING */
+
     AppLayerHtpRegisterExtraCallbacks();
     SCThresholdConfInitContext(de_ctx,NULL);
 
@@ -961,6 +909,7 @@ int main(int argc, char **argv)
         //RunModeIdsPcap3(de_ctx, pcap_dev);
         //RunModeIdsPcap2(de_ctx, pcap_dev);
         //RunModeIdsPcap(de_ctx, pcap_dev);
+        PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
         RunModeIdsPcapAuto(de_ctx, pcap_dev);
     }
     else if (run_mode == MODE_PCAP_FILE) {
@@ -982,6 +931,9 @@ int main(int argc, char **argv)
     else if (run_mode == MODE_IPFW) {
         //RunModeIpsIPFW(de_ctx);
         RunModeIpsIPFWAuto(de_ctx);
+    }
+    else if (run_mode == MODE_ERF_FILE) {
+        RunModeErfFileAuto(de_ctx, erf_file);
     }
     else {
         SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
@@ -1022,7 +974,7 @@ int main(int argc, char **argv)
     TmThreadContinueThreads();
 
 #ifdef DBG_MEM_ALLOC
-    SCLogInfo("Memory used at startup: %"PRIu64, global_mem);
+    SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
 #ifdef DBG_MEM_ALLOC_SKIP_STARTUP
     print_mem_flag = 1;
 #endif
@@ -1043,10 +995,10 @@ int main(int argc, char **argv)
                     if (sigflags & SURICATA_SIGTERM || sigflags & SURICATA_KILL)
                         break;
 
-                    SCMutexLock(&mutex_pending);
-                    if (pending == 0)
+                    SCMutexLock(&packet_q.mutex_q);
+                    if (packet_q.len == max_pending_packets)
                         done = 1;
-                    SCMutexUnlock(&mutex_pending);
+                    SCMutexUnlock(&packet_q.mutex_q);
 
                     if (done == 0) {
                         usleep(100);
@@ -1086,7 +1038,7 @@ int main(int argc, char **argv)
     HTPAtExitPrintStats();
 
 #ifdef DBG_MEM_ALLOC
-    SCLogInfo("Total memory used (without SCFree()): %"PRIu64, global_mem);
+    SCLogInfo("Total memory used (without SCFree()): %"PRIdMAX, (intmax_t)global_mem);
 #ifdef DBG_MEM_ALLOC_SKIP_STARTUP
     print_mem_flag = 0;
 #endif
@@ -1124,6 +1076,13 @@ int main(int argc, char **argv)
 
     RunModeShutDown();
     OutputDeregisterAll();
+    TimeDeinit();
+
+#ifdef PROFILING
+    if (profiling_rules_enabled)
+        SCProfilingDump(stdout);
+    SCProfilingDestroy();
+#endif
 
 #ifdef __SC_CUDA_SUPPORT__
     /* all cuda contexts attached to any threads should be free by now.

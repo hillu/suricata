@@ -98,9 +98,12 @@ error:
  */
 int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
 {
+    SCEnter();
     int ret = 0;
 
     DetectDsizeData *dd = (DetectDsizeData *)m->ctx;
+
+    SCLogDebug("p->payload_len %"PRIu16"", p->payload_len);
 
     if (dd->mode == DETECTDSIZE_EQ && dd->dsize == p->payload_len)
         ret = 1;
@@ -111,7 +114,7 @@ int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
     else if (dd->mode == DETECTDSIZE_RA && p->payload_len > dd->dsize && p->payload_len < dd->dsize2)
         ret = 1;
 
-    return ret;
+    SCReturnInt(ret);
 }
 
 /**
@@ -173,10 +176,8 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
     SCLogDebug("value2 \"%s\"", value2);
 
     dd = SCMalloc(sizeof(DetectDsizeData));
-    if (dd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+    if (dd == NULL)
         goto error;
-    }
     dd->dsize = 0;
     dd->dsize2 = 0;
 
@@ -270,6 +271,8 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
 
     SigMatchAppendPacket(s, sm);
 
+    SCLogDebug("dd->dsize %"PRIu16", dd->dsize2 %"PRIu16", dd->mode %"PRIu8"",
+            dd->dsize, dd->dsize2, dd->mode);
     /* tell the sig it has a dsize to speed up engine init */
     s->flags |= SIG_FLAG_DSIZE;
     return 0;
@@ -296,6 +299,8 @@ void DetectDsizeFree(void *de_ptr) {
  */
 
 #ifdef UNITTESTS
+#include "detect.h"
+#include "detect-engine.h"
 /**
  * \test this is a test for a valid dsize value 1
  *
@@ -662,6 +667,94 @@ int DsizeTestParse20 (void) {
 
     return result;
 }
+
+/**
+ * \test DetectDsizeIcmpv6Test01 is a test for checking the working of
+ *       dsize keyword by creating 2 rules and matching a crafted packet
+ *       against them. Only the first one shall trigger.
+ */
+int DetectDsizeIcmpv6Test01 (void) {
+    int result = 0;
+
+    static uint8_t raw_icmpv6[] = {
+        0x60, 0x00, 0x00, 0x00, 0x00, 0x30, 0x3a, 0xff,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x01, 0x00, 0x7b, 0x85, 0x00, 0x00, 0x00, 0x00,
+        0x60, 0x4b, 0xe8, 0xbd, 0x00, 0x00, 0x3b, 0xff,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
+
+    Packet p;
+    IPV6Hdr ip6h;
+    ThreadVars tv;
+    DecodeThreadVars dtv;
+    Signature *s = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&p, 0, sizeof(Packet));
+    memset(&dtv, 0, sizeof(DecodeThreadVars));
+    memset(&ip6h, 0, sizeof(IPV6Hdr));
+    memset(&th_v, 0, sizeof(ThreadVars));
+
+    FlowInitConfig(FLOW_QUIET);
+    p.src.family = AF_INET6;
+    p.dst.family = AF_INET6;
+    p.ip6h = &ip6h;
+
+    DecodeIPV6(&tv, &dtv, &p, raw_icmpv6, sizeof(raw_icmpv6), NULL);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+            "(msg:\"ICMP Large ICMP Packet\"; dsize:>8; sid:1; rev:4;)");
+    if (s == NULL) {
+        goto end;
+    }
+
+    s = s->next = SigInit(de_ctx, "alert icmp any any -> any any "
+            "(msg:\"ICMP Large ICMP Packet\"; dsize:>800; sid:2; rev:4;)");
+    if (s == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    if (PacketAlertCheck(&p, 1) == 0) {
+        printf("sid 1 did not alert, but should have: ");
+        goto cleanup;
+    } else if (PacketAlertCheck(&p, 2)) {
+        printf("sid 2 alerted, but should not have: ");
+        goto cleanup;
+    }
+
+    result = 1;
+
+cleanup:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    FlowShutdown();
+end:
+    return result;
+
+}
 #endif /* UNITTESTS */
 
 /**
@@ -689,6 +782,8 @@ void DsizeRegisterTests(void) {
     UtRegisterTest("DsizeTestParse18", DsizeTestParse18, 1);
     UtRegisterTest("DsizeTestParse19", DsizeTestParse19, 1);
     UtRegisterTest("DsizeTestParse20", DsizeTestParse20, 1);
+
+    UtRegisterTest("DetectDsizeIcmpv6Test01", DetectDsizeIcmpv6Test01, 1);
 #endif /* UNITTESTS */
 }
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -115,35 +115,6 @@ void MpmWuManberRegister (void) {
     }
 }
 
-/* append an endmatch to a pattern
- *
- * Only used in the initialization phase */
-static inline void WmEndMatchAppend(MpmCtx *mpm_ctx, WmPattern *p,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid)
-{
-    MpmEndMatch *em = MpmAllocEndMatch(mpm_ctx);
-    if (em == NULL) {
-        printf("ERROR: WmAllocEndMatch failed\n");
-        return;
-    }
-
-    em->id = pid;
-    em->sig_id = sid;
-    em->depth = depth;
-    em->offset = offset;
-
-    if (p->em == NULL) {
-        p->em = em;
-        return;
-    }
-
-    MpmEndMatch *m = p->em;
-    while (m->next) {
-        m = m->next;
-    }
-    m->next = em;
-}
-
 void prt (uint8_t *buf, uint16_t buflen) {
     uint16_t i;
 
@@ -192,10 +163,8 @@ void WmPrintInfo(MpmCtx *mpm_ctx) {
 
 static inline WmPattern *WmAllocPattern(MpmCtx *mpm_ctx) {
     WmPattern *p = SCMalloc(sizeof(WmPattern));
-    if (p == NULL) {
-        printf("ERROR: WmAllocPattern: SCMalloc failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (p == NULL)
+        return NULL;
     memset(p,0,sizeof(WmPattern));
 
     mpm_ctx->memory_cnt++;
@@ -206,10 +175,8 @@ static inline WmPattern *WmAllocPattern(MpmCtx *mpm_ctx) {
 static inline WmHashItem *
 WmAllocHashItem(MpmCtx *mpm_ctx) {
     WmHashItem *hi = SCMalloc(sizeof(WmHashItem));
-    if (hi == NULL) {
-        printf("ERROR: WmAllocHashItem: SCMalloc failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (hi == NULL)
+        return NULL;
     memset(hi,0,sizeof(WmHashItem));
 
     mpm_ctx->memory_cnt++;
@@ -319,10 +286,6 @@ static inline int WmCmpPattern(WmPattern *p, uint8_t *pat, uint16_t patlen, char
  */
 
 void WmFreePattern(MpmCtx *mpm_ctx, WmPattern *p) {
-    if (p && p->em) {
-        MpmEndMatchFreeAll(mpm_ctx, p->em);
-    }
-
     if (p && p->cs && p->cs != p->ci) {
         SCFree(p->cs);
         mpm_ctx->memory_cnt--;
@@ -369,6 +332,7 @@ static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t
 
         p->len = patlen;
         p->flags = flags;
+        p->id = pid;
 
         /* setup the case insensitive part of the pattern */
         p->ci = SCMalloc(patlen);
@@ -420,9 +384,6 @@ static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t
         if (mpm_ctx->minlen == 0) mpm_ctx->minlen = patlen;
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
     }
-
-    /* we need a match */
-    WmEndMatchAppend(mpm_ctx, p, offset, depth, pid, sid);
 
     mpm_ctx->total_pattern_cnt++;
     return 0;
@@ -482,7 +443,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
     uint8_t idx8 = 0;
 
     ctx->hash = (WmHashItem **)SCMalloc(sizeof(WmHashItem *) * ctx->hash_size);
-    if (ctx->hash == NULL) goto error;
+    if (ctx->hash == NULL)
+        goto error;
     memset(ctx->hash, 0, sizeof(WmHashItem *) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -490,7 +452,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
 
     /* alloc the pminlen array */
     ctx->pminlen = (uint8_t *)SCMalloc(sizeof(uint8_t) * ctx->hash_size);
-    if (ctx->pminlen == NULL) goto error;
+    if (ctx->pminlen == NULL)
+        goto error;
     memset(ctx->pminlen, 0, sizeof(uint8_t) * ctx->hash_size);
 
     for (i = 0; i < mpm_ctx->pattern_cnt; i++)
@@ -502,6 +465,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
                 ctx->hash1[idx8].flags |= 0x01;
             } else {
                 WmHashItem *hi = WmAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
@@ -526,6 +491,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
 
             if (ctx->hash[idx] == NULL) {
                 WmHashItem *hi = WmAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
                 ctx->pminlen[idx] = ctx->parray[i]->len;
@@ -533,6 +500,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
                 ctx->hash[idx] = hi;
             } else {
                 WmHashItem *hi = WmAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
@@ -549,7 +518,8 @@ static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
 
     /* alloc the bloom array */
     ctx->bloom = (BloomFilter **)SCMalloc(sizeof(BloomFilter *) * ctx->hash_size);
-    if (ctx->bloom == NULL) goto error;
+    if (ctx->bloom == NULL)
+        goto error;
     memset(ctx->bloom, 0, sizeof(BloomFilter *) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -673,7 +643,8 @@ int WmPreparePatterns(MpmCtx *mpm_ctx) {
 
     /* alloc the pattern array */
     ctx->parray = (WmPattern **)SCMalloc(mpm_ctx->pattern_cnt * sizeof(WmPattern *));
-    if (ctx->parray == NULL) goto error;
+    if (ctx->parray == NULL)
+        goto error;
     memset(ctx->parray, 0, mpm_ctx->pattern_cnt * sizeof(WmPattern *));
     //printf("mpm_ctx %p, parray %p\n", mpm_ctx,ctx->parray);
     mpm_ctx->memory_cnt++;
@@ -783,7 +754,6 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 #endif /* WUMANBER_COUNTERS */
     uint32_t cnt = 0;
-    uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
     uint16_t sl = ctx->shiftlen;
     uint16_t h;
@@ -845,7 +815,7 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -857,7 +827,7 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -884,7 +854,6 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 #endif /* WUMANBER_COUNTERS */
     uint32_t cnt = 0;
-    uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
     uint16_t sl = ctx->shiftlen;
     uint16_t h;
@@ -948,7 +917,7 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -960,7 +929,7 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -986,7 +955,6 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 #endif /* WUMANBER_COUNTERS */
     uint32_t cnt = 0;
-    uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
     uint16_t sl = ctx->shiftlen;
     uint16_t h;
@@ -1049,7 +1017,7 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp_lowercase(p->ci, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1059,7 +1027,7 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp(p->cs, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1084,7 +1052,6 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 #endif /* WUMANBER_COUNTERS */
     uint32_t cnt = 0;
-    uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
     uint16_t sl = ctx->shiftlen;
     uint16_t h;
@@ -1148,7 +1115,7 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1159,7 +1126,7 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1184,7 +1151,6 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 #endif /* WUMANBER_COUNTERS */
     uint32_t cnt = 0;
-    uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
     uint16_t sl = ctx->shiftlen;
     uint16_t h;
@@ -1247,7 +1213,7 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp_lowercase(p->ci, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1257,7 +1223,7 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp(p->cs, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf-sl+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1303,11 +1269,11 @@ uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
 
                     if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                         if (wm_tolower(*buf) == p->ci[0]) {
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         }
                     } else {
                         if (*buf == p->cs[0]) {
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                         }
                     }
                 }
@@ -1369,7 +1335,6 @@ void WmInitCtx (MpmCtx *mpm_ctx, int module_handle) {
     mpm_ctx->ctx = SCMalloc(sizeof(WmCtx));
     if (mpm_ctx->ctx == NULL)
         return;
-
     memset(mpm_ctx->ctx, 0, sizeof(WmCtx));
 
     mpm_ctx->memory_cnt++;

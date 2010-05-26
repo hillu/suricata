@@ -39,6 +39,7 @@
 #include "util-debug.h"
 #include "util-unittest.h"
 #include "util-spm.h"
+#include "util-print.h"
 
 #include "app-layer.h"
 
@@ -87,6 +88,8 @@ int DetectHttpHeaderMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
                               Flow *f, uint8_t flags, void *state, Signature *s,
                               SigMatch *m)
 {
+    SCEnter();
+
     int result = 0;
     DetectHttpHeaderData *hcbd = (DetectHttpHeaderData *)m->ctx;
     HtpState *htp_state = (HtpState *)state;
@@ -103,7 +106,7 @@ int DetectHttpHeaderMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     bstr *headers = NULL;
     size_t idx = 0;
 
-    for (idx = htp_state->new_in_tx_index;
+    for (idx = 0;//htp_state->new_in_tx_index;
          idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
@@ -115,11 +118,14 @@ int DetectHttpHeaderMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
         if (headers == NULL)
             continue;
 
+        SCLogDebug("inspecting tx %p", tx);
+//        PrintRawUriFp(stdout, (uint8_t *)bstr_ptr(headers), bstr_len(headers));
+
         if (bstr_len(headers) > 0) {
+            /* call the case sensitive version if nocase has been specified in the sig */
             if (hcbd->flags & DETECT_AL_HTTP_HEADER_NOCASE) {
                 result = (SpmNocaseSearch((uint8_t *)bstr_ptr(headers), bstr_len(headers),
                                           hcbd->content, hcbd->content_len) != NULL);
-            /* call the case sensitive version if nocase has been specified in the sig */
             } else {
                 result = (SpmSearch((uint8_t *)bstr_ptr(headers), bstr_len(headers),
                                     hcbd->content, hcbd->content_len) != NULL);
@@ -128,11 +134,11 @@ int DetectHttpHeaderMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     SCMutexUnlock(&f->m);
-    return result ^ ((hcbd->flags & DETECT_AL_HTTP_HEADER_NEGATED) ? 1 : 0);
+    SCReturnInt(result ^ ((hcbd->flags & DETECT_AL_HTTP_HEADER_NEGATED) ? 1 : 0));
 
  end:
     SCMutexUnlock(&f->m);
-    return result;
+    SCReturnInt(result);
 }
 
 /**
@@ -267,10 +273,12 @@ static int DetectHttpHeaderTest01(void)
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_header\"; "
                                "content:one; http_header; sid:1;)");
-    if (de_ctx->sig_list != NULL)
+    if (de_ctx->sig_list != NULL) {
         result = 1;
-    else
+    } else {
         printf("Error parsing signature: ");
+        goto end;
+    }
 
     sm = de_ctx->sig_list->match;
     if (sm != NULL) {

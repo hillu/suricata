@@ -67,10 +67,8 @@ IPOnlyCIDRItem *IPOnlyCIDRItemNew() {
     IPOnlyCIDRItem *item = NULL;
 
     item = SCMalloc(sizeof(IPOnlyCIDRItem));
-    if (item == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating IPOnlyCIDRItem");
-        exit(EXIT_FAILURE);
-    }
+    if (item == NULL)
+        return NULL;
     memset(item, 0, sizeof(IPOnlyCIDRItem));
 
     return item;
@@ -250,16 +248,16 @@ SigNumArray *SigNumArrayNew(DetectEngineCtx *de_ctx,
 {
     SigNumArray *new = SCMalloc(sizeof(SigNumArray));
 
-    if (new == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,"Error allocating memory");
+    if (new == NULL){
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayNew. Exiting...");
         exit(EXIT_FAILURE);
     }
     memset(new, 0, sizeof(SigNumArray));
 
     new->array = SCMalloc(io_ctx->max_idx / 8 + 1);
     if (new->array == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
+       SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayNew. Exiting...");
+       exit(EXIT_FAILURE);
     }
 
     memset(new->array, 0, io_ctx->max_idx / 8 + 1);
@@ -282,7 +280,7 @@ SigNumArray *SigNumArrayCopy(SigNumArray *orig) {
     SigNumArray *new = SCMalloc(sizeof(SigNumArray));
 
     if (new == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,"Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayCopy. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -291,7 +289,7 @@ SigNumArray *SigNumArrayCopy(SigNumArray *orig) {
 
     new->array = SCMalloc(orig->size);
     if (new->array == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayCopy. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -383,7 +381,6 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                     temp_rule_var_address = SCMalloc(strlen(rule_var_address) + 3);
 
                     if (temp_rule_var_address == NULL) {
-                        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
                         goto error;
                     }
 
@@ -405,6 +402,8 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                 address[x - 1] = '\0';
 
                 subhead = IPOnlyCIDRItemNew();
+                if (subhead == NULL)
+                    goto error;
 
                 if (!((negate + n_set) % 2))
                     subhead->negated = 0;
@@ -441,7 +440,6 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                 if ((negate + n_set) % 2) {
                     temp_rule_var_address = SCMalloc(strlen(rule_var_address) + 3);
                     if (temp_rule_var_address == NULL) {
-                        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
                         goto error;
                     }
                     snprintf(temp_rule_var_address, strlen(rule_var_address) + 3,
@@ -457,6 +455,8 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                     SCFree(temp_rule_var_address);
             } else {
                 subhead = IPOnlyCIDRItemNew();
+                if (subhead == NULL)
+                    goto error;
 
                 if (!((negate + n_set) % 2))
                     subhead->negated = 0;
@@ -600,6 +600,8 @@ int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, char *str)
         BUG_ON(dd->family == 0);
 
         dd->next = IPOnlyCIDRItemNew();
+        if (dd->next == NULL)
+            goto error;
 
         IPOnlyCIDRItemParseSingle(dd->next, "::/0");
         BUG_ON(dd->family == 0);
@@ -607,12 +609,14 @@ int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, char *str)
         SCFree(ipdup);
 
         SCLogDebug("address is \'any\'");
-
         return 0;
     }
 
     /* we dup so we can put a nul-termination in it later */
     ip = ipdup;
+    if (ip == NULL) {
+        goto error;
+    }
 
     /* handle the negation case */
     if (ip[0] == '!') {
@@ -701,6 +705,8 @@ int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, char *str)
             if (first < last) {
                 for (first++; first <= last; first++) {
                     IPOnlyCIDRItem *new = IPOnlyCIDRItemNew();
+                    if (new == NULL)
+                        goto error;
                     dd->next = new;
                     new->negated = dd->negated;
                     new->family= dd->family;
@@ -715,6 +721,7 @@ int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, char *str)
             r = inet_pton(AF_INET, ip, &in);
             if (r <= 0)
                 goto error;
+
             /* single host */
             dd->ip[0] = in.s_addr;
             dd->netmask = 32;
@@ -752,7 +759,6 @@ int IPOnlyCIDRItemParseSingle(IPOnlyCIDRItem *dd, char *str)
     SCFree(ipdup);
 
     BUG_ON(dd->family == 0);
-
     return 0;
 
 error:
@@ -801,7 +807,7 @@ void IPOnlyInit(DetectEngineCtx *de_ctx, DetectEngineIPOnlyCtx *io_ctx) {
     io_ctx->sig_init_size = DetectEngineGetMaxSigId(de_ctx) / 8 + 1;
 
     if ( (io_ctx->sig_init_array = SCMalloc(io_ctx->sig_init_size)) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in IPOnlyInit. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -828,6 +834,10 @@ void DetectEngineIPOnlyThreadInit(DetectEngineCtx *de_ctx,
     /* initialize the signature bitarray */
     io_tctx->sig_match_size = de_ctx->io_ctx.max_idx / 8 + 1;
     io_tctx->sig_match_array = SCMalloc(io_tctx->sig_match_size);
+    if (io_tctx->sig_match_array == NULL) {
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in DetectEngineIPOnlyThreadInit. Exiting...");
+        exit(EXIT_FAILURE);
+    }
 
     memset(io_tctx->sig_match_array, 0, io_tctx->sig_match_size);
 }
@@ -963,20 +973,7 @@ void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
                     SCLogDebug("Signum %"PRIu16" match (sid: %"PRIu16", msg: %s)",
                                u * 8 + i, s->id, s->msg);
 
-                    if (!(s->flags & SIG_FLAG_NOALERT)) {
-                        if (p->flow != NULL) {
-                            if (s->action & ACTION_DROP)
-                                p->flow->flags |= FLOW_ACTION_DROP;
-                            if (s->action & ACTION_REJECT)
-                                p->flow->flags |= FLOW_ACTION_DROP;
-                            if (s->action & ACTION_REJECT_DST)
-                                p->flow->flags |= FLOW_ACTION_DROP;
-                            if (s->action & ACTION_REJECT_BOTH)
-                                p->flow->flags |= FLOW_ACTION_DROP;
-                            if (s->action & ACTION_PASS)
-                                p->flow->flags |= FLOW_ACTION_PASS;
-                        }
-                        p->action |= ACTION_PASS;
+                    if ( !(s->flags & SIG_FLAG_NOALERT)) {
                         PacketAlertAppend(det_ctx, s, p);
                     }
                 }

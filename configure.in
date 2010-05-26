@@ -3,7 +3,7 @@
 AC_INIT(configure.in)
 
     AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 0.9.0)
+    AM_INIT_AUTOMAKE(suricata, 0.9.1)
 
     AC_LANG_C
     AC_PROG_CC_C99
@@ -231,6 +231,21 @@ AC_INIT(configure.in)
     echo
     exit 1
     fi
+
+   # To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+   # see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+   PCRE=""
+   TMPLIBS="${LIBS}"
+   AC_CHECK_LIB(pcre, pcre_dfa_exec,, PCRE="no")
+   if test "$PCRE" = "no"; then
+   echo
+   echo "   ERROR!  pcre library was found but version was < 6.0"
+   echo "   please upgrade to a newer version of pcre which you can get from"
+   echo "   www.pcre.org."
+   echo
+   exit 1
+   fi
+   LIBS="${TMPLIBS}"
 
    AC_TRY_COMPILE([ #include <pcre.h> ],
    [ int eo = 0; eo |= PCRE_EXTRA_MATCH_LIMIT_RECURSION; ],
@@ -655,6 +670,13 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
     echo
     exit 1
     fi
+    PKG_CHECK_MODULES(LIBHTPMINVERSION, htp >= 0.2.3,[libhtp_minver_found="yes"],[libhtp_minver_found="no"])
+    if test "$libhtp_minver_found" = "no"; then
+    echo
+    echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
+    echo
+    exit 1
+    fi
     fi
 
    #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
@@ -733,6 +755,14 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
     echo
     echo "   Suricata will be built without support for dropping privs."
     echo
+    fi
+
+    AC_ARG_ENABLE(profiling,
+            [  --enable-profiling  Enable performance profiling],
+            [ enable_profiling=yes
+            ])
+    if test "$enable_profiling" = "yes"; then
+    CFLAGS="${CFLAGS} -DPROFILING"
     fi
 
 AC_SUBST(CFLAGS)

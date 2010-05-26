@@ -104,10 +104,8 @@ void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
 static SigGroupHead *SigGroupHeadAlloc(uint32_t size)
 {
     SigGroupHead *sgh = SCMalloc(sizeof(SigGroupHead));
-    if (sgh == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+    if (sgh == NULL)
         return NULL;
-    }
     memset(sgh, 0, sizeof(SigGroupHead));
 
     sgh->init = SigGroupHeadInitDataAlloc(size);
@@ -119,10 +117,8 @@ static SigGroupHead *SigGroupHeadAlloc(uint32_t size)
 
     /* initialize the signature bitarray */
     sgh->sig_size = size;
-    if ( (sgh->sig_array = SCMalloc(sgh->sig_size)) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+    if ( (sgh->sig_array = SCMalloc(sgh->sig_size)) == NULL)
         goto error;
-    }
     memset(sgh->sig_array, 0, sgh->sig_size);
 
     detect_siggroup_sigarray_init_cnt++;
@@ -883,12 +879,16 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
 
             SCLogDebug("(%p)->mpm_content_maxlen %u", *sgh, (*sgh)->mpm_content_maxlen);
         }
+    }
+    if (s->flags & SIG_FLAG_MPM) {
         if (s->mpm_uricontent_maxlen > 0) {
             if ((*sgh)->mpm_uricontent_maxlen == 0)
                 (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
 
             if ((*sgh)->mpm_uricontent_maxlen > s->mpm_uricontent_maxlen)
                 (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
+
+            SCLogDebug("(%p)->mpm_uricontent_maxlen %u", *sgh, (*sgh)->mpm_uricontent_maxlen);
         }
     }
     return 0;
@@ -981,6 +981,7 @@ void SigGroupHeadSetSigCnt(SigGroupHead *sgh, uint32_t max_idx)
 {
     uint32_t sig;
 
+    sgh->sig_cnt = 0;
     for (sig = 0; sig < max_idx + 1; sig++) {
         if (sgh->sig_array[sig / 8] & (1 << (sig % 8)))
             sgh->sig_cnt++;
@@ -1056,12 +1057,18 @@ void SigGroupHeadPrintSigs(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
     SCEnter();
 
-    uint32_t i;
+    if (sgh == NULL) {
+        SCReturn;
+    }
+
+    uint32_t u;
 
     SCLogDebug("The Signatures present in this SigGroupHead are: ");
-    for (i = 0; i < sgh->sig_size; i++) {
-        if (sgh->sig_array[i / 8] & (1 << (i % 8)))
-            SCLogDebug("%" PRIu32, i);
+    for (u = 0; u < (sgh->sig_size * 8); u++) {
+        if (sgh->sig_array[u / 8] & (1 << (u % 8))) {
+            SCLogDebug("%" PRIu32, u);
+            printf("s->num %"PRIu16" ", u);
+        }
     }
 
     SCReturn;
@@ -1241,7 +1248,7 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (s == NULL)
             continue;
 
-        if (!(s->flags & SIG_FLAG_MPM))
+        if (!(s->flags & SIG_FLAG_MPM_URI))
             continue;
 
         sm = s->umatch;
@@ -1846,6 +1853,56 @@ static int SigGroupHeadTest09(void)
     return result;
 }
 
+/**
+ * \test ICMP(?) sig grouping bug.
+ */
+static int SigGroupHeadTest10(void)
+{
+    int result = 0;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    Signature *s = NULL;
+    Packet p;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    ThreadVars th_v;
+
+    memset(&th_v, 0, sizeof(ThreadVars));
+    memset(&p, 0, sizeof(Packet));
+    p.proto = IPPROTO_ICMP;
+    p.type = 5;
+    p.code = 1;
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.src.addr_data32[0] = 0xe08102d3;
+    p.dst.addr_data32[0] = 0x3001a8c0;
+
+    if (de_ctx == NULL)
+        return 0;
+
+    s = DetectEngineAppendSig(de_ctx, "alert icmp 192.168.0.0/16 any -> any any (icode:>1; itype:11; sid:1; rev:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+    s = DetectEngineAppendSig(de_ctx, "alert icmp any any -> 192.168.0.0/16 any (icode:1; itype:5; sid:2; rev:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    AddressDebugPrint(&p.dst);
+
+    SigGroupHead *sgh = SigMatchSignaturesGetSgh(&th_v, de_ctx, det_ctx, &p);
+    if (sgh == NULL) {
+        goto end;
+    }
+
+    result = 1;
+end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
 #endif
 
 void SigGroupHeadRegisterTests(void)
@@ -1862,6 +1919,7 @@ void SigGroupHeadRegisterTests(void)
     UtRegisterTest("SigGroupHeadTest07", SigGroupHeadTest07, 1);
     UtRegisterTest("SigGroupHeadTest08", SigGroupHeadTest08, 1);
     UtRegisterTest("SigGroupHeadTest09", SigGroupHeadTest09, 1);
+    UtRegisterTest("SigGroupHeadTest10", SigGroupHeadTest10, 1);
 
 #endif
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -252,9 +252,8 @@ TmEcode AlertUnifiedAlert (ThreadVars *tv, Packet *p, void *data, PacketQueue *p
 TmEcode AlertUnifiedAlertThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     AlertUnifiedAlertThread *aun = SCMalloc(sizeof(AlertUnifiedAlertThread));
-    if (aun == NULL) {
+    if (aun == NULL)
         return TM_ECODE_FAILED;
-    }
     memset(aun, 0, sizeof(AlertUnifiedAlertThread));
 
     if (initdata == NULL) {
@@ -341,10 +340,8 @@ OutputCtx *AlertUnifiedAlertInitCtx(ConfNode *conf)
         return NULL;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (output_ctx == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate memory for OutputCtx.");
-        exit(EXIT_FAILURE);
-    }
+    if (output_ctx == NULL)
+        return NULL;
     output_ctx->data = file_ctx;
     output_ctx->DeInit = AlertUnifiedAlertDeInitCtx;
 
@@ -372,8 +369,11 @@ int AlertUnifiedAlertOpenFileCtx(LogFileCtx *file_ctx, const char *prefix)
     char *filename = NULL;
     if (file_ctx->filename != NULL)
         filename = file_ctx->filename;
-    else
+    else {
         filename = file_ctx->filename = SCMalloc(PATH_MAX); /* XXX some sane default? */
+        if (filename == NULL)
+            return -1;
+    }
 
     /* get the time so we can have a filename with seconds since epoch */
     struct timeval ts;

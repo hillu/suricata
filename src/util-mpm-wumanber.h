@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -37,7 +37,7 @@ typedef struct WmPattern_ {
     uint16_t prefix_ci;
     uint16_t prefix_cs;
     uint8_t flags;
-    MpmEndMatch *em;
+    uint32_t id; /* global pattern id */
 } WmPattern;
 
 typedef struct WmHashItem_ {

@@ -53,40 +53,20 @@
 #include "app-layer-parser.h"
 #include "app-layer-detect-proto.h"
 
+#include "util-spm.h"
 #include "util-cuda.h"
 #include "util-cuda-handlers.h"
 #include "util-mpm-b2g-cuda.h"
 #include "util-debug.h"
 
 #define INSPECT_BYTES  32
-#define ALP_DETECT_MAX 256
 
 /* undef __SC_CUDA_SUPPORT__.  We will get back to this later.  Need to
  * analyze the performance of cuda support for app layer */
 #undef __SC_CUDA_SUPPORT__
 
-typedef struct AlpProtoDetectDirection_ {
-    MpmCtx mpm_ctx;
-    uint32_t id;
-    uint16_t map[ALP_DETECT_MAX];   /**< a mapping between condition id's and
-                                         protocol */
-    uint16_t max_len;              /**< max length of all patterns, so we can
-                                         limit the search */
-    uint16_t min_len;              /**< min length of all patterns, so we can
-                                         tell the stream engine to feed data
-                                         to app layer as soon as it has min
-                                         size data */
-} AlpProtoDetectDirection;
-
-typedef struct AlpProtoDetectCtx_ {
-    AlpProtoDetectDirection toserver;
-    AlpProtoDetectDirection toclient;
-
-    int alp_content_module_handle;
-} AlpProtoDetectCtx;
-
 /** global app layer detection context */
-static AlpProtoDetectCtx alp_proto_ctx;
+AlpProtoDetectCtx alp_proto_ctx;
 
 /** \brief Initialize the app layer proto detection */
 void AlpProtoInit(AlpProtoDetectCtx *ctx) {
@@ -108,21 +88,100 @@ void AlpProtoInit(AlpProtoDetectCtx *ctx) {
     ctx->toclient.id = 0;
     ctx->toclient.min_len = INSPECT_BYTES;
     ctx->toserver.min_len = INSPECT_BYTES;
+
+    ctx->mpm_pattern_id_store = MpmPatternIdTableInitHash();
 }
 
-void AlpProtoTestDestroy(AlpProtoDetectCtx *ctx) {
-    mpm_table[ctx->toserver.mpm_ctx.mpm_type].DestroyCtx(&ctx->toserver.mpm_ctx);
-    mpm_table[ctx->toclient.mpm_ctx.mpm_type].DestroyCtx(&ctx->toclient.mpm_ctx);
+/**
+ *  \brief Turn a proto detection into a AlpProtoSignature and store it
+ *         in the ctx.
+ *
+ *  \param ctx the contex
+ *  \param co the content match
+ *  \param proto the proto id
+ */
+static void AlpProtoAddSignature(AlpProtoDetectCtx *ctx, DetectContentData *co, uint16_t proto) {
+    AlpProtoSignature *s = SCMalloc(sizeof(AlpProtoSignature));
+    if (s == NULL) {
+        return;
+    }
+    memset(s, 0x00, sizeof(AlpProtoSignature));
+
+    s->proto = proto;
+    s->co = co;
+
+    if (ctx->head == NULL) {
+        ctx->head = s;
+    } else {
+        s->next = ctx->head;
+        ctx->head = s;
+    }
+
+    ctx->sigs++;
 }
 
-void AlpProtoDestroy() {
+#ifdef UNITTESTS
+/** \brief free a AlpProtoSignature, recursively free any next sig */
+static void AlpProtoFreeSignature(AlpProtoSignature *s) {
+    if (s == NULL)
+        return;
+
+    DetectContentFree(s->co);
+    s->co = NULL;
+    s->proto = 0;
+
+    AlpProtoSignature *next_s = s->next;
+
+    SCFree(s);
+
+    AlpProtoFreeSignature(next_s);
+}
+#endif
+
+/**
+ *  \brief Match a AlpProtoSignature against a buffer
+ *
+ *  \param s signature
+ *  \param buf pointer to buffer
+ *  \param buflen length of the buffer
+ *
+ *  \retval proto the detected proto or ALPROTO_UNKNOWN if no match
+ */
+static uint16_t AlpProtoMatchSignature(AlpProtoSignature *s, uint8_t *buf,
+        uint16_t buflen)
+{
     SCEnter();
-    mpm_table[alp_proto_ctx.toserver.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toserver.mpm_ctx);
-    mpm_table[alp_proto_ctx.toclient.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toclient.mpm_ctx);
-    SCReturn;
+    uint16_t proto = ALPROTO_UNKNOWN;
+
+    if (s->co->offset > buflen) {
+        SCLogDebug("s->co->offset (%"PRIu16") > buflen (%"PRIu16")",
+                s->co->offset, buflen);
+        goto end;
+    }
+
+    if (s->co->depth > buflen) {
+        SCLogDebug("s->co->depth (%"PRIu16") > buflen (%"PRIu16")",
+                s->co->depth, buflen);
+        goto end;
+    }
+
+    uint8_t *sbuf = buf + s->co->offset;
+    uint16_t sbuflen = s->co->depth - s->co->offset;
+    SCLogDebug("s->co->offset (%"PRIu16") s->co->depth (%"PRIu16")",
+                s->co->offset, s->co->depth);
+
+    uint8_t *found = SpmSearch(sbuf, sbuflen, s->co->content, s->co->content_len);
+    if (found != NULL) {
+        proto = s->proto;
+    }
+
+end:
+    SCReturnInt(proto);
 }
 
-/** \brief Add a proto detection string to the detection ctx.
+/**
+ *  \brief Add a proto detection string to the detection ctx.
+ *
  *  \param ctx The detection ctx
  *  \param ip_proto The IP proto (TCP, UDP, etc)
  *  \param al_proto Application layer proto
@@ -139,7 +198,11 @@ void AlpProtoAdd(AlpProtoDetectCtx *ctx, uint16_t ip_proto, uint16_t al_proto, c
     cd->depth = depth;
     cd->offset = offset;
 
+    cd->id = DetectContentGetId(ctx->mpm_pattern_id_store, cd);
+
     //PrintRawDataFp(stdout,cd->content,cd->content_len);
+    SCLogDebug("cd->depth %"PRIu16" and cd->offset %"PRIu16" cd->id  %"PRIu32"",
+            cd->depth, cd->offset, cd->id);
 
     AlpProtoDetectDirection *dir;
     if (flags & STREAM_TOCLIENT) {
@@ -149,7 +212,7 @@ void AlpProtoAdd(AlpProtoDetectCtx *ctx, uint16_t ip_proto, uint16_t al_proto, c
     }
 
     mpm_table[dir->mpm_ctx.mpm_type].AddPattern(&dir->mpm_ctx, cd->content, cd->content_len,
-                                cd->offset, cd->depth, dir->id, dir->id, 0);
+                                cd->offset, cd->depth, cd->id, cd->id, 0);
     dir->map[dir->id] = al_proto;
     dir->id++;
 
@@ -161,24 +224,42 @@ void AlpProtoAdd(AlpProtoDetectCtx *ctx, uint16_t ip_proto, uint16_t al_proto, c
     if (depth < dir->min_len)
         dir->min_len = depth;
 
-    /* no longer need the cd */
-    DetectContentFree(cd);
+    /* finally turn into a signature and add to the ctx */
+    AlpProtoAddSignature(ctx, cd, al_proto);
+}
+
+#ifdef UNITTESTS
+static void AlpProtoTestDestroy(AlpProtoDetectCtx *ctx) {
+    mpm_table[ctx->toserver.mpm_ctx.mpm_type].DestroyCtx(&ctx->toserver.mpm_ctx);
+    mpm_table[ctx->toclient.mpm_ctx.mpm_type].DestroyCtx(&ctx->toclient.mpm_ctx);
+    AlpProtoFreeSignature(ctx->head);
+}
+#endif
+
+void AlpProtoDestroy() {
+    SCEnter();
+    mpm_table[alp_proto_ctx.toserver.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toserver.mpm_ctx);
+    mpm_table[alp_proto_ctx.toclient.mpm_ctx.mpm_type].DestroyCtx(&alp_proto_ctx.toclient.mpm_ctx);
+    SCReturn;
 }
 
 void AlpProtoFinalizeThread(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx *tctx) {
-    uint32_t maxid;
+    uint32_t sig_maxid = 0;
+    uint32_t pat_maxid = ctx->mpm_pattern_id_store ? ctx->mpm_pattern_id_store->max_id : 0;
+
     memset(tctx, 0x00, sizeof(AlpProtoDetectThreadCtx));
 
     if (ctx->toclient.id > 0) {
-        maxid = ctx->toclient.id;
-        mpm_table[ctx->toclient.mpm_ctx.mpm_type].InitThreadCtx(&ctx->toclient.mpm_ctx, &tctx->toclient.mpm_ctx, maxid);
-        PmqSetup(&tctx->toclient.pmq, maxid);
+        //sig_maxid = ctx->toclient.id;
+        mpm_table[ctx->toclient.mpm_ctx.mpm_type].InitThreadCtx(&ctx->toclient.mpm_ctx, &tctx->toclient.mpm_ctx, sig_maxid);
+        PmqSetup(&tctx->toclient.pmq, sig_maxid, pat_maxid);
     }
     if (ctx->toserver.id > 0) {
-        maxid = ctx->toserver.id;
-        mpm_table[ctx->toserver.mpm_ctx.mpm_type].InitThreadCtx(&ctx->toserver.mpm_ctx, &tctx->toserver.mpm_ctx, maxid);
-        PmqSetup(&tctx->toserver.pmq, maxid);
+        //sig_maxid = ctx->toserver.id;
+        mpm_table[ctx->toserver.mpm_ctx.mpm_type].InitThreadCtx(&ctx->toserver.mpm_ctx, &tctx->toserver.mpm_ctx, sig_maxid);
+        PmqSetup(&tctx->toserver.pmq, sig_maxid, pat_maxid);
     }
+
 }
 
 void AlpProtoDeFinalize2Thread(AlpProtoDetectThreadCtx *tctx) {
@@ -220,6 +301,29 @@ void AlpProtoFinalizeGlobal(AlpProtoDetectCtx *ctx) {
        min_len */
     StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOCLIENT, ctx->toclient.min_len);
     StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOSERVER, ctx->toserver.min_len);
+
+    /* allocate and initialize the mapping between pattern id and signature */
+    ctx->map = (AlpProtoSignature **)SCMalloc(ctx->sigs * sizeof(AlpProtoSignature *));
+    if (ctx->map == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "%s", strerror(errno));
+        return;
+    }
+    memset(ctx->map, 0x00, ctx->sigs * sizeof(AlpProtoSignature *));
+
+    AlpProtoSignature *s = ctx->head;
+    AlpProtoSignature *temp = NULL;
+    for ( ; s != NULL; s = s->next) {
+        BUG_ON(s->co == NULL);
+
+        if (ctx->map[s->co->id] == NULL) {
+            ctx->map[s->co->id] = s;
+        } else {
+            temp = ctx->map[s->co->id];
+            while (temp->map_next != NULL)
+                temp = temp->map_next;
+            temp->map_next = s;
+        }
+    }
 }
 
 void AppLayerDetectProtoThreadInit(void) {
@@ -249,8 +353,8 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSH, "SSH-", 4, 0, STREAM_TOSERVER);
 
     /** SSLv2 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSL, "|01 03 00|", 5, 2, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSL, "|16 03 00|", 5, 2, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSL, "|01 00 02|", 5, 2, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSL, "|00 02|", 7, 5, STREAM_TOCLIENT);
 
     /** SSLv3 */
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 00|", 3, 0, STREAM_TOSERVER);
@@ -312,7 +416,8 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoFinalizeGlobal(&alp_proto_ctx);
 }
 
-/** \brief Get the app layer proto based on a buffer
+/**
+ *  \brief Get the app layer proto based on a buffer
  *
  *  \param ctx Global app layer detection context
  *  \param tctx Thread app layer detection context
@@ -327,6 +432,7 @@ uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx 
 
     AlpProtoDetectDirection *dir;
     AlpProtoDetectDirectionThread *tdir;
+
     if (flags & STREAM_TOSERVER) {
         dir = &ctx->toserver;
         tdir = &tctx->toserver;
@@ -346,6 +452,8 @@ uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx 
 
     uint16_t proto = ALPROTO_UNKNOWN;
     uint32_t cnt = 0;
+
+    /* do the mpm search */
 #ifndef __SC_CUDA_SUPPORT__
     cnt = mpm_table[dir->mpm_ctx.mpm_type].Search(&dir->mpm_ctx,
                                                 &tdir->mpm_ctx,
@@ -378,9 +486,26 @@ uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx 
         goto end;
     }
 
-    /** We just return the first match
-     *  \todo what if we have more? */
-    proto = dir->map[tdir->pmq.sig_id_array[0]];
+    /* We just work with the first match */
+    uint16_t patid = tdir->pmq.pattern_id_array[0];
+    SCLogDebug("array count is %"PRIu32" patid %"PRIu16"",
+            tdir->pmq.pattern_id_array_cnt, patid);
+
+    AlpProtoSignature *s = ctx->map[patid];
+    if (s == NULL) {
+        goto end;
+    }
+    uint8_t s_cnt = 1;
+
+    while (proto == ALPROTO_UNKNOWN && s != NULL) {
+        proto = AlpProtoMatchSignature(s, buf, buflen);
+        s = s->map_next;
+        if (s == NULL && s_cnt < tdir->pmq.pattern_id_array_cnt) {
+            patid = tdir->pmq.pattern_id_array[s_cnt];
+            s = ctx->map[patid];
+            s_cnt++;
+        }
+    }
 
 end:
     PmqReset(&tdir->pmq);
@@ -444,92 +569,6 @@ end:
     }
 #endif
     SCReturnUInt(proto);
-}
-
-/** \brief Handle a app layer message
- *
- *  If the protocol is yet unknown, the proto detection code is run first.
- *
- *  \param dp_ctx Thread app layer detect context
- *  \param smsg Stream message
- *
- *  \retval 0 ok
- *  \retval -1 error
- */
-int AppLayerHandleMsg(AlpProtoDetectThreadCtx *dp_ctx, StreamMsg *smsg)
-{
-    SCEnter();
-    uint16_t alproto = ALPROTO_UNKNOWN;
-    int r = 0;
-
-    TcpSession *ssn = smsg->flow->protoctx;
-    if (ssn != NULL) {
-        alproto = ssn->alproto;
-
-        /* if we don't know the proto yet and we have received a stream
-         * initializer message, we run proto detection.
-         * We receive 2 stream init msgs (one for each direction) but we
-         * only run the proto detection once. */
-        if (alproto == ALPROTO_UNKNOWN && smsg->flags & STREAM_START) {
-            SCLogDebug("Stream initializer (len %" PRIu32 " (%" PRIu32 "))",
-                        smsg->data.data_len, MSG_DATA_SIZE);
-
-            //printf("=> Init Stream Data -- start\n");
-            //PrintRawDataFp(stdout, smsg->init.data, smsg->init.data_len);
-            //printf("=> Init Stream Data -- end\n");
-
-            alproto = AppLayerDetectGetProto(&alp_proto_ctx, dp_ctx,
-                            smsg->data.data, smsg->data.data_len, smsg->flags);
-            if (alproto != ALPROTO_UNKNOWN) {
-                /* store the proto and setup the L7 data array */
-                StreamL7DataPtrInit(ssn);
-                ssn->alproto = alproto;
-                ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
-
-                r = AppLayerParse(smsg->flow, alproto, smsg->flags,
-                               smsg->data.data, smsg->data.data_len);
-            } else {
-                if (smsg->flags & STREAM_TOSERVER) {
-                    if (smsg->data.data_len >= alp_proto_ctx.toserver.max_len) {
-                        ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
-                        SCLogDebug("ALPROTO_UNKNOWN flow %p", smsg->flow);
-                        StreamTcpSetSessionNoReassemblyFlag(ssn, 0);
-                    }
-                } else if (smsg->flags & STREAM_TOCLIENT) {
-                    if (smsg->data.data_len >= alp_proto_ctx.toclient.max_len) {
-                        ssn->flags |= STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED;
-                        SCLogDebug("ALPROTO_UNKNOWN flow %p", smsg->flow);
-                        StreamTcpSetSessionNoReassemblyFlag(ssn, 1);
-                    }
-                }
-            }
-        } else {
-            SCLogDebug("stream data (len %" PRIu32 " (%" PRIu32 ")), alproto "
-                      "%"PRIu16" (flow %p)", smsg->data.data_len, MSG_DATA_SIZE,
-                      alproto, smsg->flow);
-
-            //printf("=> Stream Data -- start\n");
-            //PrintRawDataFp(stdout, smsg->data.data, smsg->data.data_len);
-            //printf("=> Stream Data -- end\n");
-
-            /* if we don't have a data object here we are not getting it
-             * a start msg should have gotten us one */
-            if (alproto != ALPROTO_UNKNOWN) {
-                r = AppLayerParse(smsg->flow, alproto, smsg->flags,
-                            smsg->data.data, smsg->data.data_len);
-            } else {
-                SCLogDebug(" smsg not start, but no l7 data? Weird");
-            }
-        }
-    }
-
-    /* flow is free again */
-    smsg->flow->use_cnt--;
-
-    /* return the used message to the queue */
-    StreamMsgReturnToPool(smsg);
-
-    SCReturnInt(r);
 }
 
 /* VJ Originally I thought of having separate app layer
@@ -789,9 +828,9 @@ int AlpDetectTest04(void) {
     }
 #endif
 
-    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Search(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, NULL, l7data, sizeof(l7data));
-    if (cnt != 0) {
-        printf("cnt %u != 0: ", cnt);
+    uint32_t cnt = mpm_table[ctx.toclient.mpm_ctx.mpm_type].Search(&ctx.toclient.mpm_ctx, &tctx.toclient.mpm_ctx, &tctx.toclient.pmq, l7data, sizeof(l7data));
+    if (cnt != 1) {
+        printf("cnt %u != 1: ", cnt);
         r = 0;
     }
 
@@ -1243,6 +1282,45 @@ int AlpDetectTest11(void) {
     return r;
 }
 
+/** \test AlpProtoSignature test */
+int AlpDetectTest12(void) {
+    AlpProtoDetectCtx ctx;
+    int r = 0;
+
+    AlpProtoInit(&ctx);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_HTTP, "HTTP", 4, 0, STREAM_TOSERVER);
+    AlpProtoFinalizeGlobal(&ctx);
+
+    if (ctx.head == NULL) {
+        printf("ctx.head == NULL: ");
+        goto end;
+    }
+
+    if (ctx.head->proto != ALPROTO_HTTP) {
+        printf("ctx.head->proto != ALPROTO_HTTP: ");
+        goto end;
+    }
+
+    if (ctx.sigs != 1) {
+        printf("ctx.sigs %"PRIu16", expected 1: ", ctx.sigs);
+        goto end;
+    }
+
+    if (ctx.map == NULL) {
+        printf("no mapping: ");
+        goto end;
+    }
+
+    if (ctx.map[ctx.head->co->id] != ctx.head) {
+        printf("wrong sig: ");
+        goto end;
+    }
+
+    r = 1;
+end:
+    return r;
+}
+
 #endif /* UNITTESTS */
 
 void AlpDetectRegisterTests(void) {
@@ -1258,5 +1336,6 @@ void AlpDetectRegisterTests(void) {
     UtRegisterTest("AlpDetectTest09", AlpDetectTest09, 1);
     UtRegisterTest("AlpDetectTest10", AlpDetectTest10, 1);
     UtRegisterTest("AlpDetectTest11", AlpDetectTest11, 1);
+    UtRegisterTest("AlpDetectTest12", AlpDetectTest12, 1);
 #endif /* UNITTESTS */
 }

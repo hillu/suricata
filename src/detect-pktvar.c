@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -147,10 +147,8 @@ static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
     }
 
     cd = SCMalloc(sizeof(DetectPktvarData));
-    if (cd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
+    if (cd == NULL)
         goto error;
-    }
 
     char converted = 0;
 

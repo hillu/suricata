@@ -13,6 +13,7 @@ source-pcap.c source-pcap.h \
 source-pcap-file.c source-pcap-file.h \
 source-pfring.c source-pfring.h \
 source-ipfw.c source-ipfw.h \
+source-erf-file.c source-erf-file.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
 decode-vlan.c decode-vlan.h \
@@ -57,6 +58,7 @@ detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-iponly.c detect-engine-iponly.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-uri.c detect-engine-uri.h \
+detect-engine-state.c detect-engine-state.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
 detect-seq.c detect-seq.h \
@@ -115,6 +117,7 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-urilen.c detect-urilen.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-http-client-body.c detect-http-client-body.h \
+detect-asn1.c detect-asn1.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
 util-cpu.c util-cpu.h \
@@ -157,6 +160,7 @@ util-strlcpyu.c \
 util-cuda.c util-cuda.h \
 util-cuda-handlers.c util-cuda-handlers.h \
 util-privs.c util-privs.h \
+util-decode-asn1.c util-decode-asn1.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -190,11 +194,13 @@ app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-ftp.c app-layer-ftp.h \
+app-layer-ssl.c app-layer-ssl.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
 util-action.c util-action.h \
-win32-syslog.h
+win32-syslog.h \
+util-profiling.c util-profiling.h
 
 # set the include path found by configure
 INCLUDES= $(all_includes)

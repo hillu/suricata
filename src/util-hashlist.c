@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -119,9 +119,8 @@ int HashListTableAdd(HashListTable *ht, void *data, uint16_t datalen) {
     SCLogDebug("ht %p hash %"PRIu32"", ht, hash);
 
     HashListTableBucket *hb = SCMalloc(sizeof(HashListTableBucket));
-    if (hb == NULL) {
+    if (hb == NULL)
         goto error;
-    }
     memset(hb, 0, sizeof(HashListTableBucket));
     hb->data = data;
     hb->size = datalen;
