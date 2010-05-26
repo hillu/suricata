@@ -35,6 +35,7 @@
 #include "util-byte.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "detect-pcre.h"
 
 /**
  * \brief Regex for parsing our options
@@ -99,7 +100,9 @@ error:
  *  \retval 1 match
  *  \retval 0 no match
  */
-int DetectBytejumpDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *m, uint8_t *payload, uint32_t payload_len) {
+int DetectBytejumpDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
+        SigMatch *m, uint8_t *payload, uint32_t payload_len)
+{
     SCEnter();
 
     DetectBytejumpData *data = (DetectBytejumpData *)m->ctx;
@@ -386,10 +389,8 @@ DetectBytejumpData *DetectBytejumpParse(char *optstr)
 
     /* Initialize the data */
     data = SCMalloc(sizeof(DetectBytejumpData));
-    if (data == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,"malloc failed %s", strerror(errno));
+    if (data == NULL)
         goto error;
-    }
     data->base = DETECT_BYTEJUMP_BASE_UNSET;
     data->flags = 0;
     data->multiplier = 1;
@@ -513,14 +514,39 @@ int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     if (data->flags & DETECT_BYTEJUMP_RELATIVE) {
         /** Search for the first previous DetectContent
          * SigMatch (it can be the same as this one) */
-        SigMatch *pm = DetectContentGetLastPattern(s->pmatch_tail);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_BYTEJUMP_MISSING_CONTENT, "relative bytejump match needs a previous content option");
+        SigMatch *pm = NULL;
+        pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_CONTENT);
+        if (pm != NULL) {
+            DetectContentData *cd = (DetectContentData *)pm->ctx;
+            if (cd == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "relative bytejump match "
+                        "needs a previous content option");
+                goto error;
+            }
+            cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_PCRE)) != NULL) {
+            DetectPcreData *pe = NULL;
+            pe = (DetectPcreData *) pm->ctx;
+            if (pe == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            pe->flags |= DETECT_PCRE_RELATIVE;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_BYTEJUMP)) !=
+                    NULL)
+        {
+            DetectBytejumpData *data = NULL;
+            data = (DetectBytejumpData *)pm->ctx;
+            if (data == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            data->flags |= DETECT_BYTEJUMP_RELATIVE;
+        } else {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "relative bytejump match "
+                        "needs a previous content option");
             goto error;
         }
-
-        DetectContentData *cd = (DetectContentData *)pm->ctx;
-        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
     }
 
     sm = SigMatchAlloc();
@@ -554,7 +580,7 @@ void DetectBytejumpFree(void *ptr)
 
 /* UNITTESTS */
 #ifdef UNITTESTS
-
+#include "util-unittest-helper.h"
 /**
  * \test DetectBytejumpTestParse01 is a test to make sure that we return
  * "something" when given valid bytejump opt
@@ -710,6 +736,69 @@ int DetectBytejumpTestParse08(void) {
 
     return result;
 }
+
+/**
+ * \test DetectByteJumpTestPacket01 is a test to check matches of
+ * byte_jump and byte_jump relative works if the previous keyword is pcre
+ * (bug 142)
+ */
+int DetectByteJumpTestPacket01 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre + byte_test + "
+    "relative\"; pcre:\"/AllWorkAndNoPlayMakesWillADullBoy/\"; byte_jump:1,6,"
+    "relative,string,dec; content:\"0\"; sid:134; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
+
+/**
+ * \test DetectByteJumpTestPacket02 is a test to check matches of
+ * byte_jump and byte_jump relative works if the previous keyword is byte_jump
+ * (bug 165)
+ */
+int DetectByteJumpTestPacket02 (void) {
+    int result = 0;
+    uint8_t buf[] = { 0x00, 0x00, 0x00, 0x77, 0xff, 0x53,
+                    0x4d, 0x42, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x18,
+                    0x01, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x08,
+                    0x92, 0xa4, 0x01, 0x08, 0x17, 0x5c, 0x0e, 0xff,
+                    0x00, 0x00, 0x00, 0x01, 0x40, 0x48, 0x00, 0x00,
+                    0x00, 0xff };
+    uint16_t buflen = sizeof(buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"byte_test with byte_test"
+                 " + relative\"; byte_jump:1,13; byte_jump:4,0,relative; "
+                 "content:\"|48 00 00|\"; within:3; sid:144; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
 #endif /* UNITTESTS */
 
 
@@ -726,6 +815,8 @@ void DetectBytejumpRegisterTests(void) {
     UtRegisterTest("DetectBytejumpTestParse06", DetectBytejumpTestParse06, 1);
     UtRegisterTest("DetectBytejumpTestParse07", DetectBytejumpTestParse07, 1);
     UtRegisterTest("DetectBytejumpTestParse08", DetectBytejumpTestParse08, 1);
+    UtRegisterTest("DetectByteJumpTestPacket01", DetectByteJumpTestPacket01, 1);
+    UtRegisterTest("DetectByteJumpTestPacket02", DetectByteJumpTestPacket02, 1);
 #endif /* UNITTESTS */
 }
 

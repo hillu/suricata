@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -85,35 +85,6 @@ void MpmB3gRegister (void) {
     mpm_table[MPM_B3G].RegisterUnittests = B3gRegisterTests;
 }
 
-/* append an endmatch to a pattern
- *
- * Only used in the initialization phase */
-static inline void B3gEndMatchAppend(MpmCtx *mpm_ctx, B3gPattern *p,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid)
-{
-    MpmEndMatch *em = MpmAllocEndMatch(mpm_ctx);
-    if (em == NULL) {
-        printf("ERROR: B3gAllocEndMatch failed\n");
-        return;
-    }
-
-    em->id = pid;
-    em->sig_id = sid;
-    em->depth = depth;
-    em->offset = offset;
-
-    if (p->em == NULL) {
-        p->em = em;
-        return;
-    }
-
-    MpmEndMatch *m = p->em;
-    while (m->next) {
-        m = m->next;
-    }
-    m->next = em;
-}
-
 /** \todo XXX Unused??? */
 #if 0
 static void prt (uint8_t *buf, uint16_t buflen) {
@@ -148,10 +119,8 @@ void B3gPrintInfo(MpmCtx *mpm_ctx) {
 
 static inline B3gPattern *B3gAllocPattern(MpmCtx *mpm_ctx) {
     B3gPattern *p = SCMalloc(sizeof(B3gPattern));
-    if (p == NULL) {
-        printf("ERROR: B3gAllocPattern: SCMalloc failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (p == NULL)
+        return NULL;
     memset(p,0,sizeof(B3gPattern));
 
     mpm_ctx->memory_cnt++;
@@ -162,10 +131,8 @@ static inline B3gPattern *B3gAllocPattern(MpmCtx *mpm_ctx) {
 static inline B3gHashItem *
 B3gAllocHashItem(MpmCtx *mpm_ctx) {
     B3gHashItem *hi = SCMalloc(sizeof(B3gHashItem));
-    if (hi == NULL) {
-        printf("ERROR: B3gAllocHashItem: SCMalloc failed\n");
-        exit(EXIT_FAILURE);
-    }
+    if (hi == NULL)
+        return NULL;
     memset(hi,0,sizeof(B3gHashItem));
 
     mpm_ctx->memory_cnt++;
@@ -275,10 +242,6 @@ static inline int B3gCmpPattern(B3gPattern *p, uint8_t *pat, uint16_t patlen, ch
  */
 
 void B3gFreePattern(MpmCtx *mpm_ctx, B3gPattern *p) {
-    if (p && p->em) {
-        MpmEndMatchFreeAll(mpm_ctx, p->em);
-    }
-
     if (p && p->cs && p->cs != p->ci) {
         SCFree(p->cs);
         mpm_ctx->memory_cnt--;
@@ -320,8 +283,8 @@ static int B3gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_
             goto error;
 
         p->len = patlen;
-
         p->flags = flags;
+        p->id = pid;
 
         /* setup the case insensitive part of the pattern */
         p->ci = SCMalloc(patlen);
@@ -369,9 +332,6 @@ static int B3gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
     }
 
-    /* we need a match */
-    B3gEndMatchAppend(mpm_ctx, p, offset, depth, pid, sid);
-
     mpm_ctx->total_pattern_cnt++;
     return 0;
 
@@ -415,7 +375,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
     uint8_t idx8 = 0;
 
     ctx->hash = (B3gHashItem **)SCMalloc(sizeof(B3gHashItem *) * ctx->hash_size);
-    if (ctx->hash == NULL) goto error;
+    if (ctx->hash == NULL)
+        goto error;
     memset(ctx->hash, 0, sizeof(B3gHashItem *) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -423,7 +384,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
 
     /* 2 byte pattern hash */
     ctx->hash2 = (B3gHashItem **)SCMalloc(sizeof(B3gHashItem *) * ctx->hash_size);
-    if (ctx->hash2 == NULL) goto error;
+    if (ctx->hash2 == NULL)
+        goto error;
     memset(ctx->hash2, 0, sizeof(B3gHashItem *) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -431,7 +393,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
 
     /* alloc the pminlen array */
     ctx->pminlen = (uint8_t *)SCMalloc(sizeof(uint8_t) * ctx->hash_size);
-    if (ctx->pminlen == NULL) goto error;
+    if (ctx->pminlen == NULL)
+        goto error;
     memset(ctx->pminlen, 0, sizeof(uint8_t) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -446,6 +409,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
                 ctx->hash1[idx8].flags |= 0x01;
             } else {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
@@ -459,12 +424,16 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
             idx = (uint16_t)(ctx->parray[i]->ci[0] << B3G_HASHSHIFT | ctx->parray[i]->ci[1]);
             if (ctx->hash2[idx] == NULL) {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
                 ctx->hash2[idx] = hi;
             } else {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
@@ -480,6 +449,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
 
             if (ctx->hash[idx] == NULL) {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
                 ctx->pminlen[idx] = ctx->parray[i]->len;
@@ -487,6 +458,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
                 ctx->hash[idx] = hi;
             } else {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
+                if (hi == NULL)
+                    goto error;
                 hi->idx = i;
                 hi->flags |= 0x01;
 
@@ -504,7 +477,8 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
 
     /* alloc the bloom array */
     ctx->bloom = (BloomFilter **)SCMalloc(sizeof(BloomFilter *) * ctx->hash_size);
-    if (ctx->bloom == NULL) goto error;
+    if (ctx->bloom == NULL)
+        goto error;
     memset(ctx->bloom, 0, sizeof(BloomFilter *) * ctx->hash_size);
 
     mpm_ctx->memory_cnt++;
@@ -574,7 +548,8 @@ int B3gPreparePatterns(MpmCtx *mpm_ctx) {
 
     /* alloc the pattern array */
     ctx->parray = (B3gPattern **)SCMalloc(mpm_ctx->pattern_cnt * sizeof(B3gPattern *));
-    if (ctx->parray == NULL) goto error;
+    if (ctx->parray == NULL)
+        goto error;
     memset(ctx->parray, 0, mpm_ctx->pattern_cnt * sizeof(B3gPattern *));
     //printf("mpm_ctx %p, parray %p\n", mpm_ctx,ctx->parray);
     mpm_ctx->memory_cnt++;
@@ -924,7 +899,7 @@ uint32_t B3gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                                 if (memcmp_lowercase(p->ci, buf+j, p->len) == 0) {
                                     COUNT(tctx->stat_loop_match++);
 
-                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, j, p->len);
+                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                                 } else {
                                     COUNT(tctx->stat_loop_no_match++);
                                 }
@@ -935,7 +910,7 @@ uint32_t B3gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                                 if (memcmp(p->cs, buf+j, p->len) == 0) {
                                     COUNT(tctx->stat_loop_match++);
 
-                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, j, p->len);
+                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                                 } else {
                                     COUNT(tctx->stat_loop_no_match++);
                                 }
@@ -1024,7 +999,7 @@ uint32_t B3gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
                     if (memcmp_lowercase(p->ci, buf+pos, p->len) == 0) {
                         COUNT(tctx->stat_loop_match++);
 
-                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, pos, p->len);
+                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     } else {
                         COUNT(tctx->stat_loop_no_match++);
                     }
@@ -1035,7 +1010,7 @@ uint32_t B3gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
                     if (memcmp(p->cs, buf+pos, p->len) == 0) {
                         COUNT(tctx->stat_loop_match++);
 
-                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, pos, p->len);
+                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     } else {
                         COUNT(tctx->stat_loop_no_match++);
                     }
@@ -1076,11 +1051,11 @@ uint32_t B3gSearch12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatch
 
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (h8 == p->ci[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 } else {
                     if (*buf == p->cs[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 }
             }
@@ -1096,11 +1071,11 @@ uint32_t B3gSearch12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatch
 
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (h8 == p->ci[0] && u8_tolower(*(buf+1)) == p->ci[1]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 } else {
                     if (*buf == p->cs[0] && *(buf+1) == p->cs[1]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 }
             }
@@ -1124,7 +1099,6 @@ uint32_t B3gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
     uint8_t *bufend = buf + buflen - 1;
     uint32_t cnt = 0;
     B3gPattern *p;
-    MpmEndMatch *em;
     B3gHashItem *thi, *hi;
 
     if (buflen < 2)
@@ -1146,18 +1120,14 @@ uint32_t B3gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (u8_tolower(*buf) == p->ci[0] && u8_tolower(*(buf+1)) == p->ci[1]) {
                         //printf("CI Exact match: "); prt(p->ci, p->len); printf(" in buf "); prt(buf, p->len);printf(" (B3gSearch1)\n");
-                        for (em = p->em; em; em = em->next) {
-                            if (MpmVerifyMatch(mpm_thread_ctx, pmq, em, (buf+1 - bufmin), p->len))
-                                cnt++;
-                        }
+                        if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id))
+                            cnt++;
                     }
                 } else {
                     if (*buf == p->cs[0] && *(buf+1) == p->cs[1]) {
                         //printf("CS Exact match: "); prt(p->cs, p->len); printf(" in buf "); prt(buf, p->len);printf(" (B3gSearch1)\n");
-                        for (em = p->em; em; em = em->next) {
-                            if (MpmVerifyMatch(mpm_thread_ctx, pmq, em, (buf+1 - bufmin), p->len))
-                                cnt++;
-                        }
+                        if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id))
+                            cnt++;
                     }
                 }
             }
@@ -1200,11 +1170,11 @@ uint32_t B3gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (u8_tolower(*buf) == p->ci[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 } else {
                     if (*buf == p->cs[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->em, (buf+1 - bufmin), p->len);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
                     }
                 }
             }

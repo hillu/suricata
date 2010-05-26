@@ -59,7 +59,7 @@ struct in_addr *SCRadixValidateIPV4Address(const char *addr_str)
     struct in_addr *addr = NULL;
 
     if ( (addr = SCMalloc(sizeof(struct in_addr))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixValidateIPV4Address. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -86,7 +86,7 @@ struct in6_addr *SCRadixValidateIPV6Address(const char *addr_str)
     struct in6_addr *addr = NULL;
 
     if ( (addr = SCMalloc(sizeof(struct in6_addr))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixValidateIPV6Address. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -141,9 +141,9 @@ static SCRadixUserData *SCRadixAllocSCRadixUserData(uint8_t netmask, void *user)
 {
     SCRadixUserData *user_data = SCMalloc(sizeof(SCRadixUserData));
     if (user_data == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
+        return NULL;
     }
+
     memset(user_data, 0, sizeof(SCRadixUserData));
 
     user_data->netmask = netmask;
@@ -236,16 +236,14 @@ static SCRadixPrefix *SCRadixCreatePrefix(uint8_t *key_stream,
         return NULL;
     }
 
-    if ( (prefix = SCMalloc(sizeof(SCRadixPrefix))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
-    }
+    if ( (prefix = SCMalloc(sizeof(SCRadixPrefix))) == NULL)
+        goto error;
+
     memset(prefix, 0, sizeof(SCRadixPrefix));
 
-    if ( (prefix->stream = SCMalloc(key_bitlen / 8)) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
-    }
+    if ( (prefix->stream = SCMalloc(key_bitlen / 8)) == NULL)
+        goto error;
+
     memset(prefix->stream, 0, key_bitlen / 8);
 
     memcpy(prefix->stream, key_stream, key_bitlen / 8);
@@ -253,6 +251,13 @@ static SCRadixPrefix *SCRadixCreatePrefix(uint8_t *key_stream,
     prefix->user_data = SCRadixAllocSCRadixUserData(netmask, user);
 
     return prefix;
+
+error:
+    if (prefix != NULL) {
+        SCFree(prefix);
+    }
+
+    return NULL;
 }
 
 /**
@@ -462,7 +467,7 @@ static inline SCRadixNode *SCRadixCreateNode()
     SCRadixNode *node = NULL;
 
     if ( (node = SCMalloc(sizeof(SCRadixNode))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixCreateNode. Exiting...");
         exit(EXIT_FAILURE);
     }
     memset(node, 0, sizeof(SCRadixNode));
@@ -480,6 +485,10 @@ static void SCRadixReleaseNode(SCRadixNode *node, SCRadixTree *tree)
 {
     if (node != NULL) {
         SCRadixReleasePrefix(node->prefix, tree);
+
+        if (node->netmasks != NULL)
+            SCFree(node->netmasks);
+
         SCFree(node);
     }
 
@@ -499,7 +508,7 @@ SCRadixTree *SCRadixCreateRadixTree(void (*Free)(void*), void (*PrintData)(void*
     SCRadixTree *tree = NULL;
 
     if ( (tree = SCMalloc(sizeof(SCRadixTree))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixCreateRadixTree. Exiting...");
         exit(EXIT_FAILURE);
     }
     memset(tree, 0, sizeof(SCRadixTree));
@@ -580,17 +589,17 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
     int j = 0;
     int temp = 0;
 
+    if (tree == NULL) {
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "Argument \"tree\" NULL");
+        return NULL;
+    }
+
     /* chop the ip address against a netmask */
     SCRadixChopIPAddressAgainstNetmask(key_stream, netmask, key_bitlen);
 
     if ( (prefix = SCRadixCreatePrefix(key_stream, key_bitlen, user,
                                        netmask)) == NULL) {
         SCLogError(SC_ERR_RADIX_TREE_GENERIC, "Error creating prefix");
-        return NULL;
-    }
-
-    if (tree == NULL) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT, "Argument \"tree\" NULL");
         return NULL;
     }
 
@@ -602,6 +611,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
         tree->head = node;
         if (netmask == 255 || (netmask == 32 && key_bitlen == 32) || (netmask == 128 && key_bitlen == 128))
             return node;
+
         /* if we have reached here, we are actually having a proper netblock in
          * our hand(i.e. < 32 for ipv4 and < 128 for ipv6).  Add the netmask for
          * this node.  The reason we add netmasks other than 32 and 128, is
@@ -613,7 +623,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
         node->netmask_cnt++;
         if ( (node->netmasks = SCRealloc(node->netmasks, (node->netmask_cnt *
                                                         sizeof(uint8_t)))) == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixAddKey. Exiting...");
             exit(EXIT_FAILURE);
         }
         node->netmasks[0] = netmask;
@@ -731,7 +741,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
                 node->netmask_cnt++;
                 if ( (node->netmasks = SCRealloc(node->netmasks, (node->netmask_cnt *
                                                                 sizeof(uint8_t)))) == NULL) {
-                    SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+                    SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixAddKey. Exiting...");
                     exit(EXIT_FAILURE);
                 }
 
@@ -803,7 +813,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
 
             if ( (inter_node->netmasks = SCMalloc((node->netmask_cnt - i) *
                                                 sizeof(uint8_t))) == NULL) {
-                SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+                SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixAddKey. Exiting...");
                 exit(EXIT_FAILURE);
             }
 
@@ -851,7 +861,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
         node->netmask_cnt++;
         if ( (node->netmasks = SCRealloc(node->netmasks, (node->netmask_cnt *
                                                         sizeof(uint8_t)))) == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixAddKey. Exiting...");
             exit(EXIT_FAILURE);
         }
 
@@ -1084,10 +1094,8 @@ static void SCRadixTransferNetmasksBWNodes(SCRadixNode *dest, SCRadixNode *src)
 
     if ( (dest->netmasks = SCRealloc(dest->netmasks,
                                    (src->netmask_cnt + dest->netmask_cnt) *
-                                   sizeof(uint8_t))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
-    }
+                                   sizeof(uint8_t))) == NULL)
+        return;
 
     for (i = dest->netmask_cnt, j = 0; j < src->netmask_cnt; i++, j++)
         dest->netmasks[i] = src->netmasks[j];
@@ -1149,10 +1157,8 @@ static void SCRadixRemoveNetblockEntry(SCRadixNode *node, uint8_t netmask)
     }
 
     node->netmasks = SCRealloc(node->netmasks, node->netmask_cnt * sizeof(uint8_t));
-    if (node->netmasks == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory using realloc");
-        exit(EXIT_FAILURE);
-    }
+    if (node->netmasks == NULL)
+        return;
 
     return;
 }
@@ -3178,6 +3184,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch15(void)
 
     for (; i <= 32; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, i);
@@ -3232,6 +3243,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch16(void)
 
     for (; i <= 32; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, i);
@@ -3286,6 +3302,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch17(void)
 
     for (; i <= 32; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, i);
@@ -3340,6 +3361,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch18(void)
 
     for (; i <= 32; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, i);
@@ -3391,6 +3417,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch19(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 100;
 
     SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, 0);
@@ -3426,6 +3457,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch19(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 200;
 
     SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, 8);
@@ -3485,6 +3521,11 @@ int SCRadixTestIPV4NetBlocksAndBestSearch19(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 300;
 
     SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, user, 12);
@@ -3616,6 +3657,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch20(void)
 
     for (; i <= 128; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, i);
@@ -3670,6 +3716,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch21(void)
 
     for (; i <= 128; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, i);
@@ -3724,6 +3775,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch22(void)
 
     for (; i <= 128; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, i);
@@ -3778,6 +3834,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch23(void)
 
     for (; i <= 128; i++) {
         user = SCMalloc(sizeof(uint32_t));
+        if (user == NULL) {
+            result = 0;
+            goto end;
+        }
+
         *user = i;
 
         SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, i);
@@ -3829,6 +3890,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch24(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 100;
 
     SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, 0);
@@ -3864,6 +3930,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch24(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 200;
 
     SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, 8);
@@ -3925,6 +3996,11 @@ int SCRadixTestIPV6NetBlocksAndBestSearch24(void)
     }
 
     user = SCMalloc(sizeof(uint32_t));
+    if (user == NULL) {
+        result = 0;
+        goto end;
+    }
+
     *user = 300;
 
     SCRadixAddKeyIPV6Netblock((uint8_t *)&servaddr.sin6_addr, tree, user, 12);

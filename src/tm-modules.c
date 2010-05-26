@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -72,10 +72,7 @@ LogFileCtx *LogFileNewCtx()
     lf_ctx=(LogFileCtx*)SCMalloc(sizeof(LogFileCtx));
 
     if(lf_ctx == NULL)
-    {
-        SCLogError(SC_ERR_MEM_ALLOC, "Couldn't SCMalloc");
         return NULL;
-    }
     memset(lf_ctx, 0, sizeof(LogFileCtx));
 
     SCMutexInit(&lf_ctx->fp_mutex,NULL);

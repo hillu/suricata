@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -40,6 +40,7 @@
 #include "util-debug.h"
 #include "util-spm-bm.h"
 #include "threads.h"
+#include "util-unittest-helper.h"
 
 int DetectContentMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
 static int DetectContentSetup (DetectEngineCtx *, Signature *, char *);
@@ -57,8 +58,7 @@ void DetectContentRegister (void) {
 
 /* pass on the content_max_id */
 uint32_t DetectContentMaxId(DetectEngineCtx *de_ctx) {
-    //SCLogDebug("DetectContentMaxId: %" PRIu32 "", de_ctx->content_max_id);
-    return de_ctx->content_max_id;
+    return MpmPatternIdStoreGetMaxId(de_ctx->mpm_pattern_id_store);
 }
 
 DetectContentData *DetectContentParse (char *contentstr)
@@ -81,10 +81,8 @@ DetectContentData *DetectContentParse (char *contentstr)
     }
 
     cd = SCMalloc(sizeof(DetectContentData));
-    if (cd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed");
+    if (cd == NULL)
         goto error;
-    }
     memset(cd, 0, sizeof(DetectContentData));
 
     /* skip the first spaces */
@@ -432,7 +430,7 @@ static int DetectContentSetup (DetectEngineCtx *de_ctx, Signature *s, char *cont
 
     sm->type = DETECT_CONTENT;
     sm->ctx = (void *)cd;
-    cd->id = DetectContentGetId(de_ctx, cd);
+    cd->id = DetectContentGetId(de_ctx->mpm_pattern_id_store, cd);
 
     DetectContentPrint(cd);
 
@@ -460,121 +458,6 @@ void DetectContentFree(void *ptr) {
         SCFree(cd->content);
 
     SCFree(cd);
-}
-
-/* content hash
- * A per detection engine hash to make sure each pattern has a unique global id
- * but pattern that are the same share id's.
- */
-
-typedef struct DetectContentTableElmt_ {
-    uint8_t *pattern;       /**< ptr to the pattern */
-    uint16_t pattern_len;   /**< pattern len */
-    uint32_t id;            /**< pattern id */
-} DetectContentTableElmt;
-
-static char DetectContentTableCompare(void *p1, uint16_t len1, void *p2, uint16_t len2) {
-    SCEnter();
-    BUG_ON(len1 < sizeof(DetectContentTableElmt));
-    BUG_ON(len2 < sizeof(DetectContentTableElmt));
-
-    DetectContentTableElmt *e1 = (DetectContentTableElmt *)p1;
-    DetectContentTableElmt *e2 = (DetectContentTableElmt *)p2;
-
-    if (e1->pattern_len != e2->pattern_len) {
-        SCReturnInt(0);
-    }
-
-    if (memcmp(e1->pattern, e2->pattern, e1->pattern_len) != 0) {
-        SCReturnInt(0);
-    }
-
-    SCReturnInt(1);
-}
-
-static uint32_t DetectContentTableHash(HashTable *ht, void *p, uint16_t len) {
-    SCEnter();
-    BUG_ON(len < sizeof(DetectContentTableElmt));
-
-    DetectContentTableElmt *e = (DetectContentTableElmt *)p;
-    uint32_t hash = e->pattern_len;
-    uint16_t u = 0;
-
-    for (u = 0; u < e->pattern_len; u++) {
-        hash += e->pattern[u];
-    }
-
-    SCReturnUInt(hash % ht->array_size);
-}
-
-static void DetectContentTableElmtFree(void *e) {
-    DetectContentTableElmt *c = (DetectContentTableElmt *)e;
-    free(c->pattern);
-    free(e);
-}
-
-int DetectContentTableInitHash(DetectEngineCtx *de_ctx) {
-    SCEnter();
-
-    BUG_ON(de_ctx == NULL);
-
-    de_ctx->content_hash = HashTableInit(65536, DetectContentTableHash, DetectContentTableCompare, DetectContentTableElmtFree);
-
-    BUG_ON(de_ctx->content_hash == NULL);
-
-    SCReturnInt(0);
-}
-
-void DetectContentTableFreeHash(DetectEngineCtx *de_ctx) {
-   SCEnter();
-
-    if (de_ctx == NULL || de_ctx->content_hash == NULL) {
-        SCReturn;
-    }
-
-    HashTableFree(de_ctx->content_hash);
-    SCReturn;
-}
-
-uint32_t DetectContentGetId(DetectEngineCtx *de_ctx, DetectContentData *co) {
-    SCEnter();
-
-    BUG_ON(de_ctx == NULL || de_ctx->content_hash == NULL);
-
-    DetectContentTableElmt *e = NULL;
-    DetectContentTableElmt *r = NULL;
-    uint32_t id = 0;
-
-    e = malloc(sizeof(DetectContentTableElmt));
-    BUG_ON(e == NULL);
-    e->pattern = SCMalloc(co->content_len);
-    BUG_ON(e->pattern == NULL);
-    memcpy(e->pattern, co->content, co->content_len);
-    e->pattern_len = co->content_len;
-    e->id = 0;
-
-    r = HashTableLookup(de_ctx->content_hash, (void *)e, sizeof(DetectContentTableElmt));
-    if (r == NULL) {
-        e->id = de_ctx->content_max_id;
-        de_ctx->content_max_id++;
-        id = e->id;
-
-        int ret = HashTableAdd(de_ctx->content_hash, e, sizeof(DetectContentTableElmt));
-        BUG_ON(ret != 0);
-
-        e = NULL;
-
-        de_ctx->content_hash_unique++;
-    } else {
-        id = r->id;
-
-        de_ctx->content_hash_shared++;
-    }
-
-    if (e != NULL)
-        free(e);
-
-    SCReturnUInt(id);
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
@@ -1541,6 +1424,55 @@ static int SigTest75TestNegatedContent(void)
     return SigTestPositiveTestContent("alert tcp any any -> any any (msg:\"HTTP URI cap\"; content:\"USER\"; content:\"!PASS\"; sid:1;)",  (uint8_t *)"USER !PASS");
 }
 
+static int SigTest76TestBug134(void)
+{
+    uint8_t *buf = (uint8_t *)"test detect ${IFS} in traffic";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    p->dp = 515;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    char sig[] = "alert tcp any any -> any 515 "
+            "(msg:\"detect IFS\"; flow:to_server,established; content:\"${IFS}\";"
+            " depth:50; offset:0; sid:900091; rev:1;)";
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int SigTest77TestBug139(void)
+{
+    uint8_t buf[] = {
+        0x12, 0x23, 0x34, 0x35, 0x52, 0x52, 0x24, 0x42, 0x22, 0x24,
+        0x52, 0x24, 0x82, 0x00, 0x00, 0x00, 0x00, 0x00, 0x24, 0x34 };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_UDP);
+    int result = 0;
+
+    p->dp = 53;
+    char sig[] = "alert udp any any -> any 53 (msg:\"dns testing\";"
+                    " content:\"|00 00|\"; depth:5; offset:13; sid:9436601;"
+                    " rev:1;)";
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
 #endif /* UNITTESTS */
 
 /**
@@ -1616,6 +1548,9 @@ void DetectContentRegisterTests(void)
     UtRegisterTest("SigTest73TestNegatedContent", SigTest73TestNegatedContent, 1);
     UtRegisterTest("SigTest74TestNegatedContent", SigTest74TestNegatedContent, 1);
     UtRegisterTest("SigTest75TestNegatedContent", SigTest75TestNegatedContent, 1);
+
+    UtRegisterTest("SigTest76TestBug134", SigTest76TestBug134, 1);
+    UtRegisterTest("SigTest77TestBug139", SigTest77TestBug139, 1);
 
 #endif /* UNITTESTS */
 }

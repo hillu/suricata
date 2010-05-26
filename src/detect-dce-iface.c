@@ -123,10 +123,8 @@ static inline DetectDceIfaceData *DetectDceIfaceArgParse(const char *arg)
         goto error;
     }
 
-    if ( (did = SCMalloc(sizeof(DetectDceIfaceData))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+    if ( (did = SCMalloc(sizeof(DetectDceIfaceData))) == NULL)
         goto error;
-    }
     memset(did, 0, sizeof(DetectDceIfaceData));
 
     /* retrieve the iface uuid string.  iface uuid is a compulsion in the keyword */
@@ -399,11 +397,11 @@ static int DetectDceIfaceTestParse01(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -439,11 +437,11 @@ static int DetectDceIfaceTestParse02(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,>1") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -479,11 +477,11 @@ static int DetectDceIfaceTestParse03(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,<10") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     result &= 1;
     for (i = 0; i < 16; i++) {
@@ -515,11 +513,11 @@ static int DetectDceIfaceTestParse04(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,!10") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -555,11 +553,11 @@ static int DetectDceIfaceTestParse05(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,=10") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -595,11 +593,11 @@ static int DetectDceIfaceTestParse06(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,any_frag") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -635,11 +633,11 @@ static int DetectDceIfaceTestParse07(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,>1,any_frag") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -673,11 +671,11 @@ static int DetectDceIfaceTestParse08(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,<1,any_frag") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -713,7 +711,7 @@ static int DetectDceIfaceTestParse09(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,=1,any_frag") == 0);
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -749,11 +747,11 @@ static int DetectDceIfaceTestParse10(void)
 
     result = (DetectDceIfaceSetup(NULL, s, "12345678-1234-1234-1234-123456789ABC,!1,any_frag") == 0);
 
-    if (s->match == NULL) {
+    if (s->amatch == NULL) {
         SCReturnInt(0);
     }
 
-    temp = s->match;
+    temp = s->amatch;
     did = temp->ctx;
     if (did == NULL) {
         SCReturnInt(0);
@@ -864,8 +862,7 @@ static int DetectDceIfaceTestParse12(void)
 
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx,
-                                   "alert tcp any any -> any any "
+    s = DetectEngineAppendSig(de_ctx,"alert tcp any any -> any any "
                                    "(msg:\"DCERPC\"; "
                                    "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5,=0,any_frag; "
                                    "sid:1;)");
@@ -874,6 +871,8 @@ static int DetectDceIfaceTestParse12(void)
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    SCLogDebug("handling to_server chunk");
 
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
@@ -891,8 +890,12 @@ static int DetectDceIfaceTestParse12(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match (1): ");
         goto end;
+    }
+
+    SCLogDebug("handling to_client chunk");
 
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
@@ -904,12 +907,14 @@ static int DetectDceIfaceTestParse12(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sid 1 matched, but shouldn't have: ");
         goto end;
+    }
 
     result = 1;
 
- end:
+end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
@@ -1038,14 +1043,14 @@ static int DetectDceIfaceTestParse13(void)
     uint32_t dcerpc_bind_len = sizeof(dcerpc_bind);
     uint32_t dcerpc_bindack_len = sizeof(dcerpc_bindack);
 
-    uint32_t dcerpc_request1_len = sizeof(dcerpc_request1_len);
-    uint32_t dcerpc_response1_len = sizeof(dcerpc_response1_len);
+    uint32_t dcerpc_request1_len = sizeof(dcerpc_request1);
+    uint32_t dcerpc_response1_len = sizeof(dcerpc_response1);
 
-    uint32_t dcerpc_request2_len = sizeof(dcerpc_request2_len);
-    uint32_t dcerpc_response2_len = sizeof(dcerpc_response2_len);
+    uint32_t dcerpc_request2_len = sizeof(dcerpc_request2);
+    uint32_t dcerpc_response2_len = sizeof(dcerpc_response2);
 
-    uint32_t dcerpc_request3_len = sizeof(dcerpc_request3_len);
-    uint32_t dcerpc_response3_len = sizeof(dcerpc_response3_len);
+    uint32_t dcerpc_request3_len = sizeof(dcerpc_request3);
+    uint32_t dcerpc_response3_len = sizeof(dcerpc_response3);
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
@@ -1059,6 +1064,7 @@ static int DetectDceIfaceTestParse13(void)
     p.proto = IPPROTO_TCP;
 
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
     ssn.alproto = ALPROTO_DCERPC;
@@ -1072,16 +1078,15 @@ static int DetectDceIfaceTestParse13(void)
 
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx,
-                                   "alert tcp any any -> any any "
-                                   "(msg:\"DCERPC\"; "
-                                   "dce_iface:338cd001-2244-31f1-aaaa-900038001003,=1,any_frag; "
-                                   "sid:1;)");
+    s = DetectEngineAppendSig(de_ctx,"alert tcp any any -> any any "
+            "(msg:\"DCERPC\"; dce_iface:338cd001-2244-31f1-aaaa-900038001003,=1,any_frag; sid:1;)");
     if (s == NULL)
         goto end;
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    SCLogDebug("chunk 1, bind");
 
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
@@ -1099,8 +1104,12 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sig 1 didn't match after bind request: ");
         goto end;
+    }
+
+    SCLogDebug("chunk 2, bind_ack");
 
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
@@ -1112,8 +1121,12 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sig 1 matched again after bind ack: ");
         goto end;
+    }
+
+    SCLogDebug("chunk 3, request 1");
 
     /* request1 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request1,
@@ -1126,8 +1139,12 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sig 1 didn't match after request1: ");
         goto end;
+    }
+
+    SCLogDebug("sending response1");
 
     /* response1 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response1,
@@ -1140,8 +1157,12 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sig 1 matched after response1, but shouldn't: ");
         goto end;
+    }
+
+    SCLogDebug("sending request2");
 
     /* request2 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request2,
@@ -1154,8 +1175,10 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sig 1 didn't match after request2: ");
         goto end;
+    }
 
     /* response2 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response2,
@@ -1168,8 +1191,10 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sig 1 matched after response2, but shouldn't have: ");
         goto end;
+    }
 
     /* request3 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request3,
@@ -1182,8 +1207,10 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sig 1 didn't match after request3: ");
         goto end;
+    }
 
     /* response3 */
     r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT | STREAM_EOF,
@@ -1196,8 +1223,10 @@ static int DetectDceIfaceTestParse13(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sig 1 matched after response3, but shouldn't have: ");
         goto end;
+    }
 
     result = 1;
 
@@ -1281,8 +1310,7 @@ static int DetectDceIfaceTestParse14(void)
 
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx,
-                                   "alert tcp any any -> any any "
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"DCERPC\"; "
                                    "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5,=0; "
                                    "sid:1;)");
@@ -1321,8 +1349,10 @@ static int DetectDceIfaceTestParse14(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    if (!PacketAlertCheck(&p, 1))
+    if (PacketAlertCheck(&p, 1)) {
+        printf("sig 1 matched but shouldn't have: ");
         goto end;
+    }
 
     result = 1;
 

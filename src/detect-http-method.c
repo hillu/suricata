@@ -101,7 +101,7 @@ int DetectHttpMethodMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     SCMutexLock(&f->m);
-    for (idx = hs->new_in_tx_index;
+    for (idx = 0;//hs->new_in_tx_index;
          idx < list_size(hs->connp->conn->transactions); idx++)
     {
         tx = list_get(hs->connp->conn->transactions, idx);
@@ -196,10 +196,8 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
     }
 
     data = SCMalloc(sizeof(DetectHttpMethodData));
-    if (data == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed");
+    if (data == NULL)
         goto error;
-    }
 
     data->content_len = ((DetectContentData *)pm->ctx)->content_len;
     data->content = ((DetectContentData *)pm->ctx)->content;

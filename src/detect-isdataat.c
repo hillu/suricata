@@ -40,6 +40,8 @@
 
 #include "util-debug.h"
 #include "util-byte.h"
+#include "detect-pcre.h"
+#include "detect-bytejump.h"
 
 /**
  * \brief Regex for parsing our isdataat options
@@ -170,10 +172,8 @@ DetectIsdataatData *DetectIsdataatParse (char *isdataatstr)
         }
 
         idad = SCMalloc(sizeof(DetectIsdataatData));
-        if (idad == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
+        if (idad == NULL)
             goto error;
-        }
 
         idad->flags = 0;
         idad->dataat = 0;
@@ -248,19 +248,38 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
         SigMatch *pm = NULL;
         /** Search for the first previous DetectContent
          * SigMatch (it can be the same as this one) */
-        pm = DetectContentGetLastPattern(s->pmatch_tail);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
-            return -1;
-        }
+        pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_CONTENT);
+        if (pm != NULL) {
+            cd = (DetectContentData *)pm->ctx;
+            if (cd == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
 
-        cd = (DetectContentData *)pm->ctx;
-        if (cd == NULL) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
-            return -1;
-        }
+            cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_PCRE)) != NULL) {
 
-        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+            DetectPcreData *pe = NULL;
+            pe = (DetectPcreData *) pm->ctx;
+            if (pe == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            pe->flags |= DETECT_PCRE_RELATIVE;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_BYTEJUMP)) !=
+                NULL)
+        {
+            DetectBytejumpData *data = NULL;
+            data = (DetectBytejumpData *)pm->ctx;
+            if (data == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            data->flags |= DETECT_BYTEJUMP_RELATIVE;
+        } else {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+        }
     }
 
     sm = SigMatchAlloc();
@@ -381,6 +400,68 @@ int DetectIsdataatTestPacket01 (void) {
 end:
     return result;
 }
+
+/**
+ * \test DetectIsdataatTestPacket02 is a test to check matches of
+ * isdataat, and isdataat relative works if the previous keyword is pcre
+ * (bug 144)
+ */
+int DetectIsdataatTestPacket02 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre with"
+            " isdataat + relative\"; pcre:\"/A(ll|pp)WorkAndNoPlayMakesWillA"
+            "DullBoy/\"; isdataat:96,relative; sid:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
+
+/**
+ * \test DetectIsdataatTestPacket03 is a test to check matches of
+ * isdataat, and isdataat relative works if the previous keyword is byte_jump
+ * (bug 146)
+ */
+int DetectIsdataatTestPacket03 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"byte_jump match = 0 "
+    "with distance content HTTP/1. relative against HTTP/1.0\"; byte_jump:1,"
+    "46,string,dec; isdataat:87,relative; sid:109; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
 #endif
 
 /**
@@ -392,5 +473,7 @@ void DetectIsdataatRegisterTests(void) {
     UtRegisterTest("DetectIsdataatTestParse02", DetectIsdataatTestParse02, 1);
     UtRegisterTest("DetectIsdataatTestParse03", DetectIsdataatTestParse03, 1);
     UtRegisterTest("DetectIsdataatTestPacket01", DetectIsdataatTestPacket01, 1);
+    UtRegisterTest("DetectIsdataatTestPacket02", DetectIsdataatTestPacket02, 1);
+    UtRegisterTest("DetectIsdataatTestPacket03", DetectIsdataatTestPacket03, 1);
     #endif
 }

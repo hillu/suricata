@@ -132,8 +132,30 @@ SigTableElmt *SigTableGet(char *name) {
 }
 
 /**
- * \brief SigMatchAppendUricontent, append a SigMatch of type uricontent
- *        to the Signature structure
+ * \brief append a app layer SigMatch to the Signature structure
+ * \param s pointer to the Signature
+ * \param new pointer to the SigMatch of type uricontent to be appended
+ */
+void SigMatchAppendAppLayer(Signature *s, SigMatch *new) {
+    if (s->amatch == NULL) {
+        s->amatch = new;
+        s->amatch_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->amatch_tail;
+        cur->next = new;
+        new->prev = cur;
+        new->next = NULL;
+        s->amatch_tail = new;
+    }
+
+    new->idx = s->sm_cnt;
+    s->sm_cnt++;
+}
+
+/**
+ * \brief append a SigMatch of type uricontent to the Signature structure
  * \param s pointer to the Signature
  * \param new pointer to the SigMatch of type uricontent to be appended
  */
@@ -199,7 +221,7 @@ void SigMatchAppendPacket(Signature *s, SigMatch *new) {
     s->sm_cnt++;
 }
 
-/** \brief Pull a content 'old' from the pmatch list, append 'new' to match list.
+/** \brief Pull a content 'old' from the pmatch list, append 'new' to amatch list.
   * Used for replacing contents that have http_cookie, etc modifiers.
   */
 void SigMatchReplaceContent(Signature *s, SigMatch *old, SigMatch *new) {
@@ -239,20 +261,20 @@ void SigMatchReplaceContent(Signature *s, SigMatch *old, SigMatch *new) {
 
     /* finally append the "new" sig match to the app layer list */
     /** \todo if the app layer gets it's own list, adapt this code */
-    if (s->match == NULL) {
-        s->match = new;
-        s->match_tail = new;
+    if (s->amatch == NULL) {
+        s->amatch = new;
+        s->amatch_tail = new;
         new->next = NULL;
         new->prev = NULL;
     } else {
-        SigMatch *cur = s->match;
+        SigMatch *cur = s->amatch;
 
         for ( ; cur->next != NULL; cur = cur->next);
 
         cur->next = new;
         new->next = NULL;
         new->prev = cur;
-        s->match_tail = new;
+        s->amatch_tail = new;
     }
 
     /* move over the idx */
@@ -534,7 +556,7 @@ int SigParsePort(Signature *s, const char *portstr, char flag)
 /** \retval 1 valid
  *  \retval 0 invalid
  */
-static int SigParseActionRejectValidate(void) {
+static int SigParseActionRejectValidate(const char *action) {
 #ifdef HAVE_LIBNET11
 #ifdef HAVE_LIBCAP_NG
     if (sc_set_caps == TRUE) {
@@ -555,9 +577,9 @@ static int SigParseActionRejectValidate(void) {
 
 /**
  * \brief Parses the action that has been used by the Signature and allots it
- *        to its Signatue instance.
+ *        to its Signature instance.
  *
- * \param s      Pointer to the Signatue instance to which the action belongs.
+ * \param s      Pointer to the Signature instance to which the action belongs.
  * \param action Pointer to the action string used by the Signature.
  *
  * \retval  0 On successfully parsing the action string and adding it to the
@@ -575,22 +597,22 @@ int SigParseAction(Signature *s, const char *action) {
         s->action = ACTION_PASS;
         return 0;
     } else if (strcasecmp(action, "reject") == 0) {
-        if (!(SigParseActionRejectValidate()))
+        if (!(SigParseActionRejectValidate(action)))
             return -1;
         s->action = ACTION_REJECT;
         return 0;
     } else if (strcasecmp(action, "rejectsrc") == 0) {
-        if (!(SigParseActionRejectValidate()))
+        if (!(SigParseActionRejectValidate(action)))
             return -1;
         s->action = ACTION_REJECT;
         return 0;
     } else if (strcasecmp(action, "rejectdst") == 0) {
-        if (!(SigParseActionRejectValidate()))
+        if (!(SigParseActionRejectValidate(action)))
             return -1;
         s->action = ACTION_REJECT_DST;
         return 0;
     } else if (strcasecmp(action, "rejectboth") == 0) {
-        if (!(SigParseActionRejectValidate()))
+        if (!(SigParseActionRejectValidate(action)))
             return -1;
         s->action = ACTION_REJECT_BOTH;
         return 0;
@@ -841,7 +863,11 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
             if (ud == NULL)
                 continue;
 
-            sig->flags |= SIG_FLAG_MPM;
+            sig->flags |= SIG_FLAG_MPM_URI;
+
+            if (ud->flags & DETECT_URICONTENT_NEGATED) {
+                sig->flags |= SIG_FLAG_MPM_URI_NEG;
+            }
         }
     }
 
@@ -850,7 +876,6 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
     /* determine the length of the longest pattern in the sig */
     if (sig->flags & SIG_FLAG_MPM) {
         sig->mpm_content_maxlen = 0;
-        sig->mpm_uricontent_maxlen = 0;
 
         for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_CONTENT) {
@@ -864,6 +889,9 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
                     sig->mpm_content_maxlen = cd->content_len;
             }
         }
+    }
+    if (sig->flags & SIG_FLAG_MPM_URI) {
+        sig->mpm_uricontent_maxlen = 0;
 
         for (sm = sig->umatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_URICONTENT) {
@@ -963,7 +991,11 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
             if (ud == NULL)
                 continue;
 
-            sig->flags |= SIG_FLAG_MPM;
+            sig->flags |= SIG_FLAG_MPM_URI;
+
+            if (ud->flags & DETECT_URICONTENT_NEGATED) {
+                sig->flags |= SIG_FLAG_MPM_URI_NEG;
+            }
         }
     }
 
@@ -972,7 +1004,6 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
     /* determine the length of the longest pattern in the sig */
     if (sig->flags & SIG_FLAG_MPM) {
         sig->mpm_content_maxlen = 0;
-        sig->mpm_uricontent_maxlen = 0;
 
         for (sm = sig->pmatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_CONTENT) {
@@ -986,6 +1017,9 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
                     sig->mpm_content_maxlen = cd->content_len;
             }
         }
+    }
+    if (sig->flags & SIG_FLAG_MPM_URI) {
+        sig->mpm_uricontent_maxlen = 0;
 
         for (sm = sig->umatch; sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_URICONTENT) {
@@ -1018,7 +1052,6 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
         /* determine the length of the longest pattern in the sig */
         if (sig->next->flags & SIG_FLAG_MPM) {
             sig->next->mpm_content_maxlen = 0;
-            sig->next->mpm_uricontent_maxlen = 0;
 
             SigMatch *sm;
             for (sm = sig->next->pmatch; sm != NULL; sm = sm->next) {
@@ -1033,11 +1066,16 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
                         sig->next->mpm_content_maxlen = cd->content_len;
                 }
             }
+        }
+        if (sig->next->flags & SIG_FLAG_MPM_URI) {
+            sig->next->mpm_uricontent_maxlen = 0;
+
             for (sm = sig->next->umatch; sm != NULL; sm = sm->next) {
                 if (sm->type == DETECT_URICONTENT) {
                     DetectUricontentData *ud = (DetectUricontentData *)sm->ctx;
                     if (ud == NULL)
                         continue;
+
                     if (sig->next->mpm_uricontent_maxlen == 0)
                         sig->next->mpm_uricontent_maxlen = ud->uricontent_len;
                     if (sig->next->mpm_uricontent_maxlen < ud->uricontent_len)

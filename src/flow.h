@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -132,6 +132,9 @@ typedef struct Flow_
 
     /** how many pkts and stream msgs are using the flow *right now* */
     uint16_t use_cnt;
+
+    /** detection engine state */
+    struct DetectEngineState_ *de_state;
 
     SCMutex m;
 

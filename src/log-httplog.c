@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -125,6 +125,18 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     if (proto != ALPROTO_HTTP)
         goto end;
 
+    int r = AppLayerTransactionGetLoggedId(p->flow);
+    if (r < 0) {
+        goto end;
+    }
+    size_t logged = (size_t)r;
+
+    r = AppLayerTransactionGetLoggableId(p->flow);
+    if (r < 0) {
+        goto end;
+    }
+    size_t loggable = (size_t)r;
+
     HtpState *htp_state = (HtpState *)AppLayerGetProtoStateFromPacket(p);
     if (htp_state == NULL) {
         SCLogDebug("no http state, so no request logging");
@@ -134,10 +146,6 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     if (htp_state->connp == NULL)
         goto end;
 
-    if (!(htp_state->flags & HTP_FLAG_NEW_REQUEST)) {
-        SCLogDebug("no new http request , so no request logging");
-        goto end;
-    }
     htp_tx_t *tx = NULL;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
@@ -158,8 +166,7 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     }
 
     SCMutexLock(&aft->file_ctx->fp_mutex);
-    for (idx = htp_state->new_in_tx_index;
-         idx < list_size(htp_state->connp->conn->transactions); idx++)
+    for (idx = logged; idx < loggable; idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL) {
@@ -206,11 +213,12 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
                 srcip, sp, dstip, dp);
 
         aft->uri_cnt ++;
+
+        AppLayerTransactionUpdateLoggedId(p->flow);
     }
     fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
-    htp_state->flags &= ~HTP_FLAG_NEW_REQUEST;
 end:
     SCMutexUnlock(&p->flow->m);
     SCReturnInt(TM_ECODE_OK);
@@ -234,6 +242,18 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     if (proto != ALPROTO_HTTP)
         goto end;
 
+    int r = AppLayerTransactionGetLoggedId(p->flow);
+    if (r < 0) {
+        goto end;
+    }
+    size_t logged = (size_t)r;
+
+    r = AppLayerTransactionGetLoggableId(p->flow);
+    if (r < 0) {
+        goto end;
+    }
+    size_t loggable = (size_t)r;
+
     HtpState *htp_state = (HtpState *)AppLayerGetProtoStateFromPacket(p);
     if (htp_state == NULL) {
         SCLogDebug("no http state, so no request logging");
@@ -243,10 +263,6 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     if (htp_state->connp == NULL)
         goto end;
 
-    if (!(htp_state->flags & HTP_FLAG_NEW_REQUEST)) {
-        SCLogDebug("no new http request , so no request logging");
-        goto end;
-    }
     htp_tx_t *tx = NULL;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
@@ -267,8 +283,7 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
         dp = p->sp;
     }
     SCMutexLock(&aft->file_ctx->fp_mutex);
-    for (idx = htp_state->new_in_tx_index;
-         idx < list_size(htp_state->connp->conn->transactions); idx++)
+    for (idx = logged; idx < loggable; idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL) {
@@ -315,11 +330,12 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
                 srcip, sp, dstip, dp);
 
         aft->uri_cnt++;
+
+        AppLayerTransactionUpdateLoggedId(p->flow);
     }
     fflush(aft->file_ctx->fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
 
-    htp_state->flags &= ~HTP_FLAG_NEW_REQUEST;
 end:
     SCMutexUnlock(&p->flow->m);
     SCReturnInt(TM_ECODE_OK);
@@ -350,9 +366,8 @@ TmEcode LogHttpLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 TmEcode LogHttpLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     LogHttpLogThread *aft = SCMalloc(sizeof(LogHttpLogThread));
-    if (aft == NULL) {
+    if (aft == NULL)
         return TM_ECODE_FAILED;
-    }
     memset(aft, 0, sizeof(LogHttpLogThread));
 
     if(initdata == NULL)
@@ -361,8 +376,11 @@ TmEcode LogHttpLogThreadInit(ThreadVars *t, void *initdata, void **data)
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
-    /** Use the Ouptut Context (file pointer and mutex) */
+    /* Use the Ouptut Context (file pointer and mutex) */
     aft->file_ctx= ((OutputCtx *)initdata)->data;
+
+    /* enable the logger for the app layer */
+    AppLayerRegisterLogger(ALPROTO_HTTP);
 
     *data = (void *)aft;
     return TM_ECODE_OK;
@@ -418,11 +436,8 @@ OutputCtx *LogHttpLogInitCtx(ConfNode *conf)
         return NULL;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (output_ctx == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,
-            "Failed to allocate OutputCtx for LogHttpLog");
-        exit(EXIT_FAILURE);
-    }
+    if (output_ctx == NULL)
+        return NULL;
     output_ctx->data = file_ctx;
     output_ctx->DeInit = LogHttpLogDeInitCtx;
 

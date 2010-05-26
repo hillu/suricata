@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -182,9 +182,8 @@ void StreamMsgQueuesDeinit(char quiet) {
  *  \retval smq ptr to the queue or NULL */
 StreamMsgQueue *StreamMsgQueueGetNew(void) {
     StreamMsgQueue *smq = SCMalloc(sizeof(StreamMsgQueue));
-    if (smq == NULL) {
+    if (smq == NULL)
         return NULL;
-    }
 
     memset(smq, 0x00, sizeof(StreamMsgQueue));
     SCMutexInit(&smq->mutex_q, NULL);

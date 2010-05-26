@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -400,51 +400,48 @@ typedef struct DecodeThreadVars_
     uint16_t counter_defrag_ipv6_timeouts;
 } DecodeThreadVars;
 
-/* clear key vars so we don't need to call the expensive
- * memset or bzero
+/**
+ *  \brief reset these to -1(indicates that the packet is fresh from the queue)
  */
-#define CLEAR_PACKET(p) { \
-    CLEAR_ADDR(&p->src); \
-    CLEAR_ADDR(&p->dst); \
-    if ((p)->tcph != NULL) { \
-        CLEAR_TCP_PACKET((p)); \
-    } \
-    (p)->ethh = NULL; \
-    (p)->ppph = NULL; \
-    (p)->greh = NULL; \
-    (p)->vlanh = NULL; \
-    (p)->ip4h = NULL; \
-    (p)->ip6h = NULL; \
-    (p)->action = 0; \
-    (p)->pktlen = 0; \
-    (p)->tunnel_pkt = 0; \
-    (p)->tunnel_verdicted = 0; \
-    (p)->rtv_cnt = 0; \
-    (p)->tpr_cnt = 0; \
-    (p)->root = NULL; \
-    (p)->proto = 0; \
-    (p)->sp = 0; \
-    (p)->dp = 0; \
-    (p)->flow = NULL; \
-    (p)->flowflags = 0; \
-    (p)->flags = 0; \
-    (p)->alerts.cnt = 0; \
-    if ((p)->pktvar != NULL) { \
-        PktVarFree((p)->pktvar); \
-    } \
-    (p)->pktvar = NULL; \
-    (p)->recursion_level = 0; \
-    (p)->ts.tv_sec = 0; \
-    (p)->ts.tv_usec = 0; \
-}
-
-/* reset these to -1(indicates that the packet is fresh from the queue) */
-#define RESET_PACKET_CSUMS(p) { \
+#define PACKET_RESET_CHECKSUMS(p) { \
     (p)->ip4c.comp_csum = -1; \
     (p)->tcpc.comp_csum = -1; \
     (p)->udpc.comp_csum = -1;  \
     (p)->icmpv4c.comp_csum = -1; \
     (p)->icmpv6c.comp_csum = -1; \
+}
+
+/**
+ *  \brief Initialize a packet structure for use.
+ */
+#define PACKET_INITIALIZE(p) { \
+    memset((p), 0x00, sizeof(Packet)); \
+    SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
+    PACKET_RESET_CHECKSUMS((p)); \
+}
+
+/**
+ *  \brief Recycle a packet structure for reuse.
+ *  \todo the mutex destroy & init is necessary because of the memset, reconsider
+ */
+#define PACKET_RECYCLE(p) { \
+    if ((p)->pktvar != NULL) { \
+        PktVarFree((p)->pktvar); \
+    } \
+    SCMutexDestroy(&(p)->mutex_rtv_cnt); \
+    memset((p), 0x00, sizeof(Packet)); \
+    SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
+    PACKET_RESET_CHECKSUMS((p)); \
+}
+
+/**
+ *  \brief Cleanup a packet so that we can free it. No memset needed..
+ */
+#define PACKET_CLEANUP(p) { \
+    if ((p)->pktvar != NULL) { \
+        PktVarFree((p)->pktvar); \
+    } \
+    SCMutexDestroy(&(p)->mutex_rtv_cnt); \
 }
 
 
@@ -490,6 +487,8 @@ typedef struct DecodeThreadVars_
 
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
+Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
+Packet *PacketGetFromQueueOrAlloc(void);
 
 /* decoder functions */
 void DecodeEthernet(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
@@ -508,8 +507,7 @@ void DecodeUDP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, 
 void DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 void DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 
-Packet *SetupPkt (void);
-Packet *TunnelPktSetup(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, uint8_t);
+void AddressDebugPrint(Address *);
 
 /** \brief Set the No payload inspection Flag for the packet.
  *
@@ -566,6 +564,7 @@ Packet *TunnelPktSetup(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, ui
 /*Packet Flags*/
 #define PKT_NOPACKET_INSPECTION         0x01    /**< Flag to indicate that packet header or contents should not be inspected*/
 #define PKT_NOPAYLOAD_INSPECTION        0x02    /**< Flag to indicate that packet contents should not be inspected*/
+#define PKT_ALLOC                       0x04    /**< Packet was alloc'd this run, needs to be freed */
 
 #endif /* __DECODE_H__ */
 

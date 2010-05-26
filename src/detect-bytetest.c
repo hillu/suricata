@@ -31,10 +31,12 @@
 
 #include "detect-content.h"
 #include "detect-bytetest.h"
+#include "detect-bytejump.h"
 
 #include "util-byte.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "detect-pcre.h"
 
 
 /**
@@ -395,10 +397,8 @@ DetectBytetestData *DetectBytetestParse(char *optstr)
 
     /* Initialize the data */
     data = SCMalloc(sizeof(DetectBytetestData));
-    if (data == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed");
+    if (data == NULL)
         goto error;
-    }
     data->base = DETECT_BYTETEST_BASE_UNSET;
     data->flags = 0;
 
@@ -533,14 +533,39 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     if (data->flags & DETECT_BYTETEST_RELATIVE) {
         /** Search for the first previous DetectContent
          * SigMatch (it can be the same as this one) */
-        SigMatch *pm = DetectContentGetLastPattern(s->pmatch_tail);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_BYTETEST_MISSING_CONTENT, "relative bytetest match needs a previous content option");
+        SigMatch *pm = NULL;
+        pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_CONTENT);
+        if (pm != NULL) {
+            DetectContentData *cd = (DetectContentData *) pm->ctx;
+            if (cd == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "relative bytetest match "
+                        "needs a previous content option");
+                goto error;
+            }
+            cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_PCRE)) != NULL) {
+            DetectPcreData *pe = NULL;
+            pe = (DetectPcreData *) pm->ctx;
+            if (pe == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            pe->flags |= DETECT_PCRE_RELATIVE;
+        } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_BYTEJUMP)) !=
+                    NULL)
+        {
+            DetectBytejumpData *data = NULL;
+            data = (DetectBytejumpData *)pm->ctx;
+            if (data == NULL) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                goto error;
+            }
+            data->flags |= DETECT_BYTEJUMP_RELATIVE;
+        } else {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "relative bytetest match "
+                    "needs a previous content option");
             goto error;
         }
-
-        DetectContentData *cd = (DetectContentData *)pm->ctx;
-        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
     }
 
     sm = SigMatchAlloc();
@@ -574,7 +599,7 @@ void DetectBytetestFree(void *ptr)
 
 /* UNITTESTS */
 #ifdef UNITTESTS
-
+#include "util-unittest-helper.h"
 /**
  * \test DetectBytetestTestParse01 is a test to make sure that we return "something"
  *  when given valid bytetest opt
@@ -904,6 +929,68 @@ int DetectBytetestTestParse16(void) {
 
     return result;
 }
+
+/**
+ * \test DetectByteTestTestPacket01 is a test to check matches of
+ * byte_test and byte_test relative works if the previous keyword is pcre
+ * (bug 142)
+ */
+int DetectByteTestTestPacket01 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre + byte_test + "
+    "relative\"; pcre:\"/AllWorkAndNoPlayMakesWillADullBoy/\"; byte_test:1,=,1"
+    ",6,relative,string,dec; sid:126; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
+
+/**
+ * \test DetectByteTestTestPacket02 is a test to check matches of
+ * byte_test and byte_test relative works if the previous keyword is byte_jump
+ * (bug 158)
+ */
+int DetectByteTestTestPacket02 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"content + byte_test + "
+    "relative\"; byte_jump:1,44,string,dec; byte_test:1,=,0,0,relative,string,"
+    "dec; sid:777; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
 #endif /* UNITTESTS */
 
 
@@ -927,7 +1014,8 @@ void DetectBytetestRegisterTests(void) {
     UtRegisterTest("DetectBytetestTestParse13", DetectBytetestTestParse13, 1);
     UtRegisterTest("DetectBytetestTestParse14", DetectBytetestTestParse14, 1);
     UtRegisterTest("DetectBytetestTestParse15", DetectBytetestTestParse15, 1);
-    UtRegisterTest("DetectBytetestTestParse16", DetectBytetestTestParse16, 1);
+    UtRegisterTest("DetectByteTestTestPacket01", DetectByteTestTestPacket01, 1);
+    UtRegisterTest("DetectByteTestTestPacket02", DetectByteTestTestPacket02, 1);
 #endif /* UNITTESTS */
 }
 

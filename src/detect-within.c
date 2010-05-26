@@ -31,19 +31,23 @@
 #include "detect-parse.h"
 #include "detect-content.h"
 #include "detect-uricontent.h"
+#include "detect-bytejump.h"
 
 #include "flow-var.h"
 
 #include "util-debug.h"
+#include "detect-pcre.h"
+#include "util-unittest.h"
 
 static int DetectWithinSetup (DetectEngineCtx *, Signature *, char *);
+void DetectWithinRegisterTests(void);
 
 void DetectWithinRegister (void) {
     sigmatch_table[DETECT_WITHIN].name = "within";
     sigmatch_table[DETECT_WITHIN].Match = NULL;
     sigmatch_table[DETECT_WITHIN].Setup = DetectWithinSetup;
     sigmatch_table[DETECT_WITHIN].Free  = NULL;
-    sigmatch_table[DETECT_WITHIN].RegisterTests = NULL;
+    sigmatch_table[DETECT_WITHIN].RegisterTests = DetectWithinRegisterTests;
 
     sigmatch_table[DETECT_WITHIN].flags |= SIGMATCH_PAYLOAD;
 }
@@ -148,21 +152,40 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
                 }
             }
 
-            pm = DetectContentGetLastPattern(s->pmatch_tail->prev);
-            if (pm == NULL) {
+            pm = SigMatchGetLastSM(s->pmatch_tail->prev, DETECT_CONTENT);
+            if (pm != NULL) {
+                /* Set the relative next flag on the prev sigmatch */
+                cd = (DetectContentData *)pm->ctx;
+                if (cd == NULL) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
+                            "previous keyword!");
+                    goto error;
+                }
+                cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+            } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_PCRE)) != NULL) {
+                DetectPcreData *pe = NULL;
+                pe = (DetectPcreData *) pm->ctx;
+                if (pe == NULL) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                    goto error;
+                }
+                pe->flags |= DETECT_PCRE_RELATIVE;
+            } else if ((pm = SigMatchGetLastSM(s->pmatch_tail, DETECT_BYTEJUMP))
+                                != NULL)
+            {
+                DetectBytejumpData *data = NULL;
+                data = (DetectBytejumpData *) pm->ctx;
+                if (data == NULL) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous keyword!");
+                    goto error;
+                }
+                data->flags |= DETECT_BYTEJUMP_RELATIVE;
+            } else {
                 SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two"
-                           " preceeding content or uricontent options");
+                        " preceeding content or uricontent options");
                 goto error;
             }
 
-            /* Set the relative next flag on the prev sigmatch */
-            if (pm->type == DETECT_CONTENT) {
-                cd = (DetectContentData *)pm->ctx;
-                cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
-            } else {
-                SCLogError(SC_ERR_RULE_KEYWORD_UNKNOWN, "Unknown previous-previous keyword!\n");
-                goto error;
-            }
         break;
 
         default:
@@ -179,3 +202,42 @@ error:
     return -1;
 }
 
+#ifdef UNITTESTS
+#include "util-unittest-helper.h"
+ /**
+ * \test DetectWithinTestPacket01 is a test to check matches of
+ * within, if the previous keyword is pcre (bug 145)
+ */
+int DetectWithinTestPacket01 (void) {
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre with within "
+                 "modifier\"; pcre:\"/AllWorkAndNoPlayMakesWillADullBoy/\";"
+                 " content:\"HTTP\"; within:5; sid:49; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+end:
+    return result;
+}
+
+#endif /* UNITTESTS */
+
+void DetectWithinRegisterTests(void) {
+    #ifdef UNITTESTS
+    UtRegisterTest("DetectWithinTestPacket01", DetectWithinTestPacket01, 1);
+    #endif /* UNITTESTS */
+}

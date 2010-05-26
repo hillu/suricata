@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -56,9 +56,8 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     DetectEngineCtx *de_ctx;
 
     de_ctx = SCMalloc(sizeof(DetectEngineCtx));
-    if (de_ctx == NULL) {
+    if (de_ctx == NULL)
         goto error;
-    }
 
     memset(de_ctx,0,sizeof(DetectEngineCtx));
 
@@ -79,7 +78,10 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     ThresholdHashInit(de_ctx);
     VariableNameInitHash(de_ctx);
 
-    DetectContentTableInitHash(de_ctx);
+    de_ctx->mpm_pattern_id_store = MpmPatternIdTableInitHash();
+    if (de_ctx->mpm_pattern_id_store == NULL) {
+        goto error;
+    }
 
     return de_ctx;
 error:
@@ -95,7 +97,8 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
     /* Normally the hashes are freed elsewhere, but
      * to be sure look at them again here.
      */
-    DetectContentTableFreeHash(de_ctx); /* normally cleaned up in SigGroupBuild */
+    MpmPatternIdTableFreeHash(de_ctx->mpm_pattern_id_store); /* normally cleaned up in SigGroupBuild */
+
     SigGroupHeadHashFree(de_ctx);
     SigGroupHeadMpmHashFree(de_ctx);
     SigGroupHeadMpmUriHashFree(de_ctx);
@@ -431,9 +434,8 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
         return TM_ECODE_FAILED;
 
     DetectEngineThreadCtx *det_ctx = SCMalloc(sizeof(DetectEngineThreadCtx));
-    if (det_ctx == NULL) {
+    if (det_ctx == NULL)
         return TM_ECODE_FAILED;
-    }
     memset(det_ctx, 0, sizeof(DetectEngineThreadCtx));
 
     det_ctx->de_ctx = de_ctx;
@@ -447,10 +449,22 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
     PatternMatchThreadPrepare(&det_ctx->mtc, de_ctx->mpm_matcher, DetectContentMaxId(de_ctx));
     PatternMatchThreadPrepare(&det_ctx->mtcu, de_ctx->mpm_matcher, DetectUricontentMaxId(de_ctx));
 
-    PmqSetup(&det_ctx->pmq, DetectEngineGetMaxSigId(de_ctx));
+    //PmqSetup(&det_ctx->pmq, DetectEngineGetMaxSigId(de_ctx), DetectContentMaxId(de_ctx));
+    PmqSetup(&det_ctx->pmq, 0, DetectContentMaxId(de_ctx));
 
     /* IP-ONLY */
     DetectEngineIPOnlyThreadInit(de_ctx,&det_ctx->io_ctx);
+
+    /* DeState */
+    if (de_ctx->sig_array_len > 0) {
+        det_ctx->de_state_sig_array_len = de_ctx->sig_array_len;
+        det_ctx->de_state_sig_array = SCMalloc(det_ctx->de_state_sig_array_len * sizeof(uint8_t));
+        if (det_ctx->de_state_sig_array == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "malloc of %"PRIuMAX" failed: %s",
+                    (uintmax_t)(det_ctx->de_state_sig_array_len * sizeof(uint8_t)), strerror(errno));
+            return TM_ECODE_FAILED;
+        }
+    }
 
     /** alert counter setup */
     det_ctx->counter_alerts = SCPerfTVRegisterCounter("detect.alert", tv,
@@ -474,10 +488,8 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
     uint8_t disp_outq_name_len = (strlen(tv->name) + strlen(cuda_outq_name) + 1);
 
     char *disp_outq_name = SCMalloc(disp_outq_name_len * sizeof(char));
-    if (disp_outq_name == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
-    }
+    if (disp_outq_name == NULL)
+        goto error;
     strcpy(disp_outq_name, tv->name);
     strcpy(disp_outq_name + strlen(tv->name), cuda_outq_name);
     disp_outq_name[disp_outq_name_len] = '\0';

@@ -585,7 +585,8 @@ TmEcode TmThreadSetSlots(ThreadVars *tv, char *name, void *(*fn_p)(void *)) {
     }
 
     tv->tm_slots = SCMalloc(size);
-    if (tv->tm_slots == NULL) goto error;
+    if (tv->tm_slots == NULL)
+        goto error;
     memset(tv->tm_slots, 0, size);
 
     return TM_ECODE_OK;
@@ -765,7 +766,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
 
     /* XXX create separate function for this: allocate a thread container */
     tv = SCMalloc(sizeof(ThreadVars));
-    if (tv == NULL) goto error;
+    if (tv == NULL)
+        goto error;
     memset(tv, 0, sizeof(ThreadVars));
 
     SCSpinInit(&tv->flags_spinlock, PTHREAD_PROCESS_PRIVATE);
@@ -1036,7 +1038,7 @@ void TmThreadKillThreads(void) {
                 //printf("TmThreadKillThreads: (t->inq->reader_cnt + t->inq->writer_cnt) %" PRIu32 "\n", (t->inq->reader_cnt + t->inq->writer_cnt));
 
                 /* make sure our packet pending counter doesn't block */
-                SCCondSignal(&cond_pending);
+                //SCCondSignal(&cond_pending);
 
                 /* signal the queue for the number of users */
 
@@ -1153,8 +1155,8 @@ void TmThreadSetAOF(ThreadVars *tv, uint8_t aof)
 void TmThreadInitMC(ThreadVars *tv)
 {
     if ( (tv->m = SCMalloc(sizeof(SCMutex))) == NULL) {
-        printf("Error allocating memory\n");
-        exit(0);
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC. Exiting...");
+        exit(EXIT_FAILURE);
     }
 
     if (SCMutexInit(tv->m, NULL) != 0) {
@@ -1163,7 +1165,7 @@ void TmThreadInitMC(ThreadVars *tv)
     }
 
     if ( (tv->cond = SCMalloc(sizeof(SCCondT))) == NULL) {
-        printf("Error allocating memory\n");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC. Exiting...");
         exit(0);
     }
 

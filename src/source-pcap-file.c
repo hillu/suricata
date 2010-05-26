@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -103,12 +103,6 @@ void PcapFileCallback(char *user, struct pcap_pkthdr *h, u_char *pkt) {
 
     PcapFileThreadVars *ptv = (PcapFileThreadVars *)user;
 
-    SCMutexLock(&mutex_pending);
-    if (pending > max_pending_packets) {
-        SCondWait(&cond_pending, &mutex_pending);
-    }
-    SCMutexUnlock(&mutex_pending);
-
     Packet *p = ptv->in_p;
 
     p->ts.tv_sec = h->ts.tv_sec;
@@ -151,8 +145,8 @@ TmEcode ReceivePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) 
         EngineStop();
         SCReturnInt(TM_ECODE_FAILED);
     }
-    p->pcap_cnt = pcap_g.cnt;
     pcap_g.cnt++;
+    p->pcap_cnt = pcap_g.cnt;
 
     SCReturnInt(TM_ECODE_OK);
 }
@@ -168,10 +162,8 @@ TmEcode ReceivePcapFileThreadInit(ThreadVars *tv, void *initdata, void **data) {
     SCLogInfo("reading pcap file %s", (char *)initdata);
 
     PcapFileThreadVars *ptv = SCMalloc(sizeof(PcapFileThreadVars));
-    if (ptv == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory for PcapFileThreadVars");
+    if (ptv == NULL)
         SCReturnInt(TM_ECODE_FAILED);
-    }
     memset(ptv, 0, sizeof(PcapFileThreadVars));
 
     char errbuf[PCAP_ERRBUF_SIZE] = "";
@@ -270,10 +262,8 @@ TmEcode DecodePcapFileThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCEnter();
     DecodeThreadVars *dtv = NULL;
 
-    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error Allocating memory for DecodeThreadVars");
+    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL)
         SCReturnInt(TM_ECODE_FAILED);
-    }
     memset(dtv, 0, sizeof(DecodeThreadVars));
 
     DecodeRegisterPerfCounters(dtv, tv);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -83,8 +83,8 @@ void TmModuleDecodeNFQRegister (void) {
 
 TmEcode NoNFQSupportExit(ThreadVars *tv, void *initdata, void **data)
 {
-    printf("Error creating thread %s: you do not have support for nfqueue "
-           "enabled please recompile with --enable-nfqueue\n", tv->name);
+    SCLogError(SC_ERR_NFQ_NOSUPPORT,"Error creating thread %s: you do not have support for nfqueue "
+           "enabled please recompile with --enable-nfqueue", tv->name);
     exit(EXIT_FAILURE);
 }
 
@@ -204,7 +204,11 @@ static int NFQCallBack(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     ThreadVars *tv = ntv->tv;
 
     /* grab a packet */
-    Packet *p = tv->tmqh_in(tv);
+    Packet *p = PacketGetFromQueueOrAlloc();
+    if (p == NULL) {
+        return -1;
+    }
+
     NFQSetupPkt(p, (void *)nfa);
 
 #ifdef COUNTERS
@@ -399,8 +403,7 @@ void NFQRecvPkt(NFQThreadVars *t) {
     rv = recv(t->fd, buf, sizeof(buf), 0);
 
     if (rv < 0) {
-        if (errno == EINTR || errno == EWOULDBLOCK
-           ) {
+        if (errno == EINTR || errno == EWOULDBLOCK) {
             /* no error on timeout */
         } else {
 #ifdef COUNTERS
@@ -495,20 +498,21 @@ process_rv:
  * \brief NFQ receive module main entry function: receive a packet from NFQ
  */
 TmEcode ReceiveNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
+
     NFQThreadVars *ntv = (NFQThreadVars *)data;
 
-    //printf("%p receiving on queue %" PRIu32 "\n", ntv, ntv->queue_num);
+    /* make sure we have at least one packet in the packet pool, to prevent
+     * us from 1) alloc'ing packets at line rate, 2) have a race condition
+     * for the nfq mutex lock with the verdict thread. */
+    SCMutexLock(&packet_q.mutex_q);
+    if (packet_q.len == 0) {
+        SCondWait(&packet_q.cond_q, &packet_q.mutex_q);
+    }
+    SCMutexUnlock(&packet_q.mutex_q);
 
     /* do our nfq magic */
     NFQRecvPkt(ntv);
 
-    /* check if we have too many packets in the system
-     * so we will wait for some to free up */
-    SCMutexLock(&mutex_pending);
-    if (pending > max_pending_packets) {
-        SCondWait(&cond_pending, &mutex_pending);
-    }
-    SCMutexUnlock(&mutex_pending);
     return TM_ECODE_OK;
 }
 
@@ -569,6 +573,7 @@ void NFQSetVerdict(NFQThreadVars *t, Packet *p) {
  * \brief NFQ verdict module packet entry function
  */
 TmEcode VerdictNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
+
     NFQThreadVars *ntv = (NFQThreadVars *)data;
 
     /* if this is a tunnel packet we check if we are ready to verdict
@@ -606,6 +611,7 @@ TmEcode VerdictNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq) {
  */
 TmEcode DecodeNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 {
+
     IPV4Hdr *ip4h = (IPV4Hdr *)p->pkt;
     IPV6Hdr *ip6h = (IPV6Hdr *)p->pkt;
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
@@ -639,10 +645,8 @@ TmEcode DecodeNFQThreadInit(ThreadVars *tv, void *initdata, void **data)
 {
     DecodeThreadVars *dtv = NULL;
 
-    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed");
+    if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL)
         return TM_ECODE_FAILED;
-    }
     memset(dtv, 0, sizeof(DecodeThreadVars));
 
     DecodeRegisterPerfCounters(dtv, tv);

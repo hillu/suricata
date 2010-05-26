@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -50,6 +50,7 @@
 
 #include "util-debug.h"
 #include "app-layer-protos.h"
+#include "app-layer.h"
 //#define DEBUG
 
 #ifdef DEBUG
@@ -221,9 +222,8 @@ TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(void)
 {
     SCEnter();
     TcpReassemblyThreadCtx *ra_ctx = SCMalloc(sizeof(TcpReassemblyThreadCtx));
-    if (ra_ctx == NULL) {
+    if (ra_ctx == NULL)
         return NULL;
-    }
 
     memset(ra_ctx, 0x00, sizeof(TcpReassemblyThreadCtx));
     ra_ctx->stream_q = StreamMsgQueueGetNew();
@@ -1263,12 +1263,16 @@ static void StreamTcpSetupMsg(TcpSession *ssn, TcpStream *stream, Packet *p,
                               StreamMsg *smsg)
 {
     SCEnter();
+
+    smsg->flags = 0;
+
     if (stream->ra_base_seq == stream->isn) {
+        SCLogDebug("setting STREAM_START");
         smsg->flags = STREAM_START;
-    } else if (ssn->state > TCP_ESTABLISHED) {
+    }
+    if (ssn->state > TCP_ESTABLISHED) {
+        SCLogDebug("setting STREAM_EOF");
         smsg->flags = STREAM_EOF;
-    } else {
-        smsg->flags = 0;
     }
 
     if (p->flowflags & FLOW_PKT_TOSERVER) {
@@ -1294,6 +1298,8 @@ static void StreamTcpSetupMsg(TcpSession *ssn, TcpStream *stream, Packet *p,
     if (smsg->flow != NULL) {
         smsg->flow->use_cnt++;
     }
+
+    SCLogDebug("smsg %p", smsg);
     SCReturn;
 }
 
@@ -1311,6 +1317,11 @@ static int StreamTcpReassembleCheckLimit(TcpSession *ssn, TcpStream *stream,
 
     /* check if we have enough data to send to L7 */
     if (p->flowflags & FLOW_PKT_TOCLIENT) {
+        SCLogDebug("StreamMsgQueueGetMinInitChunkLen(STREAM_TOSERVER) %"PRIu32,
+                StreamMsgQueueGetMinInitChunkLen(STREAM_TOSERVER));
+        SCLogDebug("StreamMsgQueueGetMinChunkLen(STREAM_TOSERVER) %"PRIu32,
+                StreamMsgQueueGetMinChunkLen(STREAM_TOSERVER));
+
         if (stream->ra_base_seq == stream->isn) {
             if (StreamMsgQueueGetMinInitChunkLen(STREAM_TOSERVER) >
                     (stream->last_ack - stream->ra_base_seq)) {
@@ -1331,6 +1342,11 @@ static int StreamTcpReassembleCheckLimit(TcpSession *ssn, TcpStream *stream,
             }
         }
     } else {
+        SCLogDebug("StreamMsgQueueGetMinInitChunkLen(STREAM_TOCLIENT) %"PRIu32,
+                StreamMsgQueueGetMinInitChunkLen(STREAM_TOCLIENT));
+        SCLogDebug("StreamMsgQueueGetMinChunkLen(STREAM_TOCLIENT) %"PRIu32,
+                StreamMsgQueueGetMinChunkLen(STREAM_TOCLIENT));
+
         if (stream->ra_base_seq == stream->isn) {
             if (StreamMsgQueueGetMinInitChunkLen(STREAM_TOCLIENT) >
                     (stream->last_ack - stream->ra_base_seq)) {
@@ -1392,7 +1408,20 @@ int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
     SCEnter();
 
     if (stream->seg_list == NULL) {
-        SCLogDebug("no segments in the list to reassemble !!");
+        /* send an empty EOF msg if we have no segments but TCP state
+         * is beyond ESTABLISHED */
+        if (ssn->state > TCP_ESTABLISHED) {
+            StreamMsg *smsg = StreamMsgGetFromPool();
+            if (smsg == NULL) {
+                SCLogDebug("stream_msg_pool is empty");
+                SCReturnInt(-1);
+            }
+            StreamTcpSetupMsg(ssn, stream, p, smsg);
+            StreamMsgPutInQueue(ra_ctx->stream_q,smsg);
+        } else {
+            SCLogDebug("no segments in the list to reassemble !!");
+        }
+
         SCReturnInt(0);
     }
 
@@ -1461,6 +1490,8 @@ int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
     uint16_t payload_len = 0;
     TcpSegment *seg = stream->seg_list;
     uint32_t next_seq = ra_base_seq + 1;
+    if (SEQ_GEQ(seg->seq, stream->last_ack))
+        SCLogDebug("seg is %"PRIu32" and st %"PRIu32"",seg->seq, stream->last_ack);
 
     /* loop through the segments and fill one or more msgs */
     for (; seg != NULL && SEQ_LT(seg->seq, stream->last_ack);) {
@@ -1911,7 +1942,12 @@ int StreamTcpReassembleHandleSegment(TcpReassemblyThreadCtx *ra_ctx,
         SCReturnInt(-1);
     }
 
-    if (p->payload_len > 0) {
+    /* If no stream reassembly/application layer protocol inspection, then
+       simple return */
+    if (p->payload_len > 0 &&
+        (((stream == &ssn->client) && !(ssn->flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY)) ||
+        ((stream == &ssn->server) && !(ssn->flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY))))
+    {
         if (StreamTcpReassembleHandleSegmentHandleData(ssn, stream, p) != 0) {
             SCLogDebug("StreamTcpReassembleHandleSegmentHandleData error");
             SCReturnInt(-1);
@@ -4910,6 +4946,11 @@ static int StreamTcpReassembleTest41 (void) {
     uint8_t httpbuf2[] = "HTTP/1.0 200 OK\r\nServer: VictorServer/1.0\r\n\r\n";
     uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
 
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOSERVER, 0);
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOCLIENT, 0);
+    StreamMsgQueueSetMinChunkLen(FLOW_PKT_TOSERVER, 0);
+    StreamMsgQueueSetMinChunkLen(FLOW_PKT_TOCLIENT, 0);
+
     ssn.server.ra_base_seq = 9;
     ssn.server.isn = 9;
     ssn.server.last_ack = 600;
@@ -4949,13 +4990,13 @@ static int StreamTcpReassembleTest41 (void) {
     s = &ssn.server;
 
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
-        printf("failed in segments reassembly, while processing toserver packet\n");
+        printf("failed in segments reassembly, while processing toserver packet: ");
         goto end;
     }
 
     /* Check if we have stream smsgs in queue */
     if (ra_ctx->stream_q->len > 0) {
-        printf("there shouldn't be any stream smsgs in the queue\n");
+        printf("there shouldn't be any stream smsgs in the queue: ");
         goto end;
     }
 
@@ -4967,7 +5008,7 @@ static int StreamTcpReassembleTest41 (void) {
     s = &ssn.client;
 
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
-        printf("failed in segments reassembly, while processing toserver packet\n");
+        printf("failed in segments reassembly, while processing toserver packet: ");
         goto end;
     }
 
@@ -4979,14 +5020,14 @@ static int StreamTcpReassembleTest41 (void) {
     s = &ssn.client;
 
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
-        printf("failed in segments reassembly, while processing toserver packet\n");
+        printf("failed in segments reassembly, while processing toserver packet: ");
         goto end;
     }
 
     /* Check if we have stream smsgs in queue */
     if (ra_ctx->stream_q->len > 0) {
         printf("there shouldn't be any stream smsgs in the queue, as we didn't"
-                " processed any smsg from toserver side till yet\n");
+                " processed any smsg from toserver side till yet: ");
         goto end;
     }
 
@@ -4998,20 +5039,20 @@ static int StreamTcpReassembleTest41 (void) {
     s = &ssn.server;
 
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
-        printf("failed in segments reassembly, while processing toserver packet\n");
+        printf("failed in segments reassembly, while processing toserver packet: ");
         goto end;
     }
 
     /* Check if we have stream smsgs in queue */
     if (ra_ctx->stream_q->len == 0) {
-        printf("there should be a stream smsgs in the queue\n");
+        printf("there should be a stream smsgs in the queue: ");
         goto end;
     /* Process stream smsgs we may have in queue */
     } else if (ra_ctx->stream_q->len > 1) {
-        printf("there should be only one stream smsgs in the queue\n");
+        printf("there should be only one stream smsgs in the queue: ");
         goto end;
     } else if (StreamTcpReassembleProcessAppLayer(ra_ctx) < 0) {
-        printf("failed in processing stream smsgs\n");
+        printf("failed in processing stream smsgs: ");
         goto end;
     }
 
@@ -5023,12 +5064,12 @@ static int StreamTcpReassembleTest41 (void) {
     s = &ssn.server;
 
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
-        printf("failed in segments reassembly, while processing toserver packet\n");
+        printf("failed in segments reassembly, while processing toserver packet: ");
         goto end;
     }
 
     if (ssn.client.seg_list != NULL) {
-        printf("seg_list should be null\n");
+        printf("seg_list should be null: ");
         goto end;
     }
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -91,6 +91,11 @@ typedef struct IPV4Hdr_
 #define IPV4_GET_RAW_IPPROTO(ip4h)        ((ip4h)->ip_proto)
 #define IPV4_GET_RAW_IPSRC(ip4h)          ((ip4h)->ip_src)
 #define IPV4_GET_RAW_IPDST(ip4h)          ((ip4h)->ip_dst)
+
+/** return the raw (directly from the header) src ip as uint32_t */
+#define IPV4_GET_RAW_IPSRC_U32(ip4h)      (uint32_t)((ip4h)->ip_src.s_addr)
+/** return the raw (directly from the header) dst ip as uint32_t */
+#define IPV4_GET_RAW_IPDST_U32(ip4h)      (uint32_t)((ip4h)->ip_dst.s_addr)
 
 /* we need to change them as well as get them */
 #define IPV4_SET_RAW_VER(ip4h, value)     ((ip4h)->ip_verhl = (((ip4h)->ip_verhl & 0x0f) | (value << 4)))

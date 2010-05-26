@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -82,7 +82,7 @@ void DetectUricontentRegister (void)
  */
 uint32_t DetectUricontentMaxId(DetectEngineCtx *de_ctx)
 {
-    return de_ctx->uricontent_max_id;
+    return MpmPatternIdStoreGetMaxId(de_ctx->mpm_pattern_id_store);
 }
 
 /**
@@ -96,6 +96,8 @@ void DetectUricontentPrint(DetectUricontentData *cd)
         return;
     }
     char *tmpstr = SCMalloc(sizeof(char) * cd->uricontent_len + 1);
+    if (tmpstr == NULL)
+        return;
 
     if (tmpstr != NULL) {
         for (i = 0; i < cd->uricontent_len; i++) {
@@ -176,10 +178,8 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
     }
 
     cd = SCMalloc(sizeof(DetectUricontentData));
-    if (cd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed");
+    if (cd == NULL)
         goto error;
-    }
     memset(cd,0,sizeof(DetectUricontentData));
 
     /* skip the first spaces */
@@ -323,11 +323,7 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
     sm->type = DETECT_URICONTENT;
     sm->ctx = (void *)cd;
 
-    //SigMatchAppendAppLayer(s, sm);
-
-    /** \todo use unique id here as well */
-    cd->id = de_ctx->uricontent_max_id;
-    de_ctx->uricontent_max_id++;
+    cd->id = DetectUricontentGetId(de_ctx->mpm_pattern_id_store, cd);
 
     /* Flagged the signature as to inspect the app layer data */
     s->flags |= SIG_FLAG_APPLAYER;
@@ -385,9 +381,7 @@ int DoDetectAppLayerUricontentMatch (ThreadVars *tv, DetectEngineThreadCtx *det_
 
         ret += UriPatternSearch(tv, det_ctx, uri, uri_len);
 
-        SCLogDebug("post search: cnt %" PRIu32 ", searchable %" PRIu32 "",
-                    ret, det_ctx->pmq.searchable);
-        det_ctx->pmq.searchable = 0;
+        SCLogDebug("post search: cnt %" PRIu32, ret);
     }
     return ret;
 }
@@ -414,7 +408,7 @@ uint32_t DetectUricontentInspectMpm(ThreadVars *tv, DetectEngineThreadCtx *det_c
         SCReturnUInt(0U);
     }
 
-    for (idx = htp_state->new_in_tx_index;
+    for (idx = 0;//htp_state->new_in_tx_index;
          idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
@@ -1022,7 +1016,6 @@ static int DetectUriSigTest04(void) {
         s->match != NULL)
     {
         printf("sig 3 failed to parse: ");
-        DetectContentPrint((DetectContentData *) s->pmatch_tail->ctx);
         goto end;
     }
 

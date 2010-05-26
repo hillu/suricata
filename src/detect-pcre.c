@@ -421,10 +421,8 @@ DetectPcreData *DetectPcreParse (char *regexstr)
     //printf("ret %" PRId32 " re \'%s\', op \'%s\'\n", ret, re, op);
 
     pd = SCMalloc(sizeof(DetectPcreData));
-    if (pd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
+    if (pd == NULL)
         goto error;
-    }
     memset(pd, 0, sizeof(DetectPcreData));
 
     if (negate)
@@ -524,6 +522,8 @@ DetectPcreData *DetectPcreParse (char *regexstr)
 #endif /* NO_PCRE_MATCH_RLIMIT */
         }
 
+    } else {
+        goto error;
     }
 
     if (re != NULL) SCFree(re);
@@ -600,6 +600,7 @@ error:
 
 static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexstr)
 {
+    SCEnter();
     DetectPcreData *pd = NULL;
     SigMatch *sm = NULL;
 
@@ -629,12 +630,12 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     }
 
 
-    return 0;
+    SCReturnInt(0);
 
 error:
     if (pd != NULL) DetectPcreFree(pd);
     if (sm != NULL) SCFree(sm);
-    return -1;
+    SCReturnInt(-1);
 }
 
 void DetectPcreFree(void *ptr) {
@@ -1240,6 +1241,9 @@ static int DetectPcreModifPTest05(void) {
         goto end;
     }
 
+    /* do detect for p1 */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p1);
+
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
@@ -1254,23 +1258,27 @@ static int DetectPcreModifPTest05(void) {
         goto end;
     }
 
-    /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p1);
+    /* do detect for p2 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p2);
 
-    if ( !(PacketAlertCheck(&p1, 1))) {
-        printf("sid 1 didn't match but should have");
+    if (!(PacketAlertCheck(&p1, 1))) {
+        printf("sid 1 didn't match on p1 but should have: ");
         goto end;
     }
 
-    if ( !(PacketAlertCheck(&p1, 2))) {
-        printf("sid 2 didn't match but should have");
+    if (PacketAlertCheck(&p1, 2)) {
+        printf("sid 2 did match on p1 but shouldn't have: ");
         /* It's a partial match over 2 chunks*/
         goto end;
     }
 
-    if ( !(PacketAlertCheck(&p2, 2))) {
-        printf("sid 2 didn't match but should have");
+    if ((PacketAlertCheck(&p2, 1))) {
+        printf("sid 1 did match on p2 but should have: ");
+        goto end;
+    }
+
+    if (!(PacketAlertCheck(&p2, 2))) {
+        printf("sid 2 didn't match on p2 but should have: ");
         /* It's a partial match over 2 chunks*/
         goto end;
     }

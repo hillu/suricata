@@ -146,7 +146,7 @@ int DetectTlsVersionMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *
  */
 DetectTlsVersionData *DetectTlsVersionParse (char *str)
 {
-    uint8_t temp;
+    uint16_t temp;
     DetectTlsVersionData *tls = NULL;
 	#define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
@@ -172,13 +172,15 @@ DetectTlsVersionData *DetectTlsVersionParse (char *str)
 
         /* We have a correct id option */
         tls = SCMalloc(sizeof(DetectTlsVersionData));
-        if (tls == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "malloc failed");
+        if (tls == NULL)
             goto error;
-        }
 
         orig = SCStrdup((char*)str_ptr);
         tmp_str=orig;
+        if (tmp_str == NULL) {
+            goto error;
+        }
+
         /* Let's see if we need to scape "'s */
         if (tmp_str[0] == '"')
         {

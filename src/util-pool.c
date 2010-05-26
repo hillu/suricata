@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Victor Julien <victor@inliniac.net>
+/* Copyright (C) 2007-2010 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -218,7 +218,8 @@ void *PoolTestAlloc(void *allocdata) {
 void *PoolTestAllocArg(void *allocdata) {
     size_t len = strlen((char *)allocdata) + 1;
     char *str = SCMalloc(len);
-    strlcpy(str,(char *)allocdata,len);
+    if (str != NULL)
+        strlcpy(str,(char *)allocdata,len);
     return (void *)str;
 }
 
