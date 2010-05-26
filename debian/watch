@@ -6,5 +6,5 @@
 version=3
 
 #http://www.openinfosecfoundation.org/downloads/ suricata-([\d\.]*)\.tar\.gz
-http://www.openinfosecfoundation.org/index.php/download-suricata /download/suricata-([\d\.]*)\.tar\.gz
+http://www.openinfosecfoundation.org/index.php/download-suricata [^"]*/download/suricata-([\d\.]*)\.tar\.gz
 
