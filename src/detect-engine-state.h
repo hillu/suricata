@@ -42,10 +42,11 @@
 #define __DETECT_ENGINE_STATE_H__
 
 /** number of DeStateStoreItem's in one DeStateStore object */
-#define DE_STATE_CHUNK_SIZE         4
+#define DE_STATE_CHUNK_SIZE         16
 
 #define DE_STATE_FLAG_PAYLOAD_MATCH 0x01 /**< payload part of the sig matched */
 #define DE_STATE_FLAG_URI_MATCH     0x02 /**< uri part of the sig matched */
+#define DE_STATE_FLAG_DCE_MATCH     0x04 /**< dce payload inspection part matched */
 
 typedef enum {
     DE_STATE_MATCH_FULL = 0,    /**< sig already fully matched, no state */
@@ -85,14 +86,18 @@ void DetectEngineStateReset(DetectEngineState *state);
 DetectEngineState *DetectEngineStateAlloc(void);
 void DetectEngineStateFree(DetectEngineState *);
 
-void DeStateSignatureAppend(DetectEngineState *, Signature *, SigMatch *);
+//void DeStateSignatureAppend(DetectEngineState *, Signature *, SigMatch *, char);
 
 int DeStateFlowHasState(Flow *);
-int DeStateDetectStartDetection(ThreadVars *, DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *, uint16_t);
-int DeStateDetectContinueDetection(ThreadVars *, DetectEngineCtx *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, uint16_t);
+
+int DeStateDetectStartDetection(ThreadVars *, DetectEngineCtx *,
+        DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *, uint16_t);
+
+int DeStateDetectContinueDetection(ThreadVars *, DetectEngineCtx *,
+        DetectEngineThreadCtx *, Flow *, uint8_t, void *, uint16_t);
 
 const char *DeStateMatchResultToString(DeStateMatchResult);
-int DeStateUpdateInspectTransactionId(Flow *f);
+int DeStateUpdateInspectTransactionId(Flow *, char);
 
 #endif /* __DETECT_ENGINE_STATE_H__ */
 

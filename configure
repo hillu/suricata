@@ -897,7 +897,7 @@ with_libpcap_libraries
 enable_unittests
 enable_unified_native_timeval
 enable_debug
-enable_nonbundled_htp
+enable_non_bundled_htp
 with_libhtp_includes
 with_libhtp_libraries
 enable_cuda
@@ -906,6 +906,9 @@ with_cuda_libraries
 with_libcap_ng_includes
 with_libcap_ng_libraries
 enable_profiling
+enable_dag
+with_dag_includes
+with_dag_libraries
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1543,19 +1546,24 @@ Optional Features:
   --enable-fast-install[=PKGS]
                           optimize for fast installation [default=yes]
   --disable-libtool-lock  avoid locking (might break parallel builds)
-  --enable-gccprotect  Detect and use gcc hardening options
-  --enable-gccprofile Enable gcc profile info i.e -pg flag is set
-  --enable-gccmarch-native Enable gcc march=native gcc 4.2 and later only
-  --enable-nfqueue  Enable NFQUEUE support for inline IDP
-  --enable-ipfw  Enable FreeBSD IPFW support for inline IDP
-  --enable-prelude  Enable Prelude support for alerts
-  --enable-pfring  Enable Native PF_RING support
-  --enable-unittests  Enable compilation of the unit tests
-  --enable-unified-native-timeval  Use native timeval for unified outputs
-  --enable-debug  Enable debug output
-  --enable-nonbundled-htp Enable the use of an already installed version of htp
-  --enable-cuda  Enable CUDA pattern matching
-  --enable-profiling  Enable performance profiling
+  --enable-gccprotect     Detect and use gcc hardening options
+  --enable-gccprofile     Enable gcc profile info i.e -pg flag is set
+  --enable-gccmarch-native
+                          Enable gcc march=native gcc 4.2 and later only
+  --enable-nfqueue        Enable NFQUEUE support for inline IDP
+  --enable-ipfw           Enable FreeBSD IPFW support for inline IDP
+  --enable-prelude        Enable Prelude support for alerts
+  --enable-pfring         Enable Native PF_RING support
+  --enable-unittests      Enable compilation of the unit tests
+  --enable-unified-native-timeval
+                          Use native timeval for unified outputs
+  --enable-debug          Enable debug output
+  --enable-non-bundled-htp
+                          Enable the use of an already installed version of
+                          htp
+  --enable-cuda           Enable CUDA pattern matching
+  --enable-profiling      Enable performance profiling
+  --enable-dag  Enable DAG capture
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -1588,6 +1596,8 @@ Optional Packages:
   --with-cuda-libraries=DIR    cuda library directory
   --with-libcap_ng-includes=DIR  libcap_ng include directory
   --with-libcap_ng-libraries=DIR    libcap_ng library directory
+  --with-dag-includes=DIR  dagapi include directory
+  --with-dag-libraries=DIR  dagapi library directory
 
 Some influential environment variables:
   CC          C compiler command
@@ -2900,7 +2910,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=0.9.1
+ VERSION=0.9.2
 
 
 cat >>confdefs.h <<_ACEOF
@@ -4784,13 +4794,13 @@ if test "${lt_cv_nm_interface+set}" = set; then :
 else
   lt_cv_nm_interface="BSD nm"
   echo "int some_variable = 0;" > conftest.$ac_ext
-  (eval echo "\"\$as_me:4787: $ac_compile\"" >&5)
+  (eval echo "\"\$as_me:4797: $ac_compile\"" >&5)
   (eval "$ac_compile" 2>conftest.err)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:4790: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
+  (eval echo "\"\$as_me:4800: $NM \\\"conftest.$ac_objext\\\"\"" >&5)
   (eval "$NM \"conftest.$ac_objext\"" 2>conftest.err > conftest.out)
   cat conftest.err >&5
-  (eval echo "\"\$as_me:4793: output\"" >&5)
+  (eval echo "\"\$as_me:4803: output\"" >&5)
   cat conftest.out >&5
   if $GREP 'External.*some_variable' conftest.out > /dev/null; then
     lt_cv_nm_interface="MS dumpbin"
@@ -5996,7 +6006,7 @@ ia64-*-hpux*)
   ;;
 *-*-irix6*)
   # Find out which ABI we are using.
-  echo '#line 5999 "configure"' > conftest.$ac_ext
+  echo '#line 6009 "configure"' > conftest.$ac_ext
   if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
   (eval $ac_compile) 2>&5
   ac_status=$?
@@ -7526,11 +7536,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7529: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7539: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:7533: \$? = $ac_status" >&5
+   echo "$as_me:7543: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -7865,11 +7875,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7868: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7878: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>conftest.err)
    ac_status=$?
    cat conftest.err >&5
-   echo "$as_me:7872: \$? = $ac_status" >&5
+   echo "$as_me:7882: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s "$ac_outfile"; then
      # The compiler can only warn and ignore the option if not recognized
      # So say no if there are warnings other than the usual output.
@@ -7970,11 +7980,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:7973: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:7983: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:7977: \$? = $ac_status" >&5
+   echo "$as_me:7987: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -8025,11 +8035,11 @@ else
    -e 's:.*FLAGS}\{0,1\} :&$lt_compiler_flag :; t' \
    -e 's: [^ ]*conftest\.: $lt_compiler_flag&:; t' \
    -e 's:$: $lt_compiler_flag:'`
-   (eval echo "\"\$as_me:8028: $lt_compile\"" >&5)
+   (eval echo "\"\$as_me:8038: $lt_compile\"" >&5)
    (eval "$lt_compile" 2>out/conftest.err)
    ac_status=$?
    cat out/conftest.err >&5
-   echo "$as_me:8032: \$? = $ac_status" >&5
+   echo "$as_me:8042: \$? = $ac_status" >&5
    if (exit $ac_status) && test -s out/conftest2.$ac_objext
    then
      # The compiler can only warn and ignore the option if not recognized
@@ -10409,7 +10419,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 10412 "configure"
+#line 10422 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -10505,7 +10515,7 @@ else
   lt_dlunknown=0; lt_dlno_uscore=1; lt_dlneed_uscore=2
   lt_status=$lt_dlunknown
   cat > conftest.$ac_ext <<_LT_EOF
-#line 10508 "configure"
+#line 10518 "configure"
 #include "confdefs.h"
 
 #if HAVE_DLFCN_H
@@ -10754,6 +10764,7 @@ $as_echo "$gccver" >&6; }
 
     CFLAGS="$CFLAGS -Wall -fno-strict-aliasing"
     CFLAGS="$CFLAGS -Wno-unused-parameter"
+    CFLAGS="$CFLAGS -std=gnu99"
 
 # Checks for programs.
     for ac_prog in gawk mawk nawk awk
@@ -12285,12 +12296,14 @@ $as_echo "ok" >&6; }
 #Options are taken from https://wiki.ubuntu.com/CompilerFlags
     # Check whether --enable-gccprotect was given.
 if test "${enable_gccprotect+set}" = set; then :
-  enableval=$enable_gccprotect;  enable_gccprotect=yes
-
+  enableval=$enable_gccprotect;
+else
+  enable_gccprotect=no
 fi
 
 
-    if test "$enable_gccprotect" = "yes"; then
+    if test "x$enable_gccprotect" = "xyes"; then :
+
         #buffer overflow protection
         { $as_echo "$as_me:${as_lineno-$LINENO}: checking for -fstack-protector" >&5
 $as_echo_n "checking for -fstack-protector... " >&6; }
@@ -12431,39 +12444,38 @@ rm -f core conftest.err conftest.$ac_objext \
 
         CFLAGS="${CFLAGS} ${SECCFLAGS}"
         LDFLAGS="${LDFLAGS} ${SECLDFLAGS}"
-    fi
+
+fi
 
 #enable profile generation
     # Check whether --enable-gccprofile was given.
 if test "${enable_gccprofile+set}" = set; then :
-  enableval=$enable_gccprofile;  enable_gccprofile=yes
-
+  enableval=$enable_gccprofile;
+else
+  enable_gccprofile=no
 fi
 
+    if test "x$enable_gccprofile" = "xyes"; then :
 
-    if test "$enable_gccprofile" = "yes"; then
-    CFLAGS="${CFLAGS} -pg"
-    fi
+        CFLAGS="${CFLAGS} -pg"
+
+fi
 
 #enable gcc march=native gcc 4.2 or later
     # Check whether --enable-gccmarch_native was given.
 if test "${enable_gccmarch_native+set}" = set; then :
-  enableval=$enable_gccmarch_native;  enable_gccmarch_native=yes
-
+  enableval=$enable_gccmarch_native;
+else
+  enable_gccmarch_native=yes
 fi
 
+    if test "x$enable_gccmarch_native" = "xyes"; then :
 
-    if test "$enable_gccmarch_native" = "yes"; then
         if test "$gccvernum" -ge "402"; then
                                 CFLAGS="$CFLAGS -march=native"
-        else
-                echo
-                echo "   You specified --enable-gccmarch-native but looks like you are running gcc < 4.2"
-                echo "   Please update your version of gcc or remove this option from configure."
-                echo
-                exit 1
         fi
-    fi
+
+fi
 
 #libpcre
 
@@ -12825,12 +12837,14 @@ fi
 #enable support for NFQUEUE
     # Check whether --enable-nfqueue was given.
 if test "${enable_nfqueue+set}" = set; then :
-  enableval=$enable_nfqueue;  enable_nfqueue=yes
-
+  enableval=$enable_nfqueue;
+else
+  enable_nfqueue=no
 fi
 
-    if test "$enable_nfqueue" = "yes"; then
-    CFLAGS="$CFLAGS -DNFQ"
+    if test "x$enable_nfqueue" = "xyes"; then :
+
+        CFLAGS="$CFLAGS -DNFQ"
 
 #libnfnetlink
 case $host in
@@ -13098,28 +13112,32 @@ esac
     echo
     exit 1
     fi
-    fi
 
+fi
 #enable support for IPFW
     # Check whether --enable-ipfw was given.
 if test "${enable_ipfw+set}" = set; then :
-  enableval=$enable_ipfw;  enable_ipfw=yes
-
+  enableval=$enable_ipfw;
+else
+  enable_ipfw=no
 fi
 
-    if test "$enable_ipfw" = "yes"; then
+    if test "x$enable_ipfw" = "xyes"; then :
+
         CFLAGS="$CFLAGS -DIPFW"
-    fi
+
+fi
 
 #prelude
-
     # Check whether --enable-prelude was given.
 if test "${enable_prelude+set}" = set; then :
-  enableval=$enable_prelude;  enable_prelude=yes
-
+  enableval=$enable_prelude;
+else
+  enable_prelude=no
 fi
 
-    if test "$enable_prelude" = "yes"; then
+    if test "x$enable_prelude" = "xyes"; then :
+
         CFLAGS="$CFLAGS -DPRELUDE"
 
 # Check whether --with-libprelude-prefix was given.
@@ -13377,8 +13395,7 @@ $as_echo "#define PRELUDE_APPLICATION_USE_LIBTOOL2 /**/" >>confdefs.h
             LDFLAGS="${LDFLAGS} ${LIBPRELUDE_LIBS}"
         fi
 
-    fi
-
+fi
 
 #libnet
 
@@ -13592,13 +13609,16 @@ fi
 # Error on the side of caution. If libpfring enabled pcap is being used and we don't link against -lpfring compilation will fail.
     # Check whether --enable-pfring was given.
 if test "${enable_pfring+set}" = set; then :
-  enableval=$enable_pfring;  enable_pfring=yes
-
+  enableval=$enable_pfring;
+else
+  enable_pfring=no
 fi
 
-    if test "$enable_pfring" = "yes"; then
-    CFLAGS="$CFLAGS -DHAVE_PFRING"
-    fi
+    if test "x$enable_pfring" = "xyes"; then :
+
+        CFLAGS="$CFLAGS -DHAVE_PFRING"
+
+fi
 
 #We have to set CFLAGS for AC_TRY_COMPILE as it doesn't pay attention to CPPFLAGS
 
@@ -13675,7 +13695,7 @@ else
 fi
 
     if test "$LIBPFRING" = "no"; then
-        if test "enable_pfring" = "yes"; then
+        if test "x$enable_pfring" = "xyes"; then
         echo
         echo "   ERROR! --enable-pfring was passed but the library was not found or version is >4, go get it"
         echo "   from http://www.ntop.org/PF_RING.html"
@@ -13857,91 +13877,18 @@ fi
     fi
     LIBS="${TMPLIBS}"
 
-# enable the running of unit tests
-    # Check whether --enable-unittests was given.
-if test "${enable_unittests+set}" = set; then :
-  enableval=$enable_unittests;  enable_unittests=yes
-
-fi
-
-    if test "$enable_unittests" = "yes"; then
-    CFLAGS="${CFLAGS} -DUNITTESTS"
-    fi
-
-# enable native timeval for unified alert output
-    # Check whether --enable-unified-native-timeval was given.
-if test "${enable_unified_native_timeval+set}" = set; then :
-  enableval=$enable_unified_native_timeval;  enable_unified_native_timeval=yes
-
-fi
-
-    if test "$enable_unified_native_timeval" = "yes"; then
-    CFLAGS="${CFLAGS} -DUNIFIED_NATIVE_TIMEVAL"
-    fi
-
-# enable debug output
-    # Check whether --enable-debug was given.
-if test "${enable_debug+set}" = set; then :
-  enableval=$enable_debug;  enable_debug=yes
-
-fi
-
-    if test "$enable_debug" = "yes"; then
-    CFLAGS="${CFLAGS} -DDEBUG"
-    fi
-
-#libhtp
-    # Check whether --enable-nonbundled-htp was given.
-if test "${enable_nonbundled_htp+set}" = set; then :
-  enableval=$enable_nonbundled_htp; enable_non_bundled_htp=yes
-else
-  enable_non_bundled_htp=no
-
-fi
-
-    if test "$enable_non_bundled_htp" = "yes"; then
-
-# Check whether --with-libhtp_includes was given.
-if test "${with_libhtp_includes+set}" = set; then :
-  withval=$with_libhtp_includes; with_libhtp_includes="$withval"
-else
-  with_libhtp_includes=no
-fi
-
-
-# Check whether --with-libhtp_libraries was given.
-if test "${with_libhtp_libraries+set}" = set; then :
-  withval=$with_libhtp_libraries; with_libhtp_libraries="$withval"
-else
-  with_libhtp_libraries="no"
-fi
-
-
-    if test "$with_libhtp_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libhtp_includes}"
-    fi
-
-    if test "$with_libhtp_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS} -L${with_libhtp_libraries}"
-    fi
-
-    ac_fn_c_check_header_mongrel "$LINENO" "htp/htp.h" "ac_cv_header_htp_htp_h" "$ac_includes_default"
-if test "x$ac_cv_header_htp_htp_h" = x""yes; then :
-
-else
-  as_fn_error "htp/htp.h not found ..." "$LINENO" 5
-fi
-
-
-
-    LIBHTP=""
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_conn_create in -lhtp" >&5
-$as_echo_n "checking for htp_conn_create in -lhtp... " >&6; }
-if test "${ac_cv_lib_htp_htp_conn_create+set}" = set; then :
+#Appears as if pcap_set_buffer_size is linux only?
+    LIBPCAPSBUFF=""
+#To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+#see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+    TMPLIBS="${LIBS}"
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_set_buffer_size in -lpcap" >&5
+$as_echo_n "checking for pcap_set_buffer_size in -lpcap... " >&6; }
+if test "${ac_cv_lib_pcap_pcap_set_buffer_size+set}" = set; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lhtp  $LIBS"
+LIBS="-lpcap  $LIBS"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -13951,43 +13898,93 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 #ifdef __cplusplus
 extern "C"
 #endif
-char htp_conn_create ();
+char pcap_set_buffer_size ();
 int
 main ()
 {
-return htp_conn_create ();
+return pcap_set_buffer_size ();
   ;
   return 0;
 }
 _ACEOF
 if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_htp_htp_conn_create=yes
+  ac_cv_lib_pcap_pcap_set_buffer_size=yes
 else
-  ac_cv_lib_htp_htp_conn_create=no
+  ac_cv_lib_pcap_pcap_set_buffer_size=no
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
 LIBS=$ac_check_lib_save_LIBS
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_htp_htp_conn_create" >&5
-$as_echo "$ac_cv_lib_htp_htp_conn_create" >&6; }
-if test "x$ac_cv_lib_htp_htp_conn_create" = x""yes; then :
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pcap_pcap_set_buffer_size" >&5
+$as_echo "$ac_cv_lib_pcap_pcap_set_buffer_size" >&6; }
+if test "x$ac_cv_lib_pcap_pcap_set_buffer_size" = x""yes; then :
   cat >>confdefs.h <<_ACEOF
-#define HAVE_LIBHTP 1
+#define HAVE_LIBPCAP 1
 _ACEOF
 
-  LIBS="-lhtp $LIBS"
+  LIBS="-lpcap $LIBS"
 
 else
-  LIBHTP="no"
+  LPCAPSBUFF="no"
 fi
 
-    if test "$LIBHTP" = "no"; then
-    echo
-    echo "   ERROR! libhtp library not found"
-    echo
-    exit 1
+    if test "$LPCAPSBUFF" != "no"; then
+    CFLAGS="${CFLAGS} -DHAVE_PCAP_SET_BUFF"
     fi
+    LIBS="${TMPLIBS}"
+
+# enable the running of unit tests
+    # Check whether --enable-unittests was given.
+if test "${enable_unittests+set}" = set; then :
+  enableval=$enable_unittests;
+else
+  enable_unittests=no
+fi
+
+    if test "x$enable_unittests" = "xyes"; then :
+
+        UT_ENABLED="yes"
+        CFLAGS="${CFLAGS} -DUNITTESTS"
+
+fi
+
+# enable native timeval for unified alert output
+    # Check whether --enable-unified-native-timeval was given.
+if test "${enable_unified_native_timeval+set}" = set; then :
+  enableval=$enable_unified_native_timeval;
+else
+  enable_unified_native_timeval=no
+fi
+
+    if test "x$enable_unified_native_timeval" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DUNIFIED_NATIVE_TIMEVAL"
+
+fi
+
+# enable debug output
+    # Check whether --enable-debug was given.
+if test "${enable_debug+set}" = set; then :
+  enableval=$enable_debug;
+else
+  enable_debug=no
+fi
+
+    if test "x$enable_debug" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DDEBUG"
+
+fi
+
+#libhtp
+    # Check whether --enable-non-bundled-htp was given.
+if test "${enable_non_bundled_htp+set}" = set; then :
+  enableval=$enable_non_bundled_htp;
+else
+  enable_non_bundled_htp=no
+fi
+
 
 
 if test "x$ac_cv_env_PKG_CONFIG_set" != "xset"; then
@@ -14104,6 +14101,96 @@ $as_echo "no" >&6; }
 	fi
 
 fi
+if test "x$enable_non_bundled_htp" = "xyes"; then :
+
+
+# Check whether --with-libhtp_includes was given.
+if test "${with_libhtp_includes+set}" = set; then :
+  withval=$with_libhtp_includes; with_libhtp_includes="$withval"
+else
+  with_libhtp_includes=no
+fi
+
+
+# Check whether --with-libhtp_libraries was given.
+if test "${with_libhtp_libraries+set}" = set; then :
+  withval=$with_libhtp_libraries; with_libhtp_libraries="$withval"
+else
+  with_libhtp_libraries="no"
+fi
+
+
+        if test "$with_libhtp_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libhtp_includes}"
+        fi
+
+        if test "$with_libhtp_libraries" != "no"; then
+        LDFLAGS="${LDFLAGS} -L${with_libhtp_libraries}"
+        fi
+
+        ac_fn_c_check_header_mongrel "$LINENO" "htp/htp.h" "ac_cv_header_htp_htp_h" "$ac_includes_default"
+if test "x$ac_cv_header_htp_htp_h" = x""yes; then :
+
+else
+  as_fn_error "htp/htp.h not found ..." "$LINENO" 5
+fi
+
+
+
+        LIBHTP=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_conn_create in -lhtp" >&5
+$as_echo_n "checking for htp_conn_create in -lhtp... " >&6; }
+if test "${ac_cv_lib_htp_htp_conn_create+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lhtp  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char htp_conn_create ();
+int
+main ()
+{
+return htp_conn_create ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_htp_htp_conn_create=yes
+else
+  ac_cv_lib_htp_htp_conn_create=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_htp_htp_conn_create" >&5
+$as_echo "$ac_cv_lib_htp_htp_conn_create" >&6; }
+if test "x$ac_cv_lib_htp_htp_conn_create" = x""yes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBHTP 1
+_ACEOF
+
+  LIBS="-lhtp $LIBS"
+
+else
+  LIBHTP="no"
+fi
+
+        if test "$LIBHTP" = "no"; then
+        echo
+        echo "   ERROR! libhtp library not found"
+        echo
+        exit 1
+        fi
 
 pkg_failed=no
 { $as_echo "$as_me:${as_lineno-$LINENO}: checking for LIBHTPMINVERSION" >&5
@@ -14175,20 +14262,21 @@ else
 $as_echo "yes" >&6; }
 	libhtp_minver_found="yes"
 fi
-    if test "$libhtp_minver_found" = "no"; then
-    echo
-    echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
-    echo
-    exit 1
-    fi
-    fi
+        if test "$libhtp_minver_found" = "no"; then
+        echo
+        echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
+        echo
+        exit 1
+        fi
+
+fi
 
    #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
 
 
 subdirs="$subdirs libhtp"
 
-    if test "$enable_non_bundled_htp" = "no"; then
+    if test "x$enable_non_bundled_htp" = "xno"; then
   BUILD_LIBHTP_TRUE=
   BUILD_LIBHTP_FALSE='#'
 else
@@ -14200,9 +14288,12 @@ fi
 # enable CUDA output
     # Check whether --enable-cuda was given.
 if test "${enable_cuda+set}" = set; then :
-  enableval=$enable_cuda;  enable_cuda=yes
-
+  enableval=$enable_cuda;
+else
+  enable_cuda=no
 fi
+
+    if test "x$enable_cuda" = "xyes"; then :
 
 
 # Check whether --with-cuda_includes was given.
@@ -14221,7 +14312,6 @@ else
 fi
 
 
-    if test "$enable_cuda" = "yes"; then
         CFLAGS="${CFLAGS} -D__SC_CUDA_SUPPORT__"
 
         if test "$with_cuda_includes" != "no"; then
@@ -14297,7 +14387,9 @@ fi
             echo
             exit 1
         fi
-    fi
+
+fi
+
 
 # Check for libcap-ng
 
@@ -14401,12 +14493,117 @@ fi
 
     # Check whether --enable-profiling was given.
 if test "${enable_profiling+set}" = set; then :
-  enableval=$enable_profiling;  enable_profiling=yes
+  enableval=$enable_profiling;
+else
+  enable_profiling=no
+fi
+
+    if test "x$enable_profiling" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DPROFILING"
 
 fi
 
-    if test "$enable_profiling" = "yes"; then
-    CFLAGS="${CFLAGS} -DPROFILING"
+# Check for DAG support.
+
+    # Check whether --enable-dag was given.
+if test "${enable_dag+set}" = set; then :
+  enableval=$enable_dag;  enable_dag=yes
+else
+   enable_dag=no
+fi
+
+
+# Check whether --with-dag_includes was given.
+if test "${with_dag_includes+set}" = set; then :
+  withval=$with_dag_includes; with_dag_includes="$withval"
+else
+  with_dag_includes="no"
+fi
+
+
+# Check whether --with-dag_libraries was given.
+if test "${with_dag_libraries+set}" = set; then :
+  withval=$with_dag_libraries; with_dag_libraries="$withval"
+else
+  with_dag_libraries="no"
+fi
+
+
+    if test "$enable_dag" = "yes"; then
+
+	    if test "$with_dag_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_dag_includes}"
+        fi
+
+        if test "$with_dag_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS} -I${with_dag_libraries}"
+        fi
+
+        ac_fn_c_check_header_mongrel "$LINENO" "dagapi.h" "ac_cv_header_dagapi_h" "$ac_includes_default"
+if test "x$ac_cv_header_dagapi_h" = x""yes; then :
+  DAG="yes"
+else
+  DAG="no"
+fi
+
+
+        if test "$DAG" != "no"; then
+            DAG=""
+	        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dag_open in -ldag" >&5
+$as_echo_n "checking for dag_open in -ldag... " >&6; }
+if test "${ac_cv_lib_dag_dag_open+set}" = set; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-ldag  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char dag_open ();
+int
+main ()
+{
+return dag_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_dag_dag_open=yes
+else
+  ac_cv_lib_dag_dag_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_dag_dag_open" >&5
+$as_echo "$ac_cv_lib_dag_dag_open" >&6; }
+if test "x$ac_cv_lib_dag_dag_open" = x""yes; then :
+  DAG="yes"
+else
+  DAG="no"
+fi
+
+        fi
+
+        if test "$DAG" != "no"; then
+            CFLAGS="${CFLAGS} -DHAVE_DAG"
+        fi
+
+        if test "$DAG" = "no"; then
+            echo
+            echo "  ERROR! libdag library not found"
+            echo
+            exit 1
+        fi
     fi
 
 
@@ -16888,3 +17085,21 @@ if test -n "$ac_unrecognized_opts" && test "$enable_option_checking" != no; then
 $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
 
+
+echo "
+Suricata Configuration:
+  NFQueue support:          ${enable_nfqueue}
+  IPFW support:             ${enable_ipfw}
+  PF_RING support:          ${enable_pfring}
+  Prelude support:          ${enable_prelude}
+  Unit tests enabled:       ${enable_unittests}
+  Debug output enabled:     ${enable_debug}
+  CUDA enabled:             ${enable_cuda}
+  DAG enabled:              ${enable_dag}
+  Profiling enabled:        ${enable_profiling}
+  GCC Protect enabled:      ${enable_gccprotect}
+  GCC march native enabled: ${enable_gccmarch_native}
+  GCC Profile enabled:      ${enable_gccprofile}
+  Unified native time:      ${enable_unified_native_timeval}
+  Non-bundled htp:          ${enable_non_bundled_htp}
+"

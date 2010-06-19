@@ -25,11 +25,10 @@
 
 #include "suricata-common.h"
 #include "decode.h"
-#include "detect.h"
+
 #include "flow-var.h"
 
-#include "util-cidr.h"
-#include "util-unittest.h"
+#include "app-layer-protos.h"
 
 #include "detect.h"
 #include "detect-parse.h"
@@ -46,6 +45,9 @@
 
 #include "util-error.h"
 #include "util-debug.h"
+#include "util-cidr.h"
+#include "util-unittest.h"
+
 
 /* prototypes */
 int SigGroupHeadClearSigs(SigGroupHead *);
@@ -63,18 +65,6 @@ static uint32_t detect_siggroup_matcharray_memory = 0;
 static uint32_t detect_siggroup_matcharray_init_cnt = 0;
 static uint32_t detect_siggroup_matcharray_free_cnt = 0;
 
-static SigGroupHeadInitData *SigGroupHeadInitDataAlloc(uint32_t size) {
-    SigGroupHeadInitData *sghid = SCMalloc(sizeof(SigGroupHeadInitData));
-    if (sghid == NULL)
-        return NULL;
-
-    memset(sghid, 0x00, sizeof(SigGroupHeadInitData));
-
-    detect_siggroup_head_initdata_init_cnt++;
-    detect_siggroup_head_initdata_memory += sizeof(SigGroupHeadInitData);
-    return sghid;
-}
-
 void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
     if (sghid->content_array != NULL) {
         SCFree(sghid->content_array);
@@ -86,10 +76,57 @@ void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
         sghid->uri_content_array = NULL;
         sghid->uri_content_size = 0;
     }
+    if (sghid->sig_array != NULL) {
+        SCFree(sghid->sig_array);
+        sghid->sig_array = NULL;
+
+        detect_siggroup_sigarray_free_cnt++;
+        detect_siggroup_sigarray_memory -= sghid->sig_size;
+    }
     SCFree(sghid);
 
     detect_siggroup_head_initdata_free_cnt++;
     detect_siggroup_head_initdata_memory -= sizeof(SigGroupHeadInitData);
+}
+
+static SigGroupHeadInitData *SigGroupHeadInitDataAlloc(uint32_t size) {
+    SigGroupHeadInitData *sghid = SCMalloc(sizeof(SigGroupHeadInitData));
+    if (sghid == NULL)
+        return NULL;
+
+    memset(sghid, 0x00, sizeof(SigGroupHeadInitData));
+
+    detect_siggroup_head_initdata_init_cnt++;
+    detect_siggroup_head_initdata_memory += sizeof(SigGroupHeadInitData);
+
+    /* initialize the signature bitarray */
+    sghid->sig_size = size;
+    if ( (sghid->sig_array = SCMalloc(sghid->sig_size)) == NULL)
+        goto error;
+
+    memset(sghid->sig_array, 0, sghid->sig_size);
+
+    detect_siggroup_sigarray_init_cnt++;
+    detect_siggroup_sigarray_memory += sghid->sig_size;
+
+    return sghid;
+error:
+    SigGroupHeadInitDataFree(sghid);
+    return NULL;
+}
+
+void SigGroupHeadStore(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+    //printf("de_ctx->sgh_array_cnt %u, de_ctx->sgh_array_size %u, de_ctx->sgh_array %p\n", de_ctx->sgh_array_cnt, de_ctx->sgh_array_size, de_ctx->sgh_array);
+    if (de_ctx->sgh_array_cnt < de_ctx->sgh_array_size) {
+        de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
+    } else {
+        de_ctx->sgh_array = SCRealloc(de_ctx->sgh_array, sizeof(SigGroupHead *) * (16 + de_ctx->sgh_array_size));
+        if (de_ctx->sgh_array == NULL)
+            return;
+        de_ctx->sgh_array_size += 10;
+        de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
+    }
+    de_ctx->sgh_array_cnt++;
 }
 
 /**
@@ -101,7 +138,7 @@ void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
  * \retval sgh Pointer to the newly init SigGroupHead on success; or NULL in
  *             case of error.
  */
-static SigGroupHead *SigGroupHeadAlloc(uint32_t size)
+static SigGroupHead *SigGroupHeadAlloc(DetectEngineCtx *de_ctx, uint32_t size)
 {
     SigGroupHead *sgh = SCMalloc(sizeof(SigGroupHead));
     if (sgh == NULL)
@@ -114,15 +151,6 @@ static SigGroupHead *SigGroupHeadAlloc(uint32_t size)
 
     detect_siggroup_head_init_cnt++;
     detect_siggroup_head_memory += sizeof(SigGroupHead);
-
-    /* initialize the signature bitarray */
-    sgh->sig_size = size;
-    if ( (sgh->sig_array = SCMalloc(sgh->sig_size)) == NULL)
-        goto error;
-    memset(sgh->sig_array, 0, sgh->sig_size);
-
-    detect_siggroup_sigarray_init_cnt++;
-    detect_siggroup_sigarray_memory += sgh->sig_size;
 
     return sgh;
 
@@ -146,21 +174,14 @@ void SigGroupHeadFree(SigGroupHead *sgh)
 
     PatternMatchDestroyGroup(sgh);
 
-    if (sgh->sig_array != NULL) {
-        SCFree(sgh->sig_array);
-        sgh->sig_array = NULL;
-
-        detect_siggroup_sigarray_free_cnt++;
-        detect_siggroup_sigarray_memory -= sgh->sig_size;
-    }
-
     if (sgh->match_array != NULL) {
         detect_siggroup_matcharray_free_cnt++;
-        detect_siggroup_matcharray_memory -= (sgh->sig_cnt * sizeof(SigIntId));
+        detect_siggroup_matcharray_memory -= (sgh->sig_cnt * sizeof(Signature *));
         SCFree(sgh->match_array);
         sgh->match_array = NULL;
-        sgh->sig_cnt = 0;
     }
+
+    sgh->sig_cnt = 0;
 
     if (sgh->init != NULL) {
         SigGroupHeadInitDataFree(sgh->init);
@@ -430,6 +451,131 @@ void SigGroupHeadMpmUriHashFree(DetectEngineCtx *de_ctx)
 }
 
 /**
+ * \brief The hash function to be the used by the mpm uri SigGroupHead hash
+ *        table - DetectEngineCtx->sgh_mpm_uri_hash_table.
+ *
+ * \param ht      Pointer to the hash table.
+ * \param data    Pointer to the SigGroupHead.
+ * \param datalen Not used in our case.
+ *
+ * \retval hash The generated hash value.
+ */
+uint32_t SigGroupHeadMpmStreamHashFunc(HashListTable *ht, void *data, uint16_t datalen)
+{
+    SigGroupHead *sgh = (SigGroupHead *)data;
+    uint32_t hash = 0;
+    uint32_t b = 0;
+
+    for (b = 0; b < sgh->init->stream_content_size; b++)
+        hash += sgh->init->stream_content_array[b];
+
+    return hash % ht->array_size;
+}
+
+/**
+ * \brief The Compare function to be used by the mpm uri SigGroupHead hash
+ *        table - DetectEngineCtx->sgh_mpm_uri_hash_table.
+ *
+ * \param data1 Pointer to the first SigGroupHead.
+ * \param len1  Not used.
+ * \param data2 Pointer to the second SigGroupHead.
+ * \param len2  Not used.
+ *
+ * \retval 1 If the 2 SigGroupHeads sent as args match.
+ * \retval 0 If the 2 SigGroupHeads sent as args do not match.
+ */
+char SigGroupHeadMpmStreamCompareFunc(void *data1, uint16_t len1, void *data2,
+                                   uint16_t len2)
+{
+    SigGroupHead *sgh1 = (SigGroupHead *)data1;
+    SigGroupHead *sgh2 = (SigGroupHead *)data2;
+
+    if (sgh1->init->stream_content_size != sgh2->init->stream_content_size)
+        return 0;
+
+    if (memcmp(sgh1->init->stream_content_array, sgh2->init->stream_content_array,
+               sgh1->init->stream_content_size) != 0) {
+        return 0;
+    }
+
+    return 1;
+}
+
+/**
+ * \brief Initializes the mpm uri hash table to be used by the detection engine
+ *        context.
+ *
+ * \param de_ctx Pointer to the detection engine context.
+ *
+ * \retval  0 On success.
+ * \retval -1 On failure.
+ */
+int SigGroupHeadMpmStreamHashInit(DetectEngineCtx *de_ctx)
+{
+    de_ctx->sgh_mpm_stream_hash_table = HashListTableInit(4096,
+            SigGroupHeadMpmStreamHashFunc, SigGroupHeadMpmStreamCompareFunc, NULL);
+    if (de_ctx->sgh_mpm_stream_hash_table == NULL)
+        goto error;
+
+    return 0;
+
+error:
+    return -1;
+}
+
+/**
+ * \brief Adds a SigGroupHead to the detection engine context SigGroupHead
+ *        mpm uri hash table.
+ *
+ * \param de_ctx Pointer to the detection engine context.
+ * \param sgh    Pointer to the SigGroupHead.
+ *
+ * \retval ret 0 on Successfully adding the argument sgh and -1 on failure.
+ */
+int SigGroupHeadMpmStreamHashAdd(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
+    int ret = HashListTableAdd(de_ctx->sgh_mpm_stream_hash_table, (void *)sgh, 0);
+
+    return ret;
+}
+
+/**
+ * \brief Used to lookup a SigGroupHead from the detection engine context
+ *        SigGroupHead mpm uri hash table.
+ *
+ * \param de_ctx Pointer to the detection engine context.
+ * \param sgh    Pointer to the SigGroupHead.
+ *
+ * \retval rsgh On success a pointer to the SigGroupHead if the SigGroupHead is
+ *              found in the hash table; NULL on failure.
+ */
+SigGroupHead *SigGroupHeadMpmStreamHashLookup(DetectEngineCtx *de_ctx,
+                                           SigGroupHead *sgh)
+{
+    SigGroupHead *rsgh = HashListTableLookup(de_ctx->sgh_mpm_stream_hash_table,
+                                             (void *)sgh, 0);
+
+    return rsgh;
+}
+
+/**
+ * \brief Frees the hash table - DetectEngineCtx->sgh_mpm_uri_hash_table,
+ *        allocated by SigGroupHeadMpmUriHashInit() function.
+ *
+ * \param de_ctx Pointer to the detection engine context.
+ */
+void SigGroupHeadMpmStreamHashFree(DetectEngineCtx *de_ctx)
+{
+    if (de_ctx->sgh_mpm_stream_hash_table == NULL)
+        return;
+
+    HashListTableFree(de_ctx->sgh_mpm_stream_hash_table);
+    de_ctx->sgh_mpm_stream_hash_table = NULL;
+
+    return;
+}
+
+/**
  * \brief The hash function to be the used by the hash table -
  *        DetectEngineCtx->sgh_hash_table.
  *
@@ -447,11 +593,11 @@ uint32_t SigGroupHeadHashFunc(HashListTable *ht, void *data, uint16_t datalen)
 
     SCLogDebug("hashing sgh %p (mpm_content_maxlen %u)", sgh, sgh->mpm_content_maxlen);
 
-    for (b = 0; b < sgh->sig_size; b++)
-        hash += sgh->sig_array[b];
+    for (b = 0; b < sgh->init->sig_size; b++)
+        hash += sgh->init->sig_array[b];
 
     hash %= ht->array_size;
-    SCLogDebug("hash %"PRIu32" (sig_size %"PRIu32")", hash, sgh->sig_size);
+    SCLogDebug("hash %"PRIu32" (sig_size %"PRIu32")", hash, sgh->init->sig_size);
     return hash;
 }
 
@@ -476,10 +622,10 @@ char SigGroupHeadCompareFunc(void *data1, uint16_t len1, void *data2,
     if (data1 == NULL || data2 == NULL)
         return 0;
 
-    if (sgh1->sig_size != sgh2->sig_size)
+    if (sgh1->init->sig_size != sgh2->init->sig_size)
         return 0;
 
-    if (memcmp(sgh1->sig_array, sgh2->sig_array, sgh1->sig_size) != 0)
+    if (memcmp(sgh1->init->sig_array, sgh2->init->sig_array, sgh1->init->sig_size) != 0)
         return 0;
 
     return 1;
@@ -738,16 +884,17 @@ static void SigGroupHeadFreeSigArraysHash2(DetectEngineCtx *de_ctx,
 
     for (htb = HashListTableGetListHead(ht);
          htb != NULL;
-         htb = HashListTableGetListNext(htb)) {
+         htb = HashListTableGetListNext(htb))
+    {
         sgh = (SigGroupHead *)HashListTableGetListData(htb);
 
-        if (sgh->sig_array != NULL) {
+        if (sgh->init->sig_array != NULL) {
             detect_siggroup_sigarray_free_cnt++;
-            detect_siggroup_sigarray_memory -= sgh->sig_size;
+            detect_siggroup_sigarray_memory -= sgh->init->sig_size;
 
-            SCFree(sgh->sig_array);
-            sgh->sig_array = NULL;
-            sgh->sig_size = 0;
+            SCFree(sgh->init->sig_array);
+            sgh->init->sig_array = NULL;
+            sgh->init->sig_size = 0;
         }
 
         if (sgh->init != NULL) {
@@ -776,15 +923,6 @@ static void SigGroupHeadFreeSigArraysHash(DetectEngineCtx *de_ctx,
          htb != NULL;
          htb = HashListTableGetListNext(htb)) {
         sgh = (SigGroupHead *)HashListTableGetListData(htb);
-
-        if (sgh->sig_array != NULL) {
-            detect_siggroup_sigarray_free_cnt++;
-            detect_siggroup_sigarray_memory -= sgh->sig_size;
-
-            SCFree(sgh->sig_array);
-            sgh->sig_array = NULL;
-            sgh->sig_size = 0;
-        }
 
         if (sgh->init != NULL) {
             SigGroupHeadInitDataFree(sgh->init);
@@ -859,13 +997,13 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
 
     /* see if we have a head already */
     if (*sgh == NULL) {
-        *sgh = SigGroupHeadAlloc(DetectEngineGetMaxSigId(de_ctx) / 8 + 1);
+        *sgh = SigGroupHeadAlloc(de_ctx, DetectEngineGetMaxSigId(de_ctx) / 8 + 1);
         if (*sgh == NULL)
             goto error;
     }
 
     /* enable the sig in the bitarray */
-    (*sgh)->sig_array[s->num / 8] |= 1 << (s->num % 8);
+    (*sgh)->init->sig_array[s->num / 8] |= 1 << (s->num % 8);
 
     /* update maxlen for mpm */
     if (s->flags & SIG_FLAG_MPM) {
@@ -880,7 +1018,7 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
             SCLogDebug("(%p)->mpm_content_maxlen %u", *sgh, (*sgh)->mpm_content_maxlen);
         }
     }
-    if (s->flags & SIG_FLAG_MPM) {
+    if (s->flags & SIG_FLAG_MPM_URI) {
         if (s->mpm_uricontent_maxlen > 0) {
             if ((*sgh)->mpm_uricontent_maxlen == 0)
                 (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
@@ -909,8 +1047,8 @@ int SigGroupHeadClearSigs(SigGroupHead *sgh)
     if (sgh == NULL)
         return 0;
 
-    if (sgh->sig_array != NULL)
-        memset(sgh->sig_array, 0, sgh->sig_size);
+    if (sgh->init->sig_array != NULL)
+        memset(sgh->init->sig_array, 0, sgh->init->sig_size);
 
     sgh->sig_cnt = 0;
 
@@ -936,14 +1074,14 @@ int SigGroupHeadCopySigs(DetectEngineCtx *de_ctx, SigGroupHead *src, SigGroupHea
         return 0;
 
     if (*dst == NULL) {
-        *dst = SigGroupHeadAlloc(DetectEngineGetMaxSigId(de_ctx) / 8 + 1);
+        *dst = SigGroupHeadAlloc(de_ctx, DetectEngineGetMaxSigId(de_ctx) / 8 + 1);
         if (*dst == NULL)
             goto error;
     }
 
     /* do the copy */
-    for (idx = 0; idx < src->sig_size; idx++)
-        (*dst)->sig_array[idx] = (*dst)->sig_array[idx] | src->sig_array[idx];
+    for (idx = 0; idx < src->init->sig_size; idx++)
+        (*dst)->init->sig_array[idx] = (*dst)->init->sig_array[idx] | src->init->sig_array[idx];
 
     if (src->mpm_content_maxlen != 0) {
         if ((*dst)->mpm_content_maxlen == 0)
@@ -983,7 +1121,7 @@ void SigGroupHeadSetSigCnt(SigGroupHead *sgh, uint32_t max_idx)
 
     sgh->sig_cnt = 0;
     for (sig = 0; sig < max_idx + 1; sig++) {
-        if (sgh->sig_array[sig / 8] & (1 << (sig % 8)))
+        if (sgh->init->sig_array[sig / 8] & (1 << (sig % 8)))
             sgh->sig_cnt++;
     }
 
@@ -1064,8 +1202,8 @@ void SigGroupHeadPrintSigs(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     uint32_t u;
 
     SCLogDebug("The Signatures present in this SigGroupHead are: ");
-    for (u = 0; u < (sgh->sig_size * 8); u++) {
-        if (sgh->sig_array[u / 8] & (1 << (u % 8))) {
+    for (u = 0; u < (sgh->init->sig_size * 8); u++) {
+        if (sgh->init->sig_array[u / 8] & (1 << (u % 8))) {
             SCLogDebug("%" PRIu32, u);
             printf("s->num %"PRIu16" ", u);
         }
@@ -1140,7 +1278,6 @@ int SigGroupHeadLoadContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     Signature *s = NULL;
     SigMatch *sm = NULL;
     uint32_t sig = 0;
-    SigIntId num = 0;
     DetectContentData *co = NULL;
 
     if (sgh == NULL)
@@ -1159,13 +1296,14 @@ int SigGroupHeadLoadContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     memset(sgh->init->content_array,0, sgh->init->content_size);
 
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
-        num = sgh->match_array[sig];
-
-        s = de_ctx->sig_array[num];
+        s = sgh->match_array[sig];
         if (s == NULL)
             continue;
 
         if (!(s->flags & SIG_FLAG_MPM))
+            continue;
+
+        if (s->alproto != ALPROTO_UNKNOWN)
             continue;
 
         sm = s->pmatch;
@@ -1223,7 +1361,6 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     Signature *s = NULL;
     SigMatch *sm = NULL;
     uint32_t sig = 0;
-    SigIntId num = 0;
     DetectUricontentData *co = NULL;
 
     if (sgh == NULL)
@@ -1242,9 +1379,8 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     memset(sgh->init->uri_content_array, 0, sgh->init->uri_content_size);
 
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
-        num = sgh->match_array[sig];
+        s = sgh->match_array[sig];
 
-        s = de_ctx->sig_array[num];
         if (s == NULL)
             continue;
 
@@ -1291,6 +1427,89 @@ int SigGroupHeadClearUricontent(SigGroupHead *sh)
 }
 
 /**
+ * \brief Loads all the content ids from all the contents belonging to all the
+ *        Signatures in this SigGroupHead, into a bitarray.  A fast and an
+ *        efficient way of comparing pattern sets.
+ *
+ * \param de_ctx Pointer to the detection engine context.
+ * \param sgh    Pointer to the SigGroupHead.
+ *
+ * \retval  0 On success, i.e. on either the detection engine context being NULL
+ *            or on succesfully allocating memory and updating it with relevant
+ *            data.
+ * \retval -1 On failure.
+ */
+int SigGroupHeadLoadStreamContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    uint32_t sig = 0;
+    DetectContentData *co = NULL;
+
+    if (sgh == NULL)
+        return 0;
+
+    if (DetectContentMaxId(de_ctx) == 0)
+        return 0;
+
+    BUG_ON(sgh->init == NULL);
+
+    sgh->init->stream_content_size = (DetectContentMaxId(de_ctx) / 8) + 1;
+    sgh->init->stream_content_array = SCMalloc(sgh->init->stream_content_size);
+    if (sgh->init->stream_content_array == NULL)
+        return -1;
+
+    memset(sgh->init->stream_content_array,0, sgh->init->stream_content_size);
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        if (!(s->flags & SIG_FLAG_MPM))
+            continue;
+
+        if (s->flags & SIG_FLAG_DSIZE)
+            continue;
+
+        sm = s->pmatch;
+        if (sm == NULL)
+            continue;
+
+        for ( ;sm != NULL; sm = sm->next) {
+            if (sm->type == DETECT_CONTENT) {
+                co = (DetectContentData *)sm->ctx;
+
+                sgh->init->stream_content_array[co->id / 8] |= 1 << (co->id % 8);
+            }
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * \brief Clears the memory allocated by SigGroupHeadLoadContent() for the
+ *        bitarray to hold the content ids for a SigGroupHead.
+ *
+ * \param Pointer to the SigGroupHead whose content_array would to be cleared.
+ *
+ * \ret 0 Always.
+ */
+int SigGroupHeadClearStreamContent(SigGroupHead *sh)
+{
+    if (sh == NULL)
+        return 0;
+
+    if (sh->init->stream_content_array != NULL) {
+        SCFree(sh->init->stream_content_array);
+        sh->init->stream_content_array = NULL;
+        sh->init->stream_content_size = 0;
+    }
+    return 0;
+}
+
+/**
  * \brief Create an array with all the internal ids of the sigs that this
  *        sig group head will check for.
  *
@@ -1313,24 +1532,67 @@ int SigGroupHeadBuildMatchArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
 
     BUG_ON(sgh->match_array != NULL);
 
-    sgh->match_array = SCMalloc(sgh->sig_cnt * sizeof(SigIntId));
+    sgh->match_array = SCMalloc(sgh->sig_cnt * sizeof(Signature *));
     if (sgh->match_array == NULL)
         return -1;
 
-    memset(sgh->match_array,0, sgh->sig_cnt * sizeof(SigIntId));
+    memset(sgh->match_array,0, sgh->sig_cnt * sizeof(Signature *));
 
     detect_siggroup_matcharray_init_cnt++;
-    detect_siggroup_matcharray_memory += (sgh->sig_cnt * sizeof(SigIntId));
+    detect_siggroup_matcharray_memory += (sgh->sig_cnt * sizeof(Signature *));
 
     for (sig = 0; sig < max_idx + 1; sig++) {
-        if ( !(sgh->sig_array[(sig / 8)] & (1 << (sig % 8))) )
+        if (!(sgh->init->sig_array[(sig / 8)] & (1 << (sig % 8))) )
             continue;
 
         s = de_ctx->sig_array[sig];
         if (s == NULL)
             continue;
 
-        sgh->match_array[idx] = s->num;
+        sgh->match_array[idx] = s;
+        idx++;
+    }
+
+    return 0;
+}
+
+int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
+    Signature *s = NULL;
+    uint32_t idx = 0;
+    uint32_t sig = 0;
+
+    if (sgh == NULL)
+        return 0;
+
+    BUG_ON(sgh->head_array != NULL);
+
+    sgh->head_array = SCMalloc(sgh->sig_cnt * sizeof(SignatureHeader));
+    if (sgh->head_array == NULL)
+        return -1;
+
+    memset(sgh->head_array, 0, sgh->sig_cnt * sizeof(SignatureHeader));
+
+    detect_siggroup_matcharray_init_cnt++;
+    detect_siggroup_matcharray_memory += (sgh->sig_cnt * sizeof(SignatureHeader *));
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        sgh->head_array[idx].flags = s->flags;
+        sgh->head_array[idx].mpm_pattern_id = s->mpm_pattern_id;
+        sgh->head_array[idx].alproto = s->alproto;
+        sgh->head_array[idx].num = s->num;
+        sgh->head_array[idx].full_sig = s;
+
+        BUG_ON(s->flags != sgh->head_array[idx].flags);
+        BUG_ON(s->alproto != sgh->head_array[idx].alproto);
+        BUG_ON(s->mpm_pattern_id != sgh->head_array[idx].mpm_pattern_id);
+        BUG_ON(s->num != sgh->head_array[idx].num);
+        BUG_ON(s != sgh->head_array[idx].full_sig);
+
         idx++;
     }
 
@@ -1363,12 +1625,12 @@ int SigGroupHeadContainsSigId(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
     }
 
     for (sig = 0; sig < max_sid; sig++) {
-        if (sgh->sig_array == NULL) {
+        if (sgh->init->sig_array == NULL) {
             SCReturnInt(0);
         }
 
         /* Check if the SigGroupHead has an entry for the sid */
-        if ( !(sgh->sig_array[sig / 8] & (1 << (sig % 8))) )
+        if ( !(sgh->init->sig_array[sig / 8] & (1 << (sig % 8))) )
             continue;
 
         /* If we have reached here, we have an entry for sid in the SigGrouHead.
@@ -1841,9 +2103,9 @@ static int SigGroupHeadTest09(void)
     SigGroupHeadSetSigCnt(sh, 4);
     SigGroupHeadBuildMatchArray(de_ctx, sh, 4);
 
-    result &= (sh->match_array[0] == 0);
-    result &= (sh->match_array[1] == 2);
-    result &= (sh->match_array[2] == 4);
+    result &= (sh->match_array[0] == de_ctx->sig_list);
+    result &= (sh->match_array[1] == de_ctx->sig_list->next->next);
+    result &= (sh->match_array[2] == de_ctx->sig_list->next->next->next->next);
 
     SigGroupHeadFree(sh);
 
@@ -1892,7 +2154,7 @@ static int SigGroupHeadTest10(void)
 
     AddressDebugPrint(&p.dst);
 
-    SigGroupHead *sgh = SigMatchSignaturesGetSgh(&th_v, de_ctx, det_ctx, &p);
+    SigGroupHead *sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, &p);
     if (sgh == NULL) {
         goto end;
     }

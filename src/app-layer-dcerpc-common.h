@@ -133,16 +133,31 @@ typedef struct DCERPCBindBindAck_ {
 
 typedef struct DCERPCRequest_ {
     uint16_t opnum;
-    uint8_t *stub_data;
+    /* holds the stub data for the request */
+    uint8_t *stub_data_buffer;
+    /* length of the above buffer */
+    uint32_t stub_data_buffer_len;
+    /* used by the dce preproc to indicate fresh entry in the stub data buffer */
+    uint8_t stub_data_fresh;
 } DCERPCRequest;
+
+typedef struct DCERPCResponse_ {
+    /* holds the stub data for the response */
+    uint8_t *stub_data_buffer;
+    /* length of the above buffer */
+    uint32_t stub_data_buffer_len;
+    /* used by the dce preproc to indicate fresh entry in the stub data buffer */
+    uint8_t stub_data_fresh;
+} DCERPCResponse;
 
 typedef struct DCERPC_ {
     DCERPCHdr dcerpchdr;
     DCERPCBindBindAck dcerpcbindbindack;
     DCERPCRequest dcerpcrequest;
+    DCERPCResponse dcerpcresponse;
     uint16_t bytesprocessed;
     uint8_t pad;
-    uint8_t padleft;
+    uint16_t padleft;
     uint16_t transaction_id;
 } DCERPC;
 

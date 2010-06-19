@@ -78,6 +78,11 @@ typedef struct SCProfileSummary_ {
 int profiling_rules_enabled = 0;
 
 /**
+ * Used as a check so we don't double enter a profiling run.
+ */
+__thread int profiling_entered = 0;
+
+/**
  * \brief Initialize profiling.
  */
 void
@@ -194,6 +199,7 @@ SCProfilingDump(FILE *output)
     uint32_t i;
     SCProfileSummary summary[rules_pca->size];
     uint32_t count = rules_pca->size;
+    uint64_t total_ticks = 0;
 
     SCLogInfo("Dumping profiling data.");
 
@@ -206,6 +212,7 @@ SCProfilingDump(FILE *output)
                 (long double)rules_pca->head[i].syncs;
         summary[i - 1].checks = rules_pca->head[i].syncs;
         summary[i - 1].matches = rules_profile_data[i].matches;
+        total_ticks += summary[i - 1].ticks;
     }
 
     switch (profiling_rules_sort_order) {
@@ -227,17 +234,22 @@ SCProfilingDump(FILE *output)
         break;
     }
 
-    fprintf(output, "  %-12s %-12s %-8s %-8s %-11s\n", "Rule", "Ticks", "Checks", "Matches", "Avg Ticks");
+    fprintf(output, "  %-12s %-12s %-6s %-8s %-8s %-11s\n", "Rule", "Ticks", "%", "Checks", "Matches", "Avg Ticks");
     fprintf(output, "  ------------ "
         "------------ "
+        "------ "
         "-------- "
         "-------- "
         "----------- "
         "\n");
     for (i = 0; i < MIN(count, profiling_rules_limit); i++) {
-        fprintf(output, "  %-12s %-12"PRIu64" %-8"PRIu64" %-8"PRIu64" %-8.2f\n",
+        double percent = (long double)summary[i].ticks /
+            (long double)total_ticks * 100;
+        fprintf(output,
+            "  %-12s %-12"PRIu64" %-6.2f %-8"PRIu64" %-8"PRIu64" %-8.2f\n",
             summary[i].name,
             summary[i].ticks,
+            percent,
             summary[i].checks,
             summary[i].matches,
             summary[i].avgticks);
@@ -355,6 +367,91 @@ ProfilingTest01(void)
     return 1;
 }
 
+static int
+ProfilingGenericTicksTest01(void) {
+#define TEST_RUNS 1024
+    uint64_t ticks_start = 0;
+    uint64_t ticks_end = 0;
+    void *ptr[TEST_RUNS];
+    int i;
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        ptr[i] = malloc(1024);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("malloc(1024) %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        free(ptr[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("free(1024) %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    SCMutex m[TEST_RUNS];
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCMutexInit(&m[i], NULL);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCMutexInit() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCMutexLock(&m[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCMutexLock() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCMutexUnlock(&m[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCMutexUnlock() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCMutexDestroy(&m[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCMutexDestroy() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    SCSpinlock s[TEST_RUNS];
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCSpinInit(&s[i], 0);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCSpinInit() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCSpinLock(&s[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCSpinLock() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCSpinUnlock(&s[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCSpinUnlock() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SCSpinDestroy(&s[i]);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SCSpinDestroy() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    return 1;
+}
+
 #endif /* UNITTESTS */
 
 void
@@ -362,6 +459,7 @@ SCProfilingRegisterTests(void)
 {
 #ifdef UNITTESTS
     UtRegisterTest("ProfilingTest01", ProfilingTest01, 1);
+    UtRegisterTest("ProfilingGenericTicksTest01", ProfilingGenericTicksTest01, 1);
 #endif /* UNITTESTS */
 }
 

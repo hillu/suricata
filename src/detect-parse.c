@@ -195,6 +195,27 @@ void SigMatchAppendPayload(Signature *s, SigMatch *new) {
     s->sm_cnt++;
 }
 
+void SigMatchAppendDcePayload(Signature *s, SigMatch *new) {
+    SCLogDebug("Append SigMatch against Sigature->dmatch(dce) list");
+    if (s->dmatch == NULL) {
+        s->dmatch = new;
+        s->dmatch_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->dmatch_tail;
+        cur->next = new;
+        new->prev = cur;
+        new->next = NULL;
+        s->dmatch_tail = new;
+    }
+
+    new->idx = s->sm_cnt;
+    s->sm_cnt++;
+
+    return;
+}
+
 /** \brief Append a sig match to the signatures non-payload match list
  *
  *  \param s signature
@@ -283,6 +304,70 @@ void SigMatchReplaceContent(Signature *s, SigMatch *old, SigMatch *new) {
 }
 
 /**
+ *  \brief Pull a content 'old' from the pmatch list, append 'new' to umatch list.
+ *
+ *  Used for replacing contents that have the http_uri modifier that need to be
+ *  moved to the uri inspection list.
+ */
+void SigMatchReplaceContentToUricontent(Signature *s, SigMatch *old, SigMatch *new) {
+    BUG_ON(old == NULL);
+
+    SigMatch *m = s->pmatch;
+    SigMatch *pm = m;
+
+    for ( ; m != NULL; m = m->next) {
+        if (m == old) {
+            if (m == s->pmatch) {
+                s->pmatch = m->next;
+                if (m->next != NULL) {
+                    m->next->prev = NULL;
+                }
+            } else {
+                pm->next = m->next;
+                if (m->next != NULL) {
+                    m->next->prev = pm;
+                }
+            }
+
+            if (m == s->pmatch_tail) {
+                if (pm == m) {
+                    s->pmatch_tail = NULL;
+                } else {
+                    s->pmatch_tail = pm;
+                }
+            }
+
+            //printf("m %p  s->pmatch %p s->pmatch_tail %p\n", m, s->pmatch, s->pmatch_tail);
+            break;
+        }
+
+        pm = m;
+    }
+
+    /* finally append the "new" sig match to the app layer list */
+    /** \todo if the app layer gets it's own list, adapt this code */
+    if (s->umatch == NULL) {
+        s->umatch = new;
+        s->umatch_tail = new;
+        new->next = NULL;
+        new->prev = NULL;
+    } else {
+        SigMatch *cur = s->umatch;
+
+        for ( ; cur->next != NULL; cur = cur->next);
+
+        cur->next = new;
+        new->next = NULL;
+        new->prev = cur;
+        s->umatch_tail = new;
+    }
+
+    /* move over the idx */
+    if (pm != NULL)
+        new->idx = pm->idx;
+}
+
+/**
  * \brief Replaces the old sigmatch with the new sigmatch in the current
  *        signature.
  *
@@ -333,6 +418,63 @@ SigMatch *SigMatchGetLastSM(SigMatch *sm, uint8_t type)
     }
 
     return NULL;
+}
+
+SigMatch *SigMatchGetLastSMFromLists(Signature *s, int args, ...)
+{
+    if (args % 2 != 0) {
+        SCLogError(SC_ERR_INVALID_ARGUMENTS, "You need to send an even no of args "
+                   "to this function, since we need a SigMatch list for every "
+                   "SigMatch type(send a map of sm_type and sm_list) sent");
+        return NULL;
+    }
+
+    SigMatch *sm_list[args / 2];
+    int sm_type[args / 2];
+    int list_index = 0;
+
+    va_list ap;
+    int i = 0, j = 0;
+
+    va_start(ap, args);
+
+    for (i = 0; i < args; i += 2) {
+        sm_type[list_index] = va_arg(ap, int);
+
+        sm_list[list_index] = va_arg(ap, SigMatch *);
+
+        if (sm_list[list_index] != NULL)
+            list_index++;
+
+    }
+
+    va_end(ap);
+
+    SigMatch *sm[list_index];
+    int sm_entries = 0;
+    for (i = 0; sm_entries < list_index; i++) {
+        sm[sm_entries] = SigMatchGetLastSM(sm_list[i], sm_type[i]);
+        if (sm[sm_entries] != NULL)
+            sm_entries++;
+    }
+
+    if (sm_entries == 0)
+        return NULL;
+
+    SigMatch *temp_sm = NULL;
+    for (i = 1; i < sm_entries; i++) {
+        for (j = i - 1; j >= 0; j--) {
+            if (sm[j + 1]->idx > sm[j]->idx) {
+                temp_sm = sm[j + 1];
+                sm[j + 1] = sm[j];
+                sm[j] = temp_sm;
+                continue;
+            }
+            break;
+        }
+    }
+
+    return sm[0];
 }
 
 void SigParsePrepare(void) {
@@ -436,7 +578,7 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr) 
         if (optvalue) pcre_free_substring(optvalue);
         if (optstr) SCFree(optstr);
         //if (optmore) pcre_free_substring(optmore);
-        if (arr != NULL) SCFree(arr);
+        if (arr != NULL) pcre_free_substring_list(arr);
         return SigParseOptions(de_ctx, s, optmore);
     }
 
@@ -444,7 +586,7 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr) 
     if (optvalue) pcre_free_substring(optvalue);
     if (optmore) pcre_free_substring(optmore);
     if (optstr) SCFree(optstr);
-    if (arr != NULL) SCFree(arr);
+    if (arr != NULL) pcre_free_substring_list(arr);
     return 0;
 
 error:
@@ -452,7 +594,7 @@ error:
     if (optvalue) pcre_free_substring(optvalue);
     if (optmore) pcre_free_substring(optmore);
     if (optstr) SCFree(optstr);
-    if (arr != NULL) SCFree(arr);
+    if (arr != NULL) pcre_free_substring_list(arr);
     return -1;
 }
 
@@ -783,6 +925,14 @@ void SigFree(Signature *s) {
     if (s == NULL)
         return;
 
+    /* XXX GS there seems to be a bug in the IPOnlyCIDR list, which causes
+      system abort. */
+    /*if (s->CidrDst != NULL)
+        IPOnlyCIDRListFree(s->CidrDst);
+
+    if (s->CidrSrc != NULL)
+        IPOnlyCIDRListFree(s->CidrSrc);*/
+
     SigMatch *sm = s->match, *nsm;
     while (sm != NULL) {
         nsm = sm->next;
@@ -796,6 +946,21 @@ void SigFree(Signature *s) {
         SigMatchFree(sm);
         sm = nsm;
     }
+
+    sm = s->umatch;
+    while (sm != NULL) {
+        nsm = sm->next;
+        SigMatchFree(sm);
+        sm = nsm;
+    }
+
+    sm = s->amatch;
+    while (sm != NULL) {
+        nsm = sm->next;
+        SigMatchFree(sm);
+        sm = nsm;
+    }
+
     DetectAddressHeadCleanup(&s->src);
     DetectAddressHeadCleanup(&s->dst);
 
@@ -923,6 +1088,13 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
             sig->flags |= SIG_FLAG_PACKET;
         }
     }
+
+    if (sig->umatch)
+        sig->flags |= SIG_FLAG_UMATCH;
+    if (sig->dmatch)
+        sig->flags |= SIG_FLAG_AMATCH;
+    if (sig->amatch)
+        sig->flags |= SIG_FLAG_AMATCH;
 
     SCLogDebug("sig %"PRIu32" SIG_FLAG_APPLAYER: %s, SIG_FLAG_PACKET: %s",
         sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",
@@ -1101,6 +1273,13 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
             sig->flags |= SIG_FLAG_PACKET;
         }
     }
+
+    if (sig->umatch)
+        sig->flags |= SIG_FLAG_UMATCH;
+    if (sig->dmatch)
+        sig->flags |= SIG_FLAG_AMATCH;
+    if (sig->amatch)
+        sig->flags |= SIG_FLAG_AMATCH;
 
     SCLogDebug("sig %"PRIu32" SIG_FLAG_APPLAYER: %s, SIG_FLAG_PACKET: %s",
         sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",

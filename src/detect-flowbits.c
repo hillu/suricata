@@ -30,12 +30,16 @@
 #include "threads.h"
 #include "flow.h"
 #include "flow-bit.h"
+#include "flow-util.h"
 #include "detect-flowbits.h"
 #include "util-spm.h"
+
+#include "app-layer-parser.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-state.h"
 
 #include "flow-bit.h"
 #include "util-var-name.h"
@@ -714,6 +718,7 @@ static int FlowBitsTestSig06(void) {
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
+    FLOW_INITIALIZE(&f);
     p.flow = &f;
     p.flow->flowvar = &flowvar;
 
@@ -759,6 +764,7 @@ static int FlowBitsTestSig06(void) {
     DetectEngineCtxFree(de_ctx);
 
     if(gv) GenericVarFree(gv);
+    FLOW_DESTROY(&f);
 
     return result;
 end:
@@ -777,7 +783,7 @@ end:
     }
 
     if(gv) GenericVarFree(gv);
-
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -809,6 +815,7 @@ static int FlowBitsTestSig07(void) {
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
+    FLOW_INITIALIZE(&f);
     p.flow = &f;
     p.flow->flowvar = &flowvar;
 
@@ -858,6 +865,7 @@ static int FlowBitsTestSig07(void) {
     DetectEngineCtxFree(de_ctx);
 
     if(gv) GenericVarFree(gv);
+    FLOW_DESTROY(&f);
 
     return result;
 end:
@@ -876,6 +884,7 @@ end:
     }
 
     if(gv) GenericVarFree(gv);
+    FLOW_DESTROY(&f);
 
     return result;
 }
@@ -908,6 +917,7 @@ static int FlowBitsTestSig08(void) {
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
+    FLOW_INITIALIZE(&f);
     p.flow = &f;
     p.flow->flowvar = &flowvar;
 
@@ -959,6 +969,7 @@ static int FlowBitsTestSig08(void) {
     DetectEngineCtxFree(de_ctx);
 
     if(gv) GenericVarFree(gv);
+    FLOW_DESTROY(&f);
 
     return result;
 end:
@@ -977,6 +988,7 @@ end:
     }
 
     if(gv) GenericVarFree(gv);
+    FLOW_DESTROY(&f);
 
     return result;
 }

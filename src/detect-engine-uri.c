@@ -62,7 +62,6 @@
  *  \param det_ctx Detection engine thread context
  *  \param s Signature to inspect
  *  \param sm SigMatch to inspect
- *  \param p Packet
  *  \param payload ptr to the uricontent payload to inspect
  *  \param payload_len length of the uricontent payload
  *
@@ -71,7 +70,7 @@
  */
 static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
         DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *sm,
-        Packet *p, uint8_t *payload, uint32_t payload_len)
+        uint8_t *payload, uint32_t payload_len)
 {
     SCEnter();
 
@@ -210,7 +209,7 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
                 /* see if the next payload keywords match. If not, we will
                  * search for another occurence of this uricontent and see
                  * if the others match then until we run out of matches */
-                int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, p, payload, payload_len);
+                int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, payload, payload_len);
                 if (r == 1) {
                     SCReturnInt(1);
                 }
@@ -231,7 +230,7 @@ match:
     /* this sigmatch matched, inspect the next one. If it was the last,
      * the payload portion of the signature matched. */
     if (sm->next != NULL) {
-        int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, p, payload, payload_len);
+        int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, payload, payload_len);
         SCReturnInt(r);
     } else {
         SCReturnInt(1);
@@ -247,19 +246,23 @@ match:
  *  \param f Flow
  *  \param flags app layer flags
  *  \param state App layer state
- *  \param p Packet
  *
  *  \retval 0 no match
  *  \retval 1 match
  */
 int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
         DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags,
-        void *alstate, Packet *p)
+        void *alstate)
 {
     SCEnter();
     SigMatch *sm = NULL;
     int r = 0;
     HtpState *htp_state = NULL;
+
+    if (!(det_ctx->sgh->flags & SIG_GROUP_HAVEURICONTENT)) {
+        SCLogDebug("no uricontent in sgh");
+        SCReturnInt(0);
+    }
 
     htp_state = (HtpState *)alstate;
     if (htp_state == NULL) {
@@ -270,15 +273,50 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     /* locking the flow, we will inspect the htp state */
     SCMutexLock(&f->m);
 
+    if (htp_state->connp == NULL) {
+        SCLogDebug("HTP state has no connp");
+        goto end;
+    }
+
+    /* If we have the uricontent multi pattern matcher signatures in
+       signature list, then search the received HTTP uri(s) in the htp
+       state against those patterns */
+    if (s->flags & SIG_FLAG_MPM_URI) {
+        if (det_ctx->de_mpm_scanned_uri == FALSE) {
+            uint32_t cnt = DetectUricontentInspectMpm(det_ctx, f, htp_state);
+
+            /* only consider uri sigs if we've seen at least one match */
+            /** \warning when we start supporting negated uri content matches
+             * we need to update this check as well */
+            if (cnt > 0) {
+                det_ctx->de_have_httpuri = TRUE;
+            }
+
+            SCLogDebug("uricontent cnt %"PRIu32"", cnt);
+
+            /* make sure we don't inspect this mpm again */
+            det_ctx->de_mpm_scanned_uri = TRUE;
+
+        }
+    }
+
     /* if we don't have a uri, don't bother inspecting */
     if (det_ctx->de_have_httpuri == FALSE) {
         SCLogDebug("We don't have uri");
         goto end;
     }
 
-    if (htp_state->connp == NULL) {
-        SCLogDebug("HTP state has no connp");
-        goto end;
+    if (det_ctx->de_mpm_scanned_uri == TRUE) {
+        if (det_ctx->pmq.pattern_id_bitarray != NULL) {
+            /* filter out sigs that want pattern matches, but
+             * have no matches */
+            if (!(det_ctx->pmq.pattern_id_bitarray[(s->mpm_uripattern_id / 8)] & (1<<(s->mpm_uripattern_id % 8))) &&
+                    (s->flags & SIG_FLAG_MPM_URI) && !(s->flags & SIG_FLAG_MPM_URI_NEG)) {
+                SCLogDebug("mpm sig without matches (pat id %"PRIu32
+                        " check in uri).", s->mpm_uripattern_id);
+                goto end;
+            }
+        }
     }
 
     sm = s->umatch;
@@ -290,11 +328,10 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     SCLogDebug("co->id %"PRIu32, co->id);
 #endif
 
-    size_t idx = 0;
+    size_t idx = AppLayerTransactionGetInspectId(f);
     htp_tx_t *tx = NULL;
 
-    for (idx = 0;//htp_state->new_in_tx_index;
-         idx < list_size(htp_state->connp->conn->transactions); idx++)
+    for ( ; idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL || tx->request_uri_normalized == NULL)
@@ -302,7 +339,7 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
 
         /* Inspect all the uricontents fetched on each
          * transaction at the app layer */
-        r = DoInspectPacketUri(de_ctx, det_ctx, s, s->umatch, p,
+        r = DoInspectPacketUri(de_ctx, det_ctx, s, s->umatch,
                 (uint8_t *) bstr_ptr(tx->request_uri_normalized),
                 bstr_len(tx->request_uri_normalized));
 

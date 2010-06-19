@@ -31,10 +31,12 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-state.h"
 #include "detect-content.h"
 
 #include "flow.h"
 #include "flow-var.h"
+#include "flow-util.h"
 
 #include "util-debug.h"
 #include "util-unittest.h"
@@ -52,6 +54,7 @@ int DetectHttpClientBodyMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
                               SigMatch *m);
 int DetectHttpClientBodySetup(DetectEngineCtx *, Signature *, char *);
 void DetectHttpClientBodyRegisterTests(void);
+void DetectHttpClientBodyFree(void *);
 
 /**
  * \brief Registers the keyword handlers for the "http_client_body" keyword.
@@ -63,7 +66,7 @@ void DetectHttpClientBodyRegister(void)
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].AppLayerMatch = DetectHttpClientBodyMatch;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Setup = DetectHttpClientBodySetup;
-    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Free  = NULL;
+    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Free  = DetectHttpClientBodyFree;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].RegisterTests = DetectHttpClientBodyRegisterTests;
 
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].flags |= SIGMATCH_PAYLOAD ;
@@ -248,15 +251,34 @@ int DetectHttpClientBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     return 0;
 
 error:
-    if (hcbd != NULL) {
-        if (hcbd->content != NULL)
-            SCFree(hcbd->content);
-        SCFree(hcbd);
-    }
-    if(nm != NULL)
-        SCFree(sm);
+    if (hcbd != NULL)
+        DetectHttpClientBodyFree(hcbd);
+
+        if(nm != NULL)
+        SCFree(nm);
 
     return -1;
+}
+
+/**
+ * \brief The function to free the http_client_body data.
+ *
+ * \param ptr Pointer to the http_client_body.
+ */
+void DetectHttpClientBodyFree(void *ptr)
+{
+    SCEnter();
+    DetectHttpClientBodyData *hcbd = (DetectHttpClientBodyData *)ptr;
+    if (hcbd == NULL)
+        SCReturn;
+
+    if (hcbd->content != NULL)
+        SCFree(hcbd->content);
+
+    BoyerMooreCtxDeInit(hcbd->bm_ctx);
+    SCFree(hcbd);
+
+    SCReturn;
 }
 
 /************************************Unittests*********************************/
@@ -451,16 +473,18 @@ static int DetectHttpClientBodyTest06(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -485,7 +509,7 @@ static int DetectHttpClientBodyTest06(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: \n");
         result = 0;
@@ -509,8 +533,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -561,18 +586,21 @@ static int DetectHttpClientBodyTest07(void)
     p2.payload_len = 0;
     p2.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p1.flow = &f;
     p1.flowflags |= FLOW_PKT_TOSERVER;
+    p1.flowflags |= FLOW_PKT_ESTABLISHED;
     p2.flow = &f;
     p2.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p2.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -597,7 +625,7 @@ static int DetectHttpClientBodyTest07(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -635,8 +663,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -687,18 +716,21 @@ static int DetectHttpClientBodyTest08(void)
     p2.payload_len = 0;
     p2.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p1.flow = &f;
     p1.flowflags |= FLOW_PKT_TOSERVER;
+    p1.flowflags |= FLOW_PKT_ESTABLISHED;
     p2.flow = &f;
     p2.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p2.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -723,7 +755,7 @@ static int DetectHttpClientBodyTest08(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -762,8 +794,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -814,18 +847,21 @@ static int DetectHttpClientBodyTest09(void)
     p2.payload_len = 0;
     p2.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p1.flow = &f;
     p1.flowflags |= FLOW_PKT_TOSERVER;
+    p1.flowflags |= FLOW_PKT_ESTABLISHED;
     p2.flow = &f;
     p2.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p2.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -850,7 +886,7 @@ static int DetectHttpClientBodyTest09(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -889,8 +925,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -941,18 +978,21 @@ static int DetectHttpClientBodyTest10(void)
     p2.payload_len = 0;
     p2.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p1.flow = &f;
     p1.flowflags |= FLOW_PKT_TOSERVER;
+    p1.flowflags |= FLOW_PKT_ESTABLISHED;
     p2.flow = &f;
     p2.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p2.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -977,7 +1017,7 @@ static int DetectHttpClientBodyTest10(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: \n");
         result = 0;
@@ -1016,8 +1056,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1057,16 +1098,18 @@ static int DetectHttpClientBodyTest11(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1091,7 +1134,7 @@ static int DetectHttpClientBodyTest11(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -1115,8 +1158,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1156,16 +1200,18 @@ static int DetectHttpClientBodyTest12(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1190,7 +1236,7 @@ static int DetectHttpClientBodyTest12(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -1214,8 +1260,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1255,16 +1302,18 @@ static int DetectHttpClientBodyTest13(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1289,7 +1338,7 @@ static int DetectHttpClientBodyTest13(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -1313,8 +1362,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 

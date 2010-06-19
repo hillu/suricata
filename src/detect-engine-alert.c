@@ -59,7 +59,7 @@ int PacketAlertRemove(Packet *p, uint16_t pos)
 {
     uint16_t i = 0;
     int match = 0;
-    if (pos >= p->alerts.cnt)
+    if (pos > p->alerts.cnt)
         return 0;
 
     for (i = pos; i <= p->alerts.cnt - 1; i++) {
@@ -97,6 +97,7 @@ int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p)
         p->alerts.alerts[p->alerts.cnt].rev = s->rev;
         p->alerts.alerts[p->alerts.cnt].prio = s->prio;
         p->alerts.alerts[p->alerts.cnt].msg = s->msg;
+        p->alerts.alerts[p->alerts.cnt].class = s->class;
         p->alerts.alerts[p->alerts.cnt].class_msg = s->class_msg;
         p->alerts.alerts[p->alerts.cnt].references = s->references;
     } else {
@@ -120,14 +121,13 @@ int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p)
         p->alerts.alerts[i].rev = s->rev;
         p->alerts.alerts[i].prio = s->prio;
         p->alerts.alerts[i].msg = s->msg;
+        p->alerts.alerts[i].class = s->class;
         p->alerts.alerts[i].class_msg = s->class_msg;
         p->alerts.alerts[i].references = s->references;
     }
 
     /* Update the count */
     p->alerts.cnt++;
-
-    SCPerfCounterIncr(det_ctx->counter_alerts, det_ctx->tv->sc_perf_pca);
 
     return 0;
 }
@@ -161,15 +161,11 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                     (p->flowflags & FLOW_PKT_TOCLIENT && !(p->flowflags & FLOW_PKT_TOCLIENT_IPONLY_SET))) {
                     SCLogDebug("testing against \"ip-only\" signatures");
 
-                    /* save in the flow that we scanned this direction... locking is
-                     * done in the FlowSetIPOnlyFlag function. */
-
-                    /** \todo locking overhead: locked/unlocked twice */
                     if (p->flow != NULL) {
-                        FlowSetIPOnlyFlag(p->flow, p->flowflags & FLOW_PKT_TOSERVER ? 1 : 0);
-
                         /* Update flow flags for iponly */
                         SCMutexLock(&p->flow->m);
+                        FlowSetIPOnlyFlagNoLock(p->flow, p->flowflags & FLOW_PKT_TOSERVER ? 1 : 0);
+
                         if (s->action & ACTION_DROP)
                             p->flow->flags |= FLOW_ACTION_DROP;
                         if (s->action & ACTION_REJECT)

@@ -65,7 +65,7 @@ typedef struct StreamTcpThread_ {
     TcpReassemblyThreadCtx *ra_ctx;         /**< tcp reassembly thread data */
 } StreamTcpThread;
 
-TmEcode StreamTcp (ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode StreamTcp (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode StreamTcpThreadInit(ThreadVars *, void *, void **);
 TmEcode StreamTcpThreadDeinit(ThreadVars *, void *);
 void StreamTcpExitPrintStats(ThreadVars *, void *);
@@ -174,6 +174,7 @@ void StreamTcpReturnStreamSegments (TcpStream *stream)
 void StreamTcpSessionClear(void *ssnptr)
 {
     SCEnter();
+    StreamMsg *smsg = NULL;
 
     TcpSession *ssn = (TcpSession *)ssnptr;
     if (ssn == NULL)
@@ -182,7 +183,32 @@ void StreamTcpSessionClear(void *ssnptr)
     StreamTcpReturnStreamSegments(&ssn->client);
     StreamTcpReturnStreamSegments(&ssn->server);
 
-    AppLayerParserCleanupState(ssn);
+    //AppLayerParserCleanupState(ssn);
+
+    /* if we have (a) smsg(s), return to the pool */
+    smsg = ssn->toserver_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toserver_smsg_head = NULL;
+
+    smsg = ssn->toclient_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toclient_smsg_head = NULL;
 
     memset(ssn, 0, sizeof(TcpSession));
     SCMutexLock(&ssn_pool_mutex);
@@ -195,8 +221,7 @@ void StreamTcpSessionClear(void *ssnptr)
     SCReturn;
 }
 
-/** \brief Function to return the stream back to the pool. It returns the
- *         segments in the stream to the segment pool.
+/** \brief Function to return the stream segments back to the pool.
  *
  *  We don't clear out the app layer storage here as that is under protection
  *  of the "use_cnt" reference counter in the flow. This function is called
@@ -209,6 +234,8 @@ static void StreamTcpSessionPktFree (Packet *p)
 {
     SCEnter();
 
+//    StreamMsg *smsg = NULL;
+
     TcpSession *ssn = (TcpSession *)p->flow->protoctx;
     if (ssn == NULL)
         SCReturn;
@@ -216,6 +243,32 @@ static void StreamTcpSessionPktFree (Packet *p)
     StreamTcpReturnStreamSegments(&ssn->client);
     StreamTcpReturnStreamSegments(&ssn->server);
 
+    /* if we have (a) smsg(s), return to the pool */
+#if 0
+    smsg = ssn->toserver_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toserver_smsg_head = NULL;
+
+    smsg = ssn->toclient_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toclient_smsg_head = NULL;
+#endif
     SCReturn;
 }
 
@@ -243,6 +296,8 @@ void *StreamTcpSessionPoolAlloc(void *null)
  *  \param s Void ptr to TcpSession memory */
 void StreamTcpSessionPoolFree(void *s)
 {
+    StreamMsg *smsg = NULL;
+
     if (s == NULL)
         return;
 
@@ -251,7 +306,31 @@ void StreamTcpSessionPoolFree(void *s)
     StreamTcpReturnStreamSegments(&ssn->client);
     StreamTcpReturnStreamSegments(&ssn->server);
 
-    StreamL7DataPtrFree(ssn);
+    /* if we have (a) smsg(s), return to the pool */
+    smsg = ssn->toserver_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toserver_smsg_head = NULL;
+
+    smsg = ssn->toclient_smsg_head;
+    while(smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+    ssn->toclient_smsg_head = NULL;
+
     SCFree(ssn);
 
     StreamTcpDecrMemuse((uint32_t)sizeof(TcpSession));
@@ -396,7 +475,6 @@ TcpSession *StreamTcpNewSession (Packet *p)
         }
 
         ssn->state = TCP_NONE;
-        ssn->aldata = NULL;
     }
 
     return ssn;
@@ -1595,7 +1673,7 @@ static int StreamTcpPacketStateEstablished(ThreadVars *tv, Packet *p,
                                "%" PRIu32 "", ssn, ssn->server.next_seq,
                                ssn->client.last_ack);
 
-                StreamTcpSessionPktFree(p);
+                    StreamTcpSessionPktFree(p);
                 }
             } else
                 return -1;
@@ -2452,7 +2530,7 @@ static int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt)
             SCReturnInt(-1);
 
         if (ssn != NULL)
-            SCLogDebug("ssn->alproto %"PRIu16"", ssn->alproto);
+            SCLogDebug("ssn->alproto %"PRIu16"", p->flow->alproto);
     } else {
         /* check if the packet is in right direction, when we missed the
            SYN packet and picked up midstream session. */
@@ -2512,7 +2590,7 @@ static int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt)
     SCReturnInt(0);
 }
 
-TmEcode StreamTcp (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode StreamTcp (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     StreamTcpThread *stt = (StreamTcpThread *)data;
     TmEcode ret = TM_ECODE_OK;
@@ -2926,11 +3004,19 @@ static int ValidTimestamp (TcpSession *ssn, Packet *p)
  * \param ssn TCP Session to set the flag in
  * \param direction direction to set the flag in: 0 toserver, 1 toclient
  */
-
 void StreamTcpSetSessionNoReassemblyFlag (TcpSession *ssn, char direction)
 {
     direction ? (ssn->flags |= STREAMTCP_FLAG_NOSERVER_REASSEMBLY) :
                 (ssn->flags |= STREAMTCP_FLAG_NOCLIENT_REASSEMBLY);
+}
+
+/** \brief  Set the No applayer inspection flag for the TCP session.
+ *
+ * \param ssn TCP Session to set the flag in
+ */
+void StreamTcpSetSessionNoApplayerInspectionFlag (TcpSession *ssn)
+{
+    ssn->flags |= STREAMTCP_FLAG_NO_APPLAYER_INSPECTION;
 }
 
 #ifdef UNITTESTS
@@ -2959,7 +3045,7 @@ static int StreamTcpTest01 (void) {
     }
     f.protoctx = ssn;
 
-    if (ssn->aldata != NULL) {
+    if (f.aldata != NULL) {
         printf("AppLayer field not set to NULL: ");
         goto end;
     }

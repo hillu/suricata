@@ -30,11 +30,14 @@
 #include "detect-uricontent.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine.h"
+#include "detect-engine-state.h"
 #include "detect-parse.h"
 #include "util-mpm.h"
 #include "flow.h"
+#include "flow-util.h"
 #include "flow-var.h"
 #include "detect-flow.h"
+#include "app-layer.h"
 #include "util-unittest.h"
 #include "util-print.h"
 #include "util-debug.h"
@@ -434,7 +437,19 @@ static int DetectContentSetup (DetectEngineCtx *de_ctx, Signature *s, char *cont
 
     DetectContentPrint(cd);
 
-    SigMatchAppendPayload(s,sm);
+    switch (s->alproto) {
+        case ALPROTO_DCERPC:
+            /* If we have a signature that is related to dcerpc, then we add the
+             * sm to Signature->dmatch.  All content inspections for a dce rpc
+             * alproto is done inside detect-engine-dcepayload.c */
+            SigMatchAppendDcePayload(s, sm);
+            break;
+
+        default:
+            SigMatchAppendPayload(s, sm);
+            break;
+    }
+
     return 0;
 
 error:
@@ -449,15 +464,19 @@ error:
  * \param cd pointer to DetectCotentData
  */
 void DetectContentFree(void *ptr) {
+    SCEnter();
     DetectContentData *cd = (DetectContentData *)ptr;
 
     if (cd == NULL)
-        return;
+        SCReturn;
 
     if (cd->content != NULL)
         SCFree(cd->content);
 
+    BoyerMooreCtxDeInit(cd->bm_ctx);
+
     SCFree(cd);
+    SCReturn;
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
@@ -1056,6 +1075,302 @@ end:
     return result;
 }
 
+/**
+ * \test Test content for dce sig.
+ */
+int DetectContentParseTest18(void)
+{
+    Signature *s = SigAlloc();
+    int result = 1;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    s->alproto = ALPROTO_DCERPC;
+
+    result &= (DetectContentSetup(de_ctx, s, "one") == 0);
+    result &= (s->dmatch != NULL);
+
+    SigFree(s);
+
+    s = SigAlloc();
+    /* failure since we have no preceding content/pcre/bytejump */
+    result &= (DetectContentSetup(de_ctx, s, "one") == 0);
+    result &= (s->dmatch == NULL);
+    result &= (s->pmatch != NULL);
+
+ end:
+    SigFree(s);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DetectContentParseTest19(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"Testing bytejump_body\"; "
+                               "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                               "content:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = de_ctx->sig_list;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; content:two; within:10; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->within == 10);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; offset:5; depth:9; content:two; within:10; offset:10; depth:13; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->within == 10 && data->offset == 10 && data->depth == 13);
+    data = (DetectContentData *)s->dmatch->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->offset == 5 && data->depth == 9);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; content:two; distance:2; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->distance == 2);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; content:two; within:10; distance:2; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->within == 10 && data->distance == 2);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; offset:10; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->offset == 10);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; depth:10; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->depth == 10);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "content:one; offset:10; depth:2; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->dmatch_tail->type == DETECT_CONTENT);
+    result &= (s->pmatch == NULL);
+    data = (DetectContentData *)s->dmatch_tail->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (data->offset == 10 && data->depth == 13);
+
+    s->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                      "(msg:\"Testing bytejump_body\"; "
+                      "content:one; sid:1;)");
+    if (s->next == NULL) {
+        result = 0;
+        goto end;
+    }
+    s = s->next;
+    if (s->dmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+    result &= (s->pmatch != NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
 static int SigTestPositiveTestContent(char *rule, uint8_t *buf)
 {
     uint16_t buflen = strlen((char *)buf);
@@ -1430,10 +1745,16 @@ static int SigTest76TestBug134(void)
     uint16_t buflen = strlen((char *)buf);
     Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
     int result = 0;
+    Flow f;
+
+    memset(&f, 0, sizeof(Flow));
+    FLOW_INITIALIZE(&f);
 
     p->dp = 515;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flow = &f;
+
     char sig[] = "alert tcp any any -> any 515 "
             "(msg:\"detect IFS\"; flow:to_server,established; content:\"${IFS}\";"
             " depth:50; offset:0; sid:900091; rev:1;)";
@@ -1446,6 +1767,8 @@ static int SigTest76TestBug134(void)
 end:
     if (p != NULL)
         UTHFreePacket(p);
+
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1498,6 +1821,8 @@ void DetectContentRegisterTests(void)
     UtRegisterTest("DetectContentParseTest15", DetectContentParseNegTest15, 1);
     UtRegisterTest("DetectContentParseTest16", DetectContentParseNegTest16, 1);
     UtRegisterTest("DetectContentParseTest17", DetectContentParseTest17, 1);
+    UtRegisterTest("DetectContentParseTest18", DetectContentParseTest18, 1);
+    UtRegisterTest("DetectContentParseTest19", DetectContentParseTest19, 1);
 
     /* The reals */
     UtRegisterTest("DetectContentLongPatternMatchTest01", DetectContentLongPatternMatchTest01, 1);

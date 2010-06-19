@@ -14,6 +14,7 @@ source-pcap-file.c source-pcap-file.h \
 source-pfring.c source-pfring.h \
 source-ipfw.c source-ipfw.h \
 source-erf-file.c source-erf-file.h \
+source-erf-dag.c source-erf-dag.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
 decode-vlan.c decode-vlan.h \
@@ -57,6 +58,7 @@ detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-iponly.c detect-engine-iponly.h \
 detect-engine-payload.c detect-engine-payload.h \
+detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-engine-state.c detect-engine-state.h \
 detect-parse.c detect-parse.h \
@@ -108,6 +110,7 @@ detect-icode.c detect-icode.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-method.c detect-http-method.h \
 detect-http-header.c detect-http-header.h \
+detect-http-uri.c detect-http-uri.h \
 detect-tls-version.c detect-tls-version.h \
 detect-icmp-id.c detect-icmp-id.h \
 detect-icmp-seq.c detect-icmp-seq.h \
@@ -118,6 +121,7 @@ detect-urilen.c detect-urilen.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-http-client-body.c detect-http-client-body.h \
 detect-asn1.c detect-asn1.h \
+util-atomic.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
 util-cpu.c util-cpu.h \
@@ -161,6 +165,7 @@ util-cuda.c util-cuda.h \
 util-cuda-handlers.c util-cuda-handlers.h \
 util-privs.c util-privs.h \
 util-decode-asn1.c util-decode-asn1.h \
+util-ringbuffer.c util-ringbuffer.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -169,6 +174,7 @@ tmqh-simple.c tmqh-simple.h \
 tmqh-nfq.c tmqh-nfq.h \
 tmqh-packetpool.c tmqh-packetpool.h \
 tmqh-flow.c tmqh-flow.h \
+tmqh-ringbuffer.c tmqh-ringbuffer.h \
 alert-fastlog.c alert-fastlog.h \
 alert-debuglog.c alert-debuglog.h \
 alert-prelude.c alert-prelude.h \
@@ -198,6 +204,7 @@ app-layer-ssl.c app-layer-ssl.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
+win32-service.c win32-service.h \
 util-action.c util-action.h \
 win32-syslog.h \
 util-profiling.c util-profiling.h

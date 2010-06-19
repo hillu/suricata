@@ -41,7 +41,7 @@ typedef struct TmModule_ {
     TmEcode (*ThreadDeinit)(ThreadVars *, void *);
 
     /** the packet processing function */
-    TmEcode (*Func)(ThreadVars *, Packet *, void *, PacketQueue *);
+    TmEcode (*Func)(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
     void (*RegisterTests)(void);
 
@@ -81,6 +81,8 @@ enum {
 #endif
     TMM_RECEIVEERFFILE,
     TMM_DECODEERFFILE,
+    TMM_RECEIVEERFDAG,
+    TMM_DECODEERFDAG,
     TMM_SIZE,
 };
 

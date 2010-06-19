@@ -30,9 +30,11 @@
 
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-state.h"
 
 #include "flow.h"
 #include "flow-var.h"
+#include "flow-util.h"
 
 #include "app-layer.h"
 #include "app-layer-dcerpc.h"
@@ -92,8 +94,21 @@ int DetectDceStubDataMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *
         return 0;
     }
 
-    if (dcerpc_state->dcerpc.dcerpcrequest.stub_data == NULL)
-        return 0;
+    if (flags & STREAM_TOSERVER) {
+        if (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer == NULL ||
+            dcerpc_state->dcerpc.dcerpcrequest.stub_data_fresh == 0) {
+            return 0;
+        }
+        det_ctx->dce_stub_data = dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer;
+        det_ctx->dce_stub_data_len = dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len;
+    } else {
+        if (dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer == NULL ||
+            dcerpc_state->dcerpc.dcerpcresponse.stub_data_fresh == 0) {
+            return 0;
+        }
+        det_ctx->dce_stub_data = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer;
+        det_ctx->dce_stub_data_len = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer_len;
+    }
 
     return 1;
 }
@@ -631,13 +646,15 @@ static int DetectDceStubDataTestParse02(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_DCERPC;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -663,12 +680,14 @@ static int DetectDceStubDataTestParse02(void)
         goto end;
     }
 
-    dcerpc_state = ssn.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -684,6 +703,8 @@ static int DetectDceStubDataTestParse02(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -698,6 +719,8 @@ static int DetectDceStubDataTestParse02(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -714,8 +737,9 @@ static int DetectDceStubDataTestParse02(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1167,13 +1191,15 @@ static int DetectDceStubDataTestParse03(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_DCERPC;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1199,12 +1225,14 @@ static int DetectDceStubDataTestParse03(void)
         goto end;
     }
 
-    dcerpc_state = ssn.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1220,8 +1248,9 @@ static int DetectDceStubDataTestParse03(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1359,14 +1388,16 @@ static int DetectDceStubDataTestParse04(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_DCERPC;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1388,9 +1419,11 @@ static int DetectDceStubDataTestParse04(void)
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    dcerpc_state = ssn.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
@@ -1402,6 +1435,8 @@ static int DetectDceStubDataTestParse04(void)
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
     /* request1 */
@@ -1412,6 +1447,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1426,6 +1463,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1440,6 +1479,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1454,6 +1495,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1468,6 +1511,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1482,6 +1527,8 @@ static int DetectDceStubDataTestParse04(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1497,8 +1544,9 @@ static int DetectDceStubDataTestParse04(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1609,14 +1657,16 @@ static int DetectDceStubDataTestParse05(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_DCERPC;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1643,12 +1693,14 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
-    dcerpc_state = ssn.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1663,6 +1715,8 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1677,6 +1731,8 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1691,6 +1747,8 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1705,6 +1763,8 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOCLIENT;
+    p.flowflags |= FLOW_PKT_TOSERVER;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1719,6 +1779,8 @@ static int DetectDceStubDataTestParse05(void)
         goto end;
     }
 
+    p.flowflags &=~ FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_TOCLIENT;
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
@@ -1734,8 +1796,9 @@ static int DetectDceStubDataTestParse05(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 

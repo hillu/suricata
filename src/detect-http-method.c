@@ -32,10 +32,12 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-state.h"
 #include "detect-content.h"
 
 #include "flow.h"
 #include "flow-var.h"
+#include "flow-util.h"
 
 #include "util-debug.h"
 #include "util-unittest.h"
@@ -149,7 +151,6 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
 {
     SCEnter();
     DetectHttpMethodData *data = NULL;
-    SigMatch *sm = NULL;
     bstr *method;
     /** new sig match to replace previous content */
     SigMatch *nm = NULL;
@@ -216,6 +217,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
 
     /* free the old content sigmatch, the memory for the pattern
      * is taken over by our new sigmatch */
+    BoyerMooreCtxDeInit(((DetectContentData *)pm->ctx)->bm_ctx);
     SCFree(pm->ctx);
     SCFree(pm);
 
@@ -232,7 +234,10 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
 
 error:
     if (data != NULL) DetectHttpMethodFree(data);
-    if (sm != NULL) SCFree(sm);
+    if (nm != NULL) {
+        if (nm->ctx != NULL) DetectHttpMethodFree(nm);
+        SCFree(nm);
+    }
     SCReturnInt(-1);
 }
 
@@ -412,16 +417,18 @@ static int DetectHttpMethodSigTest01(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -457,7 +464,7 @@ static int DetectHttpMethodSigTest01(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         SCLogDebug("no http state: ");
         goto end;
@@ -475,13 +482,14 @@ static int DetectHttpMethodSigTest01(void)
     result = 1;
 
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -512,16 +520,18 @@ static int DetectHttpMethodSigTest02(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -557,7 +567,7 @@ static int DetectHttpMethodSigTest02(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         SCLogDebug("no http state: ");
         goto end;
@@ -575,14 +585,15 @@ static int DetectHttpMethodSigTest02(void)
     result = 1;
 
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, (void *) det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -611,16 +622,18 @@ static int DetectHttpMethodSigTest03(void)
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -648,7 +661,7 @@ static int DetectHttpMethodSigTest03(void)
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         SCLogDebug("no http state: ");
         goto end;
@@ -663,13 +676,14 @@ static int DetectHttpMethodSigTest03(void)
     result = 1;
 
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 

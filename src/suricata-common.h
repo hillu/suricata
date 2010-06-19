@@ -34,6 +34,7 @@
 
 #include <stdio.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <unistd.h>
@@ -64,6 +65,7 @@
 
 #ifdef OS_WIN32
 #include "win32-misc.h"
+#include "win32-service.h"
 #endif /* OS_WIN32 */
 #if HAVE_CONFIG_H
 #include <config.h>

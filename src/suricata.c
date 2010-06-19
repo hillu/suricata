@@ -50,6 +50,7 @@
 #include "detect-engine-mpm.h"
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
+#include "detect-engine-dcepayload.h"
 #include "detect-engine-state.h"
 
 #include "tm-queuehandlers.h"
@@ -84,6 +85,7 @@
 #include "source-pfring.h"
 
 #include "source-erf-file.h"
+#include "source-erf-dag.h"
 
 #include "respond-reject.h"
 
@@ -142,13 +144,8 @@ volatile sig_atomic_t sigterm_count = 0;
 /* Max packets processed simultaniously. */
 #define DEFAULT_MAX_PENDING_PACKETS 50
 
-#define SURICATA_SIGINT  0x01
-#define SURICATA_SIGHUP  0x02
-#define SURICATA_SIGTERM 0x04
-#define SURICATA_STOP    0x08
-#define SURICATA_KILL    0x10
-
-static uint8_t sigflags = 0;
+/** suricata engine control flags */
+uint8_t suricata_ctl_flags = 0;
 
 /** Run mode selected */
 int run_mode = MODE_UNKNOWN;
@@ -166,9 +163,20 @@ int RunmodeIsUnittests(void) {
     return 0;
 }
 
-static void SignalHandlerSigint(/*@unused@*/ int sig) { sigint_count = 1; sigflags |= SURICATA_SIGINT; }
-static void SignalHandlerSigterm(/*@unused@*/ int sig) { sigterm_count = 1; sigflags |= SURICATA_SIGTERM; }
-static void SignalHandlerSighup(/*@unused@*/ int sig) { sighup_count = 1; sigflags |= SURICATA_SIGHUP; }
+static void SignalHandlerSigint(/*@unused@*/ int sig) {
+    sigint_count = 1;
+    suricata_ctl_flags |= SURICATA_STOP;
+}
+static void SignalHandlerSigterm(/*@unused@*/ int sig) {
+    sigterm_count = 1;
+    suricata_ctl_flags |= SURICATA_KILL;
+}
+#if 0
+static void SignalHandlerSighup(/*@unused@*/ int sig) {
+    sighup_count = 1;
+    suricata_ctl_flags |= SURICATA_SIGHUP;
+}
+#endif
 
 #ifdef DBG_MEM_ALLOC
 #ifndef _GLOBAL_MEM_
@@ -184,10 +192,12 @@ uint8_t print_mem_flag = 1;
 #endif
 #endif
 
-#ifndef OS_WIN32
 static void
 SignalHandlerSetup(int sig, void (*handler)())
 {
+#if defined (OS_WIN32)
+	signal(sig, handler);
+#else
     struct sigaction action;
 
     action.sa_handler = handler;
@@ -195,8 +205,8 @@ SignalHandlerSetup(int sig, void (*handler)())
     sigaddset(&(action.sa_mask),sig);
     action.sa_flags = 0;
     sigaction(sig, &action, 0);
-}
 #endif /* OS_WIN32 */
+}
 
 void GlobalInits()
 {
@@ -225,11 +235,11 @@ void GlobalInits()
    function. Purpose: pcap file mode needs to be able to tell the
    engine the file eof is reached. */
 void EngineStop(void) {
-    sigflags |= SURICATA_STOP;
+    suricata_ctl_flags |= SURICATA_STOP;
 }
 
 void EngineKill(void) {
-    sigflags |= SURICATA_KILL;
+    suricata_ctl_flags |= SURICATA_KILL;
 }
 
 static void SetBpfString(int optind, char *argv[]) {
@@ -284,7 +294,13 @@ void usage(const char *progname)
 #endif /* IPFW */
     printf("\t-s <path>                    : path to signature file (optional)\n");
     printf("\t-l <dir>                     : default log directory\n");
+#ifndef OS_WIN32
     printf("\t-D                           : run as daemon\n");
+#else
+	printf("\t--service-install            : install as service\n");
+	printf("\t--service-remove             : remove service\n");
+	printf("\t--service-change-params      : change service startup parameters\n");
+#endif /* OS_WIN32 */
 #ifdef UNITTESTS
     printf("\t-u                           : run the unittests and exit\n");
     printf("\t-U, --unittest-filter=REGEX  : filter unittests with a regex\n");
@@ -294,6 +310,9 @@ void usage(const char *progname)
     printf("\t--pidfile <file>             : write pid to this file (only for daemon mode)\n");
     printf("\t--init-errors-fatal          : enable fatal failure on signature init error\n");
     printf("\t--dump-config                : show the running configuration\n");
+#ifdef HAVE_PCAP_SET_BUFF
+    printf("\t--pcap-buffer-size           : size of the pcap buffer value from 0 - %i\n",INT_MAX);
+#endif /* HAVE_SET_PCAP_BUFF */
 #ifdef HAVE_PFRING
     printf("\t--pfring-int <dev>           : run in pfring mode\n");
     printf("\t--pfring-cluster-id <id>     : pfring cluster id \n");
@@ -304,6 +323,9 @@ void usage(const char *progname)
     printf("\t--group <group>              : run suricata as this group after init\n");
 #endif /* HAVE_LIBCAP_NG */
     printf("\t--erf-in <path>              : process an ERF file\n");
+#ifdef HAVE_DAG
+    printf("\t--dag <dag0,dag1,...>        : process ERF records from 0,1,...,n DAG input streams\n");
+#endif
     printf("\n");
     printf("\nTo run the engine with default configuration on "
             "interface eth0 with signature file \"signatures.rules\", run the "
@@ -334,22 +356,41 @@ int main(int argc, char **argv)
     uint32_t userid = 0;
     uint32_t groupid = 0;
     char *erf_file = NULL;
+    char *dag_input = NULL;
 
     char *log_dir;
     struct stat buf;
 
     sc_set_caps = FALSE;
 
-#ifdef OS_WIN32
-	WSADATA wsaData;
-	if (0 != WSAStartup(MAKEWORD(2, 2), &wsaData)) {
-		fprintf(stderr, "ERROR: Failed to initialize Windows sockets.\n");
-		exit(EXIT_FAILURE);
-	}
-#endif
-
     /* initialize the logging subsys */
     SCLogInitLogModule(NULL);
+
+#ifdef OS_WIN32
+	/* service initialization */
+	if (SCRunningAsService()) {
+		char path[MAX_PATH];
+		char *p = NULL;
+		strlcpy(path, argv[0], MAX_PATH);
+		if ((p = strrchr(path, '\\'))) {
+			*p = '\0';
+		}
+		if (!SetCurrentDirectory(path)) {
+			SCLogError(SC_ERR_FATAL, "Can't set current directory to: %s", path);
+			return -1;
+		}
+		SCLogInfo("Current directory is set to: %s", path);
+		daemon = 1;
+		SCServiceInit(argc, argv);
+	}
+
+	/* Windows socket subsystem initialization */
+	WSADATA wsaData;
+	if (0 != WSAStartup(MAKEWORD(2, 2), &wsaData)) {
+		SCLogError(SC_ERR_FATAL, "Can't initialize Windows sockets: %d", WSAGetLastError());
+		exit(EXIT_FAILURE);
+	}
+#endif /* OS_WIN32 */
 
     SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
 
@@ -361,14 +402,21 @@ int main(int argc, char **argv)
         {"pfring-int",  required_argument, 0, 0},
         {"pfring-cluster-id",  required_argument, 0, 0},
         {"pfring-cluster-type",  required_argument, 0, 0},
+        {"pcap-buffer-size", required_argument, 0, 0},
         {"unittest-filter", required_argument, 0, 'U'},
         {"list-unittests", 0, &list_unittests, 1},
+#ifdef OS_WIN32
+		{"service-install", 0, 0, 0},
+		{"service-remove", 0, 0, 0},
+		{"service-change-params", 0, 0, 0},
+#endif /* OS_WIN32 */
         {"pidfile", required_argument, 0, 0},
         {"init-errors-fatal", 0, 0, 0},
         {"fatal-unittests", 0, 0, 0},
         {"user", required_argument, 0, 0},
         {"group", required_argument, 0, 0},
         {"erf-in", required_argument, 0, 0},
+        {"dag", required_argument, 0, 0},
         {NULL, 0, NULL, 0}
     };
 
@@ -429,6 +477,29 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
 #endif /* UNITTESTS */
             }
+#ifdef OS_WIN32
+            else if(strcmp((long_opts[option_index]).name, "service-install") == 0) {
+				if (SCServiceInstall(argc, argv)) {
+					exit(EXIT_FAILURE);
+				}
+				SCLogInfo("Suricata service has been successfuly installed.");
+				exit(EXIT_SUCCESS);
+            }
+            else if(strcmp((long_opts[option_index]).name, "service-remove") == 0) {
+				if (SCServiceRemove(argc, argv)) {
+					exit(EXIT_FAILURE);
+				}
+				SCLogInfo("Suricata service has been successfuly removed.");
+				exit(EXIT_SUCCESS);
+            }
+            else if(strcmp((long_opts[option_index]).name, "service-change-params") == 0) {
+				if (SCServiceChangeParams(argc, argv)) {
+					exit(EXIT_FAILURE);
+				}
+				SCLogInfo("Suricata service startup parameters has been successfuly changed.");
+				exit(EXIT_SUCCESS);
+            }
+#endif /* OS_WIN32 */
             else if(strcmp((long_opts[option_index]).name, "pidfile") == 0) {
                 pid_filename = optarg;
             }
@@ -467,13 +538,36 @@ int main(int argc, char **argv)
                 run_mode = MODE_ERF_FILE;
                 erf_file = optarg;
             }
+			else if (strcmp((long_opts[option_index]).name, "dag") == 0) {
+#ifdef HAVE_DAG
+				run_mode = MODE_DAG;
+				dag_input = optarg;
+#else
+				SCLogError(SC_ERR_DAG_REQUIRED, "libdag and a DAG card are required"
+						" to receieve packets using --dag.");
+				exit(EXIT_FAILURE);
+#endif /* HAVE_DAG */
+			}
+            else if(strcmp((long_opts[option_index]).name, "pcap-buffer-size") == 0) {
+#ifdef HAVE_PCAP_SET_BUFF
+                if (ConfSet("pcap.buffer-size", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set pcap-buffer-size.\n");
+                    exit(EXIT_FAILURE);
+                }
+#else
+                SCLogError(SC_ERR_NO_PCAP_SET_BUFFER_SIZE, "The version of libpcap you have"
+                        " doesn't support setting buffer size.");
+#endif /* HAVE_PCAP_SET_BUFF */
+            }
             break;
         case 'c':
             conf_filename = optarg;
             break;
+#ifndef OS_WIN32
         case 'D':
             daemon = 1;
             break;
+#endif /* OS_WIN32 */
         case 'h':
             usage(argv[0]);
             exit(EXIT_SUCCESS);
@@ -698,6 +792,8 @@ int main(int argc, char **argv)
 #endif
     TmModuleReceiveErfFileRegister();
     TmModuleDecodeErfFileRegister();
+    TmModuleReceiveErfDagRegister();
+    TmModuleDecodeErfDagRegister();
     TmModuleDebugList();
 
     /** \todo we need an api for these */
@@ -780,6 +876,7 @@ int main(int argc, char **argv)
         SCCudaRegisterTests();
 #endif
         PayloadRegisterTests();
+        DcePayloadRegisterTests();
 #ifdef PROFILING
         SCProfilingRegisterTests();
 #endif
@@ -829,11 +926,13 @@ int main(int argc, char **argv)
         }
     }
 
-#ifndef OS_WIN32
     /* registering signals we use */
     SignalHandlerSetup(SIGINT, SignalHandlerSigint);
     SignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
-    SignalHandlerSetup(SIGHUP, SignalHandlerSighup);
+
+#ifndef OS_WIN32
+	/* SIGHUP is not implemnetd on WIN32 */
+    //SignalHandlerSetup(SIGHUP, SignalHandlerSighup);
 
     /* Get the suricata user ID to given user ID */
     if (do_setuid == TRUE) {
@@ -916,6 +1015,7 @@ int main(int argc, char **argv)
         //RunModeFilePcap(de_ctx, pcap_file);
         //RunModeFilePcap2(de_ctx, pcap_file);
         RunModeFilePcapAuto(de_ctx, pcap_file);
+        //RunModeFilePcapAuto2(de_ctx, pcap_file);
     }
     else if (run_mode == MODE_PFRING) {
         //RunModeIdsPfring3(de_ctx, pfring_dev);
@@ -934,6 +1034,9 @@ int main(int argc, char **argv)
     }
     else if (run_mode == MODE_ERF_FILE) {
         RunModeErfFileAuto(de_ctx, erf_file);
+    }
+    else if (run_mode == MODE_DAG) {
+        RunModeErfDagAuto(de_ctx, dag_input);
     }
     else {
         SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
@@ -981,18 +1084,18 @@ int main(int argc, char **argv)
 #endif
 
     while(1) {
-        if (sigflags) {
+        if (suricata_ctl_flags != 0) {
             SCLogInfo("signal received");
 
-            if (sigflags & SURICATA_STOP)  {
-                SCLogInfo("SIGINT or EngineStop received");
+            if (suricata_ctl_flags & SURICATA_STOP)  {
+                SCLogInfo("EngineStop received");
 
                 /* Stop the engine so it quits after processing the pcap file
                  * but first make sure all packets are processed by all other
                  * threads. */
                 char done = 0;
                 do {
-                    if (sigflags & SURICATA_SIGTERM || sigflags & SURICATA_KILL)
+                    if (suricata_ctl_flags & SURICATA_KILL)
                         break;
 
                     SCMutexLock(&packet_q.mutex_q);
@@ -1006,12 +1109,6 @@ int main(int argc, char **argv)
                 } while (done == 0);
 
                 SCLogInfo("all packets processed by threads, stopping engine");
-            }
-            if (sigflags & SURICATA_SIGHUP) {
-                SCLogInfo("SIGHUP received");
-            }
-            if (sigflags & SURICATA_SIGTERM) {
-                SCLogInfo("SIGTERM received");
             }
 
             struct timeval end_time;
@@ -1091,6 +1188,10 @@ int main(int argc, char **argv)
      * cuda contexts in any way */
     SCCudaHlDeRegisterAllRegisteredModules();
 #endif
-
+#ifdef OS_WIN32
+	if (daemon) {
+		return 0;
+	}
+#endif /* OS_WIN32 */
     exit(EXIT_SUCCESS);
 }

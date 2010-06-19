@@ -48,7 +48,11 @@ typedef struct DetectPcreData_ {
 } DetectPcreData;
 
 /* prototypes */
-int DetectPcrePayloadMatch(DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectPcrePayloadMatch(DetectEngineThreadCtx *, Signature *, SigMatch *, Packet *, Flow *, uint8_t *, uint32_t);
+int DetectPcrePacketPayloadMatch(DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+//int DetectPcrePayloadMatch(DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectPcrePayloadDoMatch(DetectEngineThreadCtx *, Signature *, SigMatch *,
+                             Packet *, uint8_t *, uint16_t);
 void DetectPcreRegister (void);
 
 #endif /* __DETECT_PCRE_H__ */

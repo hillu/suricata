@@ -61,8 +61,7 @@
 struct DetectionEngineThreadCtx_;
 
 /* Address */
-typedef struct Address_
-{
+typedef struct Address_ {
     char family;
     union {
         uint32_t       address_un_data32[4]; /* type-specific field */
@@ -75,75 +74,80 @@ typedef struct Address_
 #define addr_data16 address.address_un_data16
 #define addr_data8  address.address_un_data8
 
-#define COPY_ADDRESS(a,b) { \
-    (b)->family = (a)->family; \
-    (b)->addr_data32[0] = (a)->addr_data32[0]; \
-    (b)->addr_data32[1] = (a)->addr_data32[1]; \
-    (b)->addr_data32[2] = (a)->addr_data32[2]; \
-    (b)->addr_data32[3] = (a)->addr_data32[3]; \
-}
+#define COPY_ADDRESS(a, b) do {                    \
+        (b)->family = (a)->family;                 \
+        (b)->addr_data32[0] = (a)->addr_data32[0]; \
+        (b)->addr_data32[1] = (a)->addr_data32[1]; \
+        (b)->addr_data32[2] = (a)->addr_data32[2]; \
+        (b)->addr_data32[3] = (a)->addr_data32[3]; \
+    } while (0)
 
 /* Set the IPv4 addressesinto the Addrs of the Packet.
  * Make sure p->ip4h is initialized and validated.
  *
  * We set the rest of the struct to 0 so we can
  * prevent using memset. */
-#define SET_IPV4_SRC_ADDR(p,a) { \
-    (a)->family = AF_INET; \
-    (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_src.s_addr; \
-    (a)->addr_data32[1] = 0; \
-    (a)->addr_data32[2] = 0; \
-    (a)->addr_data32[3] = 0; \
-}
-#define SET_IPV4_DST_ADDR(p,a) { \
-    (a)->family = AF_INET; \
-    (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_dst.s_addr; \
-    (a)->addr_data32[1] = 0; \
-    (a)->addr_data32[2] = 0; \
-    (a)->addr_data32[3] = 0; \
-}
+#define SET_IPV4_SRC_ADDR(p, a) do {                              \
+        (a)->family = AF_INET;                                    \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_src.s_addr; \
+        (a)->addr_data32[1] = 0;                                  \
+        (a)->addr_data32[2] = 0;                                  \
+        (a)->addr_data32[3] = 0;                                  \
+    } while (0)
+
+#define SET_IPV4_DST_ADDR(p, a) do {                              \
+        (a)->family = AF_INET;                                    \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_dst.s_addr; \
+        (a)->addr_data32[1] = 0;                                  \
+        (a)->addr_data32[2] = 0;                                  \
+        (a)->addr_data32[3] = 0;                                  \
+    } while (0)
 
 /* clear the address structure by setting all fields to 0 */
-#define CLEAR_ADDR(a) { \
-    (a)->family = 0; \
-    (a)->addr_data32[0] = 0; \
-    (a)->addr_data32[1] = 0; \
-    (a)->addr_data32[2] = 0; \
-    (a)->addr_data32[3] = 0; \
-}
+#define CLEAR_ADDR(a) do {       \
+        (a)->family = 0;         \
+        (a)->addr_data32[0] = 0; \
+        (a)->addr_data32[1] = 0; \
+        (a)->addr_data32[2] = 0; \
+        (a)->addr_data32[3] = 0; \
+    } while (0)
 
 /* Set the IPv6 addressesinto the Addrs of the Packet.
  * Make sure p->ip6h is initialized and validated. */
-#define SET_IPV6_SRC_ADDR(p,a) { \
-    (a)->family = AF_INET6; \
-    (a)->addr_data32[0] = (p)->ip6h->ip6_src[0]; \
-    (a)->addr_data32[1] = (p)->ip6h->ip6_src[1]; \
-    (a)->addr_data32[2] = (p)->ip6h->ip6_src[2]; \
-    (a)->addr_data32[3] = (p)->ip6h->ip6_src[3]; \
-}
-#define SET_IPV6_DST_ADDR(p,a) { \
-    (a)->family = AF_INET6; \
-    (a)->addr_data32[0] = (p)->ip6h->ip6_dst[0]; \
-    (a)->addr_data32[1] = (p)->ip6h->ip6_dst[1]; \
-    (a)->addr_data32[2] = (p)->ip6h->ip6_dst[2]; \
-    (a)->addr_data32[3] = (p)->ip6h->ip6_dst[3]; \
-}
+#define SET_IPV6_SRC_ADDR(p, a) do {                 \
+        (a)->family = AF_INET6;                      \
+        (a)->addr_data32[0] = (p)->ip6h->ip6_src[0]; \
+        (a)->addr_data32[1] = (p)->ip6h->ip6_src[1]; \
+        (a)->addr_data32[2] = (p)->ip6h->ip6_src[2]; \
+        (a)->addr_data32[3] = (p)->ip6h->ip6_src[3]; \
+    } while (0)
+
+#define SET_IPV6_DST_ADDR(p, a) do {                 \
+        (a)->family = AF_INET6;                      \
+        (a)->addr_data32[0] = (p)->ip6h->ip6_dst[0]; \
+        (a)->addr_data32[1] = (p)->ip6h->ip6_dst[1]; \
+        (a)->addr_data32[2] = (p)->ip6h->ip6_dst[2]; \
+        (a)->addr_data32[3] = (p)->ip6h->ip6_dst[3]; \
+    } while (0)
+
 /* Set the TCP ports into the Ports of the Packet.
  * Make sure p->tcph is initialized and validated. */
-#define SET_TCP_SRC_PORT(pkt,prt) { \
-    SET_PORT(TCP_GET_SRC_PORT((pkt)), *prt); \
-}
-#define SET_TCP_DST_PORT(pkt,prt) { \
-    SET_PORT(TCP_GET_DST_PORT((pkt)), *prt); \
-}
+#define SET_TCP_SRC_PORT(pkt, prt) do {          \
+        SET_PORT(TCP_GET_SRC_PORT((pkt)), *prt); \
+    } while (0)
+
+#define SET_TCP_DST_PORT(pkt, prt) do {          \
+        SET_PORT(TCP_GET_DST_PORT((pkt)), *prt); \
+    } while (0)
+
 /* Set the UDP ports into the Ports of the Packet.
  * Make sure p->udph is initialized and validated. */
-#define SET_UDP_SRC_PORT(pkt,prt) { \
-    SET_PORT(UDP_GET_SRC_PORT((pkt)), *prt); \
-}
-#define SET_UDP_DST_PORT(pkt,prt) { \
-    SET_PORT(UDP_GET_DST_PORT((pkt)), *prt); \
-}
+#define SET_UDP_SRC_PORT(pkt, prt) do {          \
+        SET_PORT(UDP_GET_SRC_PORT((pkt)), *prt); \
+    } while (0)
+#define SET_UDP_DST_PORT(pkt, prt) do {          \
+        SET_PORT(UDP_GET_DST_PORT((pkt)), *prt); \
+    } while (0)
 
 #define GET_IPV4_SRC_ADDR_U32(p) ((p)->src.addr_data32[0])
 #define GET_IPV4_DST_ADDR_U32(p) ((p)->dst.addr_data32[0])
@@ -160,12 +164,12 @@ typedef uint16_t Port;
 #define SET_PORT(v, p) ((p) = (v))
 #define COPY_PORT(a,b) (b) = (a)
 
-#define CMP_ADDR(a1,a2) \
+#define CMP_ADDR(a1, a2) \
     (((a1)->addr_data32[3] == (a2)->addr_data32[3] && \
       (a1)->addr_data32[2] == (a2)->addr_data32[2] && \
       (a1)->addr_data32[1] == (a2)->addr_data32[1] && \
       (a1)->addr_data32[0] == (a2)->addr_data32[0]))
-#define CMP_PORT(p1,p2) \
+#define CMP_PORT(p1, p2) \
     ((p1 == p2))
 
 /*Given a packet pkt offset to the start of the ip header in a packet
@@ -218,6 +222,22 @@ typedef struct PktVar_ {
 /* forward declartion since Packet struct definition requires this */
 struct PacketQueue_;
 
+/* sizes of the members:
+ * src: 17 bytes
+ * dst: 17 bytes
+ * sp/type: 1 byte
+ * dp/code: 1 byte
+ * proto: 1 byte
+ * recurs: 1 byte
+ *
+ * sum of above: 38 bytes
+ *
+ * flow ptr: 4/8 bytes
+ * flags: 1 byte
+ * flowflags: 1 byte
+ *
+ * sum of above 44/48 bytes
+ */
 typedef struct Packet_
 {
     /* Addresses, Ports and protocol
@@ -238,7 +258,89 @@ typedef struct Packet_
      * has the exact same tuple as the lower levels */
     uint8_t recursion_level;
 
+    /*Pkt Flags*/
+    uint8_t flags;
+    /* flow */
+    uint8_t flowflags;
+    struct Flow_ *flow;
+
     struct timeval ts;
+
+    union {
+        /* nfq stuff */
+#ifdef NFQ
+        NFQPacketVars nfq_v;
+#endif /* NFQ */
+
+        /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
+        PcapPacketVars pcap_v;
+    };
+
+    /** data linktype in host order */
+    int datalink;
+
+    /* IPS action to take */
+    uint8_t action;
+
+    /* pkt vars */
+    PktVar *pktvar;
+
+    /* header pointers */
+    EthernetHdr *ethh;
+
+    IPV4Hdr *ip4h;
+    IPV4Vars ip4vars;
+    IPV4Cache ip4c;
+
+    IPV6Hdr *ip6h;
+    IPV6Vars ip6vars;
+    IPV6Cache ip6c;
+    IPV6ExtHdrs ip6eh;
+
+    TCPHdr *tcph;
+    TCPVars tcpvars;
+    TCPCache tcpc;
+
+    UDPHdr *udph;
+    UDPVars udpvars;
+    UDPCache udpc;
+
+    ICMPV4Hdr *icmpv4h;
+    ICMPV4Cache icmpv4c;
+    ICMPV4Vars icmpv4vars;
+
+    ICMPV6Hdr *icmpv6h;
+    ICMPV6Cache icmpv6c;
+    ICMPV6Vars icmpv6vars;
+
+    PPPHdr *ppph;
+    PPPOESessionHdr *pppoesh;
+    PPPOEDiscoveryHdr *pppoedh;
+
+    GREHdr *greh;
+
+    VLANHdr *vlanh;
+
+    /* ptr to the payload of the packet
+     * with it's length. */
+    uint8_t *payload;
+    uint16_t payload_len;
+
+    /* storage: maximum ip packet size + link header */
+    uint8_t pkt[IPV6_HEADER_LEN + 65536 + 28];
+    uint32_t pktlen;
+
+    /* decoder events: review how many events we have */
+    uint8_t events[(DECODE_EVENT_MAX / 8) + 1];
+
+    PacketAlerts alerts;
+
+    /** packet number in the pcap file, matches wireshark */
+    uint64_t pcap_cnt;
+
+    /* double linked list ptrs */
+    struct Packet_ *next;
+    struct Packet_ *prev;
 
     /* ready to set verdict counter, only set in root */
     uint8_t rtv_cnt;
@@ -250,84 +352,6 @@ typedef struct Packet_
     /* tunnel XXX convert to bitfield*/
     char tunnel_pkt;
     char tunnel_verdicted;
-
-    /* nfq stuff */
-#ifdef NFQ
-    NFQPacketVars nfq_v;
-#endif /* NFQ */
-
-    /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
-    PcapPacketVars pcap_v;
-
-    /** data linktype in host order */
-    int datalink;
-
-    /* storage: maximum ip packet size + link header */
-    uint8_t pkt[IPV6_HEADER_LEN + 65536 + 28];
-    uint32_t pktlen;
-
-    /* flow */
-    struct Flow_ *flow;
-    uint8_t flowflags;
-
-    /*Pkt Flags*/
-    uint8_t flags;
-
-    /* pkt vars */
-    PktVar *pktvar;
-
-    /* header pointers */
-    EthernetHdr *ethh;
-    PPPHdr *ppph;
-    PPPOESessionHdr *pppoesh;
-    PPPOEDiscoveryHdr *pppoedh;
-    GREHdr *greh;
-    VLANHdr *vlanh;
-
-    IPV4Hdr *ip4h;
-    IPV4Vars ip4vars;
-    IPV4Cache ip4c;
-
-    IPV6Hdr *ip6h;
-    IPV6Vars ip6vars;
-    IPV6Cache ip6c;
-    IPV6ExtHdrs ip6eh;
-
-    ICMPV4Hdr *icmpv4h;
-    ICMPV4Cache icmpv4c;
-    ICMPV4Vars icmpv4vars;
-
-    ICMPV6Hdr *icmpv6h;
-    ICMPV6Cache icmpv6c;
-    ICMPV6Vars icmpv6vars;
-
-    TCPHdr *tcph;
-    TCPVars tcpvars;
-    TCPCache tcpc;
-
-    UDPHdr *udph;
-    UDPVars udpvars;
-    UDPCache udpc;
-
-    /* ptr to the payload of the packet
-     * with it's length. */
-    uint8_t *payload;
-    uint16_t payload_len;
-
-    /* decoder events: review how many events we have */
-    uint8_t events[65535 / 8];
-
-    PacketAlerts alerts;
-
-    /* IPS action to take */
-    uint8_t action;
-
-    /** packet number in the pcap file, matches wireshark */
-    uint64_t pcap_cnt;
-
-    /* double linked list ptrs */
-    struct Packet_ *next;
-    struct Packet_ *prev;
 
     /* tunnel/encapsulation handling */
     struct Packet_ *root; /* in case of tunnel this is a ptr
@@ -366,9 +390,24 @@ typedef struct PacketQueue_ {
 #endif /* DBG_PERF */
 } PacketQueue;
 
+/** \brief Specific ctx for AL proto detection */
+typedef struct AlpProtoDetectDirectionThread_ {
+    MpmThreadCtx mpm_ctx;
+    PatternMatcherQueue pmq;
+} AlpProtoDetectDirectionThread;
+
+/** \brief Specific ctx for AL proto detection */
+typedef struct AlpProtoDetectThreadCtx_ {
+    AlpProtoDetectDirectionThread toserver;
+    AlpProtoDetectDirectionThread toclient;
+} AlpProtoDetectThreadCtx;
+
 /** \brief Structure to hold thread specific data for all decode modules */
 typedef struct DecodeThreadVars_
 {
+    /** Specific context for udp protocol detection (here atm) */
+    AlpProtoDetectThreadCtx udp_dp_ctx;
+
     /** stats/counters */
     uint16_t counter_pkts;
     uint16_t counter_pkts_per_sec;
@@ -403,46 +442,46 @@ typedef struct DecodeThreadVars_
 /**
  *  \brief reset these to -1(indicates that the packet is fresh from the queue)
  */
-#define PACKET_RESET_CHECKSUMS(p) { \
-    (p)->ip4c.comp_csum = -1; \
-    (p)->tcpc.comp_csum = -1; \
-    (p)->udpc.comp_csum = -1;  \
-    (p)->icmpv4c.comp_csum = -1; \
-    (p)->icmpv6c.comp_csum = -1; \
-}
+#define PACKET_RESET_CHECKSUMS(p) do { \
+        (p)->ip4c.comp_csum = -1;      \
+        (p)->tcpc.comp_csum = -1;      \
+        (p)->udpc.comp_csum = -1;      \
+        (p)->icmpv4c.comp_csum = -1;   \
+        (p)->icmpv6c.comp_csum = -1;   \
+    } while (0)
 
 /**
  *  \brief Initialize a packet structure for use.
  */
-#define PACKET_INITIALIZE(p) { \
-    memset((p), 0x00, sizeof(Packet)); \
-    SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
-    PACKET_RESET_CHECKSUMS((p)); \
-}
+#define PACKET_INITIALIZE(p) do {               \
+        memset((p), 0x00, sizeof(Packet));      \
+        SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
+        PACKET_RESET_CHECKSUMS((p));            \
+    } while (0)
 
 /**
  *  \brief Recycle a packet structure for reuse.
  *  \todo the mutex destroy & init is necessary because of the memset, reconsider
  */
-#define PACKET_RECYCLE(p) { \
-    if ((p)->pktvar != NULL) { \
-        PktVarFree((p)->pktvar); \
-    } \
-    SCMutexDestroy(&(p)->mutex_rtv_cnt); \
-    memset((p), 0x00, sizeof(Packet)); \
-    SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
-    PACKET_RESET_CHECKSUMS((p)); \
-}
+#define PACKET_RECYCLE(p) do {                  \
+        if ((p)->pktvar != NULL) {              \
+            PktVarFree((p)->pktvar);            \
+        }                                       \
+        SCMutexDestroy(&(p)->mutex_rtv_cnt);    \
+        memset((p), 0x00, sizeof(Packet));      \
+        SCMutexInit(&(p)->mutex_rtv_cnt, NULL); \
+        PACKET_RESET_CHECKSUMS((p));            \
+    } while (0)
 
 /**
  *  \brief Cleanup a packet so that we can free it. No memset needed..
  */
-#define PACKET_CLEANUP(p) { \
-    if ((p)->pktvar != NULL) { \
-        PktVarFree((p)->pktvar); \
-    } \
-    SCMutexDestroy(&(p)->mutex_rtv_cnt); \
-}
+#define PACKET_CLEANUP(p) do {                  \
+        if ((p)->pktvar != NULL) {              \
+            PktVarFree((p)->pktvar);            \
+        }                                       \
+        SCMutexDestroy(&(p)->mutex_rtv_cnt);    \
+    } while (0)
 
 
 /* macro's for setting the action
@@ -454,29 +493,27 @@ typedef struct DecodeThreadVars_
 #define REJECT_PACKET_DST(p)   ((p)->root ? ((p)->root->action = ACTION_REJECT_DST) : ((p)->action = ACTION_REJECT_DST))
 #define REJECT_PACKET_BOTH(p)  ((p)->root ? ((p)->root->action = ACTION_REJECT_BOTH) : ((p)->action = ACTION_REJECT_BOTH))
 
-#define TUNNEL_INCR_PKT_RTV(p) \
-{ \
-    SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-    ((p)->root ? (p)->root->rtv_cnt++ : (p)->rtv_cnt++); \
-    SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-}
+#define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
+        SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt);   \
+        ((p)->root ? (p)->root->rtv_cnt++ : (p)->rtv_cnt++);                        \
+        SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
+    } while (0)
 
-#define TUNNEL_INCR_PKT_TPR(p) \
-{ \
-    SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-    ((p)->root ? (p)->root->tpr_cnt++ : (p)->tpr_cnt++); \
-    SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-}
-#define TUNNEL_DECR_PKT_TPR(p) \
-{ \
-    SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-    ((p)->root ? (p)->root->tpr_cnt-- : (p)->tpr_cnt--); \
-    SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
-}
-#define TUNNEL_DECR_PKT_TPR_NOLOCK(p) \
-{ \
-    ((p)->root ? (p)->root->tpr_cnt-- : (p)->tpr_cnt--); \
-}
+#define TUNNEL_INCR_PKT_TPR(p) do {                                                 \
+        SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt);   \
+        ((p)->root ? (p)->root->tpr_cnt++ : (p)->tpr_cnt++);                        \
+        SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
+    } while (0)
+
+#define TUNNEL_DECR_PKT_TPR(p) do {                                                 \
+        SCMutexLock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt);   \
+        ((p)->root ? (p)->root->tpr_cnt-- : (p)->tpr_cnt--);                        \
+        SCMutexUnlock((p)->root ? &(p)->root->mutex_rtv_cnt : &(p)->mutex_rtv_cnt); \
+    } while (0)
+
+#define TUNNEL_DECR_PKT_TPR_NOLOCK(p) do {                   \
+        ((p)->root ? (p)->root->tpr_cnt-- : (p)->tpr_cnt--); \
+    } while (0)
 
 #define TUNNEL_PKT_RTV(p)             ((p)->root ? (p)->root->rtv_cnt : (p)->rtv_cnt)
 #define TUNNEL_PKT_TPR(p)             ((p)->root ? (p)->root->tpr_cnt : (p)->tpr_cnt)
@@ -489,6 +526,8 @@ typedef struct DecodeThreadVars_
 void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
 Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
 Packet *PacketGetFromQueueOrAlloc(void);
+
+DecodeThreadVars *DecodeThreadVarsAlloc();
 
 /* decoder functions */
 void DecodeEthernet(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
@@ -513,17 +552,17 @@ void AddressDebugPrint(Address *);
  *
  * \param p Packet to set the flag in
  */
-#define DecodeSetNoPayloadInspectionFlag(p) { \
-    (p)->flags |= PKT_NOPAYLOAD_INSPECTION; \
-}
+#define DecodeSetNoPayloadInspectionFlag(p) do { \
+        (p)->flags |= PKT_NOPAYLOAD_INSPECTION;  \
+    } while (0)
 
 /** \brief Set the No packet inspection Flag for the packet.
  *
  * \param p Packet to set the flag in
  */
-#define DecodeSetNoPacketInspectionFlag(p) { \
-    (p)->flags |= PKT_NOPACKET_INSPECTION; \
-}
+#define DecodeSetNoPacketInspectionFlag(p) do { \
+        (p)->flags |= PKT_NOPACKET_INSPECTION;  \
+    } while (0)
 
 
 #define DECODER_SET_EVENT(p, e)   ((p)->events[(e/8)] |= (1<<(e%8)))

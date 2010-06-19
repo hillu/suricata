@@ -32,9 +32,11 @@
 #include "detect-engine-mpm.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
+#include "detect-engine-state.h"
 #include "flow.h"
 #include "detect-flow.h"
 #include "flow-var.h"
+#include "flow-util.h"
 #include "threads.h"
 #include "flow-alert-sid.h"
 
@@ -59,6 +61,7 @@ void HttpUriRegisterTests(void);
 int DetectAppLayerUricontentMatch (ThreadVars *, DetectEngineThreadCtx *,
                                    Flow *, uint8_t , void *,
                                    Signature *, SigMatch *);
+void DetectUricontentFree(void *);
 
 /**
  * \brief Registration function for uricontent: keyword
@@ -69,7 +72,7 @@ void DetectUricontentRegister (void)
     sigmatch_table[DETECT_URICONTENT].AppLayerMatch = NULL;
     sigmatch_table[DETECT_URICONTENT].Match = NULL;
     sigmatch_table[DETECT_URICONTENT].Setup = DetectUricontentSetup;
-    sigmatch_table[DETECT_URICONTENT].Free  = NULL;
+    sigmatch_table[DETECT_URICONTENT].Free  = DetectUricontentFree;
     sigmatch_table[DETECT_URICONTENT].RegisterTests = HttpUriRegisterTests;
     sigmatch_table[DETECT_URICONTENT].alproto = ALPROTO_HTTP;
 
@@ -83,6 +86,27 @@ void DetectUricontentRegister (void)
 uint32_t DetectUricontentMaxId(DetectEngineCtx *de_ctx)
 {
     return MpmPatternIdStoreGetMaxId(de_ctx->mpm_pattern_id_store);
+}
+
+/**
+ * \brief this function will Free memory associated with DetectUricontentData
+ *
+ * \param cd pointer to DetectUricotentData
+ */
+void DetectUricontentFree(void *ptr) {
+    SCEnter();
+    DetectUricontentData *cd = (DetectUricontentData *)ptr;
+
+    if (cd == NULL)
+        SCReturn;
+
+    if (cd->uricontent != NULL)
+        SCFree(cd->uricontent);
+
+    BoyerMooreCtxDeInit(cd->bm_ctx);
+
+    SCFree(cd);
+    SCReturn;
 }
 
 /**
@@ -309,8 +333,15 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
 {
     SCEnter();
 
+    DetectUricontentData *cd = NULL;
     SigMatch *sm = NULL;
-    DetectUricontentData *cd = DoDetectUricontentSetup(contentstr);
+
+    if (s->alproto == ALPROTO_DCERPC) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "uri content specified in a dcerpc sig");
+        goto error;
+    }
+
+    cd = DoDetectUricontentSetup(contentstr);
     if (cd == NULL)
         goto error;
 
@@ -342,6 +373,7 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
 
 error:
     if (cd) SCFree(cd);
+    if (sm != NULL) SCFree(sm);
     SCReturnInt(-1);
 }
 
@@ -351,14 +383,13 @@ error:
  *          normalized http uri against the given rule using multi pattern
  *          search algorithms.
  *
- * \param t             Pointer to the tv for this detection module instance
  * \param det_ctx       Pointer to the detection engine thread context
  * \param content       Pointer to the uri content currently being matched
  * \param content_len   Content_len of the received uri content
  *
  * \retval 1 if the uri contents match; 0 no match
  */
-int DoDetectAppLayerUricontentMatch (ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
+static inline int DoDetectAppLayerUricontentMatch (DetectEngineThreadCtx *det_ctx,
                                      uint8_t *uri, uint16_t uri_len)
 {
     int ret = 0;
@@ -379,43 +410,46 @@ int DoDetectAppLayerUricontentMatch (ThreadVars *tv, DetectEngineThreadCtx *det_
         else if (det_ctx->sgh->mpm_uricontent_maxlen == 4) det_ctx->pkts_uri_searched4++;
         else det_ctx->pkts_uri_searched++;
 
-        ret += UriPatternSearch(tv, det_ctx, uri, uri_len);
+        ret += UriPatternSearch(det_ctx, uri, uri_len);
 
         SCLogDebug("post search: cnt %" PRIu32, ret);
     }
     return ret;
 }
 
-/** \brief Run the pattern matcher against the uri(s)
+/**
+ *  \brief Run the pattern matcher against the uri(s)
  *
  *  We run against _all_ uri(s) we have as the pattern matcher will
  *  flag each sig that has a match. We need to do this for all uri(s)
  *  to not miss possible events.
  *
+ *  \param f locked flow
+ *  \param htp_state initialized htp state
+ *
  *  \warning Make sure the flow/state is locked
  *  \todo what should we return? Just the fact that we matched?
  */
-uint32_t DetectUricontentInspectMpm(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, void *alstate) {
+uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, HtpState *htp_state) {
     SCEnter();
 
     uint32_t cnt = 0;
     size_t idx = 0;
     htp_tx_t *tx = NULL;
 
-    HtpState *htp_state = (HtpState *)alstate;
     if (htp_state == NULL || htp_state->connp == NULL) {
         SCLogDebug("no HTTP state / no connp");
         SCReturnUInt(0U);
     }
 
-    for (idx = 0;//htp_state->new_in_tx_index;
+    for (idx = AppLayerTransactionGetInspectId(f);
          idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL || tx->request_uri_normalized == NULL)
             continue;
 
-        cnt += DoDetectAppLayerUricontentMatch(tv, det_ctx, (uint8_t *)
+        cnt += DoDetectAppLayerUricontentMatch(det_ctx, (uint8_t *)
                 bstr_ptr(tx->request_uri_normalized),
                 bstr_len(tx->request_uri_normalized));
     }
@@ -443,16 +477,18 @@ static int HTTPUriTest01(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -490,8 +526,9 @@ static int HTTPUriTest01(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -508,17 +545,19 @@ static int HTTPUriTest02(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
 
-    htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -557,10 +596,10 @@ static int HTTPUriTest02(void) {
 
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state == NULL)
-        HTPStateFree(htp_state);
+    if (htp_state != NULL) HTPStateFree(htp_state);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -576,17 +615,19 @@ static int HTTPUriTest03(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
 
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -624,10 +665,10 @@ static int HTTPUriTest03(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state == NULL)
-        HTPStateFree(htp_state);
+    if (htp_state != NULL) HTPStateFree(htp_state);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -644,17 +685,19 @@ static int HTTPUriTest04(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
 
-    HtpState *htp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -693,10 +736,10 @@ static int HTTPUriTest04(void) {
 
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state == NULL)
-        HTPStateFree(htp_state);
+    if (htp_state != NULL) HTPStateFree(htp_state);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -771,16 +814,18 @@ static int DetectUriSigTest02(void) {
     p.payload_len = httplen1;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -820,7 +865,7 @@ static int DetectUriSigTest02(void) {
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -842,14 +887,15 @@ static int DetectUriSigTest02(void) {
 
     result = 1;
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+    //if (http_state != NULL) HTPStateFree(http_state);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -881,15 +927,19 @@ static int DetectUriSigTest03(void) {
     p.payload = httpbuf1;
     p.payload_len = httplen1;
     p.proto = IPPROTO_TCP;
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -929,16 +979,28 @@ static int DetectUriSigTest03(void) {
         goto end;
     }
 
-   /* do detect */
+    /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
+    if ((PacketAlertCheck(&p, 1))) {
+        printf("sig 1 alerted, but it should not: ");
+        goto end;
+    } else if (!PacketAlertCheck(&p, 2)) {
+        printf("sig 2 did not alert, but it should: ");
+        goto end;
+    } else if ((PacketAlertCheck(&p, 3))) {
+        printf("sig 3 alerted, but it should not: ");
+        goto end;
+    }
+
+
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
-   if (r != 0) {
+    if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -948,26 +1010,27 @@ static int DetectUriSigTest03(void) {
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
     if ((PacketAlertCheck(&p, 1))) {
-        printf("sig: 1 alerted, but it should not\n");
+        printf("sig 1 alerted, but it should not (chunk 2): ");
         goto end;
-    } else if (! PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should\n");
+    } else if (PacketAlertCheck(&p, 2)) {
+        printf("sig 2 alerted, but it should not (chunk 2): ");
         goto end;
-    } else if (! (PacketAlertCheck(&p, 3))) {
-        printf("sig: 3 did not alerted, but it should\n");
+    } else if (!(PacketAlertCheck(&p, 3))) {
+        printf("sig 3 did not alert, but it should (chunk 2): ");
         goto end;
     }
 
     result = 1;
+
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    //FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1082,7 +1145,7 @@ static int DetectUriSigTest04(void) {
             s->pmatch == NULL ||
             ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectContentData*) s->umatch_tail->ctx)->within != 30 ||
+            ((DetectUricontentData*) s->umatch_tail->ctx)->within != 30 ||
             s->match != NULL)
     {
         printf("sig 8 failed to parse: ");
@@ -1194,15 +1257,31 @@ static int DetectUriSigTest05(void) {
     p.payload = httpbuf1;
     p.payload_len = httplen1;
     p.proto = IPPROTO_TCP;
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
+
+    StreamMsg *stream_msg = StreamMsgGetFromPool();
+    if (stream_msg == NULL) {
+        printf("no stream_msg: ");
+        goto end;
+    }
+
+    memcpy(stream_msg->data.data, httpbuf1, httplen1);
+    stream_msg->data.data_len = httplen1;
+
+    ssn.toserver_smsg_head = stream_msg;
+    ssn.toserver_smsg_tail = stream_msg;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1245,36 +1324,36 @@ static int DetectUriSigTest05(void) {
         goto end;
     }
 
-   /* do detect */
+    /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
     }
 
     if ((PacketAlertCheck(&p, 1))) {
-        printf("sig: 1 alerted, but it should not:");
+        printf("sig: 1 alerted, but it should not: ");
         goto end;
     } else if (! PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should:");
+        printf("sig: 2 did not alert, but it should: ");
         goto end;
     } else if (! (PacketAlertCheck(&p, 3))) {
-        printf("sig: 3 did not alerted, but it should:");
+        printf("sig: 3 did not alert, but it should: ");
         goto end;
     }
 
     result = 1;
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1304,15 +1383,31 @@ static int DetectUriSigTest06(void) {
     p.payload = httpbuf1;
     p.payload_len = httplen1;
     p.proto = IPPROTO_TCP;
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
+
+    StreamMsg *stream_msg = StreamMsgGetFromPool();
+    if (stream_msg == NULL) {
+        printf("no stream_msg: ");
+        goto end;
+    }
+
+    memcpy(stream_msg->data.data, httpbuf1, httplen1);
+    stream_msg->data.data_len = httplen1;
+
+    ssn.toserver_smsg_head = stream_msg;
+    ssn.toserver_smsg_tail = stream_msg;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1365,7 +1460,7 @@ static int DetectUriSigTest06(void) {
    /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1375,23 +1470,24 @@ static int DetectUriSigTest06(void) {
         printf("sig: 1 alerted, but it should not:");
         goto end;
     } else if (! PacketAlertCheck(&p, 2)) {
-        printf("sig: 2 did not alerted, but it should:");
+        printf("sig: 2 did not alert, but it should:");
         goto end;
     } else if (! (PacketAlertCheck(&p, 3))) {
-        printf("sig: 3 did not alerted, but it should:");
+        printf("sig: 3 did not alert, but it should:");
         goto end;
     }
 
     result = 1;
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1421,15 +1517,19 @@ static int DetectUriSigTest07(void) {
     p.payload = httpbuf1;
     p.payload_len = httplen1;
     p.proto = IPPROTO_TCP;
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_HTTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1482,7 +1582,7 @@ static int DetectUriSigTest07(void) {
    /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
 
-    http_state = ssn.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1501,14 +1601,15 @@ static int DetectUriSigTest07(void) {
 
     result = 1;
 end:
-    if (http_state != NULL) HTPStateFree(http_state);
+
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 #endif /* UNITTESTS */

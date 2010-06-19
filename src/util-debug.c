@@ -93,6 +93,13 @@ SCEnumCharMap sc_syslog_facility_map[] = {
     { NULL,             -1         }
 };
 
+#if defined (OS_WIN32)
+/**
+ * \brief Used for synchronous output on WIN32
+ */
+static SCMutex sc_log_stream_lock = NULL;
+#endif /* OS_WIN32 */
+
 /**
  * \brief Holds the config state for the logging module
  */
@@ -162,10 +169,19 @@ static inline int SCLogMapLogLevelToSyslogLevel(int log_level)
  */
 static inline void SCLogPrintToStream(FILE *fd, char *msg)
 {
+#if defined (OS_WIN32)
+	SCMutexLock(&sc_log_stream_lock);
+#endif /* OS_WIN32 */
+
     if (fprintf(fd, "%s", msg) < 0)
         printf("Error writing to stream using fprintf\n");
 
     fflush(fd);
+
+#if defined (OS_WIN32)
+	SCMutexUnlock(&sc_log_stream_lock);
+#endif /* OS_WIN32 */
+
     return;
 }
 
@@ -460,16 +476,16 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
  * \retval 1 if debug messages are enabled to be logged
  * \retval 0 if debug messages are not enabled to be logged
  */
-int SCLogDebugEnabled()
+int SCLogDebugEnabled(void)
 {
-#ifndef DEBUG
-    return 0;
-#endif
-
+#ifdef DEBUG
     if (sc_log_global_log_level == SC_LOG_DEBUG)
         return 1;
     else
         return 0;
+#else
+    return 0;
+#endif
 }
 
 /**
@@ -538,6 +554,11 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
 {
     SCLogOPIfaceCtx *iface_ctx = SCLogAllocLogOPIfaceCtx();
 
+    if (iface_ctx == NULL) {
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogInitFileOPIface. Exiting...");
+        exit(EXIT_FAILURE);
+    }
+
     iface_ctx->iface = SC_LOG_OP_IFACE_FILE;
 
     if (file != NULL &&
@@ -577,11 +598,10 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
 {
     SCLogOPIfaceCtx *iface_ctx = SCLogAllocLogOPIfaceCtx();
 
-    if ( (iface_ctx = SCMalloc(sizeof(SCLogOPIfaceCtx))) == NULL) {
+    if (iface_ctx == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogInitConsoleOPIface. Exiting...");
         exit(EXIT_FAILURE);
     }
-    memset(iface_ctx, 0, sizeof(SCLogOPIfaceCtx));
 
     iface_ctx->iface = SC_LOG_OP_IFACE_CONSOLE;
 
@@ -632,11 +652,10 @@ static inline SCLogOPIfaceCtx *SCLogInitSyslogOPIface(int facility,
 {
     SCLogOPIfaceCtx *iface_ctx = SCLogAllocLogOPIfaceCtx();
 
-    if ( (iface_ctx = SCMalloc(sizeof(SCLogOPIfaceCtx))) == NULL) {
+    if ( iface_ctx == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogInitSyslogOPIface. Exiting...");
         exit(EXIT_FAILURE);
     }
-    memset(iface_ctx, 0, sizeof(SCLogOPIfaceCtx));
 
     iface_ctx->iface = SC_LOG_OP_IFACE_SYSLOG;
 
@@ -1047,6 +1066,13 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
      * environment variables at the start of the engine */
     SCLogDeInitLogModule();
 
+#if defined (OS_WIN32)
+    if (SCMutexInit(&sc_log_stream_lock, NULL) != 0) {
+        SCLogError(SC_ERR_MUTEX, "Failed to initialize log mutex.");
+        exit(EXIT_FAILURE);
+    }
+#endif /* OS_WIN32 */
+
     /* sc_log_config is a global variable */
     if ( (sc_log_config = SCMalloc(sizeof(SCLogConfig))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogInitLogModule. Exiting...");
@@ -1171,6 +1197,7 @@ void SCLogLoadConfig(void)
     SCLogInitLogModule(sc_lid);
     //exit(1);
     /* \todo Can we free sc_lid now? */
+    if (sc_lid != NULL) SCFree(sc_lid);
 }
 
 /**
@@ -1343,6 +1370,13 @@ void SCLogDeInitLogModule(void)
     SCLogReleaseFDFilters();
     /* de-init the FG filters */
     SCLogReleaseFGFilters();
+
+#if defined (OS_WIN32)
+	if (sc_log_stream_lock != NULL) {
+		SCMutexDestroy(&sc_log_stream_lock);
+		sc_log_stream_lock = NULL;
+	}
+#endif /* OS_WIN32 */
 
     return;
 }
