@@ -30,6 +30,7 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-state.h"
 #include "detect-content.h"
 
 #include "app-layer.h"
@@ -38,6 +39,7 @@
 #include "util-debug.h"
 #include "flow.h"
 #include "flow-var.h"
+#include "flow-util.h"
 #include "threads.h"
 #include "detect-ftpbounce.h"
 #include "stream-tcp.h"
@@ -335,17 +337,21 @@ static int DetectFtpbounceTestALMatch02(void) {
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.src.addr_data32[0] = 0x01020304;
-    f.src.address.address_un_data32[0]=0x01020304;
     p.payload = NULL;
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
+
+    FLOW_INITIALIZE(&f);
+    f.src.address.address_un_data32[0]=0x01020304;
     f.protoctx =(void *)&ssn;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_FTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -363,7 +369,7 @@ static int DetectFtpbounceTestALMatch02(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *)de_ctx,(void *)&det_ctx);
 
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
     int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
@@ -392,7 +398,7 @@ static int DetectFtpbounceTestALMatch02(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -420,8 +426,9 @@ end:
     DetectEngineThreadCtxDeinit(&th_v,(void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -457,18 +464,21 @@ static int DetectFtpbounceTestALMatch03(void) {
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.src.addr_data32[0] = 0x04030201;
-    f.src.address.address_un_data32[0]=0x04030201;
     p.payload = NULL;
     p.payload_len = 0;
     p.proto = IPPROTO_TCP;
 
+    FLOW_INITIALIZE(&f);
+    f.src.address.address_un_data32[0]=0x04030201;
     f.protoctx =(void *)&ssn;
+
     p.flow = &f;
     p.flowflags |= FLOW_PKT_TOSERVER;
-    ssn.alproto = ALPROTO_FTP;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -514,7 +524,7 @@ static int DetectFtpbounceTestALMatch03(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -544,8 +554,9 @@ end:
     DetectEngineThreadCtxDeinit(&th_v,(void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 

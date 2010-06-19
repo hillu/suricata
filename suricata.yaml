@@ -64,7 +64,11 @@ defrag:
   prealloc: yes
   timeout: 60
 
-# The detection engine build internal groups of signatures. The engine
+# You can specify a threshold config file by setting "threshold-file"
+# to the path of the threshold config file:
+# threshold-file: /etc/suricata/threshold.config
+
+# The detection engine builds internal groups of signatures. The engine
 # allow us to specify the profile to use for them, to manage memory on an
 # efficient way keeping a good performance. For the profile keyword you
 # can use the words "low", "medium", "high" or "custom". If you use custom
@@ -81,15 +85,26 @@ detect-engine:
       toserver_dst_groups: 4
       toserver_sp_groups: 2
       toserver_dp_groups: 25
-      small_toclient_src_groups: 2
-      small_toclient_dst_groups: 2
-      small_toclient_sp_groups: 2
-      small_toclient_dp_groups: 2
-      small_toserver_src_groups: 2
-      small_toserver_dst_groups: 2
-      small_toserver_sp_groups: 2
-      small_toserver_dp_groups: 8
 
+# Suricata is multi-threaded. Here the threading can be influenced.
+threading:
+  # On some cpu's/architectures it is beneficial to tie individual threads
+  # to specific CPU's/CPU cores. In this case all threads are tied to CPU0,
+  # and each extra CPU/core has one "detect" thread.
+  #
+  # On Intel Core2 and Nehalem CPU's enabling this will degrade performance.
+  #
+  set_cpu_affinity: no
+  #
+  # By default Suricata creates one "detect" thread per available CPU/CPU core.
+  # This setting allows controlling this behaviour. A ratio setting of 2 will
+  # create 2 detect threads for each CPU/CPU core. So for a dual core CPU this
+  # will result in 4 detect threads. If values below 1 are used, less threads
+  # are created. So on a dual core CPU a setting of 0.5 results in 1 detect
+  # thread being created. Regardless of the setting at a minimum 1 detect
+  # thread will always be created.
+  #
+  detect_thread_ratio: 1.0
 
 # Select the multi pattern algorithm you want to run for scan/search the
 # in the engine. The supported algorithms are b2g, b3g and wumanber.
@@ -135,11 +150,22 @@ pattern-matcher:
 # the engine, and by default the value is 65536.
 # At the startup, the engine can preallocate a number of flows, to get a better
 # performance. The number of flows preallocated is 10000 by default.
+# emergency_recovery is the percentage of flows that the engine need to
+# prune before unsetting the emergency state. The emergency state is activated
+# when the memcap limit is reached, allowing to create new flows, but
+# prunning them with the emergency timeouts (they are defined below).
+# If the memcap is reached, the engine will try to prune prune_flows
+# with the default timeouts. If it doens't find a flow to prune, it will set
+# the emergency bit and it will try again with more agressive timeouts.
+# If that doesn't work, then it will try to kill the last time seen flows
+# not in use.
 
 flow:
   memcap: 33554432
   hash_size: 65536
   prealloc: 10000
+  emergency_recovery: 30
+  prune_flows: 5
 
 # Specific timeouts for flows. Here you can specify the timeouts that the
 # active flows will wait to transit from the current state to another, on each
@@ -444,6 +470,9 @@ libhtp:
            - 192.168.10.0/24
          personality: IIS_7_0
 
+# rule profiling settings. Only effective if Suricata has been built with the
+# the --enable-profiling configure flag.
+#
 profiling:
 
   rules:
@@ -457,3 +486,4 @@ profiling:
 
     # Limit the number of items printed at exit.
     limit: 100
+

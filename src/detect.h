@@ -55,7 +55,6 @@ struct SCSigSignatureWrapper_;
 
    For TCP/UDP
 
-   Packet data size (dsize)
    - Flow direction
    -- Protocol
    -=- Src address
@@ -65,7 +64,6 @@ struct SCSigSignatureWrapper_;
 
    For the other protocols
 
-   Packet data size (dsize)
    - Flow direction
    -- Protocol
    -=- Src address
@@ -200,6 +198,10 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_BIDIREC        0x00010000  /**< signature has bidirectional operator */
 #define SIG_FLAG_PACKET         0x00020000  /**< signature has matches against a packet (as opposed to app layer) */
 
+#define SIG_FLAG_UMATCH         0x00040000
+#define SIG_FLAG_AMATCH         0x00080000
+#define SIG_FLAG_DMATCH         0x00100000
+
 /* Detection Engine flags */
 #define DE_QUIET           0x01     /**< DE is quiet (esp for unittests) */
 
@@ -219,29 +221,42 @@ typedef struct IPOnlyCIDRItem_ {
 
 } IPOnlyCIDRItem;
 
+/** \brief Subset of the Signature for cache efficient prefiltering
+ */
+typedef struct SignatureHeader_ {
+    uint32_t flags;
+
+    /* app layer signature stuff */
+    uint16_t alproto;
+
+    /** pattern in the mpm matcher */
+    uint32_t mpm_pattern_id;
+
+    SigIntId num; /**< signature number, internal id */
+
+    /** pointer to the full signature */
+    struct Signature_ *full_sig;
+} SignatureHeader;
+
 /** \brief Signature container */
 typedef struct Signature_ {
     uint32_t flags;
 
-    uint8_t rev;
-    int prio;
+    /* app layer signature stuff */
+    uint16_t alproto;
 
-    uint32_t gid; /**< generator id */
+    /** pattern in the mpm matcher */
+    uint32_t mpm_pattern_id;
+
     SigIntId num; /**< signature number, internal id */
-    uint32_t id;  /**< sid, set by the 'sid' rule keyword */
-    uint8_t nchunk_groups; /**< Internal chunk grp id (for splitted patterns) */
-    char *msg;
 
-    /** classification message */
-    char *class_msg;
-
-    /** Reference */
-    Reference *references;
+    /** address settings for this signature */
+    DetectAddressHead src, dst;
+    /** port settings for this signature */
+    DetectPort *sp, *dp;
 
     /** addresses, ports and proto this sig matches on */
-    DetectAddressHead src, dst;
     DetectProto proto;
-    DetectPort *sp, *dp;
 
     /** netblocks and hosts specified at the sid, in CIDR format */
     IPOnlyCIDRItem *CidrSrc, *CidrDst;
@@ -255,6 +270,9 @@ typedef struct Signature_ {
     struct SigMatch_ *umatch_tail; /* uricontent payload matches, tail of the list */
     struct SigMatch_ *amatch; /* general app layer matches */
     struct SigMatch_ *amatch_tail; /* general app layer  matches, tail of the list */
+    struct SigMatch_ *dmatch; /* dce app layer matches */
+    struct SigMatch_ *dmatch_tail; /* dce app layer matches, tail of the list */
+
     /** ptr to the next sig in the list */
     struct Signature_ *next;
 
@@ -265,17 +283,29 @@ typedef struct Signature_ {
     uint16_t mpm_content_maxlen;
     uint16_t mpm_uricontent_maxlen;
 
-    /* app layer signature stuff */
-    uint8_t alproto;
-
     /** number of sigmatches in the match and pmatch list */
     uint16_t sm_cnt;
 
     SigIntId order_id;
 
     /** pattern in the mpm matcher */
-    uint32_t mpm_pattern_id;
     uint32_t mpm_uripattern_id;
+
+    uint8_t rev;
+    int prio;
+
+    uint32_t gid; /**< generator id */
+    uint32_t id;  /**< sid, set by the 'sid' rule keyword */
+    char *msg;
+
+    /** classification id **/
+    uint8_t class;
+
+    /** classification message */
+    char *class_msg;
+
+    /** Reference */
+    Reference *references;
 
 #ifdef PROFILING
     uint16_t profiling_id;
@@ -328,15 +358,6 @@ typedef struct DetectEngineLookupFlow_ {
  * to client
  */
 #define FLOW_STATES 2
-typedef struct DetectEngineLookupDsize_ {
-    DetectEngineLookupFlow flow_gh[FLOW_STATES];
-} DetectEngineLookupDsize;
-
-/* Dsize states
- * <= 100
- * >100
- */
-#define DSIZE_STATES 2
 
 /* mpm pattern id api */
 typedef struct MpmPatternIdStore_ {
@@ -354,6 +375,10 @@ typedef struct ThresholdCtx_    {
     HashListTable *threshold_hash_table_dst_ipv6;   /**< Ipv6 dst hash table */
     HashListTable *threshold_hash_table_src_ipv6;   /**< Ipv6 src hash table */
     SCMutex threshold_table_lock;                   /**< Mutex for hash table */
+
+    /** to support rate_filter "by_rule" option */
+    DetectThresholdEntry **th_entry;
+    uint32_t th_size;
 } ThresholdCtx;
 
 /** \brief main detection engine ctx */
@@ -378,7 +403,7 @@ typedef struct DetectEngineCtx_ {
     HashTable *class_conf_ht;
 
     /* main sigs */
-    DetectEngineLookupDsize dsize_gh[DSIZE_STATES];
+    DetectEngineLookupFlow flow_gh[FLOW_STATES];
 
     uint32_t mpm_unique, mpm_reuse, mpm_none,
         mpm_uri_unique, mpm_uri_reuse, mpm_uri_none;
@@ -392,6 +417,7 @@ typedef struct DetectEngineCtx_ {
 
     HashListTable *sgh_mpm_hash_table;
     HashListTable *sgh_mpm_uri_hash_table;
+    HashListTable *sgh_mpm_stream_hash_table;
 
     HashListTable *sgh_sport_hash_table;
     HashListTable *sgh_dport_hash_table;
@@ -428,7 +454,7 @@ typedef struct DetectEngineCtx_ {
     uint16_t max_uniq_toserver_dst_groups;
     uint16_t max_uniq_toserver_sp_groups;
     uint16_t max_uniq_toserver_dp_groups;
-
+/*
     uint16_t max_uniq_small_toclient_src_groups;
     uint16_t max_uniq_small_toclient_dst_groups;
     uint16_t max_uniq_small_toclient_sp_groups;
@@ -438,10 +464,16 @@ typedef struct DetectEngineCtx_ {
     uint16_t max_uniq_small_toserver_dst_groups;
     uint16_t max_uniq_small_toserver_sp_groups;
     uint16_t max_uniq_small_toserver_dp_groups;
-
+*/
     /** hash table for looking up patterns for
      *  id sharing and id tracking. */
     MpmPatternIdStore *mpm_pattern_id_store;
+
+    /* array containing all sgh's in use so we can loop
+     * through it in Stage4. */
+    struct SigGroupHead_ **sgh_array;
+    uint32_t sgh_array_cnt;
+    uint32_t sgh_array_size;
 } DetectEngineCtx;
 
 /* Engine groups profiles (low, medium, high, custom) */
@@ -471,15 +503,28 @@ typedef struct DetectionEngineThreadCtx_ {
      *  uricontent */
     uint32_t uricontent_payload_offset;
 
+    /* dce stub data */
+    uint8_t *dce_stub_data;
+    /* dce stub data len */
+    uint32_t dce_stub_data_len;
+    /* offset into the payload of the last match for dce related sigmatches,
+     * stored in Signature->dmatch, by content, pcre, etc */
+    uint32_t dce_payload_offset;
+
     /** recursive counter */
     uint8_t pkt_cnt;
 
-    char de_checking_distancewithin;
-    char de_checking_uricontent_distancewithin;
-
     /* http_uri stuff for uricontent */
     char de_have_httpuri;
+    char de_mpm_scanned_uri;
 
+    /** array of signature pointers we're going to inspect in the detection
+     *  loop. */
+    Signature **match_array;
+    /** size of the array in items (mem size if * sizeof(Signature *) */
+    uint32_t match_array_len;
+    /** size in use */
+    uint32_t match_array_cnt;
 
     /** Array of sigs that had a state change */
     uint8_t *de_state_sig_array;
@@ -488,10 +533,12 @@ typedef struct DetectionEngineThreadCtx_ {
     /** pointer to the current mpm ctx that is stored
      *  in a rule group head -- can be either a content
      *  or uricontent ctx. */
-    MpmThreadCtx mtc; /**< thread ctx for the mpm */
-    MpmThreadCtx mtcu;
+    MpmThreadCtx mtc;   /**< thread ctx for the mpm */
+    MpmThreadCtx mtcu;  /**< thread ctx for uricontent mpm */
+    MpmThreadCtx mtcs;  /**< thread ctx for stream mpm */
     struct SigGroupHead_ *sgh;
     PatternMatcherQueue pmq;
+    PatternMatcherQueue smsg_pmq[256];
 
     /* counters */
     uint32_t pkts;
@@ -554,12 +601,14 @@ typedef struct SigTableElmt_ {
     char *name;
 } SigTableElmt;
 
-#define SIG_GROUP_HAVECONTENT       0x01
-#define SIG_GROUP_HAVEURICONTENT    0x02
-#define SIG_GROUP_HEAD_MPM_COPY     0x04
-#define SIG_GROUP_HEAD_MPM_URI_COPY 0x08
-#define SIG_GROUP_HEAD_FREE         0x10
-#define SIG_GROUP_HEAD_REFERENCED   0x20 /**< sgh is being referenced by others, don't clear */
+#define SIG_GROUP_HAVECONTENT           0x01
+#define SIG_GROUP_HAVEURICONTENT        0x02
+#define SIG_GROUP_HAVESTREAMCONTENT     0x04
+#define SIG_GROUP_HEAD_MPM_COPY         0x08
+#define SIG_GROUP_HEAD_MPM_URI_COPY     0x10
+#define SIG_GROUP_HEAD_MPM_STREAM_COPY  0x20
+#define SIG_GROUP_HEAD_FREE             0x40
+#define SIG_GROUP_HEAD_REFERENCED       0x80 /**< sgh is being referenced by others, don't clear */
 
 typedef struct SigGroupHeadInitData_ {
     /* list of content containers
@@ -571,31 +620,43 @@ typedef struct SigGroupHeadInitData_ {
     uint32_t content_size;
     uint8_t *uri_content_array;
     uint32_t uri_content_size;
-
-    /* port ptr */
-    struct DetectPort_ *port;
-} SigGroupHeadInitData;
-
-/** \brief head of the list of containers. */
-typedef struct SigGroupHead_ {
-    uint8_t flags;
-
-    /* pattern matcher instance */
-    MpmCtx *mpm_ctx;
-    uint16_t mpm_content_maxlen;
-    MpmCtx *mpm_uri_ctx;
-    uint16_t mpm_uricontent_maxlen;
-
-    /* number of sigs in this head */
-    uint32_t sig_cnt;
+    uint8_t *stream_content_array;
+    uint32_t stream_content_size;
 
     /* "Normal" detection uses these only at init, but ip-only
      * uses it during runtime as well, thus not in init... */
     uint8_t *sig_array; /**< bit array of sig nums (internal id's) */
     uint32_t sig_size; /**< size in bytes */
 
-    /* Array with sig nums... size is sig_cnt * sizeof(SigIntId) */
-    SigIntId *match_array;
+    /* port ptr */
+    struct DetectPort_ *port;
+} SigGroupHeadInitData;
+
+/** \brief Container for matching data for a signature group */
+typedef struct SigGroupHead_ {
+    uint8_t flags;
+
+    uint8_t pad0;
+    uint16_t pad1;
+
+    /* number of sigs in this head */
+    uint32_t sig_cnt;
+
+    /** chunk of memory containing the "header" part of each
+     *  signature ordered as an array. Used to pre-filter the
+     *  signatures to be inspected in a cache efficient way. */
+    SignatureHeader *head_array;
+
+    /* pattern matcher instances */
+    MpmCtx *mpm_ctx;
+    MpmCtx *mpm_stream_ctx;
+    uint16_t mpm_content_maxlen;
+    uint16_t mpm_streamcontent_maxlen;
+    MpmCtx *mpm_uri_ctx;
+    uint16_t mpm_uricontent_maxlen;
+
+    /** Array with sig ptrs... size is sig_cnt * sizeof(Signature *) */
+    Signature **match_array;
 
     /* ptr to our init data we only use at... init :) */
     SigGroupHeadInitData *init;
@@ -684,6 +745,7 @@ enum {
     DETECT_AL_URILEN,
     DETECT_AL_HTTP_CLIENT_BODY,
     DETECT_AL_HTTP_HEADER,
+    DETECT_AL_HTTP_URI,
 
     DETECT_DCE_IFACE,
     DETECT_DCE_OPNUM,
@@ -718,6 +780,6 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx,
                        DetectEngineThreadCtx *det_ctx, Packet *p);
 
 int SignatureIsIPOnly(DetectEngineCtx *de_ctx, Signature *s);
-SigGroupHead *SigMatchSignaturesGetSgh(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p);
+SigGroupHead *SigMatchSignaturesGetSgh(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p);
 #endif /* __DETECT_H__ */
 

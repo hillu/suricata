@@ -26,11 +26,11 @@
 
 #include "flow.h"
 
-#define STREAM_START        0x01
-#define STREAM_EOF          0x02
-#define STREAM_TOSERVER     0x04
-#define STREAM_TOCLIENT     0x08
-#define STREAM_GAP          0x10
+#define STREAM_START        FLOW_AL_STREAM_START
+#define STREAM_EOF          FLOW_AL_STREAM_EOF
+#define STREAM_TOSERVER     FLOW_AL_STREAM_TOSERVER
+#define STREAM_TOCLIENT     FLOW_AL_STREAM_TOCLIENT
+#define STREAM_GAP          FLOW_AL_STREAM_GAP
 
 /** size of the data chunks sent to the app layer parser. */
 #define MSG_DATA_SIZE       2048
@@ -64,8 +64,8 @@ typedef struct StreamMsgQueue_ {
     StreamMsg *top;
     StreamMsg *bot;
     uint16_t len;
-    SCMutex mutex_q;
-    SCCondT cond_q;
+//    SCMutex mutex_q;
+//    SCCondT cond_q;
     uint8_t flags;
 #ifdef DBG_PERF
     uint16_t dbg_maxlen;
@@ -89,11 +89,6 @@ void StreamMsgQueueSetMinInitChunkLen(uint8_t, uint16_t);
 void StreamMsgQueueSetMinChunkLen(uint8_t dir, uint16_t len);
 uint16_t StreamMsgQueueGetMinInitChunkLen(uint8_t);
 uint16_t StreamMsgQueueGetMinChunkLen(uint8_t);
-
-void StreamMsgSignalQueueHack(void);
-
-uint8_t StreamL7RegisterModule(void);
-uint8_t StreamL7GetStorageSize(void);
 
 #endif /* __STREAM_H__ */
 

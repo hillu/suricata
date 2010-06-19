@@ -70,7 +70,7 @@ uint8_t tv_aof = THV_RESTART_THREAD;
 
 typedef struct TmSlot_ {
     /* function pointers */
-    TmEcode (*SlotFunc)(ThreadVars *, Packet *, void *, PacketQueue *);
+    TmEcode (*SlotFunc)(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
     TmEcode (*SlotThreadInit)(ThreadVars *, void *, void **);
     void (*SlotThreadExitPrintStats)(ThreadVars *, void *);
@@ -79,10 +79,22 @@ typedef struct TmSlot_ {
     /* data storage */
     void *slot_initdata;
     void *slot_data;
-    PacketQueue slot_pq;
+
+    /**< queue filled by the SlotFunc with packets that will
+     *   be processed futher _before_ the current packet.
+     *   The locks in the queue are NOT used */
+    PacketQueue slot_pre_pq;
+
+    /**< queue filled by the SlotFunc with packets that will
+     *   be processed futher _after_ the current packet. The
+     *   locks in the queue are NOT used */
+    PacketQueue slot_post_pq;
 
     /* linked list, only used by TmVarSlot */
     struct TmSlot_ *slot_next;
+
+    int id; /**< slot id, only used my TmVarSlot to know what the first
+             *   slot is. */
 } TmSlot;
 
 /* 1 function slot */
@@ -165,28 +177,37 @@ void *TmThreadsSlot1NoIn(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while(run) {
         TmThreadTestThreadUnPaused(tv);
 
-        r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pq);
+        r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
         /* handle error */
         if (r == TM_ECODE_FAILED) {
-            TmqhReleasePacketsToPacketPool(&s->s.slot_pq);
+            TmqhReleasePacketsToPacketPool(&s->s.slot_pre_pq);
+            TmqhReleasePacketsToPacketPool(&s->s.slot_post_pq);
             TmqhOutputPacketpool(tv, p);
             TmThreadsSetFlag(tv, THV_FAILED);
             break;
         }
 
-        while (s->s.slot_pq.len > 0) {
-            Packet *extra = PacketDequeue(&s->s.slot_pq);
+        /* handle pre queue */
+        while (s->s.slot_pre_pq.len > 0) {
+            Packet *extra = PacketDequeue(&s->s.slot_pre_pq);
             tv->tmqh_out(tv, extra);
         }
 
         tv->tmqh_out(tv, p);
+
+        /* handle post queue */
+        while (s->s.slot_post_pq.len > 0) {
+            Packet *extra = PacketDequeue(&s->s.slot_post_pq);
+            tv->tmqh_out(tv, extra);
+        }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
             SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
@@ -235,7 +256,8 @@ void *TmThreadsSlot1NoOut(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
@@ -244,7 +266,7 @@ void *TmThreadsSlot1NoOut(void *td) {
 
         p = tv->tmqh_in(tv);
 
-        r = s->s.SlotFunc(tv, p, s->s.slot_data, /* no outqh no pq */NULL);
+        r = s->s.SlotFunc(tv, p, s->s.slot_data, /* no outqh no pq */NULL, /* no outqh no pq */NULL);
         /* handle error */
         if (r == TM_ECODE_FAILED) {
             TmqhOutputPacketpool(tv, p);
@@ -300,14 +322,15 @@ void *TmThreadsSlot1NoInOut(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while(run) {
         TmThreadTestThreadUnPaused(tv);
 
-        r = s->s.SlotFunc(tv, NULL, s->s.slot_data, /* no outqh, no pq */NULL);
+        r = s->s.SlotFunc(tv, NULL, s->s.slot_data, /* no outqh, no pq */NULL, NULL);
         //printf("%s: TmThreadsSlot1NoInNoOut: r %" PRId32 "\n", tv->name, r);
 
         /* handle error */
@@ -367,7 +390,8 @@ void *TmThreadsSlot1(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
     while(run) {
@@ -379,25 +403,30 @@ void *TmThreadsSlot1(void *td) {
         if (p == NULL) {
             //printf("%s: TmThreadsSlot1: p == NULL\n", tv->name);
         } else {
-            r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pq);
+            r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
             /* handle error */
             if (r == TM_ECODE_FAILED) {
-                TmqhReleasePacketsToPacketPool(&s->s.slot_pq);
+                TmqhReleasePacketsToPacketPool(&s->s.slot_pre_pq);
+                TmqhReleasePacketsToPacketPool(&s->s.slot_post_pq);
                 TmqhOutputPacketpool(tv, p);
                 TmThreadsSetFlag(tv, THV_FAILED);
                 break;
             }
 
-            while (s->s.slot_pq.len > 0) {
+            while (s->s.slot_pre_pq.len > 0) {
                 /* handle new packets from this func */
-                Packet *extra_p = PacketDequeue(&s->s.slot_pq);
+                Packet *extra_p = PacketDequeue(&s->s.slot_pre_pq);
                 tv->tmqh_out(tv, extra_p);
             }
 
-            //printf("%s: TmThreadsSlot1: p %p, r %" PRId32 "\n", tv->name, p, r);
-
             /* output the packet */
             tv->tmqh_out(tv, p);
+
+            while (s->s.slot_post_pq.len > 0) {
+                /* handle new packets from this func */
+                Packet *extra_p = PacketDequeue(&s->s.slot_post_pq);
+                tv->tmqh_out(tv, extra_p);
+            }
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
@@ -424,24 +453,32 @@ void *TmThreadsSlot1(void *td) {
     pthread_exit((void *) 0);
 }
 
-/* separate run function so we can call it recursively */
+/** \brief separate run function so we can call it recursively
+ *
+ *  \todo deal with post_pq for slots beyond the first
+ */
 static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *slot) {
     TmEcode r = TM_ECODE_OK;
     TmSlot *s = NULL;
 
     for (s = slot; s != NULL; s = s->slot_next) {
-        r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pq);
+        if (s->id == 0) {
+            r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq, &s->slot_post_pq);
+        } else {
+            r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq, NULL);
+        }
         /* handle error */
         if (r == TM_ECODE_FAILED) {
             /* Encountered error.  Return packets to packetpool and return */
-            TmqhReleasePacketsToPacketPool(&s->slot_pq);
+            TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
+            TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
             TmThreadsSetFlag(tv, THV_FAILED);
             return TM_ECODE_FAILED;
         }
 
         /* handle new packets */
-        while (s->slot_pq.len > 0) {
-            Packet *extra_p = PacketDequeue(&s->slot_pq);
+        while (s->slot_pre_pq.len > 0) {
+            Packet *extra_p = PacketDequeue(&s->slot_pre_pq);
 
             /* see if we need to process the packet */
             if (s->slot_next != NULL) {
@@ -449,7 +486,8 @@ static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *sl
                 /* XXX handle error */
                 if (r == TM_ECODE_FAILED) {
                     //printf("TmThreadsSlotVarRun: recursive TmThreadsSlotVarRun returned 1\n");
-                    TmqhReleasePacketsToPacketPool(&s->slot_pq);
+                    TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
+                    TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
                     TmqhOutputPacketpool(tv, extra_p);
                     TmThreadsSetFlag(tv, THV_FAILED);
                     return TM_ECODE_FAILED;
@@ -457,11 +495,17 @@ static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *sl
             }
             tv->tmqh_out(tv, extra_p);
         }
+
+        /** \todo post pq */
     }
 
     return TM_ECODE_OK;
 }
 
+/**
+ *  \todo only the first "slot" currently makes the "post_pq" available
+ *        to the thread module.
+ */
 void *TmThreadsSlotVar(void *td) {
     ThreadVars *tv = (ThreadVars *)td;
     TmVarSlot *s = (TmVarSlot *)tv->tm_slots;
@@ -479,7 +523,13 @@ void *TmThreadsSlotVar(void *td) {
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
 
-    //printf("TmThreadsSlot1: %s starting\n", tv->name);
+    /* check if we are setup properly */
+    if (s == NULL || s->s == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
+        EngineKill();
+
+        TmThreadsSetFlag(tv, THV_CLOSED);
+        pthread_exit((void *) -1);
+    }
 
     for (slot = s->s; slot != NULL; slot = slot->slot_next) {
         if (slot->SlotThreadInit != NULL) {
@@ -491,7 +541,8 @@ void *TmThreadsSlotVar(void *td) {
                 pthread_exit((void *) -1);
             }
         }
-        memset(&slot->slot_pq, 0, sizeof(PacketQueue));
+        memset(&slot->slot_pre_pq, 0, sizeof(PacketQueue));
+        memset(&slot->slot_post_pq, 0, sizeof(PacketQueue));
     }
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
@@ -501,15 +552,11 @@ void *TmThreadsSlotVar(void *td) {
 
         /* input a packet */
         p = tv->tmqh_in(tv);
-        //printf("TmThreadsSlotVar: %p\n", p);
 
-        if (p == NULL) {
-            //printf("%s: TmThreadsSlot1: p == NULL\n", tv->name);
-        } else {
+        if (p != NULL) {
+            /* run the thread module(s) */
             r = TmThreadsSlotVarRun(tv, p, s->s);
-            /* XXX handle error */
             if (r == TM_ECODE_FAILED) {
-                //printf("TmThreadsSlotVar: TmThreadsSlotVarRun returned 1, breaking out of the loop.\n");
                 TmqhOutputPacketpool(tv, p);
                 TmThreadsSetFlag(tv, THV_FAILED);
                 break;
@@ -517,14 +564,30 @@ void *TmThreadsSlotVar(void *td) {
 
             /* output the packet */
             tv->tmqh_out(tv, p);
+
+            /* now handle the post_pq packets */
+            while (s->s->slot_post_pq.len > 0) {
+                Packet *extra_p = PacketDequeue(&s->s->slot_post_pq);
+
+                if (s->s->slot_next != NULL) {
+                    r = TmThreadsSlotVarRun(tv, extra_p, s->s->slot_next);
+                    if (r == TM_ECODE_FAILED) {
+                        TmqhOutputPacketpool(tv, extra_p);
+                        TmThreadsSetFlag(tv, THV_FAILED);
+                        break;
+                    }
+                }
+
+                /* output the packet */
+                tv->tmqh_out(tv, extra_p);
+            }
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            //printf("%s: TmThreadsSlot1: KILL is set\n", tv->name);
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
             run = 0;
         }
     }
+    SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
 
     for (slot = s->s; slot != NULL; slot = slot->slot_next) {
         if (slot->SlotThreadExitPrintStats != NULL) {
@@ -626,6 +689,7 @@ void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
 
     if (s->s == NULL) {
         s->s = slot;
+        slot->id = 0;
     } else {
         TmSlot *a = s->s, *b = NULL;
 
@@ -636,6 +700,7 @@ void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
         /* append the new slot */
         if (b != NULL) {
             b->slot_next = slot;
+            slot->id = b->id + 1;
         }
     }
 }
@@ -782,33 +847,42 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
 
     /* set the incoming queue */
     if (inq_name != NULL && strcmp(inq_name,"packetpool") != 0) {
+        SCLogDebug("inq_name \"%s\"", inq_name);
+
         tmq = TmqGetQueueByName(inq_name);
         if (tmq == NULL) {
             tmq = TmqCreateQueue(inq_name);
             if (tmq == NULL) goto error;
         }
+        SCLogDebug("tmq %p", tmq);
 
         tv->inq = tmq;
         tv->inq->reader_cnt++;
-        //printf("TmThreadCreate: tv->inq->id %" PRIu32 "\n", tv->inq->id);
+        SCLogDebug("tv->inq %p", tv->inq);
     }
     if (inqh_name != NULL) {
+        SCLogDebug("inqh_name \"%s\"", inqh_name);
+
         tmqh = TmqhGetQueueHandlerByName(inqh_name);
         if (tmqh == NULL) goto error;
 
         tv->tmqh_in = tmqh->InHandler;
-        //printf("TmThreadCreate: tv->tmqh_in %p\n", tv->tmqh_in);
+        tv->InShutdownHandler = tmqh->InShutdownHandler;
+        SCLogDebug("tv->tmqh_in %p", tv->tmqh_in);
     }
 
     /* set the outgoing queue */
     if (outqh_name != NULL) {
+        SCLogDebug("outqh_name \"%s\"", outqh_name);
+
         tmqh = TmqhGetQueueHandlerByName(outqh_name);
         if (tmqh == NULL) goto error;
 
         tv->tmqh_out = tmqh->OutHandler;
-        //printf("TmThreadCreate: tv->tmqh_out %p\n", tv->tmqh_out);
 
         if (outq_name != NULL && strcmp(outq_name,"packetpool") != 0) {
+            SCLogDebug("outq_name \"%s\"", outq_name);
+
             if (tmqh->OutHandlerCtxSetup != NULL) {
                 tv->outctx = tmqh->OutHandlerCtxSetup(outq_name);
                 tv->outq = NULL;
@@ -818,12 +892,12 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
                     tmq = TmqCreateQueue(outq_name);
                     if (tmq == NULL) goto error;
                 }
+                SCLogDebug("tmq %p", tmq);
 
                 tv->outq = tmq;
                 tv->outctx = NULL;
                 tv->outq->writer_cnt++;
             }
-            //printf("TmThreadCreate: tv->outq->id %" PRIu32 "\n", tv->outq->id);
         }
     }
 
@@ -986,6 +1060,9 @@ void TmThreadKillThread(ThreadVars *tv)
 
     if (tv->inq != NULL) {
         /* signal the queue for the number of users */
+                if (tv->InShutdownHandler != NULL) {
+                    tv->InShutdownHandler(tv);
+                }
         for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
             SCCondSignal(&trans_q[tv->inq->id].cond_q);
 
@@ -995,6 +1072,9 @@ void TmThreadKillThread(ThreadVars *tv)
                 break;
             }
 
+                if (tv->InShutdownHandler != NULL) {
+                    tv->InShutdownHandler(tv);
+                }
             for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
                 SCCondSignal(&trans_q[tv->inq->id].cond_q);
 
@@ -1029,9 +1109,6 @@ void TmThreadKillThreads(void) {
             TmThreadsSetFlag(tv, THV_KILL);
             SCLogDebug("told thread %s to stop", tv->name);
 
-            /* XXX hack */
-            StreamMsgSignalQueueHack();
-
             if (tv->inq != NULL) {
                 int i;
 
@@ -1042,6 +1119,9 @@ void TmThreadKillThreads(void) {
 
                 /* signal the queue for the number of users */
 
+                if (tv->InShutdownHandler != NULL) {
+                    tv->InShutdownHandler(tv);
+                }
                 for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
                     SCCondSignal(&trans_q[tv->inq->id].cond_q);
 
@@ -1054,6 +1134,10 @@ void TmThreadKillThreads(void) {
                     }
 
                     cnt++;
+
+                    if (tv->InShutdownHandler != NULL) {
+                        tv->InShutdownHandler(tv);
+                    }
 
                     for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
                         SCCondSignal(&trans_q[tv->inq->id].cond_q);

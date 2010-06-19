@@ -37,6 +37,8 @@
 #include "stream-tcp.h"
 #include "stream.h"
 
+#include "detect-engine-state.h"
+
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 
@@ -46,7 +48,7 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 #include "flow-private.h"
-
+#include "flow-util.h"
 #include "util-byte.h"
 
 /**
@@ -263,10 +265,12 @@ static int SSLParserTest01(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_SSL, STREAM_TOSERVER|STREAM_EOF, sslbuf, ssllen);
     if (r != 0) {
@@ -274,7 +278,7 @@ static int SSLParserTest01(void) {
         goto end;
     }
 
-    SslState *ssl_state = ssn.aldata[AlpGetStateIdx(ALPROTO_SSL)];
+    SslState *ssl_state = f.aldata[AlpGetStateIdx(ALPROTO_SSL)];
     if (ssl_state == NULL) {
         printf("no ssl state: ");
         goto end;
@@ -294,8 +298,9 @@ static int SSLParserTest01(void) {
 
     result = 1;
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -314,10 +319,12 @@ static int SSLParserTest02(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_SSL, STREAM_TOCLIENT|STREAM_EOF, sslbuf, ssllen);
     if (r != 0) {
@@ -326,7 +333,7 @@ static int SSLParserTest02(void) {
         goto end;
     }
 
-    SslState *ssl_state = ssn.aldata[AlpGetStateIdx(ALPROTO_SSL)];
+    SslState *ssl_state = f.aldata[AlpGetStateIdx(ALPROTO_SSL)];
     if (ssl_state == NULL) {
         printf("no ssl state: ");
         result = 0;
@@ -347,8 +354,9 @@ static int SSLParserTest02(void) {
         goto end;
     }
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -540,8 +548,9 @@ static int SSLParserTest03(void) {
     ssn.client.ra_base_seq = 4276431676UL;
     ssn.client.isn = 4276431676UL;
     ssn.client.last_ack = 390133221UL;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     tcph.th_win = htons(5480);
@@ -642,7 +651,7 @@ static int SSLParserTest03(void) {
         goto end;
     }
 
-    SslState *ssl_state = ssn.aldata[AlpGetStateIdx(ALPROTO_SSL)];
+    SslState *ssl_state = f.aldata[AlpGetStateIdx(ALPROTO_SSL)];
     if (ssl_state == NULL) {
         printf("no ssl state: ");
         result = 0;
@@ -665,7 +674,7 @@ static int SSLParserTest03(void) {
 
     uint16_t app_layer_sid = AppLayerParserGetStorageId();
     AppLayerParserStateStore *parser_state_store = (AppLayerParserStateStore *)
-                                                    ssn.aldata[app_layer_sid];
+                                                    f.aldata[app_layer_sid];
     AppLayerParserState *parser_state = &parser_state_store->to_server;
 
     if (!(parser_state->flags & APP_LAYER_PARSER_NO_INSPECTION) &&
@@ -682,8 +691,9 @@ static int SSLParserTest03(void) {
         goto end;
     }
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 #endif /* UNITTESTS */

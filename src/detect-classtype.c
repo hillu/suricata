@@ -131,7 +131,7 @@ static inline const char *DetectClasstypeParseRawString(char *rawstr)
 static inline SCClassConfClasstype *DetectClasstypeGetClasstypeInfo(const char *ct_name,
                                                                     DetectEngineCtx *de_ctx)
 {
-    SCClassConfClasstype *ct_info = SCClassConfAllocClasstype(ct_name, NULL,
+    SCClassConfClasstype *ct_info = SCClassConfAllocClasstype(0, ct_name, NULL,
                                                               0);
     SCClassConfClasstype *lookup_ct_info = HashTableLookup(de_ctx->class_conf_ht,
                                                            ct_info, 0);
@@ -171,6 +171,7 @@ static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
 
     /* if we have retrieved the classtype, assign the message to be displayed
      * for this Signature by fast.log, if a Packet matches this Signature */
+    s->class = ct->classtype_id;
     s->class_msg = ct->classtype_desc;
 
     /* if a priority keyword has appeared before the classtype, s->prio would
@@ -179,9 +180,11 @@ static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
     if (s->prio == -1)
         s->prio = ct->priority;
 
+    pcre_free_substring(parsed_ct_name);
     return 0;
 
  error:
+    if (parsed_ct_name != NULL) pcre_free_substring(parsed_ct_name);
     return -1;
 }
 

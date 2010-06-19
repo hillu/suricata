@@ -32,6 +32,10 @@
 #include "util-print.h"
 #include "util-pool.h"
 
+#include "flow-util.h"
+
+#include "detect-engine-state.h"
+
 #include "stream-tcp.h"
 #include "stream-tcp-private.h"
 #include "stream.h"
@@ -458,6 +462,21 @@ int AlpParseFieldByDelimiter(AppLayerParserResult *output, AppLayerParserState *
     SCReturnInt(0);
 }
 
+/** app layer id counter */
+static uint8_t al_module_id = 0;
+
+/** \brief Get a unique app layer id
+ */
+uint8_t AppLayerRegisterModule(void) {
+    uint8_t id = al_module_id;
+    al_module_id++;
+    return id;
+}
+
+uint8_t AppLayerGetStorageSize(void) {
+    return al_module_id;
+}
+
 /** \brief Get the Parsers id for storing the parser state.
  *
  * \retval Parser subsys id
@@ -561,7 +580,7 @@ int AppLayerRegisterProto(char *name, uint8_t proto, uint8_t flags,
     }
 
     if (al_proto_table[proto].storage_id == 0) {
-        al_proto_table[proto].storage_id = StreamL7RegisterModule();
+        al_proto_table[proto].storage_id = AppLayerRegisterModule();
     }
 
     SCLogDebug("registered %p at proto %" PRIu32 " flags %02X, al_proto_table "
@@ -766,13 +785,11 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
     AppLayerProto *p = &al_proto_table[proto];
     TcpSession *ssn = NULL;
 
+    /* Used only if it's TCP */
     ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto error;
-    }
 
-    if (flags & STREAM_GAP) {
+    /** Do this check before calling AppLayerParse */
+    if (flags & FLOW_AL_STREAM_GAP) {
         SCLogDebug("stream gap detected (missing packets), this is not yet supported.");
         goto error;
     }
@@ -780,27 +797,27 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
     /* Get the parser state (if any) */
     AppLayerParserStateStore *parser_state_store = NULL;
 
-    if (ssn->aldata != NULL) {
+    if (f->aldata != NULL) {
         parser_state_store = (AppLayerParserStateStore *)
-                                                    ssn->aldata[app_layer_sid];
+                                                    f->aldata[app_layer_sid];
         if (parser_state_store == NULL) {
             parser_state_store = AppLayerParserStateStoreAlloc();
             if (parser_state_store == NULL)
                 goto error;
 
-            ssn->aldata[app_layer_sid] = (void *)parser_state_store;
+            f->aldata[app_layer_sid] = (void *)parser_state_store;
         }
     } else {
         SCLogDebug("No App Layer Data");
         /* Nothing is there to clean up, so just return from here after setting
          * up the no reassembly flags */
-        StreamTcpSetSessionNoReassemblyFlag(ssn, flags & STREAM_TOCLIENT ? 1 : 0);
-        StreamTcpSetSessionNoReassemblyFlag(ssn, flags & STREAM_TOSERVER ? 1 : 0);
+        FlowSetSessionNoApplayerInspectionFlag(f);
+
         SCReturnInt(-1);
     }
 
     AppLayerParserState *parser_state = NULL;
-    if (flags & STREAM_TOSERVER) {
+    if (flags & FLOW_AL_STREAM_TOSERVER) {
         SCLogDebug("to_server msg (flow %p)", f);
 
         parser_state = &parser_state_store->to_server;
@@ -833,12 +850,12 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
         SCReturnInt(0);
     }
 
-    if (flags & STREAM_EOF)
+    if (flags & FLOW_AL_STREAM_EOF)
         parser_state->flags |= APP_LAYER_PARSER_EOF;
 
     /* See if we already have a 'app layer' state */
     void *app_layer_state = NULL;
-    app_layer_state = ssn->aldata[p->storage_id];
+    app_layer_state = f->aldata[p->storage_id];
 
     if (app_layer_state == NULL) {
         /* lock the allocation of state as we may
@@ -848,12 +865,12 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
             goto error;
         }
 
-        ssn->aldata[p->storage_id] = app_layer_state;
+        f->aldata[p->storage_id] = app_layer_state;
         SCLogDebug("alloced new app layer state %p (p->storage_id %u, name %s)",
-                app_layer_state, p->storage_id, al_proto_table[ssn->alproto].name);
+                app_layer_state, p->storage_id, al_proto_table[f->alproto].name);
     } else {
         SCLogDebug("using existing app layer state %p (p->storage_id %u, name %s))",
-                app_layer_state, p->storage_id, al_proto_table[ssn->alproto].name);
+                app_layer_state, p->storage_id, al_proto_table[f->alproto].name);
     }
 
     /* invoke the recursive parser, but only on data. We may get empty msgs on EOF */
@@ -864,16 +881,19 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
             goto error;
     }
 
-    /* set the packets to no inspection and reassembly for the TLS sessions */
+    /* set the packets to no inspection and reassembly if required */
     if (parser_state->flags & APP_LAYER_PARSER_NO_INSPECTION) {
         FlowSetNoPayloadInspectionFlag(f);
+        FlowSetSessionNoApplayerInspectionFlag(f);
 
         /* Set the no reassembly flag for both the stream in this TcpSession */
         if (parser_state->flags & APP_LAYER_PARSER_NO_REASSEMBLY) {
-            StreamTcpSetSessionNoReassemblyFlag(ssn,
-                                               flags & STREAM_TOCLIENT ? 1 : 0);
-            StreamTcpSetSessionNoReassemblyFlag(ssn,
-                                               flags & STREAM_TOSERVER ? 1 : 0);
+            if (ssn != NULL) {
+                StreamTcpSetSessionNoReassemblyFlag(ssn,
+                        flags & FLOW_AL_STREAM_TOCLIENT ? 1 : 0);
+                StreamTcpSetSessionNoReassemblyFlag(ssn,
+                        flags & FLOW_AL_STREAM_TOSERVER ? 1 : 0);
+            }
         }
     }
 
@@ -892,9 +912,9 @@ int AppLayerParse(Flow *f, uint8_t proto, uint8_t flags, uint8_t *input,
     SCReturnInt(0);
 error:
     if (ssn != NULL) {
-        /* Set the no reassembly flag for both the stream in this TcpSession */
-        StreamTcpSetSessionNoReassemblyFlag(ssn, flags & STREAM_TOCLIENT ? 1 : 0);
-        StreamTcpSetSessionNoReassemblyFlag(ssn, flags & STREAM_TOSERVER ? 1 : 0);
+        /* Set the no app layer inspection flag for both
+         * the stream in this Flow */
+        FlowSetSessionNoApplayerInspectionFlag(f);
 
         if (f->src.family == AF_INET) {
             char src[16];
@@ -907,7 +927,7 @@ error:
             SCLogError(SC_ERR_ALPARSER, "Error occured in parsing \"%s\" app layer "
                 "protocol, using network protocol %"PRIu8", source IP "
                 "address %s, destination IP address %s, src port %"PRIu16" and "
-                "dst port %"PRIu16"", al_proto_table[ssn->alproto].name,
+                "dst port %"PRIu16"", al_proto_table[f->alproto].name,
                 f->proto, src, dst, f->sp, f->dp);
         } else {
             char dst6[46];
@@ -921,7 +941,7 @@ error:
             SCLogError(SC_ERR_ALPARSER, "Error occured in parsing \"%s\" app layer "
                 "protocol, using network protocol %"PRIu8", source IPv6 "
                 "address %s, destination IPv6 address %s, src port %"PRIu16" and "
-                "dst port %"PRIu16"", al_proto_table[ssn->alproto].name,
+                "dst port %"PRIu16"", al_proto_table[f->alproto].name,
                 f->proto, src6, dst6, f->sp, f->dp);
         }
     }
@@ -933,24 +953,15 @@ error:
 int AppLayerTransactionGetBaseId(Flow *f) {
     SCEnter();
 
-    if (f->proto != IPPROTO_TCP) {
-        SCLogDebug("no TCP");
-        goto error;
-    }
-
-    TcpSession *ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto error;
-    }
-
     /* Get the parser state (if any) */
-    if (ssn->aldata == NULL) {
+    if (f->aldata == NULL) {
         SCLogDebug("no aldata");
         goto error;
     }
 
-    AppLayerParserStateStore *parser_state_store = parser_state_store = (AppLayerParserStateStore *)ssn->aldata[app_layer_sid];
+    AppLayerParserStateStore *parser_state_store =
+        (AppLayerParserStateStore *)f->aldata[app_layer_sid];
+
     if (parser_state_store == NULL) {
         SCLogDebug("no state store");
         goto error;
@@ -962,28 +973,43 @@ error:
     SCReturnInt(-1);
 }
 
-/** \brief get the highest loggable transaction id */
-int AppLayerTransactionGetLoggableId(Flow *f) {
+/** \brief get the base transaction id */
+int AppLayerTransactionGetInspectId(Flow *f) {
     SCEnter();
 
-    if (f->proto != IPPROTO_TCP) {
-        SCLogDebug("no TCP");
-        goto error;
-    }
-
-    TcpSession *ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto error;
-    }
-
     /* Get the parser state (if any) */
-    if (ssn->aldata == NULL) {
+    if (f->aldata == NULL) {
         SCLogDebug("no aldata");
         goto error;
     }
 
-    AppLayerParserStateStore *parser_state_store = parser_state_store = (AppLayerParserStateStore *)ssn->aldata[app_layer_sid];
+    AppLayerParserStateStore *parser_state_store =
+        (AppLayerParserStateStore *)f->aldata[app_layer_sid];
+
+    if (parser_state_store == NULL) {
+        SCLogDebug("no state store");
+        goto error;
+    }
+
+    SCReturnInt((int)parser_state_store->inspect_id);
+
+error:
+    SCReturnInt(-1);
+}
+
+/** \brief get the highest loggable transaction id */
+int AppLayerTransactionGetLoggableId(Flow *f) {
+    SCEnter();
+
+    /* Get the parser state (if any) */
+    if (f->aldata == NULL) {
+        SCLogDebug("no aldata");
+        goto error;
+    }
+
+    AppLayerParserStateStore *parser_state_store =
+        (AppLayerParserStateStore *)f->aldata[app_layer_sid];
+
     if (parser_state_store == NULL) {
         SCLogDebug("no state store");
         goto error;
@@ -1008,24 +1034,15 @@ error:
 void AppLayerTransactionUpdateLoggedId(Flow *f) {
     SCEnter();
 
-    if (f->proto != IPPROTO_TCP) {
-        SCLogDebug("no TCP");
-        goto error;
-    }
-
-    TcpSession *ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto error;
-    }
-
     /* Get the parser state (if any) */
-    if (ssn->aldata == NULL) {
+    if (f->aldata == NULL) {
         SCLogDebug("no aldata");
         goto error;
     }
 
-    AppLayerParserStateStore *parser_state_store = parser_state_store = (AppLayerParserStateStore *)ssn->aldata[app_layer_sid];
+    AppLayerParserStateStore *parser_state_store =
+        (AppLayerParserStateStore *)f->aldata[app_layer_sid];
+
     if (parser_state_store == NULL) {
         SCLogDebug("no state store");
         goto error;
@@ -1041,24 +1058,15 @@ error:
 int AppLayerTransactionGetLoggedId(Flow *f) {
     SCEnter();
 
-    if (f->proto != IPPROTO_TCP) {
-        SCLogDebug("no TCP");
-        goto error;
-    }
-
-    TcpSession *ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto error;
-    }
-
     /* Get the parser state (if any) */
-    if (ssn->aldata == NULL) {
+    if (f->aldata == NULL) {
         SCLogDebug("no aldata");
         goto error;
     }
 
-    AppLayerParserStateStore *parser_state_store = parser_state_store = (AppLayerParserStateStore *)ssn->aldata[app_layer_sid];
+    AppLayerParserStateStore *parser_state_store =
+        (AppLayerParserStateStore *)f->aldata[app_layer_sid];
+
     if (parser_state_store == NULL) {
         SCLogDebug("no state store");
         goto error;
@@ -1072,33 +1080,23 @@ error:
 
 /**
  *  \param f LOCKED flow
+ *  \param direction STREAM_TOSERVER or STREAM_TOCLIENT
+ *
  *  \retval 2 current transaction done, new available
  *  \retval 1 current transaction done, no new (yet)
  *  \retval 0 current transaction is not done yet
  */
-int AppLayerTransactionUpdateInspectId(Flow *f)
+int AppLayerTransactionUpdateInspectId(Flow *f, char direction)
 {
     SCEnter();
 
     int r = 0;
 
-    if (f->proto != IPPROTO_TCP) {
-        SCLogDebug("no TCP flow");
-        goto end;
-    }
-
-    TcpSession *ssn = f->protoctx;
-    if (ssn == NULL) {
-        SCLogDebug("no TCP session");
-        goto end;
-    }
-
     /* Get the parser state (if any) */
     AppLayerParserStateStore *parser_state_store = NULL;
 
-    if (ssn->aldata != NULL) {
-        parser_state_store = (AppLayerParserStateStore *)
-                                                    ssn->aldata[app_layer_sid];
+    if (f->aldata != NULL) {
+        parser_state_store = (AppLayerParserStateStore *)f->aldata[app_layer_sid];
         if (parser_state_store != NULL) {
             /* update inspect_id and see if it there are other transactions
              * as well */
@@ -1106,7 +1104,18 @@ int AppLayerTransactionUpdateInspectId(Flow *f)
             SCLogDebug("avail_id %"PRIu16", inspect_id %"PRIu16,
                     parser_state_store->avail_id, parser_state_store->inspect_id);
 
-            if ((parser_state_store->inspect_id+1) < parser_state_store->avail_id) {
+            if (direction == STREAM_TOSERVER)
+                parser_state_store->id_flags |= APP_LAYER_TRANSACTION_TOSERVER;
+            else
+                parser_state_store->id_flags |= APP_LAYER_TRANSACTION_TOCLIENT;
+
+            if ((parser_state_store->inspect_id+1) < parser_state_store->avail_id &&
+                    (parser_state_store->id_flags & APP_LAYER_TRANSACTION_TOCLIENT) &&
+                    (parser_state_store->id_flags & APP_LAYER_TRANSACTION_TOSERVER))
+            {
+                parser_state_store->id_flags &=~ APP_LAYER_TRANSACTION_TOCLIENT;
+                parser_state_store->id_flags &=~ APP_LAYER_TRANSACTION_TOSERVER;
+
                 parser_state_store->inspect_id++;
                 if (parser_state_store->inspect_id < parser_state_store->avail_id) {
                     /* done and more transactions available */
@@ -1126,7 +1135,7 @@ int AppLayerTransactionUpdateInspectId(Flow *f)
             }
         }
     }
-end:
+
     SCReturnInt(r);
 }
 
@@ -1136,45 +1145,45 @@ void RegisterAppLayerParsers(void)
     memset(&al_proto_table, 0, sizeof(al_proto_table));
     memset(&al_parser_table, 0, sizeof(al_parser_table));
 
-    app_layer_sid = StreamL7RegisterModule();
+    app_layer_sid = AppLayerRegisterModule();
 
     /** setup result pool
      * \todo Per thread pool */
     al_result_pool = PoolInit(1000,250,AlpResultElmtPoolAlloc,NULL,AlpResultElmtPoolFree);
 }
 
-void AppLayerParserCleanupState(TcpSession *ssn)
+void AppLayerParserCleanupState(Flow *f)
 {
-    if (ssn == NULL) {
-        SCLogDebug("no ssn");
+    if (f == NULL) {
+        SCLogDebug("no flow");
         return;
     }
-    if (ssn->alproto >= ALPROTO_MAX) {
+    if (f->alproto >= ALPROTO_MAX) {
         SCLogDebug("app layer proto unknown");
         return;
     }
 
     /* free the parser protocol state */
-    AppLayerProto *p = &al_proto_table[ssn->alproto];
-    if (p->StateFree != NULL && ssn->aldata != NULL) {
-        if (ssn->aldata[p->storage_id] != NULL) {
+    AppLayerProto *p = &al_proto_table[f->alproto];
+    if (p->StateFree != NULL && f->aldata != NULL) {
+        if (f->aldata[p->storage_id] != NULL) {
             SCLogDebug("calling StateFree");
-            p->StateFree(ssn->aldata[p->storage_id]);
-            ssn->aldata[p->storage_id] = NULL;
+            p->StateFree(f->aldata[p->storage_id]);
+            f->aldata[p->storage_id] = NULL;
         }
     }
 
     /* free the app layer parser api state */
-    if (ssn->aldata != NULL) {
-        if (ssn->aldata[app_layer_sid] != NULL) {
+    if (f->aldata != NULL) {
+        if (f->aldata[app_layer_sid] != NULL) {
             SCLogDebug("calling AppLayerParserStateStoreFree");
-            AppLayerParserStateStoreFree(ssn->aldata[app_layer_sid]);
-            ssn->aldata[app_layer_sid] = NULL;
+            AppLayerParserStateStoreFree(f->aldata[app_layer_sid]);
+            f->aldata[app_layer_sid] = NULL;
         }
 
-        StreamTcpDecrMemuse((uint32_t)(StreamL7GetStorageSize() * sizeof(void *)));
-        SCFree(ssn->aldata);
-        ssn->aldata = NULL;
+        //StreamTcpDecrMemuse((uint32_t)(StreamL7GetStorageSize() * sizeof(void *)));
+        SCFree(f->aldata);
+        f->aldata = NULL;
     }
 }
 
@@ -1302,7 +1311,7 @@ static void TestProtocolStateFree(void *s)
  */
 static int AppLayerParserTest01 (void)
 {
-    int result = 1;
+    int result = 0;
     Flow f;
     uint8_t testbuf[] = { 0x11 };
     uint32_t testlen = sizeof(testbuf);
@@ -1323,7 +1332,8 @@ static int AppLayerParserTest01 (void)
     AppLayerRegisterStateFuncs(ALPROTO_TEST, TestProtocolStateAlloc,
                                 TestProtocolStateFree);
 
-    ssn.alproto = ALPROTO_TEST;
+    FLOW_INITIALIZE(&f);
+    f.alproto = ALPROTO_TEST;
     f.protoctx = (void *)&ssn;
 
     inet_pton(AF_INET, "1.2.3.4", &addr.s_addr);
@@ -1339,7 +1349,69 @@ static int AppLayerParserTest01 (void)
     f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
+
+    int r = AppLayerParse(&f, ALPROTO_TEST, STREAM_TOSERVER|STREAM_EOF, testbuf,
+                          testlen);
+    if (r != -1) {
+        printf("returned %" PRId32 ", expected -1: ", r);
+        goto end;
+    }
+
+    if (!(f.alflags & FLOW_AL_NO_APPLAYER_INSPECTION))
+    {
+        printf("flag should have been set, but is not: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/** \test   Test the deallocation of app layer parser memory on occurance of
+ *          error in the parsing process for UDP.
+ */
+static int AppLayerParserTest02 (void)
+{
+    int result = 1;
+    Flow f;
+    uint8_t testbuf[] = { 0x11 };
+    uint32_t testlen = sizeof(testbuf);
+    struct in_addr addr;
+    struct in_addr addr1;
+    Address src;
+    Address dst;
+
+    memset(&f, 0, sizeof(f));
+    memset(&src, 0, sizeof(src));
+    memset(&dst, 0, sizeof(dst));
+
+    /* Register the Test protocol state and parser functions */
+    AppLayerRegisterProto("test", ALPROTO_TEST, STREAM_TOSERVER,
+                          TestProtocolParser);
+    AppLayerRegisterStateFuncs(ALPROTO_TEST, TestProtocolStateAlloc,
+                                TestProtocolStateFree);
+
+    f.alproto = ALPROTO_TEST;
+
+    inet_pton(AF_INET, "1.2.3.4", &addr.s_addr);
+    src.family = AF_INET;
+    src.addr_data32[0] = addr.s_addr;
+    inet_pton(AF_INET, "4.3.2.1", &addr1.s_addr);
+    dst.family = AF_INET;
+    dst.addr_data32[0] = addr1.s_addr;
+    f.src = src;
+    f.dst = dst;
+    f.sp = htons(20);
+    f.dp = htons(40);
+    f.proto = IPPROTO_UDP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_TEST, STREAM_TOSERVER|STREAM_EOF, testbuf,
                           testlen);
@@ -1349,16 +1421,8 @@ static int AppLayerParserTest01 (void)
         goto end;
     }
 
-    if (!(ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY) ||
-            !(ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY))
-    {
-        printf("flags should be set, but they are not !\n");
-        result = 0;
-        goto end;
-    }
-
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1369,5 +1433,6 @@ void AppLayerParserRegisterTests(void)
 {
 #ifdef UNITTESTS
     UtRegisterTest("AppLayerParserTest01", AppLayerParserTest01, 1);
+    UtRegisterTest("AppLayerParserTest02", AppLayerParserTest02, 1);
 #endif /* UNITTESTS */
 }

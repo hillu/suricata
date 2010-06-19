@@ -29,7 +29,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "0.9.1"
+#define PROG_VER "0.9.2"
 
 /* number of packets in processing right now
  * This is the diff between recv'd and verdicted
@@ -44,6 +44,11 @@
 //SCMutex mutex_pending;
 //SCCondT cond_pending;
 
+/* runtime engine control flags */
+#define SURICATA_STOP    0x01   /**< gracefully stop the engine: process all
+                                     outstanding packets first */
+#define SURICATA_KILL    0x02   /**< shut down asap, discarding outstanding
+                                     packets. */
 
 /* Run mode */
 enum {
@@ -55,6 +60,7 @@ enum {
     MODE_IPFW,
     MODE_UNITTEST,
     MODE_ERF_FILE,
+    MODE_DAG,
 };
 
 /* preallocated packet structures here

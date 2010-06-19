@@ -25,8 +25,10 @@
 #ifndef __STREAM_TCP_REASSEMBLE_H__
 #define __STREAM_TCP_REASSEMBLE_H__
 
+#include "stream-tcp-private.h"
 #include "stream.h"
 #include "app-layer-detect-proto.h"
+#include "stream-tcp-private.h"
 
 /** Supported OS list and default OS policy is BSD */
 enum
@@ -66,10 +68,8 @@ int StreamTcpReassembleProcessAppLayer(TcpReassemblyThreadCtx *);
 
 void StreamTcpCreateTestPacket(uint8_t *, uint8_t, uint8_t, uint8_t);
 
-void StreamL7DataPtrInit(TcpSession *);
-void StreamL7DataPtrFree(TcpSession *);
-
 void StreamTcpSetSessionNoReassemblyFlag (TcpSession *, char );
+
 void StreamTcpSetOSPolicy(TcpStream *, Packet *);
 void StreamTcpReassemblePause (TcpSession *, char );
 void StreamTcpReassembleUnPause (TcpSession *, char );

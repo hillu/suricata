@@ -25,15 +25,21 @@
  */
 
 #include "suricata-common.h"
+
 #include "decode.h"
+
+#include "flow-private.h"
+#include "flow-util.h"
+
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine.h"
+
 #include "util-debug.h"
+#include "util-time.h"
 #include "util-error.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
-#include <stdarg.h>
-#include "detect-engine.h"
 
 /**
  * \brief UTHBuildPacketReal is a function that create tcp/udp packets for unittests
@@ -59,6 +65,8 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
         return NULL;
     memset(p, 0, sizeof(Packet));
 
+    TimeSet(&p->ts);
+
     p->src.family = AF_INET6;
     p->dst.family = AF_INET6;
     p->payload = payload;
@@ -82,9 +90,11 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
     p->ip6h = SCMalloc(sizeof(IPV6Hdr));
     if (p->ip6h == NULL)
         return NULL;
+    memset(p->ip6h, 0, sizeof(IPV6Hdr));
     p->tcph = SCMalloc(sizeof(TCPHdr));
     if (p->tcph == NULL)
         return NULL;
+    memset(p->tcph, 0, sizeof(TCPHdr));
     p->tcph->th_sport = sport;
     p->tcph->th_dport = dport;
     return p;
@@ -114,6 +124,10 @@ Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
         return NULL;
     memset(p, 0, sizeof(Packet));
 
+    struct timeval tv;
+    TimeGet(&tv);
+    COPY_TIMESTAMP(&tv, &p->ts);
+
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = payload;
@@ -128,31 +142,34 @@ Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
     p->dst.addr_data32[0] = in.s_addr;
     p->dp = dport;
 
+    p->ip4h = SCMalloc(sizeof(IPV4Hdr));
+    if (p->ip4h == NULL)
+        return NULL;
+    memset(p->ip4h, 0, sizeof(IPV4Hdr));
+
+    p->ip4h->ip_src.s_addr = p->src.addr_data32[0];
+    p->ip4h->ip_dst.s_addr = p->dst.addr_data32[0];
+    p->proto = ipproto;
+
     switch (ipproto) {
         case IPPROTO_UDP:
-            p->ip4h = SCMalloc(sizeof(IPV4Hdr));
-            if (p->ip4h == NULL)
-                return NULL;
             p->udph = SCMalloc(sizeof(UDPHdr));
             if (p->udph == NULL)
                 return NULL;
+            memset(p->udph, 0, sizeof(UDPHdr));
             p->udph->uh_sport = sport;
             p->udph->uh_dport = dport;
         break;
         case IPPROTO_TCP:
-            p->ip4h = SCMalloc(sizeof(IPV4Hdr));
-            if (p->ip4h == NULL)
-                return NULL;
             p->tcph = SCMalloc(sizeof(TCPHdr));
             if (p->tcph == NULL)
                 return NULL;
+            memset(p->tcph, 0, sizeof(TCPHdr));
             p->tcph->th_sport = sport;
             p->tcph->th_dport = dport;
         break;
         case IPPROTO_ICMP:
-            p->ip4h = SCMalloc(sizeof(IPV4Hdr));
-            if (p->ip4h == NULL)
-                return NULL;
+        default:
         break;
         /* TODO: Add more protocols */
     }
@@ -572,7 +589,6 @@ int UTHPacketMatchSigMpm(Packet *p, char *sig, uint16_t mpm_type) {
     int result = 0;
 
     DecodeThreadVars dtv;
-
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
 
@@ -673,6 +689,29 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     return result;
+}
+
+uint32_t UTHBuildPacketOfFlows(uint32_t start, uint32_t end, uint8_t dir) {
+    uint32_t i = start;
+    uint8_t payload[] = "Payload";
+    for (; i < end; i++) {
+        Packet *p = UTHBuildPacket(payload, sizeof(payload), IPPROTO_TCP);
+        if (dir == 0) {
+            p->src.addr_data32[0] = i;
+            p->dst.addr_data32[0] = i + 1;
+        } else {
+            p->src.addr_data32[0] = i + 1;
+            p->dst.addr_data32[0] = i;
+        }
+        FlowHandlePacket(NULL, p);
+        if (p->flow != NULL)
+            SC_ATOMIC_RESET(p->flow->use_cnt);
+
+        /* Now the queues shoul be updated */
+        UTHFreePacket(p);
+    }
+
+    return i;
 }
 
 
@@ -782,6 +821,27 @@ int UTHBuildPacketTest02(void) {
 }
 
 /**
+ * \brief UTHBuildPacketOfFlowsTest01 wrapper to check packets for unittests
+ */
+int UTHBuildPacketOfFlowsTest01(void) {
+    int result = 0;
+
+    FlowInitConfig(FLOW_QUIET);
+    uint32_t flow_spare_q_len = flow_spare_q.len;
+
+    UTHBuildPacketOfFlows(0, 100, 0);
+
+    if (flow_spare_q.len != flow_spare_q_len - 100)
+        result = 0;
+    else
+        result = 1;
+    FlowShutdown();
+
+    return result;
+}
+
+
+/**
  * \brief UTHBuildPacketSrcDstTest01 wrapper to check packets for unittests
  */
 int UTHBuildPacketSrcDstTest01(void) {
@@ -853,6 +913,7 @@ void UTHRegisterTests(void) {
     UtRegisterTest("UTHBuildPacketSrcDstTest02", UTHBuildPacketSrcDstTest02, 1);
     UtRegisterTest("UTHBuildPacketSrcDstPortsTest01", UTHBuildPacketSrcDstPortsTest01, 1);
     UtRegisterTest("UTHBuildPacketSrcDstPortsTest02", UTHBuildPacketSrcDstPortsTest02, 1);
+    UtRegisterTest("UTHBuildPacketOfFlowsTest01", UTHBuildPacketOfFlowsTest01, 1);
 
 #endif /* UNITTESTS */
 }

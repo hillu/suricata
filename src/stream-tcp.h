@@ -25,7 +25,14 @@
 #ifndef __STREAM_TCP_H__
 #define __STREAM_TCP_H__
 
+#include "stream-tcp-private.h"
+
 #define COUNTER_STREAMTCP_STREAMS 1
+
+#include "app-layer-detect-proto.h"
+#include "util-mpm.h"
+#include "stream.h"
+#include "stream-tcp-reassemble.h"
 
 #define STREAM_VERBOSE    FALSE
 /*global flow data*/

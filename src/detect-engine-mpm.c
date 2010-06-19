@@ -26,6 +26,8 @@
 #include "suricata.h"
 #include "suricata-common.h"
 
+#include "app-layer-protos.h"
+
 #include "decode.h"
 #include "detect.h"
 #include "detect-engine.h"
@@ -41,11 +43,15 @@
 
 #include "detect-content.h"
 #include "detect-uricontent.h"
+
+#include "stream.h"
+
 #include "util-cuda-handlers.h"
 #include "util-mpm-b2g-cuda.h"
 
 #include "util-enum.h"
 #include "util-debug.h"
+#include "util-print.h"
 
 /** \todo make it possible to use multiple pattern matcher algorithms next to
           eachother. */
@@ -132,19 +138,20 @@ uint32_t PacketPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
 
 /** \brief Uri Pattern match -- searches for one pattern per signature.
  *
- *  \param tv threadvars
  *  \param det_ctx detection engine thread ctx
  *  \param p packet to inspect
  *
  *  \retval ret number of matches
  */
-uint32_t UriPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
+uint32_t UriPatternSearch(DetectEngineThreadCtx *det_ctx,
                         uint8_t *uri, uint16_t uri_len)
 {
     SCEnter();
 
     if (det_ctx->sgh->mpm_uri_ctx == NULL)
         SCReturnUInt(0U);
+
+    //PrintRawDataFp(stdout, uri, uri_len);
 
     uint32_t ret;
 #ifndef __SC_CUDA_SUPPORT__
@@ -168,6 +175,41 @@ uint32_t UriPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
     SCReturnUInt(ret);
 }
 
+/** \brief Pattern match -- searches for only one pattern per signature.
+ *
+ *  \param tv threadvars
+ *  \param det_ctx detection engine thread ctx
+ *  \param smsg stream msg (reassembled stream data)
+ *
+ *  \retval ret number of matches
+ */
+uint32_t StreamPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
+                           StreamMsg *smsg)
+{
+    SCEnter();
+
+    uint32_t ret = 0;
+    uint8_t cnt = 0;
+
+    for ( ; smsg != NULL; smsg = smsg->next) {
+        //PrintRawDataFp(stdout, smsg->data.data, smsg->data.data_len);
+
+        uint32_t r = mpm_table[det_ctx->sgh->mpm_stream_ctx->mpm_type].Search(det_ctx->sgh->mpm_stream_ctx,
+                &det_ctx->mtcs, &det_ctx->smsg_pmq[cnt], smsg->data.data, smsg->data.data_len);
+        if (r > 0) {
+            ret += r;
+
+            SCLogDebug("smsg match stored in det_ctx->smsg_pmq[%u]", cnt);
+
+            /* merge results with overall pmq */
+            PmqMerge(&det_ctx->smsg_pmq[cnt], &det_ctx->pmq);
+        }
+
+        cnt++;
+    }
+
+    SCReturnInt(ret);
+}
 
 /** \brief cleans up the mpm instance after a match */
 void PacketPatternCleanup(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
@@ -183,6 +225,21 @@ void PacketPatternCleanup(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
     /* uricontent */
     if (det_ctx->sgh->mpm_uri_ctx != NULL && mpm_table[det_ctx->sgh->mpm_uri_ctx->mpm_type].Cleanup != NULL) {
         mpm_table[det_ctx->sgh->mpm_uri_ctx->mpm_type].Cleanup(&det_ctx->mtcu);
+    }
+    /* stream content */
+    if (det_ctx->sgh->mpm_stream_ctx != NULL && mpm_table[det_ctx->sgh->mpm_stream_ctx->mpm_type].Cleanup != NULL) {
+        mpm_table[det_ctx->sgh->mpm_stream_ctx->mpm_type].Cleanup(&det_ctx->mtcs);
+    }
+}
+
+void StreamPatternCleanup(ThreadVars *t, DetectEngineThreadCtx *det_ctx, StreamMsg *smsg) {
+    uint8_t cnt = 0;
+
+    while (smsg != NULL) {
+        PmqReset(&det_ctx->smsg_pmq[cnt]);
+
+        smsg = smsg->next;
+        cnt++;
     }
 }
 
@@ -234,6 +291,18 @@ void PatternMatchDestroyGroup(SigGroupHead *sh) {
         /* ready for reuse */
         sh->mpm_uri_ctx = NULL;
         sh->flags &= ~SIG_GROUP_HAVEURICONTENT;
+    }
+
+    /* stream content */
+    if (sh->flags & SIG_GROUP_HAVESTREAMCONTENT && sh->mpm_stream_ctx != NULL &&
+        !(sh->flags & SIG_GROUP_HEAD_MPM_STREAM_COPY)) {
+        SCLogDebug("destroying mpm_stream_ctx %p (sh %p)", sh->mpm_stream_ctx, sh);
+        mpm_table[sh->mpm_stream_ctx->mpm_type].DestroyCtx(sh->mpm_stream_ctx);
+        SCFree(sh->mpm_stream_ctx);
+
+        /* ready for reuse */
+        sh->mpm_stream_ctx = NULL;
+        sh->flags &= ~SIG_GROUP_HAVESTREAMCONTENT;
     }
 }
 
@@ -376,9 +445,7 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
 
     /* add all the contents to a counting hash */
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
-        uint32_t num = sgh->match_array[sig];
-
-        Signature *s = de_ctx->sig_array[num];
+        Signature *s = sgh->match_array[sig];
         if (s == NULL)
             continue;
 
@@ -476,8 +543,7 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
 
     /* now determine which one to add to the mpm phase */
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
-        uint32_t num = sgh->match_array[sig];
-        Signature *s = de_ctx->sig_array[num];
+        Signature *s = sgh->match_array[sig];
         if (s == NULL)
             continue;
 
@@ -543,10 +609,39 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
             depth = mpm_ch->cnt ? 0 : depth;
             uint8_t flags = 0;
 
-            if (co->flags & DETECT_CONTENT_NOCASE) {
-                mpm_table[sgh->mpm_ctx->mpm_type].AddPatternNocase(sgh->mpm_ctx, co->content, co->content_len, offset, depth, co->id, s->num, flags);
+            char scan_packet = 0;
+            char scan_stream = 0;
+
+            if (s->flags & SIG_FLAG_DSIZE) {
+                scan_packet = 1;
+            } else if (s->alproto == ALPROTO_UNKNOWN) {
+                scan_packet = 1;
+                scan_stream = 1;
             } else {
-                mpm_table[sgh->mpm_ctx->mpm_type].AddPattern(sgh->mpm_ctx, co->content, co->content_len, offset, depth, co->id, s->num, flags);
+                scan_stream = 1;
+            }
+
+            if (scan_packet) {
+                /* add the content to the "packet" mpm */
+                if (co->flags & DETECT_CONTENT_NOCASE) {
+                    mpm_table[sgh->mpm_ctx->mpm_type].AddPatternNocase(sgh->mpm_ctx,
+                            co->content, co->content_len, offset, depth, co->id,
+                            s->num, flags);
+                } else {
+                    mpm_table[sgh->mpm_ctx->mpm_type].AddPattern(sgh->mpm_ctx,
+                            co->content, co->content_len, offset, depth, co->id,
+                            s->num, flags);
+                }
+            }
+            if (scan_stream) {
+                /* add the content to the "stream" mpm */
+                if (co->flags & DETECT_CONTENT_NOCASE) {
+                    mpm_table[sgh->mpm_stream_ctx->mpm_type].AddPatternNocase(sgh->mpm_stream_ctx,
+                            co->content, co->content_len, offset, depth, co->id, s->num, flags);
+                } else {
+                    mpm_table[sgh->mpm_stream_ctx->mpm_type].AddPattern(sgh->mpm_stream_ctx,
+                            co->content, co->content_len, offset, depth, co->id, s->num, flags);
+                }
             }
 
             s->mpm_pattern_id = co->id;
@@ -592,12 +687,13 @@ int PatternMatchPrepareGroup(DetectEngineCtx *de_ctx, SigGroupHead *sh)
     if (!(sh->flags & SIG_GROUP_HEAD_MPM_URI_COPY))
         sh->mpm_uricontent_maxlen = 0;
 
+    if (!(sh->flags & SIG_GROUP_HEAD_MPM_STREAM_COPY))
+        sh->mpm_streamcontent_maxlen = 0;
+
     /** see if this head has content and/or uricontent
      *  \todo we can move this to the signature init phase */
     for (sig = 0; sig < sh->sig_cnt; sig++) {
-        uint32_t num = sh->match_array[sig];
-
-        s = de_ctx->sig_array[num];
+        s = sh->match_array[sig];
         if (s == NULL)
             continue;
 
@@ -637,6 +733,19 @@ int PatternMatchPrepareGroup(DetectEngineCtx *de_ctx, SigGroupHead *sh)
 #else
         MpmInitCtx(sh->mpm_ctx, de_ctx->mpm_matcher, de_ctx->cuda_rc_mod_handle);
 #endif
+        //if (sh->flags & SIG_GROUP_HAVESTREAMCONTENT && !(sh->flags & SIG_GROUP_HEAD_MPM_STREAM_COPY)) {
+            sh->mpm_stream_ctx = SCMalloc(sizeof(MpmCtx));
+            if (sh->mpm_stream_ctx == NULL)
+                goto error;
+
+            memset(sh->mpm_stream_ctx, 0x00, sizeof(MpmCtx));
+#ifndef __SC_CUDA_SUPPORT__
+            MpmInitCtx(sh->mpm_stream_ctx, de_ctx->mpm_matcher, -1);
+#else
+            MpmInitCtx(sh->mpm_stream_ctx, de_ctx->mpm_matcher, de_ctx->cuda_rc_mod_handle);
+#endif
+        //}
+
     }
     if (sh->flags & SIG_GROUP_HAVEURICONTENT && !(sh->flags & SIG_GROUP_HEAD_MPM_URI_COPY)) {
         sh->mpm_uri_ctx = SCMalloc(sizeof(MpmCtx));
@@ -659,9 +768,7 @@ int PatternMatchPrepareGroup(DetectEngineCtx *de_ctx, SigGroupHead *sh)
 
     /* for each signature in this group do */
     for (sig = 0; sig < sh->sig_cnt; sig++) {
-        uint32_t num = sh->match_array[sig];
-
-        s = de_ctx->sig_array[num];
+        s = sh->match_array[sig];
         if (s == NULL)
             continue;
 
@@ -810,9 +917,7 @@ int PatternMatchPrepareGroup(DetectEngineCtx *de_ctx, SigGroupHead *sh)
 
     /* add the patterns for uricontent signatures */
     for (sig = 0; sig < sh->sig_cnt; sig++) {
-        uint32_t num = sh->match_array[sig];
-
-        s = de_ctx->sig_array[num];
+        s = sh->match_array[sig];
         if (s == NULL)
             continue;
 
@@ -873,6 +978,9 @@ int PatternMatchPrepareGroup(DetectEngineCtx *de_ctx, SigGroupHead *sh)
 
         if (mpm_table[sh->mpm_ctx->mpm_type].Prepare != NULL) {
             mpm_table[sh->mpm_ctx->mpm_type].Prepare(sh->mpm_ctx);
+        }
+        if (mpm_table[sh->mpm_stream_ctx->mpm_type].Prepare != NULL) {
+            mpm_table[sh->mpm_stream_ctx->mpm_type].Prepare(sh->mpm_stream_ctx);
         }
 
         if (mpm_content_maxdepth) {
@@ -962,9 +1070,11 @@ static uint32_t MpmPatternIdHashFunc(HashTable *ht, void *p, uint16_t len) {
 
 /** \brief free a MpmPatternIdTableElmt */
 static void MpmPatternIdTableElmtFree(void *e) {
+    SCEnter();
     MpmPatternIdTableElmt *c = (MpmPatternIdTableElmt *)e;
-    free(c->pattern);
-    free(e);
+    SCFree(c->pattern);
+    SCFree(c);
+    SCReturn;
 }
 
 /** \brief alloc initialize the MpmPatternIdHash */
@@ -1048,7 +1158,7 @@ uint32_t DetectContentGetId(MpmPatternIdStore *ht, DetectContentData *co) {
     }
 
     if (e != NULL)
-        free(e);
+        MpmPatternIdTableElmtFree(e);
 
     SCReturnUInt(id);
 }
@@ -1097,7 +1207,7 @@ uint32_t DetectUricontentGetId(MpmPatternIdStore *ht, DetectUricontentData *co) 
     }
 
     if (e != NULL)
-        free(e);
+        MpmPatternIdTableElmtFree(e);
 
     SCReturnUInt(id);
 }

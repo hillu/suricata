@@ -31,6 +31,10 @@
 #include "util-print.h"
 #include "util-pool.h"
 
+#include "flow-util.h"
+
+#include "detect-engine-state.h"
+
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
 #include "stream-tcp.h"
@@ -248,6 +252,9 @@ static void *FTPStateAlloc(void) {
 }
 
 static void FTPStateFree(void *s) {
+    FtpState *fstate = (FtpState *) s;
+    if (fstate->port_line != NULL)
+        SCFree(fstate->port_line);
     SCFree(s);
 #ifdef DEBUG
     SCMutexLock(&ftp_state_mem_lock);
@@ -291,10 +298,12 @@ int FTPParserTest01(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_EOF, ftpbuf, ftplen);
     if (r != 0) {
@@ -303,7 +312,7 @@ int FTPParserTest01(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -317,8 +326,9 @@ int FTPParserTest01(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -339,7 +349,7 @@ int FTPParserTest03(void) {
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1);
     if (r != 0) {
@@ -362,7 +372,7 @@ int FTPParserTest03(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -376,7 +386,7 @@ int FTPParserTest03(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -391,10 +401,12 @@ int FTPParserTest06(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, ftpbuf1, ftplen1);
     if (r != 0) {
@@ -403,7 +415,7 @@ int FTPParserTest06(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -417,8 +429,9 @@ int FTPParserTest06(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -434,10 +447,12 @@ int FTPParserTest07(void) {
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER|STREAM_START, ftpbuf1, ftplen1);
     if (r != 0) {
@@ -453,7 +468,7 @@ int FTPParserTest07(void) {
         goto end;
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -467,8 +482,9 @@ int FTPParserTest07(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -483,10 +499,12 @@ int FTPParserTest10(void) {
     int r = 0;
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
-    StreamL7DataPtrInit(&ssn);
+    FlowL7DataPtrInit(&f);
 
     uint32_t u;
     for (u = 0; u < ftplen1; u++) {
@@ -504,7 +522,7 @@ int FTPParserTest10(void) {
         }
     }
 
-    FtpState *ftp_state = ssn.aldata[AlpGetStateIdx(ALPROTO_FTP)];
+    FtpState *ftp_state = f.aldata[AlpGetStateIdx(ALPROTO_FTP)];
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state: ");
         result = 0;
@@ -518,8 +536,9 @@ int FTPParserTest10(void) {
     }
 
 end:
-    StreamL7DataPtrFree(&ssn);
+    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 #endif /* UNITTESTS */

@@ -30,6 +30,7 @@
 #include "flow-private.h"
 #include "flow-util.h"
 #include "flow-var.h"
+#include "app-layer.h"
 
 #include "util-var.h"
 #include "util-debug.h"
@@ -37,45 +38,51 @@
 #include "detect.h"
 #include "detect-engine-state.h"
 
-/* Allocate a flow */
+/** \brief allocate a flow
+ *
+ *  We check against the memuse counter. If it passes that check we increment
+ *  the counter first, then we try to alloc.
+ *
+ *  \retval f the flow or NULL on out of memory
+ */
 Flow *FlowAlloc(void)
 {
     Flow *f;
 
-    SCMutexLock(&flow_memuse_mutex);
-    if (flow_memuse + sizeof(Flow) > flow_config.memcap) {
-        SCMutexUnlock(&flow_memuse_mutex);
+    if (SC_ATOMIC_GET(flow_memuse) + sizeof(Flow) > flow_config.memcap) {
         return NULL;
     }
+
+    SC_ATOMIC_ADD(flow_memuse, sizeof(Flow));
+
     f = SCMalloc(sizeof(Flow));
     if (f == NULL) {
-        SCMutexUnlock(&flow_memuse_mutex);
+        SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
         return NULL;
     }
-    flow_memuse += sizeof(Flow);
-    SCMutexUnlock(&flow_memuse_mutex);
 
-    SCMutexInit(&f->m, NULL);
-    f->lnext = NULL;
-    f->lprev = NULL;
-    f->hnext = NULL;
-    f->hprev = NULL;
 
-    f->flowvar = NULL;
-    f->de_state = NULL;
+    FLOW_INITIALIZE(f);
+
+    f->alproto = 0;
+    f->aldata = NULL;
+    f->alflags = FLOW_AL_PROTO_UNKNOWN;
 
     return f;
 }
 
-/** free the memory of a flow */
+
+/**
+ *  \brief cleanup & free the memory of a flow
+ *
+ *  \param f flow to clear & destroy
+ */
 void FlowFree(Flow *f)
 {
-    SCMutexLock(&flow_memuse_mutex);
-    flow_memuse -= sizeof(Flow);
-    SCMutexUnlock(&flow_memuse_mutex);
-
-    SCMutexDestroy(&f->m);
+    FLOW_DESTROY(f);
     SCFree(f);
+
+    SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
 }
 
 /**
@@ -104,8 +111,6 @@ void FlowInit(Flow *f, Packet *p)
 {
     SCEnter();
     SCLogDebug("flow %p", f);
-
-    CLEAR_FLOW(f);
 
     f->proto = p->proto;
     f->recursion_level = p->recursion_level;
@@ -142,6 +147,8 @@ void FlowInit(Flow *f, Packet *p)
         printf("FIXME: %s:%s:%" PRId32 "\n", __FILE__, __FUNCTION__, __LINE__);
     }
 
+    f->alflags = FLOW_AL_PROTO_UNKNOWN;
+    FlowL7DataPtrInit(f);
     COPY_TIMESTAMP(&p->ts, &f->startts);
 
     f->protomap = FlowGetProtoMapping(f->proto);

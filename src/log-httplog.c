@@ -50,9 +50,9 @@
 
 #define MODULE_NAME "LogHttpLog"
 
-TmEcode LogHttpLog (ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode LogHttpLogIPv4(ThreadVars *, Packet *, void *, PacketQueue *);
-TmEcode LogHttpLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *);
+TmEcode LogHttpLog (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
+TmEcode LogHttpLogIPv4(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
+TmEcode LogHttpLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode LogHttpLogThreadInit(ThreadVars *, void *, void **);
 TmEcode LogHttpLogThreadDeinit(ThreadVars *, void *);
 void LogHttpLogExitPrintStats(ThreadVars *, void *);
@@ -107,7 +107,7 @@ static void CreateTimeString (const struct timeval *ts, char *str, size_t size) 
         (uint32_t) ts->tv_usec);
 }
 
-TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     SCEnter();
     LogHttpLogThread *aft = (LogHttpLogThread *)data;
@@ -151,18 +151,12 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     char srcip[16], dstip[16];
-    Port sp;
-    Port dp;
     if ((PKT_IS_TOSERVER(p))) {
         inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
-        sp = p->sp;
-        dp = p->dp;
     } else {
         inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), dstip, sizeof(dstip));
-        sp = p->dp;
-        dp = p->sp;
     }
 
     SCMutexLock(&aft->file_ctx->fp_mutex);
@@ -210,7 +204,7 @@ TmEcode LogHttpLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 
         /* ip/tcp header info */
         fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
-                srcip, sp, dstip, dp);
+                srcip, p->sp, dstip, p->dp);
 
         aft->uri_cnt ++;
 
@@ -224,7 +218,7 @@ end:
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     SCEnter();
     LogHttpLogThread *aft = (LogHttpLogThread *)data;
@@ -268,19 +262,12 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     char srcip[46], dstip[46];
-    Port sp;
-    Port dp;
-
     if ((PKT_IS_TOSERVER(p))) {
         inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
-        sp = p->sp;
-        dp = p->dp;
     } else {
         inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
-        sp = p->dp;
-        dp = p->sp;
     }
     SCMutexLock(&aft->file_ctx->fp_mutex);
     for (idx = logged; idx < loggable; idx++)
@@ -327,7 +314,7 @@ TmEcode LogHttpLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
 
         /* ip/tcp header info */
         fprintf(aft->file_ctx->fp, " [**] %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
-                srcip, sp, dstip, dp);
+                srcip, p->sp, dstip, p->dp);
 
         aft->uri_cnt++;
 
@@ -341,7 +328,7 @@ end:
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogHttpLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
+TmEcode LogHttpLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     SCEnter();
 
@@ -355,9 +342,9 @@ TmEcode LogHttpLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq)
     }
 
     if (PKT_IS_IPV4(p)) {
-        SCReturnInt(LogHttpLogIPv4(tv, p, data, pq));
+        SCReturnInt(LogHttpLogIPv4(tv, p, data, pq, postpq));
     } else if (PKT_IS_IPV6(p)) {
-        SCReturnInt(LogHttpLogIPv6(tv, p, data, pq));
+        SCReturnInt(LogHttpLogIPv6(tv, p, data, pq, postpq));
     }
 
     SCReturnInt(TM_ECODE_OK);

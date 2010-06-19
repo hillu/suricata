@@ -34,6 +34,8 @@
 #include "flow.h"
 #include "threads.h"
 
+#include "flow-util.h"
+
 #include "threadvars.h"
 #include "tm-modules.h"
 
@@ -1295,9 +1297,8 @@ static void StreamTcpSetupMsg(TcpSession *ssn, TcpStream *stream, Packet *p,
 
     smsg->data.data_len = 0;
     smsg->flow = p->flow;
-    if (smsg->flow != NULL) {
-        smsg->flow->use_cnt++;
-    }
+
+    FlowIncrUsecnt(smsg->flow);
 
     SCLogDebug("smsg %p", smsg);
     SCReturn;
@@ -1905,6 +1906,10 @@ int StreamTcpReassembleProcessAppLayer(TcpReassemblyThreadCtx *ra_ctx)
         do {
             smsg = StreamMsgGetFromQueue(ra_ctx->stream_q);
             if (smsg != NULL) {
+                SCLogDebug("smsg %p, next %p, prev %p, flow %p", smsg, smsg->next, smsg->prev, smsg->flow);
+
+                BUG_ON(smsg->flow == NULL);
+
                 /* Handle the stream msg. No need to use locking, flow is
                  * already locked at this point. Don't break out of the
                  * loop if we encounter an error. */
@@ -1946,8 +1951,10 @@ int StreamTcpReassembleHandleSegment(TcpReassemblyThreadCtx *ra_ctx,
        simple return */
     if (p->payload_len > 0 &&
         (((stream == &ssn->client) && !(ssn->flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY)) ||
-        ((stream == &ssn->server) && !(ssn->flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY))))
+         ((stream == &ssn->server) && !(ssn->flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY))))
     {
+        SCLogDebug("calling StreamTcpReassembleHandleSegmentHandleData");
+
         if (StreamTcpReassembleHandleSegmentHandleData(ssn, stream, p) != 0) {
             SCLogDebug("StreamTcpReassembleHandleSegmentHandleData error");
             SCReturnInt(-1);
@@ -1955,48 +1962,6 @@ int StreamTcpReassembleHandleSegment(TcpReassemblyThreadCtx *ra_ctx,
     }
 
     SCReturnInt(0);
-}
-
-/** \brief Initialize the l7data ptr in the TCP session used by the L7 Modules
- *         for data storage.
- *
- *  \param ssn TcpSesssion to init the ptrs for
- *  \param cnt number of items in the array
- *
- *  \todo VJ use a pool?
- */
-void StreamL7DataPtrInit(TcpSession *ssn) {
-    if (ssn->aldata != NULL)
-        return;
-
-    uint32_t size = (uint32_t)(sizeof (void *) * StreamL7GetStorageSize());
-
-    if (StreamTcpCheckMemcap(size) == 0)
-        return;
-
-    ssn->aldata = (void **) SCMalloc(size);
-    if (ssn->aldata != NULL) {
-        StreamTcpIncrMemuse(size);
-
-        uint8_t u;
-        for (u = 0; u < StreamL7GetStorageSize(); u++) {
-            ssn->aldata[u] = NULL;
-        }
-    }
-}
-
-void StreamL7DataPtrFree(TcpSession *ssn) {
-    if (ssn == NULL)
-        return;
-
-    if (ssn->aldata == NULL)
-        return;
-
-    SCFree(ssn->aldata);
-    ssn->aldata = NULL;
-
-    uint32_t size = (uint32_t)(sizeof (void *) * StreamL7GetStorageSize());
-    StreamTcpDecrMemuse(size);
 }
 
 /**
@@ -2172,6 +2137,7 @@ static int StreamTcpReassembleStreamTest(TcpStream *stream) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -2464,6 +2430,8 @@ static int StreamTcpTestStartsBeforeListSegment(TcpStream *stream) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -2552,6 +2520,7 @@ static int StreamTcpTestStartsAtSameListSegment(TcpStream *stream) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -2641,6 +2610,7 @@ static int StreamTcpTestStartsAfterListSegment(TcpStream *stream) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -3347,6 +3317,7 @@ static int StreamTcpTestMissedPacket (TcpReassemblyThreadCtx *ra_ctx,
     sp = 200;
     dp = 220;
 
+    FLOW_INITIALIZE(&f);
     f.src = src;
     f.dst = dst;
     f.sp = sp;
@@ -3938,6 +3909,7 @@ static int StreamTcpReassembleTest32(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4015,6 +3987,7 @@ static int StreamTcpReassembleTest33(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4081,6 +4054,7 @@ static int StreamTcpReassembleTest34(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4148,6 +4122,7 @@ static int StreamTcpReassembleTest35(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4205,6 +4180,7 @@ static int StreamTcpReassembleTest36(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4262,6 +4238,7 @@ static int StreamTcpReassembleTest37(void) {
     memset(&p, 0, sizeof (Packet));
     memset(&f, 0, sizeof (Flow));
     memset(&tcph, 0, sizeof (TCPHdr));
+    FLOW_INITIALIZE(&f);
     f.protoctx = &ssn;
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
@@ -4331,6 +4308,7 @@ static int StreamTcpReassembleTest38 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -4356,7 +4334,7 @@ static int StreamTcpReassembleTest38 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 60;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     f.src = src;
     f.dst = dst;
@@ -4487,6 +4465,7 @@ static int StreamTcpReassembleTest39 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -4505,7 +4484,7 @@ static int StreamTcpReassembleTest39 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 60;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     inet_pton(AF_INET, "1.2.3.4", &in);
     src.family = AF_INET;
@@ -4672,6 +4651,7 @@ static int StreamTcpReassembleTest40 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -4694,7 +4674,7 @@ static int StreamTcpReassembleTest40 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 10;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     inet_pton(AF_INET, "1.2.3.4", &in);
     src.family = AF_INET;
@@ -4879,7 +4859,7 @@ static int StreamTcpReassembleTest40 (void) {
         goto end;
     }
 
-    if (ssn.alproto != ALPROTO_HTTP) {
+    if (f.alproto != ALPROTO_HTTP) {
         printf("app layer proto has not been detected\n");
         goto end;
     }
@@ -4919,6 +4899,7 @@ static int StreamTcpReassembleTest41 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -4957,7 +4938,7 @@ static int StreamTcpReassembleTest41 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 600;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     inet_pton(AF_INET, "1.2.3.4", &in);
     src.family = AF_INET;
@@ -5105,6 +5086,7 @@ static int StreamTcpReassembleTest42 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -5121,7 +5103,7 @@ static int StreamTcpReassembleTest42 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 60;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     inet_pton(AF_INET, "1.2.3.4", &in);
     src.family = AF_INET;
@@ -5263,6 +5245,7 @@ static int StreamTcpReassembleTest43 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
     AppLayerDetectProtoThreadInit();
@@ -5292,7 +5275,7 @@ static int StreamTcpReassembleTest43 (void) {
     ssn.client.ra_base_seq = 9;
     ssn.client.isn = 9;
     ssn.client.last_ack = 600;
-    ssn.alproto = ALPROTO_UNKNOWN;
+    f.alproto = ALPROTO_UNKNOWN;
 
     /* Check the minimum init smsg length. It should be equal to the min length
        of given signature in toserver direction. */

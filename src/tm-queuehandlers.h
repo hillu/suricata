@@ -29,6 +29,7 @@ enum {
     TMQH_NFQ,
     TMQH_PACKETPOOL,
     TMQH_FLOW,
+    TMQH_RINGBUFFER,
 
     TMQH_SIZE,
 };
@@ -36,6 +37,7 @@ enum {
 typedef struct Tmqh_ {
     char *name;
     Packet *(*InHandler)(ThreadVars *);
+    void (*InShutdownHandler)(ThreadVars *);
     void (*OutHandler)(ThreadVars *, Packet *);
     void *(*OutHandlerCtxSetup)(char *);
     void (*OutHandlerCtxFree)(void *);
@@ -48,3 +50,4 @@ void TmqhSetup (void);
 Tmqh* TmqhGetQueueHandlerByName(char *name);
 
 #endif /* __TM_QUEUEHANDLERS_H__ */
+

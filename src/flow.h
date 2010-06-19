@@ -26,9 +26,13 @@
 
 #include "decode.h"
 #include "util-var.h"
+#include "util-atomic.h"
 
 #define FLOW_QUIET      TRUE
 #define FLOW_VERBOSE    FALSE
+
+#define TOSERVER 0
+#define TOCLIENT 1
 
 /* per flow flags */
 
@@ -59,6 +63,11 @@
 /** All packets in this flow should be accepted */
 #define FLOW_ACTION_PASS            0x0400
 
+/** Sgh for toserver direction set (even if it's NULL) */
+#define FLOW_SGH_TOSERVER           0x0800
+/** Sgh for toclient direction set (even if it's NULL) */
+#define FLOW_SGH_TOCLIENT           0x1000
+
 /* pkt flow flags */
 #define FLOW_PKT_TOSERVER               0x01
 #define FLOW_PKT_TOCLIENT               0x02
@@ -83,6 +92,8 @@ typedef struct FlowCnf_
 
     uint32_t emerg_timeout_new;
     uint32_t emerg_timeout_est;
+    uint32_t flow_try_release;
+    uint32_t emergency_recovery;
 
 } FlowConfig;
 
@@ -96,8 +107,28 @@ typedef struct FlowKey_
 
 } FlowKey;
 
+/**
+ *  \brief Flow data structure.
+ *
+ *  The flow is a global data structure that is created for new packets of a
+ *  flow and then looked up for the following packets of a flow.
+ *
+ *  Locking
+ *
+ *  The flow is updated/used by multiple packets at the same time. This is why
+ *  there is a flow-mutex. It's a mutex and not a spinlock because some
+ *  operations on the flow can be quite expensive, thus spinning would be
+ *  too expensive.
+ *
+ *  The flow "header" (addresses, ports, proto, recursion level) are static
+ *  after the initialization and remain read-only throughout the entire live
+ *  of a flow. This is why we can access those without protection of the lock.
+ */
+
 typedef struct Flow_
 {
+    /* flow "header", used for hashing and flow lookup. Static after init,
+     * so safe to look at without lock */
     Address src, dst;
     union {
         Port sp;        /**< tcp/udp source port */
@@ -109,6 +140,8 @@ typedef struct Flow_
     };
     uint8_t proto;
     uint8_t recursion_level;
+
+    /* end of flow "header" */
 
     uint16_t flags;
 
@@ -130,11 +163,23 @@ typedef struct Flow_
     /** protocol specific data pointer, e.g. for TcpSession */
     void *protoctx;
 
-    /** how many pkts and stream msgs are using the flow *right now* */
-    uint16_t use_cnt;
+    /** how many pkts and stream msgs are using the flow *right now*. This
+     *  variable is atomic so not protected by the Flow mutex "m".
+     *
+     *  On receiving a packet the counter is incremented while the flow
+     *  bucked is locked, which is also the case on timeout pruning.
+     */
+    SC_ATOMIC_DECLARE(unsigned short, use_cnt);
 
     /** detection engine state */
     struct DetectEngineState_ *de_state;
+
+    /** toclient sgh for this flow. Only use when FLOW_SGH_TOCLIENT flow flag
+     *  has been set. */
+    struct SigGroupHead_ *sgh_toclient;
+    /** toserver sgh for this flow. Only use when FLOW_SGH_TOSERVER flow flag
+     *  has been set. */
+    struct SigGroupHead_ *sgh_toserver;
 
     SCMutex m;
 
@@ -147,7 +192,22 @@ typedef struct Flow_
     struct Flow_ *lprev;
 
     struct FlowBucket_ *fb;
+
+    uint16_t alproto; /**< application level protocol */
+    void **aldata; /**< application level storage ptrs */
+    uint8_t alflags; /**< application level specific flags */
+
 } Flow;
+
+/** Flow Application Level flags */
+#define FLOW_AL_PROTO_UNKNOWN           0x01
+#define FLOW_AL_PROTO_DETECT_DONE       0x02
+#define FLOW_AL_NO_APPLAYER_INSPECTION  0x04 /** \todo move to flow flags later */
+#define FLOW_AL_STREAM_START            0x08
+#define FLOW_AL_STREAM_EOF              0x10
+#define FLOW_AL_STREAM_TOSERVER         0x20
+#define FLOW_AL_STREAM_TOCLIENT         0x40
+#define FLOW_AL_STREAM_GAP              0x80
 
 enum {
     FLOW_STATE_NEW = 0,
@@ -171,7 +231,13 @@ void FlowInitConfig (char);
 void FlowPrintQueueInfo (void);
 void FlowShutdown(void);
 void FlowSetIPOnlyFlag(Flow *, char);
-void FlowDecrUsecnt(ThreadVars *, Packet *);
+void FlowSetIPOnlyFlagNoLock(Flow *, char);
+
+void FlowIncrUsecnt(Flow *);
+void FlowDecrUsecnt(Flow *);
+
+uint32_t FlowPruneFlowsCnt(struct timeval *, int);
+uint32_t FlowKillFlowsCnt(int);
 
 void *FlowManagerThread(void *td);
 
@@ -182,10 +248,17 @@ int FlowSetProtoEmergencyTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoFreeFunc (uint8_t , void (*Free)(void *));
 int FlowSetFlowStateFunc (uint8_t , int (*GetProtoState)(void *));
 void FlowUpdateQueue(Flow *);
+
 void FlowLockSetNoPacketInspectionFlag(Flow *);
 void FlowSetNoPacketInspectionFlag(Flow *);
 void FlowLockSetNoPayloadInspectionFlag(Flow *);
 void FlowSetNoPayloadInspectionFlag(Flow *);
+void FlowSetSessionNoApplayerInspectionFlag(Flow *);
+
+int FlowGetPacketDirection(Flow *, Packet *);
+
+void FlowL7DataPtrInit(Flow *);
+void FlowL7DataPtrFree(Flow *);
 
 #endif /* __FLOW_H__ */
 
