@@ -12,7 +12,7 @@ export DH_VERBOSE=1
 
 build:
 	dh_testdir
-	dh_auto_configure -- --enable-nfqueue --enable-prelude --enable-nonbundled-htp --enable-gccprotect
+	dh_auto_configure -- --enable-nfqueue --enable-prelude --enable-non-bundled-htp --enable-gccprotect
 	sed \
 		-e 's|^classification-file: .*$$|classification-file: /etc/snort/classification.config|' \
 		-e 's|^default-rule-path: .*$$|default-rule-path: /etc/snort/rules|' \
