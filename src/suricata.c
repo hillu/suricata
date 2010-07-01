@@ -51,7 +51,9 @@
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
 #include "detect-engine-dcepayload.h"
+#include "detect-engine-uri.h"
 #include "detect-engine-state.h"
+#include "detect-engine-tag.h"
 
 #include "tm-queuehandlers.h"
 #include "tm-queues.h"
@@ -100,6 +102,7 @@
 #include "app-layer-tls.h"
 #include "app-layer-smb.h"
 #include "app-layer-dcerpc.h"
+#include "app-layer-dcerpc-udp.h"
 #include "app-layer-htp.h"
 #include "app-layer-ftp.h"
 #include "app-layer-ssl.h"
@@ -130,9 +133,14 @@
 /* holds the cuda b2g module */
 #include "util-mpm-b2g-cuda.h"
 #include "util-cuda-handlers.h"
+#include "cuda-packet-batcher.h"
 
 #include "output.h"
 #include "util-privs.h"
+
+#include "tmqh-packetpool.h"
+
+#include "util-ringbuffer.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -211,6 +219,7 @@ SignalHandlerSetup(int sig, void (*handler)())
 void GlobalInits()
 {
     memset(trans_q, 0, sizeof(trans_q));
+    memset(data_queues, 0, sizeof(data_queues));
 
     /* Initialize the trans_q mutex */
     int blah;
@@ -218,17 +227,15 @@ void GlobalInits()
     for(blah=0;blah<256;blah++) {
         r |= SCMutexInit(&trans_q[blah].mutex_q, NULL);
         r |= SCCondInit(&trans_q[blah].cond_q, NULL);
+
+        r |= SCMutexInit(&data_queues[blah].mutex_q, NULL);
+        r |= SCCondInit(&data_queues[blah].cond_q, NULL);
    }
 
     if (r != 0) {
         SCLogInfo("Trans_Q Mutex not initialized correctly");
         exit(EXIT_FAILURE);
     }
-
-    /* initialize packet queues Here! */
-    memset(&packet_q,0,sizeof(packet_q));
-    SCMutexInit(&packet_q.mutex_q, NULL);
-    SCCondInit(&packet_q.cond_q, NULL);
 }
 
 /* XXX hack: make sure threads can stop the engine by calling this
@@ -761,6 +768,8 @@ int main(int argc, char **argv)
 #endif /* PROFILING */
     SCReputationInitCtx();
 
+    TagInitCtx();
+
     TmModuleReceiveNFQRegister();
     TmModuleVerdictNFQRegister();
     TmModuleDecodeNFQRegister();
@@ -789,6 +798,7 @@ int main(int argc, char **argv)
     TmModuleLogHttpLogIPv6Register();
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
+    TmModuleCudaPacketBatcherRegister();
 #endif
     TmModuleReceiveErfFileRegister();
     TmModuleDecodeErfFileRegister();
@@ -803,6 +813,7 @@ int main(int argc, char **argv)
     RegisterTLSParsers();
     RegisterSMBParsers();
     RegisterDCERPCParsers();
+    RegisterDCERPCUDPParsers();
     RegisterFTPParsers();
     RegisterSSLParsers();
     AppLayerParsersInitPostProcess();
@@ -843,6 +854,7 @@ int main(int argc, char **argv)
         TLSParserRegisterTests();
         SMBParserRegisterTests();
         DCERPCParserRegisterTests();
+        DCERPCUDPParserRegisterTests();
         FTPParserRegisterTests();
         DecodeRawRegisterTests();
         DecodePPPOERegisterTests();
@@ -877,10 +889,12 @@ int main(int argc, char **argv)
 #endif
         PayloadRegisterTests();
         DcePayloadRegisterTests();
+        UriRegisterTests();
 #ifdef PROFILING
         SCProfilingRegisterTests();
 #endif
         DeStateRegisterTests();
+        DetectRingBufferRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
@@ -965,7 +979,7 @@ int main(int argc, char **argv)
         }
         PACKET_INITIALIZE(p);
 
-        PacketEnqueue(&packet_q,p);
+        PacketPoolStorePacket(p);
     }
     SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
         max_pending_packets, (uintmax_t)(max_pending_packets*sizeof(Packet)));
@@ -988,9 +1002,14 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
     }
 
+
 #ifdef PROFILING
     SCProfilingInitRuleCounters(de_ctx);
 #endif /* PROFILING */
+
+#ifdef __SC_CUDA_SUPPORT__
+    SCCudaPBSetUpQueuesAndBuffers();
+#endif /* __SC_CUDA_SUPPORT__ */
 
     AppLayerHtpRegisterExtraCallbacks();
     SCThresholdConfInitContext(de_ctx,NULL);
@@ -1015,6 +1034,7 @@ int main(int argc, char **argv)
         //RunModeFilePcap(de_ctx, pcap_file);
         //RunModeFilePcap2(de_ctx, pcap_file);
         RunModeFilePcapAuto(de_ctx, pcap_file);
+        //RunModeFilePcapAutoFp(de_ctx, pcap_file);
         //RunModeFilePcapAuto2(de_ctx, pcap_file);
     }
     else if (run_mode == MODE_PFRING) {
@@ -1098,10 +1118,10 @@ int main(int argc, char **argv)
                     if (suricata_ctl_flags & SURICATA_KILL)
                         break;
 
-                    SCMutexLock(&packet_q.mutex_q);
-                    if (packet_q.len == max_pending_packets)
+                    /* if all packets are returned to the packetpool
+                     * we are done */
+                    if (PacketPoolSize() == max_pending_packets)
                         done = 1;
-                    SCMutexUnlock(&packet_q.mutex_q);
 
                     if (done == 0) {
                         usleep(100);
@@ -1116,6 +1136,10 @@ int main(int argc, char **argv)
             gettimeofday(&end_time, NULL);
 
             SCLogInfo("time elapsed %" PRIuMAX "s", (uintmax_t)(end_time.tv_sec - start_time.tv_sec));
+
+#ifdef __SC_CUDA_SUPPORT__
+            SCCudaPBKillBatchingPackets();
+#endif
 
             TmThreadKillThreads();
             SCPerfReleaseResources();
@@ -1167,9 +1191,12 @@ int main(int argc, char **argv)
         }
     }
 #endif
+
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
     AlpProtoDestroy();
+
+    TagDestroyCtx();
 
     RunModeShutDown();
     OutputDeregisterAll();

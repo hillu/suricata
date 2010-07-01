@@ -541,6 +541,7 @@ end:
 }
 
 static int DetectTlsVersionTestDetect03(void) {
+    DetectEngineCtx *de_ctx = NULL;
     int result = 0;
     Flow f;
     uint8_t tlsbuf1[] = { 0x16 };
@@ -556,17 +557,22 @@ static int DetectTlsVersionTestDetect03(void) {
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
+    TCPHdr tcp_hdr;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    memset(&tcp_hdr, 0, sizeof(tcp_hdr));
+
+    tcp_hdr.th_seq = htonl(1000);
 
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = tlsbuf4;
     p.payload_len = tlslen4;
     p.proto = IPPROTO_TCP;
+    p.tcph = &tcp_hdr;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -574,6 +580,7 @@ static int DetectTlsVersionTestDetect03(void) {
     p.flowflags |= FLOW_PKT_TOSERVER;
     p.flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_TLS;
+    f.proto = p.proto;
 
     StreamTcpInitConfig(TRUE);
     FlowL7DataPtrInit(&f);
@@ -590,7 +597,7 @@ static int DetectTlsVersionTestDetect03(void) {
     ssn.toserver_smsg_head = stream_msg;
     ssn.toserver_smsg_tail = stream_msg;
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -659,11 +666,12 @@ static int DetectTlsVersionTestDetect03(void) {
 
     result = 1;
 end:
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
 
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);

@@ -53,40 +53,6 @@
 #include "tm-modules.h"
 
 /**
- * \brief Handle a packet and check if needs a threshold logic
- *
- * \param de_ctx Detection Context
- * \param sig Signature pointer
- * \param p Packet structure
- *
- */
-int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-                       Signature *s, Packet *p, uint16_t pos)
-{
-    SCEnter();
-    int ret = 0;
-
-    /* retrieve the sig match data */
-    DetectThresholdData *td = SigGetThresholdType(s,p);
-
-    SCLogDebug("td %p", td);
-
-    /* if have none just alert, otherwise handle thresholding */
-    if (td == NULL) {
-        /* Already inserted so get out */
-        ret = 1;
-    } else {
-        ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
-        if (ret == 0) {
-            /* It doesn't match threshold, remove it */
-            PacketAlertRemove(p, pos);
-        }
-    }
-
-    SCReturnInt(ret);
-}
-
-/**
  * \brief Check if a certain signature has threshold option
  *
  * \param sig Signature pointer
@@ -346,6 +312,7 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
                 e->tv_sec1 = p->ts.tv_sec;
                 e->current_count = 1;
+                e->ipv = ste.ipv;
 
                 ret = 1;
 
@@ -381,6 +348,7 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
                     e->current_count = 1;
                     e->tv_sec1 = p->ts.tv_sec;
+                    e->ipv = ste.ipv;
 
                     ThresholdHashAdd(de_ctx, e, p);
                 }
@@ -410,6 +378,7 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
                 e->current_count = 1;
                 e->tv_sec1 = p->ts.tv_sec;
+                e->ipv = ste.ipv;
 
                 ThresholdHashAdd(de_ctx, e, p);
 
@@ -449,6 +418,7 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
                 e->current_count = 1;
                 e->tv_sec1 = p->ts.tv_sec;
+                e->ipv = ste.ipv;
 
                 ThresholdHashAdd(de_ctx, e, p);
             }
@@ -538,6 +508,7 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                 e->current_count = 1;
                 e->tv_sec1 = p->ts.tv_sec;
                 e->tv_timeout = 0;
+                e->ipv = ste.ipv;
 
                 /** The track is by src/dst or by rule? */
                 if (td->track != TRACK_RULE)
@@ -666,7 +637,6 @@ void ThresholdHashInit(DetectEngineCtx *de_ctx)
             exit(EXIT_FAILURE);
         }
     }
-
 }
 
 /**

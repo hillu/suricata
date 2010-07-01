@@ -33,6 +33,7 @@
 #define DETECT_PCRE_MATCH_LIMIT   0x20
 
 #define DETECT_PCRE_HTTP_BODY_AL  0x40
+#define DETECT_PCRE_RELATIVE_NEXT 0x80
 
 typedef struct DetectPcreData_ {
     /* pcre options */

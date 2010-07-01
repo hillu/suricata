@@ -30,6 +30,7 @@
 #include "app-layer-detect-proto.h"
 #include "tm-modules.h"
 #include "util-error.h"
+#include "tmqh-packetpool.h"
 
 void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
@@ -49,7 +50,7 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
 }
 
 /**
- *  \brief Get a packet. We try to get a packet from the packet_q first, but
+ *  \brief Get a packet. We try to get a packet from the packetpool first, but
  *         if that is empty we alloc a packet that is free'd again after
  *         processing.
  *
@@ -58,10 +59,10 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
 Packet *PacketGetFromQueueOrAlloc(void) {
     Packet *p = NULL;
 
-    /* try the queue first */
-    SCMutexLock(&packet_q.mutex_q);
-    p = PacketDequeue(&packet_q);
-    SCMutexUnlock(&packet_q.mutex_q);
+    /* try the pool first */
+    if (PacketPoolSize() > 0) {
+        p = PacketPoolGetPacket();
+    }
 
     if (p == NULL) {
         /* non fatal, we're just not processing a packet then */
@@ -134,17 +135,21 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     /* register counters */
     dtv->counter_pkts = SCPerfTVRegisterCounter("decoder.pkts", tv,
                                                 SC_PERF_TYPE_UINT64, "NULL");
+#if 0
     dtv->counter_pkts_per_sec = SCPerfTVRegisterIntervalCounter("decoder.pkts_per_sec",
                                                                 tv, SC_PERF_TYPE_DOUBLE,
                                                                 "NULL", "1s");
+#endif
     dtv->counter_bytes = SCPerfTVRegisterCounter("decoder.bytes", tv,
                                                  SC_PERF_TYPE_UINT64, "NULL");
+#if 0
     dtv->counter_bytes_per_sec = SCPerfTVRegisterIntervalCounter("decoder.bytes_per_sec",
                                                                 tv, SC_PERF_TYPE_DOUBLE,
                                                                 "NULL", "1s");
     dtv->counter_mbit_per_sec = SCPerfTVRegisterIntervalCounter("decoder.mbit_per_sec",
                                                                 tv, SC_PERF_TYPE_DOUBLE,
                                                                 "NULL", "1s");
+#endif
     dtv->counter_ipv4 = SCPerfTVRegisterCounter("decoder.ipv4", tv,
                                                 SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_ipv6 = SCPerfTVRegisterCounter("decoder.ipv6", tv,

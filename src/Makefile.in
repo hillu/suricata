@@ -54,13 +54,13 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
-	packet-queue.$(OBJEXT) threads.$(OBJEXT) source-nfq.$(OBJEXT) \
-	source-pcap.$(OBJEXT) source-pcap-file.$(OBJEXT) \
-	source-pfring.$(OBJEXT) source-ipfw.$(OBJEXT) \
-	source-erf-file.$(OBJEXT) source-erf-dag.$(OBJEXT) \
-	decode.$(OBJEXT) decode-ethernet.$(OBJEXT) \
-	decode-vlan.$(OBJEXT) decode-sll.$(OBJEXT) \
-	decode-gre.$(OBJEXT) decode-ppp.$(OBJEXT) \
+	packet-queue.$(OBJEXT) data-queue.$(OBJEXT) threads.$(OBJEXT) \
+	source-nfq.$(OBJEXT) source-pcap.$(OBJEXT) \
+	source-pcap-file.$(OBJEXT) source-pfring.$(OBJEXT) \
+	source-ipfw.$(OBJEXT) source-erf-file.$(OBJEXT) \
+	source-erf-dag.$(OBJEXT) decode.$(OBJEXT) \
+	decode-ethernet.$(OBJEXT) decode-vlan.$(OBJEXT) \
+	decode-sll.$(OBJEXT) decode-gre.$(OBJEXT) decode-ppp.$(OBJEXT) \
 	decode-pppoe.$(OBJEXT) decode-ipv4.$(OBJEXT) \
 	decode-ipv6.$(OBJEXT) decode-raw.$(OBJEXT) \
 	decode-icmpv4.$(OBJEXT) decode-icmpv6.$(OBJEXT) \
@@ -73,7 +73,7 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	detect-rpc.$(OBJEXT) detect-isdataat.$(OBJEXT) \
 	detect-window.$(OBJEXT) detect-ftpbounce.$(OBJEXT) \
 	detect-engine-address.$(OBJEXT) \
-	detect-engine-threshold.$(OBJEXT) \
+	detect-engine-threshold.$(OBJEXT) detect-engine-tag.$(OBJEXT) \
 	detect-engine-address-ipv4.$(OBJEXT) \
 	detect-engine-address-ipv6.$(OBJEXT) \
 	detect-engine-proto.$(OBJEXT) detect-engine-port.$(OBJEXT) \
@@ -148,10 +148,11 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	app-layer-parser.$(OBJEXT) app-layer-htp.$(OBJEXT) \
 	app-layer-tls.$(OBJEXT) app-layer-smb.$(OBJEXT) \
 	app-layer-smb2.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
-	app-layer-ftp.$(OBJEXT) app-layer-ssl.$(OBJEXT) \
-	defrag.$(OBJEXT) output.$(OBJEXT) win32-misc.$(OBJEXT) \
-	win32-service.$(OBJEXT) util-action.$(OBJEXT) \
-	util-profiling.$(OBJEXT)
+	app-layer-dcerpc-udp.$(OBJEXT) app-layer-ftp.$(OBJEXT) \
+	app-layer-ssl.$(OBJEXT) defrag.$(OBJEXT) output.$(OBJEXT) \
+	win32-misc.$(OBJEXT) win32-service.$(OBJEXT) \
+	util-action.$(OBJEXT) util-profiling.$(OBJEXT) \
+	cuda-packet-batcher.$(OBJEXT)
 suricata_OBJECTS = $(am_suricata_OBJECTS)
 @BUILD_LIBHTP_TRUE@suricata_DEPENDENCIES =  \
 @BUILD_LIBHTP_TRUE@	$(top_builddir)/libhtp/htp/libhtp.la
@@ -201,6 +202,7 @@ EGREP = @EGREP@
 EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GREP = @GREP@
+HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -303,11 +305,13 @@ noinst_HEADERS = action-globals.h \
     app-layer-nbss.h app-layer-dcerpc-common.h \
     debug.h decode-events.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
-	suricata-common.h threadvars.h util-binsearch.h
+	suricata-common.h threadvars.h util-binsearch.h \
+    util-atomic.h util-validate.h
 
 suricata_SOURCES = suricata.c suricata.h \
 runmodes.c runmodes.h \
 packet-queue.c packet-queue.h \
+data-queue.c data-queue.h \
 threads.c threads.h \
 source-nfq.c source-nfq.h \
 source-pcap.c source-pcap.h \
@@ -351,6 +355,7 @@ detect-window.c detect-window.h \
 detect-ftpbounce.c detect-ftpbounce.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-threshold.c detect-engine-threshold.h \
+detect-engine-tag.c detect-engine-tag.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
 detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
 detect-engine-proto.c detect-engine-proto.h \
@@ -467,6 +472,7 @@ util-cuda-handlers.c util-cuda-handlers.h \
 util-privs.c util-privs.h \
 util-decode-asn1.c util-decode-asn1.h \
 util-ringbuffer.c util-ringbuffer.h \
+util-validate.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -500,6 +506,7 @@ app-layer-tls.c app-layer-tls.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
+app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-ssl.c app-layer-ssl.h \
 defrag.c defrag.h \
@@ -508,7 +515,8 @@ win32-misc.c win32-misc.h \
 win32-service.c win32-service.h \
 util-action.c util-action.h \
 win32-syslog.h \
-util-profiling.c util-profiling.h
+util-profiling.c util-profiling.h \
+cuda-packet-batcher.c cuda-packet-batcher.h
 
 
 # set the include path found by configure
@@ -610,6 +618,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-unified-alert.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-unified-log.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-unified2-alert.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dcerpc-udp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dcerpc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-detect-proto.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ftp.Po@am__quote@
@@ -623,6 +632,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf-yaml-loader.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/counters.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/cuda-packet-batcher.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/data-queue.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ethernet.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-gre.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-icmpv4.Po@am__quote@
@@ -666,6 +677,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-siggroup.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-sigorder.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-state.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-tag.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-threshold.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-uri.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine.Po@am__quote@

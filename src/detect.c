@@ -138,12 +138,12 @@
 #include "util-unittest-helper.h"
 #include "util-debug.h"
 #include "util-hashlist.h"
-
 #include "util-cuda-handlers.h"
 #include "util-mpm-b2g-cuda.h"
 #include "util-cuda.h"
 #include "util-privs.h"
 #include "util-profiling.h"
+#include "util-validate.h"
 
 SigMatch *SigMatchAlloc(void);
 void DetectExitPrintStats(ThreadVars *tv, void *data);
@@ -296,7 +296,7 @@ int DetectLoadSigFile(DetectEngineCtx *de_ctx, char *sig_file, int *sigs_tot) {
         if (sig != NULL) {
             SCLogDebug("signature %"PRIu32" loaded", sig->id);
             good++;
-	} else {
+        } else {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Error parsing signature \"%s\" from "
                  "file %s at line %"PRId32"", line, sig_file, lineno - multiline);
             if (de_ctx->failure_fatal == 1) {
@@ -387,7 +387,7 @@ int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
     }
 
     if (ret < 0 && de_ctx->failure_fatal) {
-        SCReturnInt(ret);
+        goto end;
     }
 
     SCSigRegisterSignatureOrderingFuncs(de_ctx);
@@ -406,7 +406,12 @@ int SigLoadSignatures (DetectEngineCtx *de_ctx, char *sig_file)
 
     /* Setup the signature group lookup structure and pattern matchers */
     SigGroupBuild(de_ctx);
-    SCReturnInt(0);
+
+    ret = 0;
+
+ end:
+    DetectParseDupSigHashFree(de_ctx);
+    SCReturnInt(ret);
 }
 
 /**
@@ -451,19 +456,40 @@ static void SigMatchSignaturesBuildMatchArray(DetectEngineCtx *de_ctx,
         }
 
         /* if the sig has alproto and the session as well they should match */
-        if (s->alproto != ALPROTO_UNKNOWN && alproto != ALPROTO_UNKNOWN) {
+        if (s->alproto != ALPROTO_UNKNOWN) {
             if (s->alproto != alproto) {
-                SCLogDebug("alproto mismatch");
-                continue;
+                if (s->alproto == ALPROTO_DCERPC) {
+                    if (alproto != ALPROTO_SMB && alproto != ALPROTO_SMB2) {
+                        SCLogDebug("DCERPC sig, alproto not SMB or SMB2");
+                        continue;
+                    }
+                } else {
+                    SCLogDebug("alproto mismatch");
+                    continue;
+                }
             }
         }
 
-        if (s->flags & SIG_FLAG_MPM && !(s->flags & SIG_FLAG_MPM_NEGCONTENT)) {
+        /* check for a pattern match of the one pattern in this sig. */
+        if (s->flags & SIG_FLAG_MPM) {
             /* filter out sigs that want pattern matches, but
              * have no matches */
             if (!(det_ctx->pmq.pattern_id_bitarray[(s->mpm_pattern_id / 8)] & (1<<(s->mpm_pattern_id % 8)))) {
                 SCLogDebug("mpm sig without matches (pat id %"PRIu32" check in content).", s->mpm_pattern_id);
-                continue;
+
+                if (!(s->flags & SIG_FLAG_MPM_NEGCONTENT)) {
+                    /* pattern didn't match. There is one case where we will inspect
+                     * the signature anyway: if the packet payload was added to the
+                     * stream it is not scanned itself: the stream data is inspected.
+                     * Inspecting both would result in duplicated alerts. There is
+                     * one case where we are going to inspect the packet payload
+                     * anyway: if a signature has the dsize option. */
+                    if (!((p->flags & PKT_STREAM_ADD) && (s->flags & SIG_FLAG_DSIZE))) {
+                        continue;
+                    }
+                } else {
+                    SCLogDebug("but thats okay, we are looking for neg-content");
+                }
             }
         }
 
@@ -500,6 +526,12 @@ SigGroupHead *SigMatchSignaturesGetSgh(DetectEngineCtx *de_ctx, DetectEngineThre
 
     int f;
     SigGroupHead *sgh = NULL;
+
+    /* if the packet proto is 0 (not set), we're inspecting it against
+     * the decoder events sgh we have. */
+    if (p->proto == 0 && p->events.cnt > 0) {
+        SCReturnPtr(de_ctx->decoder_event_sgh, "SigGroupHead");
+    }
 
     /* select the flow_gh */
     if (p->flowflags & FLOW_PKT_TOCLIENT)
@@ -543,6 +575,87 @@ SigGroupHead *SigMatchSignaturesGetSgh(DetectEngineCtx *de_ctx, DetectEngineThre
     SCReturnPtr(sgh, "SigGroupHead");
 }
 
+/** \brief Get the smsgs relevant to this packet
+ *
+ *  \param f LOCKED flow
+ *  \param p packet
+ *  \param flags stream flags
+ */
+static StreamMsg *SigMatchSignaturesGetSmsg(Flow *f, Packet *p, uint8_t flags) {
+    SCEnter();
+
+    StreamMsg *smsg = NULL;
+
+    if (p->proto == IPPROTO_TCP) {
+        TcpSession *ssn = (TcpSession *)f->protoctx;
+        if (ssn != NULL) {
+            /* at stream eof, inspect all smsg's */
+            if (flags & STREAM_EOF) {
+                if (p->flowflags & FLOW_PKT_TOSERVER) {
+                    smsg = ssn->toserver_smsg_head;
+                    /* deref from the ssn */
+                    ssn->toserver_smsg_head = NULL;
+                    ssn->toserver_smsg_tail = NULL;
+
+                    SCLogDebug("to_server smsg %p at stream eof", smsg);
+                } else {
+                    smsg = ssn->toclient_smsg_head;
+                    /* deref from the ssn */
+                    ssn->toclient_smsg_head = NULL;
+                    ssn->toclient_smsg_tail = NULL;
+
+                    SCLogDebug("to_client smsg %p at stream eof", smsg);
+                }
+            } else {
+                if (p->flowflags & FLOW_PKT_TOSERVER) {
+                    StreamMsg *head = ssn->toserver_smsg_head;
+                    if (head == NULL) {
+                        SCLogDebug("no smsgs in to_server direction");
+                        goto end;
+                    }
+
+                    /* if the smsg is bigger than the current packet, we will
+                     * process the smsg in a later run */
+                    if ((head->data.seq + head->data.data_len) > (TCP_GET_SEQ(p) + p->payload_len)) {
+                        SCLogDebug("smsg ends beyond current packet, skipping for now %"PRIu32">%"PRIu32,
+                                (head->data.seq + head->data.data_len), (TCP_GET_SEQ(p) + p->payload_len));
+                        goto end;
+                    }
+
+                    smsg = head;
+                    /* deref from the ssn */
+                    ssn->toserver_smsg_head = NULL;
+                    ssn->toserver_smsg_tail = NULL;
+
+                    SCLogDebug("to_server smsg %p", smsg);
+                } else {
+                    StreamMsg *head = ssn->toclient_smsg_head;
+                    if (head == NULL)
+                        goto end;
+
+                    /* if the smsg is bigger than the current packet, we will
+                     * process the smsg in a later run */
+                    if ((head->data.seq + head->data.data_len) > (TCP_GET_SEQ(p) + p->payload_len)) {
+                        SCLogDebug("smsg ends beyond current packet, skipping for now %"PRIu32">%"PRIu32,
+                                (head->data.seq + head->data.data_len), (TCP_GET_SEQ(p) + p->payload_len));
+                        goto end;
+                    }
+
+                    smsg = head;
+                    /* deref from the ssn */
+                    ssn->toclient_smsg_head = NULL;
+                    ssn->toclient_smsg_tail = NULL;
+
+                    SCLogDebug("to_client smsg %p", smsg);
+                }
+            }
+        }
+    }
+
+end:
+    SCReturnPtr(smsg, "StreamMsg");
+}
+
 /**
  *  \brief Signature match function
  *
@@ -566,12 +679,19 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
 
     SCEnter();
 
+    SCLogDebug("pcap_cnt %"PRIu64, p->pcap_cnt);
+
     p->alerts.cnt = 0;
 
     det_ctx->pkts++;
 
     /* grab the protocol state we will detect on */
     if (p->flow != NULL) {
+        if (p->flags & PKT_STREAM_EOF) {
+            flags |= STREAM_EOF;
+            SCLogDebug("STREAM_EOF set");
+        }
+
         FlowIncrUsecnt(p->flow);
 
         SCMutexLock(&p->flow->m);
@@ -586,6 +706,8 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                 sgh = p->flow->sgh_toclient;
                 use_flow_sgh = TRUE;
             }
+
+            smsg = SigMatchSignaturesGetSmsg(p->flow, p, flags);
         } else {
             no_store_flow_sgh = TRUE;
         }
@@ -597,26 +719,6 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             alproto = AppLayerGetProtoFromPacket(p);
             SCLogDebug("alstate %p, alproto %u", alstate, alproto);
 
-            if (p->proto == IPPROTO_TCP) {
-                TcpSession *ssn = (TcpSession *)p->flow->protoctx;
-                if (ssn != NULL) {
-                    if (p->flowflags & FLOW_PKT_TOSERVER) {
-                        smsg = ssn->toserver_smsg_head;
-                        /* deref from the ssn */
-                        ssn->toserver_smsg_head = NULL;
-                        ssn->toserver_smsg_tail = NULL;
-
-                        SCLogDebug("to_server smsg %p", smsg);
-                    } else {
-                        smsg = ssn->toclient_smsg_head;
-                        /* deref from the ssn */
-                        ssn->toclient_smsg_head = NULL;
-                        ssn->toclient_smsg_tail = NULL;
-
-                        SCLogDebug("to_client smsg %p", smsg);
-                    }
-                }
-            }
         } else {
             SCLogDebug("packet doesn't have established flag set");
         }
@@ -676,13 +778,13 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
     /* have a look at the reassembled stream (if any) */
     if (p->flowflags & FLOW_PKT_ESTABLISHED) {
         if (smsg != NULL && det_ctx->sgh->mpm_stream_ctx != NULL) {
-            cnt = StreamPatternSearch(th_v, det_ctx, smsg);
+            cnt = StreamPatternSearch(th_v, det_ctx, p, smsg, flags);
             SCLogDebug("cnt %u", cnt);
         }
     }
 
     if (p->payload_len > 0 && det_ctx->sgh->mpm_ctx != NULL &&
-        !(p->flags & PKT_NOPAYLOAD_INSPECTION))
+        (!(p->flags & PKT_NOPAYLOAD_INSPECTION) && !(p->flags & PKT_STREAM_ADD)))
     {
         /* run the multi packet matcher against the payload of the packet */
         if (det_ctx->sgh->mpm_content_maxlen > p->payload_len) {
@@ -769,36 +871,17 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             }
         }
 
-        SCLogDebug("s->amatch %p, s->umatch %p, s->dmatch %p",
-                s->amatch, s->umatch, s->dmatch);
-
-        if (s->amatch != NULL || s->umatch != NULL || s->dmatch != NULL) {
-            if (alstate == NULL) {
-                SCLogDebug("state matches but no state, we can't match");
-                goto next;
-            }
-
-            if (de_state_start == TRUE) {
-                SCLogDebug("stateful app layer match inspection starting");
-                if (DeStateDetectStartDetection(th_v, de_ctx, det_ctx, s,
-                            p->flow, flags, alstate, alproto) != 1)
-                    goto next;
-            } else {
-                SCLogDebug("signature %"PRIu32" (%"PRIuMAX"): %s",
-                        s->id, (uintmax_t)s->num, DeStateMatchResultToString(det_ctx->de_state_sig_array[s->num]));
-                if (det_ctx->de_state_sig_array[s->num] != DE_STATE_MATCH_NEW) {
-                    if (s->pmatch == NULL && s->dmatch == NULL) {
-                        goto next;
-                    }
-                }
-            }
+        if (s->flags & SIG_FLAG_DSIZE && s->dsize_sm != NULL) {
+            if (sigmatch_table[DETECT_DSIZE].Match(th_v, det_ctx, p, s, s->dsize_sm) == 0)
+                continue;
         }
 
         /* Check the payload keywords. If we are a MPM sig and we've made
          * to here, we've had at least one of the patterns match */
         if (s->pmatch != NULL) {
-            /* if we have stream msgs, inspect against those first */
-            if (smsg != NULL) {
+            /* if we have stream msgs, inspect against those first,
+             * but not for a "dsize" signature */
+            if (!(s->flags & SIG_FLAG_DSIZE) && smsg != NULL) {
                 char pmatch = 0;
                 uint8_t pmq_idx = 0;
                 StreamMsg *smsg_inspect = smsg;
@@ -835,6 +918,31 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             } else {
                 if (DetectEngineInspectPacketPayload(de_ctx, det_ctx, s, p->flow, flags, alstate, p) != 1)
                     goto next;
+            }
+        }
+
+        SCLogDebug("s->amatch %p, s->umatch %p, s->dmatch %p",
+                s->amatch, s->umatch, s->dmatch);
+
+        if (s->amatch != NULL || s->umatch != NULL || s->dmatch != NULL) {
+            if (alstate == NULL) {
+                SCLogDebug("state matches but no state, we can't match");
+                goto next;
+            }
+
+            if (de_state_start == TRUE) {
+                SCLogDebug("stateful app layer match inspection starting");
+                if (DeStateDetectStartDetection(th_v, de_ctx, det_ctx, s,
+                            p->flow, flags, alstate, alproto) != 1)
+                    goto next;
+            } else {
+                SCLogDebug("signature %"PRIu32" (%"PRIuMAX"): %s",
+                        s->id, (uintmax_t)s->num, DeStateMatchResultToString(det_ctx->de_state_sig_array[s->num]));
+                if (det_ctx->de_state_sig_array[s->num] != DE_STATE_MATCH_NEW) {
+                    if (s->pmatch == NULL && s->dmatch == NULL) {
+                        goto next;
+                    }
+                }
             }
         }
 
@@ -918,19 +1026,23 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
         break;
     }
 
+end:
     if (alstate != NULL) {
         SCLogDebug("getting de_state_status");
         int de_state_status = DeStateUpdateInspectTransactionId(p->flow,
                 (flags & STREAM_TOSERVER) ? STREAM_TOSERVER : STREAM_TOCLIENT);
         SCLogDebug("de_state_status %d", de_state_status);
+
         if (de_state_status == 2) {
+            SCMutexLock(&p->flow->de_state_m);
             DetectEngineStateReset(p->flow->de_state);
+            SCMutexUnlock(&p->flow->de_state_m);
         }
     }
 
-end:
     /* so now let's iterate the alerts and remove the ones after a pass rule
      * matched (if any). This is done inside PacketAlertFinalize() */
+    /* PR: installed "tag" keywords are handled after the threshold inspection */
     PacketAlertFinalize(de_ctx, det_ctx, p);
     if (p->alerts.cnt > 0) {
         SCPerfCounterAddUI64(det_ctx->counter_alerts, det_ctx->tv->sc_perf_pca, (uint64_t)p->alerts.cnt);
@@ -958,7 +1070,7 @@ end:
         }
 
         /* if we have (a) smsg(s), return to the pool */
-        while(smsg != NULL) {
+        while (smsg != NULL) {
             StreamMsg *smsg_next = smsg->next;
             SCLogDebug("returning smsg %p to pool", smsg);
             smsg->next = NULL;
@@ -987,6 +1099,8 @@ end:
  */
 TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
+    DEBUG_VALIDATE_PACKET(p);
+
     /* No need to perform any detection on this packet, if the the given flag is set.*/
     if (p->flags & PKT_NOPACKET_INSPECTION)
         return 0;
@@ -1079,6 +1193,9 @@ int SignatureIsAppLayer(DetectEngineCtx *de_ctx, Signature *s) {
  *  \retval 0 sig is not ip only
  */
 int SignatureIsIPOnly(DetectEngineCtx *de_ctx, Signature *s) {
+    if (s->alproto != ALPROTO_UNKNOWN)
+        return 0;
+
     /* for tcp/udp, only consider sigs that don't have ports set, as ip-only */
     if (!(s->proto.flags & DETECT_PROTO_ANY)) {
         if (s->proto.proto[IPPROTO_TCP / 8] & (1 << (IPPROTO_TCP % 8)) ||
@@ -1123,8 +1240,10 @@ iponly:
     }
     return 1;
 }
+
 /**
- * \brief Check if the initialized signature is inspecting the packet payload
+ *  \internal
+ *  \brief Check if the initialized signature is inspecting the packet payload
  *  \param de_ctx detection engine ctx
  *  \param s the signature
  *  \retval 1 sig is inspecting the payload
@@ -1149,6 +1268,46 @@ static int SignatureIsInspectingPayload(DetectEngineCtx *de_ctx, Signature *s) {
     }
 #endif
     return 0;
+}
+
+/**
+ *  \internal
+ *  \brief check if a signature is decoder event matching only
+ *  \param de_ctx detection engine
+ *  \param s the signature to test
+ *  \retval 0 not a DEOnly sig
+ *  \retval 1 DEOnly sig
+ */
+static int SignatureIsDEOnly(DetectEngineCtx *de_ctx, Signature *s) {
+    if (s->alproto != ALPROTO_UNKNOWN)
+        return 0;
+
+    if (s->pmatch != NULL)
+        return 0;
+
+    if (s->umatch != NULL)
+        return 0;
+
+    if (s->amatch != NULL)
+        return 0;
+
+    SigMatch *sm = s->match;
+    if (sm == NULL)
+        goto deonly;
+
+    for ( ;sm != NULL; sm = sm->next) {
+        if ( !(sigmatch_table[sm->type].flags & SIGMATCH_DEONLY_COMPAT))
+            return 0;
+    }
+
+deonly:
+    if (!(de_ctx->flags & DE_QUIET)) {
+        SCLogDebug("DE-ONLY (%" PRIu32 "): source %s, dest %s", s->id,
+                   s->flags & SIG_FLAG_SRC_ANY ? "ANY" : "SET",
+                   s->flags & SIG_FLAG_DST_ANY ? "ANY" : "SET");
+    }
+
+    return 1;
 }
 
 /**
@@ -1204,6 +1363,9 @@ int SigAddressPrepareStage1(DetectEngineCtx *de_ctx) {
             cnt_payload++;
 
             SCLogDebug("Signature %"PRIu32" is considered \"Payload inspecting\"", tmp_s->id);
+        } else if (SignatureIsDEOnly(de_ctx, tmp_s) == 1) {
+            tmp_s->flags |= SIG_FLAG_DEONLY;
+            SCLogDebug("Signature %"PRIu32" is considered \"Decoder Event only\"", tmp_s->id);
         }
 
         if (tmp_s->flags & SIG_FLAG_APPLAYER) {
@@ -1731,6 +1893,15 @@ error:
 }
 
 /**
+ *  \internal
+ *  \brief add a decoder event signature to the detection engine ctx
+ */
+static void DetectEngineAddDecoderEventSig(DetectEngineCtx *de_ctx, Signature *s) {
+    SCLogDebug("adding signature %"PRIu32" to the decoder event sgh", s->id);
+    SigGroupHeadAppendSig(de_ctx, &de_ctx->decoder_event_sgh, s);
+}
+
+/**
  * \brief Fill the global src group head, with the sigs included
  *
  * \param de_ctx Pointer to the Detection Engine Context whose Signatures have
@@ -1767,13 +1938,15 @@ int SigAddressPrepareStage2(DetectEngineCtx *de_ctx) {
 
     /* now for every rule add the source group to our temp lists */
     for (tmp_s = de_ctx->sig_list; tmp_s != NULL; tmp_s = tmp_s->next) {
-        //printf("SigAddressPrepareStage2 tmp_s->id %u\n", tmp_s->id);
-        if (!(tmp_s->flags & SIG_FLAG_IPONLY)) {
+        SCLogDebug("tmp_s->id %"PRIu32, tmp_s->id);
+        if (tmp_s->flags & SIG_FLAG_IPONLY) {
+            IPOnlyAddSignature(de_ctx, &de_ctx->io_ctx, tmp_s);
+        } else if (tmp_s->flags & SIG_FLAG_DEONLY) {
+            DetectEngineAddDecoderEventSig(de_ctx, tmp_s);
+        } else {
             DetectEngineLookupFlowAddSig(de_ctx, tmp_s, AF_INET);
             DetectEngineLookupFlowAddSig(de_ctx, tmp_s, AF_INET6);
             DetectEngineLookupFlowAddSig(de_ctx, tmp_s, AF_UNSPEC);
-        } else {
-            IPOnlyAddSignature(de_ctx, &de_ctx->io_ctx, tmp_s);
         }
 
         sigs++;
@@ -2422,6 +2595,15 @@ error:
     return -1;
 }
 
+static void DetectEngineBuildDecoderEventSgh(DetectEngineCtx *de_ctx) {
+    if (de_ctx->decoder_event_sgh == NULL)
+        return;
+
+    uint32_t max_idx = DetectEngineGetMaxSigId(de_ctx);
+    SigGroupHeadSetSigCnt(de_ctx->decoder_event_sgh, max_idx);
+    SigGroupHeadBuildMatchArray(de_ctx, de_ctx->decoder_event_sgh, max_idx);
+}
+
 int SigAddressPrepareStage3(DetectEngineCtx *de_ctx) {
     int r;
 
@@ -2487,6 +2669,9 @@ int SigAddressPrepareStage3(DetectEngineCtx *de_ctx) {
             }
         }
     }
+
+    /* prepare the decoder event sgh */
+    DetectEngineBuildDecoderEventSgh(de_ctx);
 
     /* cleanup group head (uri)content_array's */
     SigGroupHeadFreeMpmArrays(de_ctx);
@@ -2617,6 +2802,10 @@ int SigAddressPrepareStage4(DetectEngineCtx *de_ctx) {
         SigGroupHeadBuildHeadArray(de_ctx, sgh);
     }
 
+    if (de_ctx->decoder_event_sgh != NULL) {
+        SigGroupHeadBuildHeadArray(de_ctx, de_ctx->decoder_event_sgh);
+    }
+
     SCFree(de_ctx->sgh_array);
     de_ctx->sgh_array_cnt = 0;
     de_ctx->sgh_array_size = 0;
@@ -2641,7 +2830,7 @@ int SigAddressPrepareStage5(DetectEngineCtx *de_ctx) {
     for (f = 0; f < FLOW_STATES; f++) {
         printf("\n");
         for (proto = 0; proto < 256; proto++) {
-            if (proto != 1)
+            if (proto != 0)
                 continue;
 
             for (global_src_gr = de_ctx->flow_gh[f].src_gh[proto]->ipv4_head; global_src_gr != NULL;
@@ -2960,6 +3149,7 @@ int SigGroupBuild (DetectEngineCtx *de_ctx) {
             SCLogError(SC_ERR_B2G_CUDA_ERROR, "Error getting a cuda context for the "
                        "module SC_RULES_CONTENT_B2G_CUDA");
         }
+        SCCudaCtxPushCurrent(dummy_context);
         if (SCCudaMemGetInfo(&cuda_free_before_alloc, &cuda_total) == 0) {
             SCLogInfo("Total Memory available in the CUDA context used for mpm "
                       "with b2g: %.2f MB", cuda_total/(1024.0 * 1024.0));
@@ -3112,6 +3302,7 @@ void SigTableRegisterTests(void) {
 #ifdef UNITTESTS
 #include "flow-util.h"
 #include "stream-tcp-reassemble.h"
+#include "util-var-name.h"
 
 static const char *dummy_conf_string =
     "%YAML 1.1\n"

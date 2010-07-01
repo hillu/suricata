@@ -411,9 +411,9 @@ void AppLayerDetectProtoThreadInit(void) {
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOCLIENT);
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOSERVER);
 
-    /** SMB2 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 4, 4, STREAM_TOCLIENT);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 4, 4, STREAM_TOSERVER);
+    /** DCERPC */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_UDP, ALPROTO_DCERPC_UDP, "|04 00|", 2, 0, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_UDP, ALPROTO_DCERPC_UDP, "|04 00|", 2, 0, STREAM_TOSERVER);
 
     /** DCERPC */
     AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0, STREAM_TOCLIENT);
@@ -481,7 +481,7 @@ uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx 
     p->payload_len = searchlen;
     B2gCudaPushPacketTo_tv_CMB2_APC(p);
     SCMutexLock(&p->cuda_mutex_q);
-    SCondWait(&p->cuda_cond_q, &p->cuda_mutex_q);
+    SCCondWait(&p->cuda_cond_q, &p->cuda_mutex_q);
     p->cuda_done = 1;
     SCMutexUnlock(&p->cuda_mutex_q);
     cnt = p->cuda_matches;
