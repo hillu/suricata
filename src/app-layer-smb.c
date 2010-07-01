@@ -1147,6 +1147,7 @@ static int SMBParse(Flow *f, void *smb_state, AppLayerParserState *pstate,
             if (sstate->bytesprocessed >= sstate->nbss.length + NBSS_HDR_LEN ||
                     sstate->andx.maxchainedandx == 0) {
                 sstate->bytesprocessed = 0;
+                sstate->transaction_id++;
             }
             break;
         default:
@@ -1205,6 +1206,25 @@ static void *SMBStateAlloc(void) {
  */
 static void SMBStateFree(void *s) {
     SCEnter();
+    SMBState *sstate = (SMBState *) s;
+
+    DCERPCUuidEntry *item;
+
+    while ((item = TAILQ_FIRST(&sstate->dcerpc.dcerpcbindbindack.uuid_list))) {
+	//printUUID("Free", item);
+	TAILQ_REMOVE(&sstate->dcerpc.dcerpcbindbindack.uuid_list, item, next);
+	free(item);
+    }
+    if (sstate->dcerpc.dcerpcrequest.stub_data_buffer != NULL) {
+        free(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
+        sstate->dcerpc.dcerpcrequest.stub_data_buffer = NULL;
+        sstate->dcerpc.dcerpcrequest.stub_data_buffer_len = 0;
+    }
+    if (sstate->dcerpc.dcerpcresponse.stub_data_buffer != NULL) {
+        free(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
+        sstate->dcerpc.dcerpcresponse.stub_data_buffer = NULL;
+        sstate->dcerpc.dcerpcresponse.stub_data_buffer_len = 0;
+    }
 
     if (s) {
         SCFree(s);
@@ -1214,10 +1234,26 @@ static void SMBStateFree(void *s) {
     SCReturn;
 }
 
+/**
+ *  \brief Update the transaction id based on the SMB state
+ */
+void SMBUpdateTransactionId(void *state, uint16_t *id) {
+    SCEnter();
+
+    SMBState *s = (SMBState *)state;
+    SCLogDebug("original id %"PRIu16, *id);
+    (*id) = s->transaction_id;
+    SCLogDebug("updated id %"PRIu16, *id);
+
+    SCReturn;
+}
+
 void RegisterSMBParsers(void) {
     AppLayerRegisterProto("smb", ALPROTO_SMB, STREAM_TOSERVER, SMBParse);
     AppLayerRegisterProto("smb", ALPROTO_SMB, STREAM_TOCLIENT, SMBParse);
     AppLayerRegisterStateFuncs(ALPROTO_SMB, SMBStateAlloc, SMBStateFree);
+    AppLayerRegisterTransactionIdFuncs(ALPROTO_SMB,
+            SMBUpdateTransactionId, NULL);
 }
 
 /* UNITTESTS */

@@ -35,6 +35,7 @@
 #include "detect-engine-port.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-iponly.h"
+#include "detect-engine-tag.h"
 
 #include "detect-engine.h"
 
@@ -76,7 +77,8 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     DetectPortSpHashInit(de_ctx);
     DetectPortDpHashInit(de_ctx);
     ThresholdHashInit(de_ctx);
-    VariableNameInitHash(de_ctx);
+    VariableNameInitHash();
+    DetectParseDupSigHashInit(de_ctx);
 
     de_ctx->mpm_pattern_id_store = MpmPatternIdTableInitHash();
     if (de_ctx->mpm_pattern_id_store == NULL) {
@@ -104,13 +106,14 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
     SigGroupHeadMpmUriHashFree(de_ctx);
     SigGroupHeadSPortHashFree(de_ctx);
     SigGroupHeadDPortHashFree(de_ctx);
+    DetectParseDupSigHashFree(de_ctx);
     SCSigSignatureOrderingModuleCleanup(de_ctx);
     DetectPortSpHashFree(de_ctx);
     DetectPortDpHashFree(de_ctx);
     ThresholdContextDestroy(de_ctx);
     SigCleanSignatures(de_ctx);
 
-    VariableNameFreeHash(de_ctx);
+    VariableNameFreeHash();
     if (de_ctx->sig_array)
         SCFree(de_ctx->sig_array);
 
@@ -374,47 +377,6 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
     det_ctx->tv = tv;
 
     *data = (void *)det_ctx;
-
-#ifdef __SC_CUDA_SUPPORT__
-    if (PatternMatchDefaultMatcher() != MPM_B2G_CUDA)
-        return TM_ECODE_OK;
-
-    Tmq *tmq;
-    /* we would prepend this name to the the tv name, to obtain the final unique
-     * detection thread queue name */
-    char *cuda_outq_name = "cuda_mpm_rc_disp_outq";
-    uint8_t disp_outq_name_len = (strlen(tv->name) + strlen(cuda_outq_name) + 1);
-
-    char *disp_outq_name = SCMalloc(disp_outq_name_len * sizeof(char));
-    if (disp_outq_name == NULL)
-        goto error;
-    strcpy(disp_outq_name, tv->name);
-    strcpy(disp_outq_name + strlen(tv->name), cuda_outq_name);
-    disp_outq_name[disp_outq_name_len] = '\0';
-
-    tmq = TmqGetQueueByName(disp_outq_name);
-    if (tmq != NULL) {
-        SCLogError(SC_ERR_TMQ_ALREADY_REGISTERED, "A queue by the name \"%s\" "
-                   "is already registered, which shouldn't be the case.  Queue "
-                   "name is duplicated.  Please check if multiple instances of "
-                   "detection module are given different names ",
-                   disp_outq_name);
-        goto error;
-    }
-    tmq = TmqCreateQueue(disp_outq_name);
-    if (tmq == NULL)
-        goto error;
-
-    /* hold the queue instane we create under this detection thread instance */
-    det_ctx->cuda_mpm_rc_disp_outq = tmq;
-    det_ctx->cuda_mpm_rc_disp_outq->reader_cnt++;
-    det_ctx->cuda_mpm_rc_disp_outq->writer_cnt++;
-
-    return TM_ECODE_OK;
-
- error:
-    return TM_ECODE_FAILED;
-#endif
 
     return TM_ECODE_OK;
 }

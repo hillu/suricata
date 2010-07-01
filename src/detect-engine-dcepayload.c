@@ -76,8 +76,9 @@
  * \retval 1 Match.
  */
 static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s,
-        SigMatch *sm, Flow *f, uint8_t *stub, uint32_t stub_len)
+                               DetectEngineThreadCtx *det_ctx, Signature *s,
+                               SigMatch *sm, Flow *f, uint8_t *stub,
+                               uint32_t stub_len, DCERPCState *dcerpc_state)
 {
     SCEnter();
 
@@ -106,14 +107,15 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
             uint32_t offset = 0;
             uint32_t depth = stub_len;
             uint32_t prev_offset = 0; /**< used in recursive searching */
+            uint32_t prev_payload_offset = det_ctx->payload_offset;
 
             do {
                 if (cd->flags & DETECT_CONTENT_DISTANCE ||
                     cd->flags & DETECT_CONTENT_WITHIN) {
-                    SCLogDebug("det_ctx->payload_offset %"PRIu32,
-                               det_ctx->payload_offset);
+                    SCLogDebug("prev_payload_offset %"PRIu32,
+                               prev_payload_offset);
 
-                    offset = det_ctx->payload_offset;
+                    offset = prev_payload_offset;
                     depth = stub_len;
 
                     if (cd->flags & DETECT_CONTENT_DISTANCE) {
@@ -128,18 +130,18 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                     }
 
                     if (cd->flags & DETECT_CONTENT_WITHIN) {
-                        if ((int32_t)depth > (int32_t)(det_ctx->payload_offset + cd->within)) {
-                            depth = det_ctx->payload_offset + cd->within;
+                        if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within)) {
+                            depth = prev_payload_offset + cd->within;
                         }
 
-                        SCLogDebug("cd->within %"PRIi32", det_ctx->payload_offset "
+                        SCLogDebug("cd->within %"PRIi32", prev_payload_offset "
                                    "%"PRIu32", depth %"PRIu32, cd->within,
-                                   det_ctx->payload_offset, depth);
+                                   prev_payload_offset, depth);
                     }
 
                     if (cd->depth != 0) {
-                        if ((cd->depth + det_ctx->payload_offset) < depth) {
-                            depth = det_ctx->payload_offset + cd->depth;
+                        if ((cd->depth + prev_payload_offset) < depth) {
+                            depth = prev_payload_offset + cd->depth;
                         }
 
                         SCLogDebug("cd->depth %"PRIu32", depth %"PRIu32,
@@ -160,13 +162,15 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
 
                     /* set offset */
                     offset = cd->offset;
+                    prev_payload_offset = 0;
                 }
 
                 /* update offset with prev_offset if we're searching for
                  * matches after the first occurence. */
                 SCLogDebug("offset %"PRIu32", prev_offset %"PRIu32, offset,
                            prev_offset);
-                offset += prev_offset;
+                if (prev_offset != 0)
+                    offset = prev_offset;
 
                 SCLogDebug("offset %"PRIu32", depth %"PRIu32, offset, depth);
 
@@ -175,6 +179,8 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
 
                 /* if offset is bigger than depth we can never match on a
                  * pattern.  We can however, "match" on a negated pattern. */
+                /* \todo why isn't it >= ?.  Same question applies for
+                 * detect-engine-dcepayload.c and detect-engine-uri.c */
                 if (offset > depth || depth == 0) {
                     if (cd->flags & DETECT_CONTENT_NEGATED) {
                         goto match;
@@ -232,13 +238,13 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                      * search for another occurence of this content and see
                      * if the others match then until we run out of matches */
                     int r = DoInspectDcePayload(de_ctx, det_ctx, s, sm->next,
-                                                f, stub, stub_len);
+                                                f, stub, stub_len, dcerpc_state);
                     if (r == 1) {
                         SCReturnInt(1);
                     }
 
                     /* set the previous match offset to the start of this match + 1 */
-                    prev_offset += (match_offset - (cd->content_len - 1));
+                    prev_offset = (match_offset - (cd->content_len - 1));
                     SCLogDebug("trying to see if there is another match after "
                                "prev_offset %"PRIu32, prev_offset);
                 }
@@ -288,18 +294,48 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
 
         case DETECT_BYTETEST:
         {
+            DetectBytetestData *data = (DetectBytetestData *)sm->ctx;
+            uint32_t temp_flags = data->flags;
+
+            /* if we have dce enabled we will have to use the endianness
+             * specified by the dce header */
+            if (data->flags & DETECT_BYTETEST_DCE) {
+                /* enable the endianness flag temporarily.  once we are done
+                 * processing we reset the flags to the original value*/
+                data->flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] == 0x10) ?
+                                DETECT_BYTETEST_LITTLE: 0);
+            }
+
             if (DetectBytetestDoMatch(det_ctx, s, sm, stub, stub_len) != 1) {
                 SCReturnInt(0);
             }
+
+            /* reset the flags */
+            data->flags = temp_flags;
 
             goto match;
         }
 
         case DETECT_BYTEJUMP:
         {
+            DetectBytejumpData *data = (DetectBytejumpData *)sm->ctx;
+            uint32_t temp_flags = data->flags;
+
+            /* if we have dce enabled we will have to use the endianness
+             * specified by the dce header */
+            if (data->flags & DETECT_BYTEJUMP_DCE) {
+                /* enable the endianness flag temporarily.  once we are done
+                 * processing we reset the flags to the original value*/
+                data->flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] == 0x10) ?
+                                DETECT_BYTEJUMP_LITTLE : 0);
+            }
+
             if (DetectBytejumpDoMatch(det_ctx, s, sm, stub, stub_len) != 1) {
                 SCReturnInt(0);
             }
+
+            /* reset the flags */
+            data->flags = temp_flags;
 
             goto match;
         }
@@ -317,7 +353,8 @@ match:
     /* this sigmatch matched, inspect the next one. If it was the last,
      * the payload portion of the signature matched. */
     if (sm->next != NULL) {
-        int r = DoInspectDcePayload(de_ctx, det_ctx, s, sm->next, f, stub, stub_len);
+        int r = DoInspectDcePayload(de_ctx, det_ctx, s, sm->next, f, stub,
+                                    stub_len, dcerpc_state);
         SCReturnInt(r);
     } else {
         SCReturnInt(1);
@@ -373,7 +410,7 @@ int DetectEngineInspectDcePayload(DetectEngineCtx *de_ctx,
     det_ctx->payload_offset = 0;
 
     r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
-                            dce_stub_data, dce_stub_data_len);
+                            dce_stub_data, dce_stub_data_len, dcerpc_state);
     if (r == 1) {
         SCReturnInt(1);
     }
@@ -1516,21 +1553,21 @@ int DcePayloadTest01(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|26 d0 cf 80|; sid:1;)";
+        "content:|26 d0 cf 80|; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|43 5b 67 26 65|; sid:2;)";
+        "content:|43 5b 67 26 65|; distance:0; sid:2;)";
     char *sig3 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|71 69 75 3e|; sid:3;)";
+        "content:|71 69 75 3e|; distance:0; sid:3;)";
     char *sig4 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|6a 68 69 3e 72|; sid:4;)";
+        "content:|6a 68 69 3e 72|; distance:0; sid:4;)";
     char *sig5 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|61 50 71 45 29 5b 56 3d 5a|; sid:5;)";
+        "content:|61 50 71 45 29 5b 56 3d 5a|; distance:0; sid:5;)";
     char *sig6 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|23 75 40 5d 32 55|; sid:6;)";
+        "content:|23 75 40 5d 32 55|; distance:0; sid:6;)";
     char *sig7 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|ee 70 32 65 c1|; sid:7;)";
+        "content:|ee 70 32 65 c1|; distance:0; sid:7;)";
     char *sig8 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|79 26 46 f7 bf a1|; sid:8;)";
+        "content:|79 26 46 f7 bf a1|; distance:0; sid:8;)";
 
     Signature *s;
 
@@ -2397,7 +2434,7 @@ int DcePayloadTest02(void)
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
         "sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; sid:2;)";
+        "dce_stub_data; content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -2845,9 +2882,9 @@ int DcePayloadTest03(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef4; "
-        "sid:1;)";
+        "dce_stub_data; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; sid:2;)";
+        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -3294,9 +3331,9 @@ int DcePayloadTest04(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "content:|91 27 27 40|; sid:1;)";
+        "dce_stub_data; content:|91 27 27 40|; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; sid:2;)";
+        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -3742,9 +3779,9 @@ int DcePayloadTest05(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef4; "
-        "content:|91 27 27 40|; sid:1;)";
+        "dce_stub_data; content:|91 27 27 40|; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; sid:2;)";
+        "dce_stub_data; content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -4191,9 +4228,9 @@ int DcePayloadTest06(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "content:|91 27 27 30|; sid:1;)";
+        "dce_stub_data; content:|91 27 27 30|; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; sid:2;)";
+        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -4639,9 +4676,9 @@ int DcePayloadTest07(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "content:|91 27 27 30|; sid:1;)";
+        "dce_stub_data; content:|91 27 27 30|; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 35 25|; sid:2;)";
+        "content:|2d 5e 63 35 25|; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -4926,7 +4963,7 @@ int DcePayloadTest08(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5d 5b 35|; content:|9e a3|; "
+        "(dce_stub_data; content:|5d 5b 35|; distance:0; content:|9e a3|; "
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
@@ -5151,7 +5188,7 @@ int DcePayloadTest09(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5d 5b 35|; content:|9e a3|; "
+        "(dce_stub_data; content:|5d 5b 35|; distance:0; content:|9e a3|; "
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
@@ -5376,7 +5413,7 @@ int DcePayloadTest10(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|ad 0d|; content:|ad 0d 00|; "
+        "(dce_stub_data; content:|ad 0d|; distance:0; content:|ad 0d 00|; "
         "distance:-10; within:3; sid:1;)";
 
     Signature *s;
@@ -5736,7 +5773,7 @@ int DcePayloadTest11(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|af, 26, d0|; content:|80 98 6d|; "
+        "(dce_stub_data; content:|af, 26, d0|; distance:0; content:|80 98 6d|; "
         "distance:1; within:3; sid:1;)";
 
     Signature *s;
@@ -6110,7 +6147,7 @@ int DcePayloadTest12(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|af, 26, d0|; content:|80 98 6d|; "
+        "(dce_stub_data; content:|af, 26, d0|; distance:0; content:|80 98 6d|; "
         "distance:2; within:3; sid:1;)";
 
     Signature *s;
@@ -6681,6 +6718,3197 @@ end:
     return result;
 }
 
+/**
+ * \test Test the working of byte_test endianness.
+ */
+int DcePayloadTest15(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x00, 0x37, 0x00,
+        0x31, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,14080,0,relative,dce; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,46,5,relative,dce; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of byte_test endianness.
+ */
+int DcePayloadTest16(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x00, 0x37, 0x00,
+        0x31, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,55,0,relative; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,11776,5,relative; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of byte_test endianness.
+ */
+int DcePayloadTest17(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x00, 0x37, 0x00,
+        0x31, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,55,0,relative,big; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_test:2,=,46,5,relative,little; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of byte_jump endianness.
+ */
+int DcePayloadTest18(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x03, 0x00, 0x03,
+        0x00, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,0,relative,dce; byte_test:2,=,46,0,relative,dce; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,2,relative,dce; byte_test:2,=,14080,0,relative; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of byte_jump endianness.
+ */
+int DcePayloadTest19(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x00, 0x03, 0x00,
+        0x03, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,0,relative; byte_test:2,=,46,0,relative,dce; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,2,relative; byte_test:2,=,14080,0,relative; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of byte_jump endianness.
+ */
+int DcePayloadTest20(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x76, 0x7e, 0x32, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x00, 0x00,
+        0x5c, 0x00, 0x5c, 0x00, 0x31, 0x00, 0x03, 0x03,
+        0x00, 0x00, 0x2e, 0x00, 0x37, 0x00, 0x31, 0x00,
+        0x2e, 0x00, 0x38, 0x00, 0x34, 0x00, 0x2e, 0x00,
+        0x36, 0x00, 0x37, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x84, 0xf9, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+        0x14, 0xfa, 0x7f, 0x01, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,0,relative,big; byte_test:2,=,46,0,relative,dce; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "byte_jump:2,2,little,relative; byte_test:2,=,14080,0,relative; sid:2;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+    s->next = SigInit(de_ctx, sig2);
+    if (s->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+    if (!(PacketAlertCheck(&p, 2))) {
+        printf("sid 2 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of consecutive relative matches.
+ */
+int DcePayloadTest21(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x6e, 0x6f, 0x77, 0x20, 0x74, 0x68, 0x69, 0x73, /* "now this" */
+        0x20, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x62, /* " is is b" */
+        0x69, 0x67, 0x20, 0x62, 0x69, 0x67, 0x20, 0x73, /* "ig big s" */
+        0x74, 0x72, 0x69, 0x6e, 0x67, 0x20, 0x6e, 0x6f, /* "tring no" */
+        0x77 };                                         /* "w" */
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "content:this; distance:0; content:is; within:6; content:big; within:8; "
+        "content:string; within:8; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of consecutive relative matches.
+ */
+int DcePayloadTest22(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x6e, 0x6f, 0x77, 0x20, 0x74, 0x68, 0x69, 0x73,   /* "now this" */
+        0x20, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20, 0x69,   /* " is is i" */
+        0x73, 0x20, 0x62, 0x69, 0x67, 0x20, 0x62, 0x69,   /* "s big bi" */
+        0x67, 0x20, 0x62, 0x69, 0x67, 0x20, 0x73, 0x74,   /* "g big st" */
+        0x72, 0x69, 0x6e, 0x67, 0x20, 0x6e, 0x6f, 0x77 }; /* "ring now" */
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "content:this; distance:0; content:is; within:9; content:big; within:12; "
+        "content:string; within:8; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of consecutive relative matches.
+ */
+int DcePayloadTest23(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x74, 0x68, 0x69, 0x73, 0x20, 0x74, 0x68, 0x69, /* "this thi" */
+        0x73, 0x20, 0x6e, 0x6f, 0x77, 0x20, 0x69, 0x73, /* "s now is" */
+        0x20, 0x69, 0x73, 0x20, 0x20, 0x20, 0x20, 0x20, /* " is     " */
+        0x62, 0x69, 0x67, 0x20, 0x73, 0x74, 0x72, 0x69, /* "big stri" */
+        0x6e, 0x67, 0x20, 0x6e, 0x6f, 0x77 };           /* "ng now"   */
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "content:now; distance:0; content:this; distance:-20; "
+        "content:is; within:12; content:big; within:8; "
+        "content:string; within:8; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test the working of consecutive relative matches with offset.
+ */
+int DcePayloadTest24(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, 0x20, /* "        " */
+        0x20, 0x74, 0x68, 0x75, 0x73, 0x20, 0x74, 0x68, /* " thus th" */
+        0x75, 0x73, 0x20, 0x69, 0x73, 0x20, 0x61, 0x20, /* "us is a " */
+        0x62, 0x69, 0x67 };                             /* "big" */
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet p;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "content:thus; distance:0; offset:8; content:is; within:6; "
+        "content:big; within:8; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    memset(&p, 0, sizeof(Packet));
+    p.src.family = AF_INET;
+    p.dst.family = AF_INET;
+    p.payload = NULL;
+    p.payload_len = 0;
+    p.proto = IPPROTO_TCP;
+    p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    if (!(PacketAlertCheck(&p, 1))) {
+        printf("sid 1 didn't match but should have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest25(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "content:one; content:two; "
+                                   "content:three; within:10; "
+                                   "content:four; distance:4; "
+                                   "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest26(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "content: one; "
+                                   "content:two; "
+                                   "content:three; within:5; "
+                                   "content:four; distance:10; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest27(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "content: one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three; within:5; "
+                                   "content:four; distance:10; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest28(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "content: one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four;"
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest29(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectPcreData *pd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "pcre:/boom/; "
+                                   "content:one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four;"
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_PCRE) {
+        result = 0;
+        goto end;
+    }
+    pd = (DetectPcreData *)sm->ctx;
+    if (pd->flags & DETECT_PCRE_RAWBYTES ||
+        pd->flags & DETECT_PCRE_RELATIVE) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest30(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytejumpData *bd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "byte_jump:2,5; "
+                                   "content:one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four;"
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail != NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bd = (DetectBytejumpData *)sm->ctx;
+    if (bd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bd->flags & DETECT_BYTEJUMP_BIG ||
+        bd->flags & DETECT_BYTEJUMP_STRING ||
+        bd->flags & DETECT_BYTEJUMP_RELATIVE ||
+        bd->flags & DETECT_BYTEJUMP_ALIGN ||
+        bd->flags & DETECT_BYTEJUMP_DCE ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest31(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytejumpData *bd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "byte_jump:2,5,relative; "
+                                   "content:one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four;"
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bd = (DetectBytejumpData *)sm->ctx;
+    if (bd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bd->flags & DETECT_BYTEJUMP_BIG ||
+        bd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        bd->flags & DETECT_BYTEJUMP_ALIGN ||
+        bd->flags & DETECT_BYTEJUMP_DCE ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest32(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytejumpData *bd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "byte_jump:2,5,relative; "
+                                   "content:one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four; within:4; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bd = (DetectBytejumpData *)sm->ctx;
+    if (bd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bd->flags & DETECT_BYTEJUMP_BIG ||
+        bd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        bd->flags & DETECT_BYTEJUMP_ALIGN ||
+        bd->flags & DETECT_BYTEJUMP_DCE ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest33(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectPcreData *pd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_stub_data; "
+                                   "pcre:/boom/R; "
+                                   "content:one; distance:10; within:5; "
+                                   "content:two; within:5;"
+                                   "content:three;"
+                                   "content:four; distance:5;"
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_PCRE) {
+        result = 0;
+        goto end;
+    }
+    pd = (DetectPcreData *)sm->ctx;
+    if ( pd->flags & DETECT_PCRE_RAWBYTES ||
+         !(pd->flags & DETECT_PCRE_RELATIVE)) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("four failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "four", 4) == 0);
+    if (result == 0)
+        goto end;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest34(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectPcreData *pd = NULL;
+    DetectBytejumpData *bd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "pcre:/boom/R; "
+                                   "byte_jump:1,2,relative,align,dce; "
+                                   "content:one; within:4; distance:8; "
+                                   "content:two; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_PCRE) {
+        result = 0;
+        goto end;
+    }
+    pd = (DetectPcreData *)sm->ctx;
+    if ( pd->flags & DETECT_PCRE_RAWBYTES ||
+         !(pd->flags & DETECT_PCRE_RELATIVE)) {
+        result = 0;
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bd = (DetectBytejumpData *)sm->ctx;
+    bd = (DetectBytejumpData *)sm->ctx;
+    if (bd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bd->flags & DETECT_BYTEJUMP_BIG ||
+        bd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        !(bd->flags & DETECT_BYTEJUMP_ALIGN) ||
+        !(bd->flags & DETECT_BYTEJUMP_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest35(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytetestData *bd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "byte_test:1,=,0,0,relative,dce; "
+                                   "content:one; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    bd = (DetectBytetestData *)sm->ctx;
+    if (bd->flags & DETECT_BYTETEST_LITTLE ||
+        bd->flags & DETECT_BYTETEST_BIG ||
+        bd->flags & DETECT_BYTETEST_STRING ||
+        !(bd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(bd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest36(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectIsdataatData *isd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "isdataat:10,relative; "
+                                   "content:one; within:4; distance:8; "
+                                   "content:two; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_ISDATAAT) {
+        result = 0;
+        goto end;
+    }
+    isd = (DetectIsdataatData *)sm->ctx;
+    if ( isd->flags & ISDATAAT_RAWBYTES ||
+         !(isd->flags & ISDATAAT_RELATIVE)) {
+        result = 0;
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest37(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytejumpData *bjd = NULL;
+    DetectBytetestData *btd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "byte_jump:1,2,relative,align,dce; "
+                                   "byte_test:1,=,2,0,relative,dce; "
+                                   "content:one; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bjd = (DetectBytejumpData *)sm->ctx;
+    if (bjd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bjd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bjd->flags & DETECT_BYTEJUMP_BIG ||
+        bjd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bjd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        !(bjd->flags & DETECT_BYTEJUMP_ALIGN) ||
+        !(bjd->flags & DETECT_BYTEJUMP_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    btd = (DetectBytetestData *)sm->ctx;
+    if (btd->flags & DETECT_BYTETEST_LITTLE ||
+        btd->flags & DETECT_BYTETEST_BIG ||
+        btd->flags & DETECT_BYTETEST_STRING ||
+        !(btd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(btd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest38(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectPcreData *pd = NULL;
+    DetectBytejumpData *bjd = NULL;
+    DetectBytetestData *btd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "pcre:/boom/R; "
+                                   "byte_jump:1,2,relative,align,dce; "
+                                   "byte_test:1,=,2,0,relative,dce; "
+                                   "content:one; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_PCRE) {
+        result = 0;
+        goto end;
+    }
+    pd = (DetectPcreData *)sm->ctx;
+    if ( pd->flags & DETECT_PCRE_RAWBYTES ||
+         !(pd->flags & DETECT_PCRE_RELATIVE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bjd = (DetectBytejumpData *)sm->ctx;
+    if (bjd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bjd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bjd->flags & DETECT_BYTEJUMP_BIG ||
+        bjd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bjd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        !(bjd->flags & DETECT_BYTEJUMP_ALIGN) ||
+        !(bjd->flags & DETECT_BYTEJUMP_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    btd = (DetectBytetestData *)sm->ctx;
+    if (btd->flags & DETECT_BYTETEST_LITTLE ||
+        btd->flags & DETECT_BYTETEST_BIG ||
+        btd->flags & DETECT_BYTETEST_STRING ||
+        !(btd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(btd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest39(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "content:one; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "content:two; within:4; distance:8; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+    sm = s->dmatch;
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest40(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytetestData *btd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "content: one; within:10; "
+                                   "content:two; distance:20; within:30; "
+                                   "byte_test:1,=,2,0,relative,dce; "
+                                   "content:three; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    btd = (DetectBytetestData *)sm->ctx;
+    if (btd->flags & DETECT_BYTETEST_LITTLE ||
+        btd->flags & DETECT_BYTETEST_BIG ||
+        btd->flags & DETECT_BYTETEST_STRING ||
+        !(btd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(btd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest41(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytetestData *btd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "content: one; within:10; "
+                                   "content:two; "
+                                   "byte_test:1,=,2,0,relative,dce; "
+                                   "content:three; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    btd = (DetectBytetestData *)sm->ctx;
+    if (btd->flags & DETECT_BYTETEST_LITTLE ||
+        btd->flags & DETECT_BYTETEST_BIG ||
+        btd->flags & DETECT_BYTETEST_STRING ||
+        !(btd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(btd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "three", 5) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void DcePayloadRegisterTests(void)
@@ -6701,6 +9929,34 @@ void DcePayloadRegisterTests(void)
     UtRegisterTest("DcePayloadTest12", DcePayloadTest12, 1);
     UtRegisterTest("DcePayloadTest13", DcePayloadTest13, 1);
     UtRegisterTest("DcePayloadTest14", DcePayloadTest14, 1);
+    UtRegisterTest("DcePayloadTest15", DcePayloadTest15, 1);
+    UtRegisterTest("DcePayloadTest16", DcePayloadTest16, 1);
+    UtRegisterTest("DcePayloadTest17", DcePayloadTest17, 1);
+    UtRegisterTest("DcePayloadTest18", DcePayloadTest18, 1);
+    UtRegisterTest("DcePayloadTest19", DcePayloadTest19, 1);
+    UtRegisterTest("DcePayloadTest20", DcePayloadTest20, 1);
+    UtRegisterTest("DcePayloadTest21", DcePayloadTest21, 1);
+    UtRegisterTest("DcePayloadTest22", DcePayloadTest22, 1);
+    UtRegisterTest("DcePayloadTest23", DcePayloadTest23, 1);
+    UtRegisterTest("DcePayloadTest24", DcePayloadTest24, 1);
+
+    UtRegisterTest("DcePayloadParseTest25", DcePayloadParseTest25, 1);
+    UtRegisterTest("DcePayloadParseTest26", DcePayloadParseTest26, 1);
+    UtRegisterTest("DcePayloadParseTest27", DcePayloadParseTest27, 1);
+    UtRegisterTest("DcePayloadParseTest28", DcePayloadParseTest28, 1);
+    UtRegisterTest("DcePayloadParseTest29", DcePayloadParseTest29, 1);
+    UtRegisterTest("DcePayloadParseTest30", DcePayloadParseTest30, 1);
+    UtRegisterTest("DcePayloadParseTest31", DcePayloadParseTest31, 1);
+    UtRegisterTest("DcePayloadParseTest32", DcePayloadParseTest32, 1);
+    UtRegisterTest("DcePayloadParseTest33", DcePayloadParseTest33, 1);
+    UtRegisterTest("DcePayloadParseTest34", DcePayloadParseTest34, 1);
+    UtRegisterTest("DcePayloadParseTest35", DcePayloadParseTest35, 1);
+    UtRegisterTest("DcePayloadParseTest36", DcePayloadParseTest36, 1);
+    UtRegisterTest("DcePayloadParseTest37", DcePayloadParseTest37, 1);
+    UtRegisterTest("DcePayloadParseTest38", DcePayloadParseTest38, 1);
+    UtRegisterTest("DcePayloadParseTest39", DcePayloadParseTest39, 1);
+    UtRegisterTest("DcePayloadParseTest40", DcePayloadParseTest40, 1);
+    UtRegisterTest("DcePayloadParseTest41", DcePayloadParseTest41, 1);
 #endif /* UNITTESTS */
 
     return;

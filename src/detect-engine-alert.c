@@ -20,11 +20,49 @@
 #include "detect.h"
 #include "detect-engine-alert.h"
 #include "detect-engine-threshold.h"
+#include "detect-engine-tag.h"
 
 #include "decode.h"
 
 #include "flow.h"
 #include "flow-private.h"
+
+/**
+ * \brief Handle a packet and check if needs a threshold logic
+ *
+ * \param de_ctx Detection Context
+ * \param sig Signature pointer
+ * \param p Packet structure
+ *
+ */
+int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                       Signature *s, Packet *p, uint16_t pos)
+{
+    SCEnter();
+    int ret = 0;
+    DetectThresholdData *td = NULL;
+
+    /* retrieve the sig match data */
+    if (PKT_IS_IPV4(p) || PKT_IS_IPV6(p)) {
+        td = SigGetThresholdType(s,p);
+    }
+
+    SCLogDebug("td %p", td);
+
+    /* if have none just alert, otherwise handle thresholding */
+    if (td == NULL) {
+        /* Already inserted so get out */
+        ret = 1;
+    } else {
+        ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+        if (ret == 0) {
+            /* It doesn't match threshold, remove it */
+            PacketAlertRemove(p, pos);
+        }
+    }
+
+    SCReturnInt(ret);
+}
 
 
 /**
@@ -133,6 +171,26 @@ int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p)
 }
 
 /**
+ * \brief Fill the data of a tagged packet to be logged by unified
+ */
+int PacketAlertAppendTag(Packet *p, PacketAlert *pa)
+{
+        pa->sid = TAG_SIG_ID;
+        pa->gid = TAG_SIG_GEN;
+        pa->num = TAG_SIG_ID;
+        pa->order_id = 1000;
+        pa->action = ACTION_ALERT;
+        pa->rev = 1;
+        pa->prio = 2;
+        pa->msg = NULL;
+        pa->class = 0;
+        pa->class_msg = NULL;
+        pa->references = NULL;
+
+    return 0;
+}
+
+/**
  * \brief Check the threshold of the sigs that match, set actions, break on pass action
  *        This function iterate the packet alerts array, removing those that didn't match
  *        the threshold, and those that match after a signature with the action "pass".
@@ -146,6 +204,7 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
     int i = 0;
     Signature *s = NULL;
+    SigMatch *sm = NULL;
 
     for (i = 0; i < p->alerts.cnt; i++) {
         SCLogDebug("Sig->num: %"PRIu16, p->alerts.alerts[i].num);
@@ -156,6 +215,15 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
         if (res == 0) {
             i--;
         } else {
+            /* Now, if we have an alert, we have to check if we want
+             * to tag this session or src/dst host */
+            sm = s->tmatch;
+            while (sm) {
+                /* tags are set only for alerts */
+                sigmatch_table[sm->type].Match(NULL, det_ctx, p, s, sm);
+                sm = sm->next;
+            }
+
             if (s->flags & SIG_FLAG_IPONLY) {
                 if ((p->flowflags & FLOW_PKT_TOSERVER && !(p->flowflags & FLOW_PKT_TOSERVER_IPONLY_SET)) ||
                     (p->flowflags & FLOW_PKT_TOCLIENT && !(p->flowflags & FLOW_PKT_TOCLIENT_IPONLY_SET))) {
@@ -194,5 +262,10 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
          * have compacted the array and decreased cnt by one, so
          * process again the same position (with different alert now) */
     }
+
+    /* At this point, we should have all the new alerts. Now check the tag
+     * keyword context for sessions and hosts */
+    TagHandlePacket(de_ctx, det_ctx, p);
 }
+
 

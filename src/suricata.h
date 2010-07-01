@@ -26,23 +26,11 @@
 
 #include "suricata-common.h"
 #include "packet-queue.h"
+#include "data-queue.h"
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "0.9.2"
-
-/* number of packets in processing right now
- * This is the diff between recv'd and verdicted
- * pkts
- * XXX this should be turned into an api located
- * in the packetpool code
- */
-//intmax_t pending;
-#ifdef DBG_PERF
-//uint32_t dbg_maxpending;
-#endif /* DBG_PERF */
-//SCMutex mutex_pending;
-//SCCondT cond_pending;
+#define PROG_VER "1.0.0"
 
 /* runtime engine control flags */
 #define SURICATA_STOP    0x01   /**< gracefully stop the engine: process all
@@ -63,14 +51,12 @@ enum {
     MODE_DAG,
 };
 
-/* preallocated packet structures here
- * XXX move to the packetpool queue handler code
- */
-PacketQueue packet_q;
 /* queue's between various other threads
  * XXX move to the TmQueue structure later
  */
 PacketQueue trans_q[256];
+
+SCDQDataQueue data_queues[256];
 /* memset to zeros, and mutex init! */
 void GlobalInits();
 

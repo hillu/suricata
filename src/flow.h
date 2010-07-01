@@ -27,6 +27,7 @@
 #include "decode.h"
 #include "util-var.h"
 #include "util-atomic.h"
+#include "detect-tag.h"
 
 #define FLOW_QUIET      TRUE
 #define FLOW_VERBOSE    FALSE
@@ -173,6 +174,7 @@ typedef struct Flow_
 
     /** detection engine state */
     struct DetectEngineState_ *de_state;
+    SCMutex de_state_m;          /**< mutex lock for the de_state object */
 
     /** toclient sgh for this flow. Only use when FLOW_SGH_TOCLIENT flow flag
      *  has been set. */
@@ -182,6 +184,9 @@ typedef struct Flow_
     struct SigGroupHead_ *sgh_toserver;
 
     SCMutex m;
+
+    /** List of tags of this flow (from "tag" keyword of type "session") */
+    DetectTagDataEntryList *tag_list;
 
     /* list flow ptrs
      * NOTE!!! These are NOT protected by the

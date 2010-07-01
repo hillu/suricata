@@ -40,6 +40,7 @@
 #include "util-radix-tree.h"
 
 #include "detect-threshold.h"
+//#include "detect-engine-tag.h"
 
 #define COUNTER_DETECT_ALERTS 1
 
@@ -272,9 +273,13 @@ typedef struct Signature_ {
     struct SigMatch_ *amatch_tail; /* general app layer  matches, tail of the list */
     struct SigMatch_ *dmatch; /* dce app layer matches */
     struct SigMatch_ *dmatch_tail; /* dce app layer matches, tail of the list */
+    struct SigMatch_ *tmatch; /* list of tags matches */
+    struct SigMatch_ *tmatch_tail; /* tag matches, tail of the list */
 
     /** ptr to the next sig in the list */
     struct Signature_ *next;
+
+    struct SigMatch_ *dsize_sm;
 
     /** inline -- action */
     uint8_t action;
@@ -306,6 +311,10 @@ typedef struct Signature_ {
 
     /** Reference */
     Reference *references;
+
+    /* Be careful, this pointer is only valid while parsing the sig,
+     * to warn the user about any possible problem */
+    char *sig_str;
 
 #ifdef PROFILING
     uint16_t profiling_id;
@@ -381,6 +390,14 @@ typedef struct ThresholdCtx_    {
     uint32_t th_size;
 } ThresholdCtx;
 
+/** \brief tag ctx */
+typedef struct DetectTagHostCtx_ {
+    HashListTable *tag_hash_table_ipv4;   /**< Ipv4 hash table      */
+    HashListTable *tag_hash_table_ipv6;   /**< Ipv6 hash table      */
+    SCMutex lock;                         /**< Mutex for the ctx    */
+    struct timeval last_ts;               /**< Last time the ctx was pruned */
+} DetectTagHostCtx;
+
 /** \brief main detection engine ctx */
 typedef struct DetectEngineCtx_ {
     uint8_t flags;
@@ -425,8 +442,8 @@ typedef struct DetectEngineCtx_ {
     HashListTable *sport_hash_table;
     HashListTable *dport_hash_table;
 
-    HashListTable *variable_names;
-    uint16_t variable_names_idx;
+    /* hash table used to cull out duplicate sigs */
+    HashListTable *dup_sig_hash_table;
 
     /* memory counters */
     uint32_t mpm_memory_size;
@@ -474,6 +491,10 @@ typedef struct DetectEngineCtx_ {
     struct SigGroupHead_ **sgh_array;
     uint32_t sgh_array_cnt;
     uint32_t sgh_array_size;
+
+    /** sgh for signatures that match against invalid packets. In those cases
+     *  we can't lookup by proto, address, port as we don't have these */
+    struct SigGroupHead_ *decoder_event_sgh;
 } DetectEngineCtx;
 
 /* Engine groups profiles (low, medium, high, custom) */
@@ -771,7 +792,7 @@ void SigRegisterTests(void);
 void TmModuleDetectRegister (void);
 
 int SigGroupBuild(DetectEngineCtx *);
-int SigGroupCleanup();
+int SigGroupCleanup (DetectEngineCtx *de_ctx);
 void SigAddressPrepareBidirectionals (DetectEngineCtx *);
 
 int SigLoadSignatures (DetectEngineCtx *, char *);

@@ -777,9 +777,9 @@ DetectPcreData *DetectPcreParseCapture(char *regexstr, DetectEngineCtx *de_ctx, 
         }
         if (capture_str_ptr != NULL) {
             if (pd->flags & DETECT_PCRE_CAPTURE_PKT)
-                pd->capidx = VariableNameGetIdx(de_ctx,(char *)capture_str_ptr,DETECT_PKTVAR);
+                pd->capidx = VariableNameGetIdx((char *)capture_str_ptr,DETECT_PKTVAR);
             else if (pd->flags & DETECT_PCRE_CAPTURE_FLOW)
-                pd->capidx = VariableNameGetIdx(de_ctx,(char *)capture_str_ptr,DETECT_FLOWVAR);
+                pd->capidx = VariableNameGetIdx((char *)capture_str_ptr,DETECT_FLOWVAR);
         }
     }
     //printf("DetectPcreParseCapture: pd->capname %s\n", pd->capname ? pd->capname : "NULL");
@@ -840,26 +840,54 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         AppLayerHtpEnableRequestBodyCallback();
 
         SigMatchAppendAppLayer(s, sm);
-    } else {
-        switch (s->alproto) {
-            case ALPROTO_DCERPC:
-                /* If we have a signature that is related to dcerpc, then we add the
-                 * sm to Signature->dmatch.  All content inspections for a dce rpc
-                 * alproto is done inside detect-engine-dcepayload.c */
-                SigMatchAppendDcePayload(s, sm);
-                break;
+    } else if (pd->flags & DETECT_PCRE_URI) {
+        s->flags |= SIG_FLAG_APPLAYER;
 
-            default:
+        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                       " keywords.");
+            goto error;
+        }
+
+        s->alproto = ALPROTO_HTTP;
+
+        SigMatchAppendUricontent(s, sm);
+    } else {
+        if (s->alproto == ALPROTO_DCERPC &&
+            pd->flags & DETECT_PCRE_RELATIVE) {
+            SigMatch *pm = NULL;
+            SigMatch *dm = NULL;
+
+            pm = SigMatchGetLastSMFromLists(s, 6,
+                                            DETECT_CONTENT, s->pmatch_tail,
+                                            DETECT_PCRE, s->pmatch_tail,
+                                            DETECT_BYTEJUMP, s->pmatch_tail);
+            dm = SigMatchGetLastSMFromLists(s, 6,
+                                            DETECT_CONTENT, s->pmatch_tail,
+                                            DETECT_PCRE, s->pmatch_tail,
+                                            DETECT_BYTEJUMP, s->pmatch_tail);
+
+            if (pm == NULL) {
+                SigMatchAppendDcePayload(s, sm);
+            } else if (dm == NULL) {
+                SigMatchAppendDcePayload(s, sm);
+            } else if (pm->idx > dm->idx) {
                 SigMatchAppendPayload(s, sm);
-                break;
+            } else {
+                SigMatchAppendDcePayload(s, sm);
+            }
+        } else {
+            SigMatchAppendPayload(s, sm);
         }
     }
 
     SCReturnInt(0);
 
 error:
-    if (pd != NULL) DetectPcreFree(pd);
-    if (sm != NULL) SCFree(sm);
+    if (pd != NULL)
+        DetectPcreFree(pd);
+    if (sm != NULL)
+        SCFree(sm);
     SCReturnInt(-1);
 }
 
@@ -1052,15 +1080,14 @@ int DetectPcreParseTest10(void)
     s->alproto = ALPROTO_DCERPC;
 
     result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->dmatch != NULL);
+    result &= (s->dmatch == NULL && s->pmatch != NULL);
 
     SigFree(s);
 
     s = SigAlloc();
     /* failure since we have no preceding content/pcre/bytejump */
     result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->dmatch == NULL);
-    result &= (s->pmatch != NULL);
+    result &= (s->dmatch == NULL && s->pmatch != NULL);
 
  end:
     SigFree(s);
@@ -1087,7 +1114,8 @@ int DetectPcreParseTest11(void)
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing bytejump_body\"; "
                                "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                               "pcre:/bamboo/; sid:1;)");
+                               "dce_stub_data; "
+                               "pcre:/bamboo/R; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
@@ -1100,7 +1128,7 @@ int DetectPcreParseTest11(void)
     result &= (s->dmatch_tail->type == DETECT_PCRE);
     data = (DetectPcreData *)s->dmatch_tail->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
-        data->flags & DETECT_PCRE_RELATIVE ||
+        !(data->flags & DETECT_PCRE_RELATIVE) ||
         data->flags & DETECT_PCRE_URI) {
         result = 0;
         goto end;
@@ -1109,6 +1137,7 @@ int DetectPcreParseTest11(void)
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "dce_stub_data; "
                       "pcre:/bamboo/R; sid:1;)");
     if (s->next == NULL) {
         result = 0;
@@ -1131,6 +1160,7 @@ int DetectPcreParseTest11(void)
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
+                      "dce_stub_data; "
                       "pcre:/bamboo/RB; sid:1;)");
     if (s->next == NULL) {
         result = 0;
@@ -1180,6 +1210,7 @@ static int DetectPcreTestSig01Real(int mpm_type) {
         "Host: two.example.org\r\n"
         "\r\n\r\n";
     uint16_t buflen = strlen((char *)buf);
+    TcpSession ssn;
     Packet p;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
@@ -1190,13 +1221,25 @@ static int DetectPcreTestSig01Real(int mpm_type) {
     memset(&th_v, 0, sizeof(th_v));
     memset(&p, 0, sizeof(p));
 
+    memset(&ssn, 0, sizeof(TcpSession));
+
     FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_HTTP;
+
     p.src.family = AF_INET;
     p.dst.family = AF_INET;
     p.payload = buf;
     p.payload_len = buflen;
     p.proto = IPPROTO_TCP;
     p.flow = &f;
+    p.flowflags |= FLOW_PKT_TOSERVER;
+    p.flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1215,18 +1258,28 @@ static int DetectPcreTestSig01Real(int mpm_type) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START, buf, buflen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
     SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
     if (PacketAlertCheck(&p, 1) == 1) {
         result = 1;
     }
 
+end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
     FLOW_DESTROY(&f);
-end:
     return result;
 }
 
@@ -1686,6 +1739,47 @@ end:
     return result;
 }
 
+/** \test anchored pcre */
+int DetectPcreTestSig07() {
+    uint8_t *buf = (uint8_t *)
+                    "lalala\n";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre with an ending slash\"; pcre:\"/^(la)+$/\"; sid:1;)";
+    if (UTHPacketMatchSig(p, sig) == 0) {
+        result = 0;
+        goto end;
+    }
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+/** \test anchored pcre */
+int DetectPcreTestSig08() {
+    /* test it also without ending in a newline "\n" */
+    uint8_t *buf = (uint8_t *)
+                    "lalala";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"pcre with an ending slash\"; pcre:\"/^(la)+$/\"; sid:1;)";
+    if (UTHPacketMatchSig(p, sig) == 0) {
+        result = 0;
+        goto end;
+    }
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 /**
@@ -1716,6 +1810,8 @@ void DetectPcreRegisterTests(void) {
     UtRegisterTest("DetectPcreModifPTest04 -- Modifier P", DetectPcreModifPTest04, 1);
     UtRegisterTest("DetectPcreModifPTest05 -- Modifier P fragmented", DetectPcreModifPTest05, 1);
     UtRegisterTest("DetectPcreTestSig06", DetectPcreTestSig06, 1);
+    UtRegisterTest("DetectPcreTestSig07 -- anchored pcre", DetectPcreTestSig07, 1);
+    UtRegisterTest("DetectPcreTestSig08 -- anchored pcre", DetectPcreTestSig08, 1);
 #endif /* UNITTESTS */
 }
 

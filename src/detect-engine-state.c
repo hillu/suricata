@@ -105,24 +105,33 @@ DetectEngineState *DetectEngineStateAlloc(void) {
     }
     memset(d, 0x00, sizeof(DetectEngineState));
 
-    SCMutexInit(&d->m, NULL);
-
     SCReturnPtr(d, "DetectEngineState");
 }
 
 /**
  *  \brief Free a DetectEngineState object
+ *         You must lock the flow mutex for de_state
+ *         (f->de_state_m)
  *  \param state DetectEngineState object to free
  */
 void DetectEngineStateFree(DetectEngineState *state) {
+    DeStateStore *iter = NULL;
+    DeStateStore *aux = NULL;
+
     if (state == NULL)
         return;
 
-    if (state->head != NULL) {
-        DeStateStoreFree(state->head);
+    iter = state->head;
+    while (iter != NULL) {
+        aux = iter;
+        iter = iter->next;
+        SCFree(aux);
     }
 
-    SCMutexDestroy(&state->m);
+    state->head = NULL;
+    state->tail = NULL;
+
+    state->cnt = 0;
 
     SCFree(state);
 }
@@ -134,20 +143,23 @@ void DetectEngineStateFree(DetectEngineState *state) {
 void DetectEngineStateReset(DetectEngineState *state) {
     SCEnter();
 
-    if (state == NULL) {
-        SCReturn;
+    DeStateStore *iter = NULL;
+    DeStateStore *aux = NULL;
+
+    if (state == NULL)
+        return;
+
+    iter = state->head;
+    while (iter != NULL) {
+        aux = iter;
+        iter = iter->next;
+        SCFree(aux);
     }
 
-    SCMutexLock(&state->m);
-
-    if (state->head != NULL) {
-        DeStateStoreFree(state->head);
-    }
     state->head = NULL;
     state->tail = NULL;
 
     state->cnt = 0;
-    SCMutexUnlock(&state->m);
 
     SCReturn;
 }
@@ -249,12 +261,12 @@ static void DeStateSignatureAppend(DetectEngineState *state, Signature *s, SigMa
 int DeStateFlowHasState(Flow *f) {
     SCEnter();
     int r = 0;
-    SCMutexLock(&f->m);
+    SCMutexLock(&f->de_state_m);
     if (f->de_state == NULL || f->de_state->cnt == 0)
         r = 0;
     else
         r = 1;
-    SCMutexUnlock(&f->m);
+    SCMutexUnlock(&f->de_state_m);
     SCReturnInt(r);
 }
 
@@ -301,14 +313,19 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 SCLogDebug("uri inspected but no match");
             }
         }
-    } else if (alproto == ALPROTO_DCERPC) {
+    } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
         if (s->dmatch != NULL) {
             dinspect = 1;
 
             SCLogDebug("inspecting dce payload");
 
+            void *real_alstate = alstate;
+            if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
+                real_alstate = f->aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+            }
+
             if (DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
-                        flags, alstate) == 1)
+                        flags, real_alstate) == 1)
             {
                 SCLogDebug("dce payload matched");
                 dmatch = 1;
@@ -351,20 +368,18 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
     SCLogDebug("detection done, store results: sm %p, uri %d, dce %d",
             sm, umatch, dmatch);
 
-    SCMutexLock(&f->m);
+    SCMutexLock(&f->de_state_m);
     /* match or no match, we store the state anyway
      * "sm" here is either NULL (complete match) or
      * the last SigMatch that didn't match */
     if (f->de_state == NULL) {
         f->de_state = DetectEngineStateAlloc();
     }
-    SCMutexUnlock(&f->m);
-
     if (f->de_state != NULL) {
-        SCMutexLock(&f->de_state->m);
         DeStateSignatureAppend(f->de_state, s, sm, umatch, dmatch);
-        SCMutexUnlock(&f->de_state->m);
     }
+
+    SCMutexUnlock(&f->de_state_m);
 
     SCReturnInt(r);
 }
@@ -380,6 +395,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     SigIntId cnt = 0;
     SigIntId store_cnt = 0;
     DeStateStore *store = NULL;
+    int match = 0;
     char umatch = 0;
     char uinspect = 0;
     char dmatch = 0;
@@ -391,9 +407,9 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
         return 0;
     }
 
-    SCMutexLock(&f->de_state->m);
+    SCMutexLock(&f->de_state_m);
 
-    if (f->de_state->cnt == 0)
+    if (f->de_state == NULL || f->de_state->cnt == 0)
         goto end;
 
     /* loop through the stores */
@@ -412,6 +428,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
             dinspect = 0;
             appinspect = 0;
             appmatch = 0;
+            match = 0;
 
             SCLogDebug("internal id of signature to inspect: %"PRIuMAX,
                     (uintmax_t)item->sid);
@@ -444,14 +461,19 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         SCLogDebug("uri already inspected");
                     }
                 }
-            } else if (alproto == ALPROTO_DCERPC) {
+            } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                 if (s->dmatch != NULL) {
                     if (!(item->flags & DE_STATE_FLAG_DCE_MATCH)) {
                         SCLogDebug("inspecting dce payload");
                         dinspect = 1;
 
+                        void *real_alstate = alstate;
+                        if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
+                            real_alstate = f->aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+                        }
+
                         if (DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
-                                    flags, alstate) == 1)
+                                    flags, real_alstate) == 1)
                         {
                             SCLogDebug("dce payload matched");
                             item->flags |= DE_STATE_FLAG_DCE_MATCH;
@@ -473,7 +495,6 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
             /* next, check the other sig matches */
             if (item->nm != NULL) {
                 SigMatch *sm;
-                int match = 0;
                 for (sm = item->nm; sm != NULL; sm = sm->next) {
                     match = sigmatch_table[sm->type].AppLayerMatch(tv,
                             det_ctx, f, flags, alstate, s, sm);
@@ -517,7 +538,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     }
 
 end:
-    SCMutexUnlock(&f->de_state->m);
+    SCMutexUnlock(&f->de_state_m);
     SCReturnInt(0);
 }
 
@@ -531,13 +552,11 @@ int DeStateRestartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngin
 
     /* first clear the existing state as it belongs
      * to the previous transaction */
-    SCMutexLock(&f->m);
+    SCMutexLock(&f->de_state_m);
     if (f->de_state != NULL) {
-        SCMutexLock(&f->de_state->m);
         DetectEngineStateReset(f->de_state);
-        SCMutexUnlock(&f->de_state->m);
     }
-    SCMutexUnlock(&f->m);
+    SCMutexUnlock(&f->de_state_m);
 
     SCReturnInt(0);
 }

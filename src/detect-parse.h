@@ -46,7 +46,9 @@ void SigFree(Signature *s);
 Signature *SigInit(DetectEngineCtx *,char *sigstr);
 SigMatch *SigMatchGetLastSM(SigMatch *, uint8_t);
 SigMatch *SigMatchGetLastSMFromLists(Signature *, int, ...);
-
+void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
+                                         SigMatch **, SigMatch **s,
+                                         SigMatch **, SigMatch **);
 void SigParsePrepare(void);
 void SigParseRegisterTests(void);
 Signature *DetectEngineAppendSig(DetectEngineCtx *, char *);
@@ -60,6 +62,10 @@ void SigMatchAppendDcePayload(Signature *, SigMatch *);
 void SigMatchAppendPacket(Signature *, SigMatch *);
 void SigMatchAppendUricontent(Signature *, SigMatch *);
 void SigMatchAppendAppLayer(Signature *, SigMatch *);
+void SigMatchAppendTag(Signature *, SigMatch *);
+
+int DetectParseDupSigHashInit(DetectEngineCtx *);
+void DetectParseDupSigHashFree(DetectEngineCtx *);
 
 #endif /* __DETECT_PARSE_H__ */
 

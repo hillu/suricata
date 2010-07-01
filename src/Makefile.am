@@ -2,11 +2,13 @@ noinst_HEADERS = action-globals.h \
     app-layer-nbss.h app-layer-dcerpc-common.h \
     debug.h decode-events.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
-	suricata-common.h threadvars.h util-binsearch.h
+	suricata-common.h threadvars.h util-binsearch.h \
+    util-atomic.h util-validate.h
 bin_PROGRAMS = suricata
 suricata_SOURCES = suricata.c suricata.h \
 runmodes.c runmodes.h \
 packet-queue.c packet-queue.h \
+data-queue.c data-queue.h \
 threads.c threads.h \
 source-nfq.c source-nfq.h \
 source-pcap.c source-pcap.h \
@@ -50,6 +52,7 @@ detect-window.c detect-window.h \
 detect-ftpbounce.c detect-ftpbounce.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-threshold.c detect-engine-threshold.h \
+detect-engine-tag.c detect-engine-tag.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
 detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
 detect-engine-proto.c detect-engine-proto.h \
@@ -166,6 +169,7 @@ util-cuda-handlers.c util-cuda-handlers.h \
 util-privs.c util-privs.h \
 util-decode-asn1.c util-decode-asn1.h \
 util-ringbuffer.c util-ringbuffer.h \
+util-validate.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -199,6 +203,7 @@ app-layer-tls.c app-layer-tls.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
+app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-ssl.c app-layer-ssl.h \
 defrag.c defrag.h \
@@ -207,7 +212,8 @@ win32-misc.c win32-misc.h \
 win32-service.c win32-service.h \
 util-action.c util-action.h \
 win32-syslog.h \
-util-profiling.c util-profiling.h
+util-profiling.c util-profiling.h \
+cuda-packet-batcher.c cuda-packet-batcher.h
 
 # set the include path found by configure
 INCLUDES= $(all_includes)

@@ -106,31 +106,42 @@ uint16_t PatternMatchDefaultMatcher(void) {
  *  \retval ret number of matches
  */
 uint32_t PacketPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
-                           Packet *p)
+                             Packet *p)
 {
     SCEnter();
 
     uint32_t ret;
+
 #ifndef __SC_CUDA_SUPPORT__
     ret = mpm_table[det_ctx->sgh->mpm_ctx->mpm_type].Search(det_ctx->sgh->mpm_ctx,
-                                                          &det_ctx->mtc,
-                                                          &det_ctx->pmq,
-                                                          p->payload,
-                                                          p->payload_len);
+                                                            &det_ctx->mtc,
+                                                            &det_ctx->pmq,
+                                                            p->payload,
+                                                            p->payload_len);
 #else
     /* if the user has enabled cuda support, but is not using the cuda mpm
      * algo, then we shouldn't take the path of the dispatcher.  Call the mpm
      * directly */
     if (det_ctx->sgh->mpm_ctx->mpm_type != MPM_B2G_CUDA) {
         ret = mpm_table[det_ctx->sgh->mpm_ctx->mpm_type].Search(det_ctx->sgh->mpm_ctx,
-                                                              &det_ctx->mtc,
-                                                              &det_ctx->pmq,
-                                                              p->payload,
-                                                              p->payload_len);
+                                                                &det_ctx->mtc,
+                                                                &det_ctx->pmq,
+                                                                p->payload,
+                                                                p->payload_len);
         SCReturnInt(ret);
     }
 
-    SCCudaHlProcessPacketWithDispatcher(p, det_ctx, &ret);
+    if (p->cuda_mpm_enabled) {
+        ret = B2gCudaResultsPostProcessing(p, det_ctx->sgh->mpm_ctx,
+                                           &det_ctx->mtc, &det_ctx->pmq);
+    } else {
+        ret = mpm_table[det_ctx->sgh->mpm_ctx->mpm_type].Search(det_ctx->sgh->mpm_ctx,
+                                                                &det_ctx->mtc,
+                                                                &det_ctx->pmq,
+                                                                p->payload,
+                                                                p->payload_len);
+    }
+
 #endif
 
     SCReturnInt(ret);
@@ -154,23 +165,8 @@ uint32_t UriPatternSearch(DetectEngineThreadCtx *det_ctx,
     //PrintRawDataFp(stdout, uri, uri_len);
 
     uint32_t ret;
-#ifndef __SC_CUDA_SUPPORT__
-    ret = mpm_table[det_ctx->sgh->mpm_uri_ctx->mpm_type].Search
-        (det_ctx->sgh->mpm_uri_ctx, &det_ctx->mtcu, &det_ctx->pmq,
-         uri, uri_len);
-#else
-    /* if the user has enabled cuda support, but is not using the cuda mpm
-     * algo, then we shouldn't take the path of the dispatcher.  Call the mpm
-     * directly */
-    if (det_ctx->sgh->mpm_uri_ctx->mpm_type != MPM_B2G_CUDA) {
-        ret = mpm_table[det_ctx->sgh->mpm_uri_ctx->mpm_type].Search
-            (det_ctx->sgh->mpm_uri_ctx, &det_ctx->mtcu, &det_ctx->pmq,
-             uri, uri_len);
-        SCReturnUInt(ret);
-    }
-
-    SCCudaHlProcessUriWithDispatcher(uri, uri_len, det_ctx, &ret);
-#endif
+    ret = mpm_table[det_ctx->sgh->mpm_uri_ctx->mpm_type].Search(det_ctx->sgh->mpm_uri_ctx,
+            &det_ctx->mtcu, &det_ctx->pmq, uri, uri_len);
 
     SCReturnUInt(ret);
 }
@@ -179,12 +175,14 @@ uint32_t UriPatternSearch(DetectEngineThreadCtx *det_ctx,
  *
  *  \param tv threadvars
  *  \param det_ctx detection engine thread ctx
+ *  \param p packet
  *  \param smsg stream msg (reassembled stream data)
+ *  \param flags stream flags
  *
  *  \retval ret number of matches
  */
 uint32_t StreamPatternSearch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
-                           StreamMsg *smsg)
+        Packet *p, StreamMsg *smsg, uint8_t flags)
 {
     SCEnter();
 
@@ -544,7 +542,7 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
     /* now determine which one to add to the mpm phase */
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
         Signature *s = sgh->match_array[sig];
-        if (s == NULL)
+        if (s == NULL || s->pmatch == NULL)
             continue;
 
         ContentHash *mpm_ch = NULL;
@@ -600,6 +598,7 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
                 ContentHashFree(ch);
             }
         }
+
         /* now add the mpm_ch to the mpm ctx */
         if (mpm_ch != NULL) {
             DetectContentData *co = mpm_ch->ptr;
@@ -608,9 +607,26 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
             offset = mpm_ch->cnt ? 0 : offset;
             depth = mpm_ch->cnt ? 0 : depth;
             uint8_t flags = 0;
-
             char scan_packet = 0;
             char scan_stream = 0;
+            char scan_negated = 0;
+
+            SigMatch *tmpsm = s->pmatch;
+            for ( ; tmpsm != NULL; tmpsm = tmpsm->next) {
+                if (tmpsm->type != DETECT_CONTENT)
+                    continue;
+
+                DetectContentData *tmp = (DetectContentData *)tmpsm->ctx;
+                if (tmp == NULL)
+                    continue;
+
+                if (co->id == tmp->id) {
+                    if (tmp->flags & DETECT_CONTENT_NEGATED) {
+                        scan_negated = 1;
+                    }
+                    break;
+                }
+            }
 
             if (s->flags & SIG_FLAG_DSIZE) {
                 scan_packet = 1;
@@ -645,6 +661,10 @@ static int PatternMatchPreprarePopulateMpm(DetectEngineCtx *de_ctx, SigGroupHead
             }
 
             s->mpm_pattern_id = co->id;
+            if (scan_negated) {
+                SCLogDebug("flagging sig %"PRIu32" to be looking for negated mpm", s->id);
+                s->flags |= SIG_FLAG_MPM_NEGCONTENT;
+            }
 
             SCLogDebug("%"PRIu32" adding co->id %"PRIu32" to the mpm phase (s->num %"PRIu32")", s->id, co->id, s->num);
         } else {
