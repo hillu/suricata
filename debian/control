@@ -13,7 +13,7 @@ Build-Depends: debhelper (>= 7),
     libprelude-dev,
     zlib1g-dev | libz-dev,
     libcap-ng-dev
-Standards-Version: 3.8.4
+Standards-Version: 3.9.0
 Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
