@@ -3,10 +3,20 @@
  *
  * \author Anoop Saldanha <poonaatsoc@gmail.com>
  *
- * \todo Some work yet to be done in this file.  Firstly change the way we get
- *       the sgh.  Once we implement the retrieval of sghs from the flow, as
- *       suggested by victor, we can get rid of the sgh retrieval here.
- *       Make the various parameters user configurable.  Terribly hard-coded now.
+ * \todo
+ *       - Make cuda paramters user configurable.
+ *       - Implement a gpu version of aho-corasick.  That should get rid of a
+ *         lot of post processing and pattern_chopping, and we don't have to
+ *         deal with one or two byte patterns.
+ *       - Currently a lot of packets(~17k) are getting stuck on the detection
+ *         thread, which is a major bottleneck.  Introduce bypass detection
+ *         threads for these 15k non buffered packets and check how the alerts
+ *         are affected by this(out of sequence handling by detection threads).
+ *       - Use texture/shared memory.  This should be handled along with AC.
+ *       - Test the use of host-alloced page locked memory.
+ *       - Test other optimizations like using the sgh held in the flow(if
+ *         present in the flow), instead of retrieving the sgh inside the batcher
+ *         thread.
  */
 
 /* compile in, only if we have a CUDA enabled on this machine */
@@ -69,12 +79,14 @@ static int run_batcher = 1;
  * on the traffic
  * \todo make this user configurable, as well allow dynamic update of this
  * variable based on the traffic seen */
-static uint32_t buffer_packet_threshhold = 1280;
+static uint32_t buffer_packet_threshhold = 2400;
 
 /* flag used by the SIG_ALRM handler to indicate that the batcher TM should queue
  * the buffer to be processed by the Cuda Mpm B2g Batcher Thread for further
  * processing on the GPU */
 static int queue_buffer = 0;
+
+static int unittest_mode = 0;
 
 /**
  * \internal
@@ -474,8 +486,13 @@ TmEcode SCCudaPBThreadInit(ThreadVars *tv, void *initdata, void **data)
     /* set the SIG_ALRM handler */
     SCCudaPBSetBatcherAlarmTimeHandler();
 
-    /* Set the alarm time limit during which the batcher thread would buffer packets */
-    alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+    /* if we are running unittests, don't set the alarm handler.  It will only
+     * cause a seg fault if the tests take too long */
+    if (!unittest_mode) {
+        /* Set the alarm time limit during which the batcher thread would
+         * buffer packets */
+        alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+    }
 
     return TM_ECODE_OK;
 }
@@ -504,7 +521,11 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
                    "buffer and reseting the alarm");
         queue_buffer = 0;
         SCCudaPBQueueBuffer(data);
-        alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+        /* if we are running unittests, don't set the alarm handler.  It will only
+         * cause a seg fault if the tests take too long */
+        if (!unittest_mode) {
+            alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+        }
     }
 
     /* this is possible, since we are using a custom slot function that calls this
@@ -536,13 +557,27 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
     /* the sgh to which the incoming packet belongs */
     SigGroupHead *sgh = NULL;
 
-    /* get the signature group head to which this packet belongs.  If it belongs
-     * to no sgh, we don't need to buffer this packet.
-     * \todo Get rid of this, once we get the sgh from the flow */
-    sgh = SCCudaPBGetSgh(tctx->de_ctx, p);
+    if (p->flow != NULL) {
+        /* Get the stored sgh from the flow (if any). Make sure we're not using
+         * the sgh for icmp error packets part of the same stream. */
+        if (p->proto == p->flow->proto) { /* filter out icmp */
+            if (p->flowflags & FLOW_PKT_TOSERVER && p->flow->flags & FLOW_SGH_TOSERVER) {
+                sgh = p->flow->sgh_toserver;
+            } else if (p->flowflags & FLOW_PKT_TOCLIENT && p->flow->flags & FLOW_SGH_TOCLIENT) {
+                sgh = p->flow->sgh_toclient;
+            }
+        }
+    }
+
     if (sgh == NULL) {
-        SCLogDebug("No SigGroupHead match for this packet");
-        return TM_ECODE_OK;
+        /* get the signature group head to which this packet belongs.  If it belongs
+         * to no sgh, we don't need to buffer this packet.
+         * \todo Get rid of this, once we get the sgh from the flow */
+        sgh = SCCudaPBGetSgh(tctx->de_ctx, p);
+        if (sgh == NULL) {
+            SCLogDebug("No SigGroupHead match for this packet");
+            return TM_ECODE_OK;
+        }
     }
 
     /* if the payload is less than the maximum content length in this sgh we
@@ -650,7 +685,11 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
                    "time limit.  Buffering the packet buffer and reseting the "
                    "alarm.", buffer_packet_threshhold);
         SCCudaPBQueueBuffer(tctx);
-        alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+        /* if we are running unittests, don't set the alarm handler.  It will only
+         * cause a seg fault if the tests take too long */
+        if (!unittest_mode) {
+            alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
+        }
     }
 
     return TM_ECODE_OK;
@@ -737,7 +776,7 @@ void SCCudaPBSetUpQueuesAndBuffers(void)
     /* \todo This needs to be changed ASAP.  This can't exceed max_pending_packets.
      * Also we need to make this user configurable and allow dynamic updaes
      * based on live traffic */
-    buffer_packet_threshhold = 1280;
+    buffer_packet_threshhold = 2400;
 
     return;
 }
@@ -816,6 +855,11 @@ void SCCudaPBKillBatchingPackets(void)
     SCCondSignal(&dq->cond_q);
 
     return;
+}
+
+void SCCudaPBRunningTests(int status)
+{
+    unittest_mode = status;
 }
 
 /***********************************Unittests**********************************/
@@ -967,6 +1011,7 @@ int SCCudaPBTest01(void)
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 10);
+    SCCudaPBRunningTests(1);
     SCCudaPBThreadInit(&tv_cuda_PB, de_ctx, (void *)&tctx);
     SCCudaPBSetBufferPacketThreshhold(sizeof(strings)/sizeof(char *));
 
@@ -1192,6 +1237,7 @@ int SCCudaPBTest02(void)
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 10);
+    SCCudaPBRunningTests(1);
     SCCudaPBThreadInit(&tv_cuda_PB, de_ctx, (void *)&tctx);
 
     result = 1;

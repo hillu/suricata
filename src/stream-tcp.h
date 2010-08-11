@@ -42,6 +42,8 @@ typedef struct TcpStreamCnf_ {
     uint32_t prealloc_sessions;
     int midstream;
     int async_oneside;
+    uint32_t reassembly_memcap; /**< max memory usage for stream reassembly */
+    uint32_t reassembly_depth;  /**< Depth until when we reassemble the stream */
 } TcpStreamCnf;
 
 TcpStreamCnf stream_config;

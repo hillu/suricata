@@ -46,6 +46,7 @@
 #include "decode-tcp.h"
 #include "flow-util.h"
 #include "util-debug.h"
+
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
@@ -82,17 +83,13 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
 {
     SCEnter();
 
-    if (sm == NULL) {
+    if (sm == NULL || stub_len == 0) {
         SCReturnInt(0);
     }
 
     switch(sm->type) {
         case DETECT_CONTENT:
         {
-            if (stub_len == 0) {
-                SCReturnInt(0);
-            }
-
             DetectContentData *cd = NULL;
             cd = (DetectContentData *)sm->ctx;
             SCLogDebug("inspecting content %"PRIu32" stub_len %"PRIu32,
@@ -216,9 +213,9 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                 } else if (found == NULL && cd->flags & DETECT_CONTENT_NEGATED) {
                     goto match;
                 } else if (found != NULL && cd->flags & DETECT_CONTENT_NEGATED) {
-                    match_offset = (uint32_t)((found - stub) + cd->content_len);
                     SCLogDebug("content %"PRIu32" matched at offset %"PRIu32", but "
                                "negated so no match", cd->id, match_offset);
+                    det_ctx->discontinue_matching = 1;
                     SCReturnInt(0);
                 } else {
                     match_offset = (uint32_t)((found - stub) + cd->content_len);
@@ -242,6 +239,9 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                     if (r == 1) {
                         SCReturnInt(1);
                     }
+
+                    if (det_ctx->discontinue_matching)
+                        SCReturnInt(0);
 
                     /* set the previous match offset to the start of this match + 1 */
                     prev_offset = (match_offset - (cd->content_len - 1));
@@ -282,16 +282,44 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
         case DETECT_PCRE:
         {
             SCLogDebug("inspecting pcre");
+            DetectPcreData *pe = (DetectPcreData *)sm->ctx;
+            uint32_t prev_payload_offset = det_ctx->payload_offset;
+            uint32_t prev_offset = 0;
+            int r = 0;
 
-            int r = DetectPcrePayloadMatch(det_ctx, s, sm, /* no packet */NULL,
-                    f, stub, stub_len);
-            if (r == 1) {
-                goto match;
-            }
+            det_ctx->pcre_match_start_offset = 0;
+            do {
+                r = DetectPcrePayloadMatch(det_ctx, s, sm, NULL, f,
+                                           stub, stub_len);
+                if (r == 0) {
+                    det_ctx->discontinue_matching = 1;
+                    SCReturnInt(0);
+                }
 
-            SCReturnInt(0);
+                if (!(pe->flags & DETECT_PCRE_RELATIVE_NEXT)) {
+                    SCLogDebug("no relative match coming up, so this is a match");
+                    goto match;
+                }
+
+                /* save it, in case we need to do a pcre match once again */
+                prev_offset = det_ctx->pcre_match_start_offset;
+
+                /* see if the next payload keywords match. If not, we will
+                 * search for another occurence of this pcre and see
+                 * if the others match, until we run out of matches */
+                r = DoInspectDcePayload(de_ctx, det_ctx, s, sm->next, f, stub,
+                                        stub_len, dcerpc_state);
+                if (r == 1) {
+                    SCReturnInt(1);
+                }
+
+                if (det_ctx->discontinue_matching)
+                    SCReturnInt(0);
+
+                det_ctx->payload_offset = prev_payload_offset;
+                det_ctx->pcre_match_start_offset = prev_offset;
+            } while (1);
         }
-
         case DETECT_BYTETEST:
         {
             DetectBytetestData *data = (DetectBytetestData *)sm->ctx;
@@ -389,30 +417,36 @@ int DetectEngineInspectDcePayload(DetectEngineCtx *de_ctx,
         SCReturnInt(0);
     }
 
-    /* we are not relying on the stub pointer being set by the dce_stub_data
-     * match function.  Instead we will retrieve it directly from the app layer. */
-    if (flags & STREAM_TOSERVER) {
-        if (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer == NULL ||
-            dcerpc_state->dcerpc.dcerpcrequest.stub_data_fresh == 0) {
-            SCReturnInt(0);
-        }
+    if (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+        dcerpc_state->dcerpc.dcerpcrequest.stub_data_fresh != 0) {
+        /* the request stub and stub_len */
         dce_stub_data = dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer;
         dce_stub_data_len = dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len;
-    } else {
-        if (dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer == NULL ||
-            dcerpc_state->dcerpc.dcerpcresponse.stub_data_fresh == 0) {
-            SCReturnInt(0);
+
+        det_ctx->payload_offset = 0;
+        det_ctx->discontinue_matching = 0;
+
+        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
+                                dce_stub_data, dce_stub_data_len, dcerpc_state);
+        if (r == 1) {
+            SCReturnInt(1);
         }
-        dce_stub_data = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer;
-        dce_stub_data_len = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer_len;
     }
 
-    det_ctx->payload_offset = 0;
+    if (dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer != NULL &&
+        dcerpc_state->dcerpc.dcerpcresponse.stub_data_fresh == 0) {
+        /* the response stub and stub_len */
+        dce_stub_data = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer;
+        dce_stub_data_len = dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer_len;
 
-    r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
-                            dce_stub_data, dce_stub_data_len, dcerpc_state);
-    if (r == 1) {
-        SCReturnInt(1);
+        det_ctx->payload_offset = 0;
+        det_ctx->discontinue_matching = 0;
+
+        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
+                                dce_stub_data, dce_stub_data_len, dcerpc_state);
+        if (r == 1) {
+            SCReturnInt(1);
+        }
     }
 
     SCReturnInt(0);
@@ -1544,7 +1578,7 @@ int DcePayloadTest01(void)
     uint32_t request9_len = sizeof(request9);
 
     TcpSession ssn;
-    Packet p[11];
+    Packet *p[11];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -1576,17 +1610,12 @@ int DcePayloadTest01(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 11; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -1653,36 +1682,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 3))) {
+    if ((PacketAlertCheck(p[0], 3))) {
         printf("sid 3 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 4))) {
+    if ((PacketAlertCheck(p[0], 4))) {
         printf("sid 4 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 5))) {
+    if ((PacketAlertCheck(p[0], 5))) {
         printf("sid 5 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 6))) {
+    if ((PacketAlertCheck(p[0], 6))) {
         printf("sid 6 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 7))) {
+    if ((PacketAlertCheck(p[0], 7))) {
         printf("sid 7 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 8))) {
+    if ((PacketAlertCheck(p[0], 8))) {
         printf("sid 8 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -1694,36 +1723,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 3))) {
+    if ((PacketAlertCheck(p[1], 3))) {
         printf("sid 3 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 4))) {
+    if ((PacketAlertCheck(p[1], 4))) {
         printf("sid 4 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 5))) {
+    if ((PacketAlertCheck(p[1], 5))) {
         printf("sid 5 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 6))) {
+    if ((PacketAlertCheck(p[1], 6))) {
         printf("sid 6 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 7))) {
+    if ((PacketAlertCheck(p[1], 7))) {
         printf("sid 7 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 8))) {
+    if ((PacketAlertCheck(p[1], 8))) {
         printf("sid 8 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -1735,36 +1764,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 3))) {
+    if ((PacketAlertCheck(p[2], 3))) {
         printf("sid 3 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 4))) {
+    if ((PacketAlertCheck(p[2], 4))) {
         printf("sid 4 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 5))) {
+    if ((PacketAlertCheck(p[2], 5))) {
         printf("sid 5 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 6))) {
+    if ((PacketAlertCheck(p[2], 6))) {
         printf("sid 6 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 7))) {
+    if ((PacketAlertCheck(p[2], 7))) {
         printf("sid 7 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 8))) {
+    if ((PacketAlertCheck(p[2], 8))) {
         printf("sid 8 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -1777,36 +1806,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if (!(PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if (!(PacketAlertCheck(p[3], 1))) {
         printf("sid 1 didn't match but should have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 2))) {
+    if ((PacketAlertCheck(p[3], 2))) {
         printf("sid 2 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 3))) {
+    if ((PacketAlertCheck(p[3], 3))) {
         printf("sid 3 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 4))) {
+    if ((PacketAlertCheck(p[3], 4))) {
         printf("sid 4 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 5))) {
+    if ((PacketAlertCheck(p[3], 5))) {
         printf("sid 5 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 6))) {
+    if ((PacketAlertCheck(p[3], 6))) {
         printf("sid 6 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 7))) {
+    if ((PacketAlertCheck(p[3], 7))) {
         printf("sid 7 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 8))) {
+    if ((PacketAlertCheck(p[3], 8))) {
         printf("sid 8 matched but shouldn't have for packet 3: ");
         goto end;
     }
@@ -1820,36 +1849,36 @@ int DcePayloadTest01(void)
     }
     /* detection phase */
     SCLogDebug("inspecting packet 4");
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[4]);
-    if ((PacketAlertCheck(&p[4], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[4]);
+    if ((PacketAlertCheck(p[4], 1))) {
         printf("sid 1 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[4], 2))) {
+    if (!(PacketAlertCheck(p[4], 2))) {
         printf("sid 2 didn't match but should have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 3))) {
+    if ((PacketAlertCheck(p[4], 3))) {
         printf("sid 3 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 4))) {
+    if ((PacketAlertCheck(p[4], 4))) {
         printf("sid 4 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 5))) {
+    if ((PacketAlertCheck(p[4], 5))) {
         printf("sid 5 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 6))) {
+    if ((PacketAlertCheck(p[4], 6))) {
         printf("sid 6 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 7))) {
+    if ((PacketAlertCheck(p[4], 7))) {
         printf("sid 7 matched but shouldn't have for packet 4: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[4], 8))) {
+    if ((PacketAlertCheck(p[4], 8))) {
         printf("sid 8 matched but shouldn't have for packet 4: ");
         goto end;
     }
@@ -1862,36 +1891,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[5]);
-    if ((PacketAlertCheck(&p[5], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[5]);
+    if ((PacketAlertCheck(p[5], 1))) {
         printf("sid 1 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 2))) {
+    if ((PacketAlertCheck(p[5], 2))) {
         printf("sid 2 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[5], 3))) {
+    if (!(PacketAlertCheck(p[5], 3))) {
         printf("sid 3 didn't match but should have packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 4))) {
+    if ((PacketAlertCheck(p[5], 4))) {
         printf("sid 4 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 5))) {
+    if ((PacketAlertCheck(p[5], 5))) {
         printf("sid 5 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 6))) {
+    if ((PacketAlertCheck(p[5], 6))) {
         printf("sid 6 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 7))) {
+    if ((PacketAlertCheck(p[5], 7))) {
         printf("sid 7 matched but shouldn't have for packet 5: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[5], 8))) {
+    if ((PacketAlertCheck(p[5], 8))) {
         printf("sid 8 matched but shouldn't have for packet 5: ");
         goto end;
     }
@@ -1903,36 +1932,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[6]);
-    if ((PacketAlertCheck(&p[6], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[6]);
+    if ((PacketAlertCheck(p[6], 1))) {
         printf("sid 1 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 2))) {
+    if ((PacketAlertCheck(p[6], 2))) {
         printf("sid 2 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 3))) {
+    if ((PacketAlertCheck(p[6], 3))) {
         printf("sid 3 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[6], 4))) {
+    if (!(PacketAlertCheck(p[6], 4))) {
         printf("sid 4 didn't match but should have packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 5))) {
+    if ((PacketAlertCheck(p[6], 5))) {
         printf("sid 5 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 6))) {
+    if ((PacketAlertCheck(p[6], 6))) {
         printf("sid 6 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 7))) {
+    if ((PacketAlertCheck(p[6], 7))) {
         printf("sid 7 matched but shouldn't have for packet 6: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[6], 8))) {
+    if ((PacketAlertCheck(p[6], 8))) {
         printf("sid 8 matched but shouldn't have for packet 6: ");
         goto end;
     }
@@ -1944,36 +1973,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[7]);
-    if ((PacketAlertCheck(&p[7], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[7]);
+    if ((PacketAlertCheck(p[7], 1))) {
         printf("sid 1 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 2))) {
+    if ((PacketAlertCheck(p[7], 2))) {
         printf("sid 2 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 3))) {
+    if ((PacketAlertCheck(p[7], 3))) {
         printf("sid 3 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 4))) {
+    if ((PacketAlertCheck(p[7], 4))) {
         printf("sid 4 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[7], 5))) {
+    if (!(PacketAlertCheck(p[7], 5))) {
         printf("sid 5 didn't match but should have paket 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 6))) {
+    if ((PacketAlertCheck(p[7], 6))) {
         printf("sid 6 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 7))) {
+    if ((PacketAlertCheck(p[7], 7))) {
         printf("sid 7 matched but shouldn't have for packet 7: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[7], 8))) {
+    if ((PacketAlertCheck(p[7], 8))) {
         printf("sid 8 matched but shouldn't have for packet 7: ");
         goto end;
     }
@@ -1985,36 +2014,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[8]);
-    if ((PacketAlertCheck(&p[8], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[8]);
+    if ((PacketAlertCheck(p[8], 1))) {
         printf("sid 1 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 2))) {
+    if ((PacketAlertCheck(p[8], 2))) {
         printf("sid 2 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 3))) {
+    if ((PacketAlertCheck(p[8], 3))) {
         printf("sid 3 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 4))) {
+    if ((PacketAlertCheck(p[8], 4))) {
         printf("sid 4 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 5))) {
+    if ((PacketAlertCheck(p[8], 5))) {
         printf("sid 5 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[8], 6))) {
+    if (!(PacketAlertCheck(p[8], 6))) {
         printf("sid 6 didn't match but should have paket 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 7))) {
+    if ((PacketAlertCheck(p[8], 7))) {
         printf("sid 7 matched but shouldn't have for packet 8: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[8], 8))) {
+    if ((PacketAlertCheck(p[8], 8))) {
         printf("sid 8 matched but shouldn't have for packet 8: ");
         goto end;
     }
@@ -2026,36 +2055,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[9]);
-    if ((PacketAlertCheck(&p[9], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[9]);
+    if ((PacketAlertCheck(p[9], 1))) {
         printf("sid 1 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 2))) {
+    if ((PacketAlertCheck(p[9], 2))) {
         printf("sid 2 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 3))) {
+    if ((PacketAlertCheck(p[9], 3))) {
         printf("sid 3 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 4))) {
+    if ((PacketAlertCheck(p[9], 4))) {
         printf("sid 4 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 5))) {
+    if ((PacketAlertCheck(p[9], 5))) {
         printf("sid 5 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 6))) {
+    if ((PacketAlertCheck(p[9], 6))) {
         printf("sid 6 matched but shouldn't have for packet 9: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[9], 7))) {
+    if (!(PacketAlertCheck(p[9], 7))) {
         printf("sid 7 didn't match but should have for packet 9: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[9], 8))) {
+    if ((PacketAlertCheck(p[9], 8))) {
         printf("sid 8 matched but shouldn't have for packet 9: ");
         goto end;
     }
@@ -2067,36 +2096,36 @@ int DcePayloadTest01(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[10]);
-    if ((PacketAlertCheck(&p[10], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[10]);
+    if ((PacketAlertCheck(p[10], 1))) {
         printf("sid 1 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 2))) {
+    if ((PacketAlertCheck(p[10], 2))) {
         printf("sid 2 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 3))) {
+    if ((PacketAlertCheck(p[10], 3))) {
         printf("sid 3 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 4))) {
+    if ((PacketAlertCheck(p[10], 4))) {
         printf("sid 4 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 5))) {
+    if ((PacketAlertCheck(p[10], 5))) {
         printf("sid 5 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 6))) {
+    if ((PacketAlertCheck(p[10], 6))) {
         printf("sid 6 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[10], 7))) {
+    if ((PacketAlertCheck(p[10], 7))) {
         printf("sid 7 matched but shouldn't have for packet 10: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[10], 8))) {
+    if (!(PacketAlertCheck(p[10], 8))) {
         printf("sid 8 didn't match but should have for paket 10: ");
         goto end;
     }
@@ -2115,6 +2144,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 11);
     return result;
 }
 
@@ -2422,7 +2452,7 @@ int DcePayloadTest02(void)
 
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -2443,18 +2473,13 @@ int DcePayloadTest02(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
-    p[1].flowflags &=~ FLOW_PKT_TOSERVER;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags &=~ FLOW_PKT_TOSERVER;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -2490,12 +2515,12 @@ int DcePayloadTest02(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -2507,12 +2532,12 @@ int DcePayloadTest02(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -2524,12 +2549,12 @@ int DcePayloadTest02(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if (!(PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if (!(PacketAlertCheck(p[2], 1))) {
         printf("sid 1 didn't match but should have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -2541,12 +2566,12 @@ int DcePayloadTest02(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[3], 2))) {
+    if (!(PacketAlertCheck(p[3], 2))) {
         printf("sid 2 didn't match but should have for packet 3: ");
         goto end;
     }
@@ -2565,6 +2590,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -2872,7 +2898,7 @@ int DcePayloadTest03(void)
 
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -2893,17 +2919,12 @@ int DcePayloadTest03(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -2939,12 +2960,12 @@ int DcePayloadTest03(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -2956,12 +2977,12 @@ int DcePayloadTest03(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -2973,12 +2994,12 @@ int DcePayloadTest03(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -2990,12 +3011,12 @@ int DcePayloadTest03(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[3], 2))) {
+    if (!(PacketAlertCheck(p[3], 2))) {
         printf("sid 2 didn't match but should have for packet 3: ");
         goto end;
     }
@@ -3014,6 +3035,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -3321,7 +3343,7 @@ int DcePayloadTest04(void)
 
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -3342,17 +3364,12 @@ int DcePayloadTest04(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -3388,12 +3405,12 @@ int DcePayloadTest04(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -3405,12 +3422,12 @@ int DcePayloadTest04(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -3422,12 +3439,12 @@ int DcePayloadTest04(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if (!(PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if (!(PacketAlertCheck(p[2], 1))) {
         printf("sid 1 didn't match but should have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -3439,12 +3456,12 @@ int DcePayloadTest04(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[3], 2))) {
+    if (!(PacketAlertCheck(p[3], 2))) {
         printf("sid 2 didn't match but should have for packet 3: ");
         goto end;
     }
@@ -3463,6 +3480,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -3769,7 +3787,7 @@ int DcePayloadTest05(void)
     uint32_t request2_len = sizeof(request2);
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -3790,17 +3808,12 @@ int DcePayloadTest05(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -3836,12 +3849,12 @@ int DcePayloadTest05(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -3853,12 +3866,12 @@ int DcePayloadTest05(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -3870,12 +3883,12 @@ int DcePayloadTest05(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -3887,12 +3900,12 @@ int DcePayloadTest05(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 2 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[3], 2))) {
+    if (!(PacketAlertCheck(p[3], 2))) {
         printf("sid 2 didn't match but should have for packet 3: ");
         goto end;
     }
@@ -3911,6 +3924,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -4218,7 +4232,7 @@ int DcePayloadTest06(void)
 
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -4239,17 +4253,12 @@ int DcePayloadTest06(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -4285,12 +4294,12 @@ int DcePayloadTest06(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -4302,12 +4311,12 @@ int DcePayloadTest06(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -4319,12 +4328,12 @@ int DcePayloadTest06(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -4336,12 +4345,12 @@ int DcePayloadTest06(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p[3], 2))) {
+    if (!(PacketAlertCheck(p[3], 2))) {
         printf("sid 2 didn't match but should have for packet 3: ");
         goto end;
     }
@@ -4360,6 +4369,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -4666,7 +4676,7 @@ int DcePayloadTest07(void)
     uint32_t request2_len = sizeof(request2);
 
     TcpSession ssn;
-    Packet p[4];
+    Packet *p[4];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -4687,17 +4697,12 @@ int DcePayloadTest07(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 4; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -4733,12 +4738,12 @@ int DcePayloadTest07(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[0], 2))) {
+    if ((PacketAlertCheck(p[0], 2))) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -4750,12 +4755,12 @@ int DcePayloadTest07(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[1], 2))) {
+    if ((PacketAlertCheck(p[1], 2))) {
         printf("sid 2 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -4767,12 +4772,12 @@ int DcePayloadTest07(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[2], 2))) {
+    if ((PacketAlertCheck(p[2], 2))) {
         printf("sid 2 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -4784,12 +4789,12 @@ int DcePayloadTest07(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
-    if ((PacketAlertCheck(&p[3], 2))) {
+    if ((PacketAlertCheck(p[3], 2))) {
         printf("sid 2 matched but shouldn't have for packet 3: ");
         goto end;
     }
@@ -4808,6 +4813,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 4);
     return result;
 }
 
@@ -4954,7 +4960,7 @@ int DcePayloadTest08(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p[1];
+    Packet *p[1];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -4973,15 +4979,10 @@ int DcePayloadTest08(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 1; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
 
     FLOW_INITIALIZE(&f);
@@ -5013,8 +5014,8 @@ int DcePayloadTest08(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
@@ -5033,6 +5034,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 1);
     return result;
 }
 
@@ -5179,7 +5181,7 @@ int DcePayloadTest09(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p[1];
+    Packet *p[1];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -5198,15 +5200,10 @@ int DcePayloadTest09(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 1; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
 
     FLOW_INITIALIZE(&f);
@@ -5238,8 +5235,8 @@ int DcePayloadTest09(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
@@ -5258,6 +5255,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 1);
     return result;
 }
 
@@ -5404,7 +5402,7 @@ int DcePayloadTest10(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p[1];
+    Packet *p[1];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -5423,15 +5421,10 @@ int DcePayloadTest10(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 1; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
 
     FLOW_INITIALIZE(&f);
@@ -5463,8 +5456,8 @@ int DcePayloadTest10(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
@@ -5483,6 +5476,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 1);
     return result;
 }
 
@@ -5764,7 +5758,7 @@ int DcePayloadTest11(void)
     uint32_t request2_len = sizeof(request2);
 
     TcpSession ssn;
-    Packet p[2];
+    Packet *p[2];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -5783,15 +5777,10 @@ int DcePayloadTest11(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 2; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
 
     FLOW_INITIALIZE(&f);
@@ -5823,8 +5812,8 @@ int DcePayloadTest11(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -5836,8 +5825,8 @@ int DcePayloadTest11(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if (!(PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if (!(PacketAlertCheck(p[1], 1))) {
         printf("sid 1 didn't match but should have for pacekt 1: ");
         goto end;
     }
@@ -5856,6 +5845,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 2);
     return result;
 }
 
@@ -6138,7 +6128,7 @@ int DcePayloadTest12(void)
     uint32_t request2_len = sizeof(request2);
 
     TcpSession ssn;
-    Packet p[2];
+    Packet *p[2];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6157,15 +6147,10 @@ int DcePayloadTest12(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 2; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
 
     FLOW_INITIALIZE(&f);
@@ -6197,8 +6182,8 @@ int DcePayloadTest12(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if ((PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if ((PacketAlertCheck(p[0], 1))) {
         printf("sid 1 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -6210,8 +6195,8 @@ int DcePayloadTest12(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -6230,6 +6215,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 2);
     return result;
 }
 
@@ -6321,7 +6307,7 @@ int DcePayloadTest13(void)
     uint32_t response3_len = sizeof(response3);
 
     TcpSession ssn;
-    Packet p[8];
+    Packet *p[8];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6340,22 +6326,17 @@ int DcePayloadTest13(void)
 
     /* let the 7 and the 8th packet be dummy packets the client sends to the server */
     for (i = 0; i < 8; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[1].flowflags |= FLOW_PKT_TOCLIENT;
-    p[1].flowflags &=~ FLOW_PKT_TOSERVER;
-    p[3].flowflags |= FLOW_PKT_TOCLIENT;
-    p[3].flowflags &=~ FLOW_PKT_TOSERVER;
-    p[5].flowflags |= FLOW_PKT_TOCLIENT;
-    p[5].flowflags &=~ FLOW_PKT_TOSERVER;
+    p[1]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[1]->flowflags &=~ FLOW_PKT_TOSERVER;
+    p[3]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[3]->flowflags &=~ FLOW_PKT_TOSERVER;
+    p[5]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[5]->flowflags &=~ FLOW_PKT_TOSERVER;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -6386,15 +6367,15 @@ int DcePayloadTest13(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
 
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[6]);
-    if ((PacketAlertCheck(&p[6], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[6]);
+    if ((PacketAlertCheck(p[6], 1))) {
         printf("sid 1 matched but shouldn't have for packet 6: ");
         goto end;
     }
@@ -6406,8 +6387,8 @@ int DcePayloadTest13(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -6422,15 +6403,15 @@ int DcePayloadTest13(void)
     /* we should have a match for the sig once again for the same flow, since
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if (!(PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if (!(PacketAlertCheck(p[2], 1))) {
         printf("sid 1 didn't match but should have for packet 2: ");
         goto end;
     }
 
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[7]);
-    if ((PacketAlertCheck(&p[7], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[7]);
+    if ((PacketAlertCheck(p[7], 1))) {
         printf("sid 1 matched but shouldn't have for packet 7: ");
         goto end;
     }
@@ -6442,8 +6423,8 @@ int DcePayloadTest13(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
@@ -6458,8 +6439,8 @@ int DcePayloadTest13(void)
     /* we should have a match for the sig once again for the same flow, since
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[4]);
-    if (!(PacketAlertCheck(&p[4], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[4]);
+    if (!(PacketAlertCheck(p[4], 1))) {
         printf("sid 1 didn't match but should have for packet 4: ");
         goto end;
     }
@@ -6471,8 +6452,8 @@ int DcePayloadTest13(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[5]);
-    if ((PacketAlertCheck(&p[5], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[5]);
+    if ((PacketAlertCheck(p[5], 1))) {
         printf("sid 1 matched but shouldn't have for packet 5: ");
         goto end;
     }
@@ -6491,6 +6472,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 8);
     return result;
 }
 
@@ -6567,7 +6549,7 @@ int DcePayloadTest14(void)
     uint32_t response2_len = sizeof(response2);
 
     TcpSession ssn;
-    Packet p[6];
+    Packet *p[6];
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6585,20 +6567,15 @@ int DcePayloadTest14(void)
     memset(&ssn, 0, sizeof(TcpSession));
 
     for (i = 0; i < 6; i++) {
-        memset(&p[i], 0, sizeof(Packet));
-        p[i].src.family = AF_INET;
-        p[i].dst.family = AF_INET;
-        p[i].payload = NULL;
-        p[i].payload_len = 0;
-        p[i].proto = IPPROTO_TCP;
-        p[i].flow = &f;
-        p[i].flowflags |= FLOW_PKT_TOSERVER;
-        p[i].flowflags |= FLOW_PKT_ESTABLISHED;
+        p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        p[i]->flow = &f;
+        p[i]->flowflags |= FLOW_PKT_TOSERVER;
+        p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
-    p[3].flowflags |= FLOW_PKT_TOCLIENT;
-    p[3].flowflags &=~ FLOW_PKT_TOSERVER;
-    p[5].flowflags |= FLOW_PKT_TOCLIENT;
-    p[5].flowflags &=~ FLOW_PKT_TOSERVER;
+    p[3]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[3]->flowflags &=~ FLOW_PKT_TOSERVER;
+    p[5]->flowflags |= FLOW_PKT_TOCLIENT;
+    p[5]->flowflags &=~ FLOW_PKT_TOSERVER;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -6630,15 +6607,15 @@ int DcePayloadTest14(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[0]);
-    if (!(PacketAlertCheck(&p[0], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
+    if (!(PacketAlertCheck(p[0], 1))) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
 
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[1]);
-    if ((PacketAlertCheck(&p[1], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
+    if ((PacketAlertCheck(p[1], 1))) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
@@ -6651,8 +6628,8 @@ int DcePayloadTest14(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[2]);
-    if ((PacketAlertCheck(&p[2], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
+    if ((PacketAlertCheck(p[2], 1))) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
@@ -6665,8 +6642,8 @@ int DcePayloadTest14(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[3]);
-    if ((PacketAlertCheck(&p[3], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
+    if ((PacketAlertCheck(p[3], 1))) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
@@ -6681,8 +6658,8 @@ int DcePayloadTest14(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[4]);
-    if (!(PacketAlertCheck(&p[4], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[4]);
+    if (!(PacketAlertCheck(p[4], 1))) {
         printf("sid 1 didn't match but should have for packet 4: ");
         goto end;
     }
@@ -6695,8 +6672,8 @@ int DcePayloadTest14(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p[5]);
-    if ((PacketAlertCheck(&p[5], 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p[5]);
+    if ((PacketAlertCheck(p[5], 1))) {
         printf("sid 1 matched but shouldn't have for packet 5: ");
         goto end;
     }
@@ -6715,6 +6692,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(p, 6);
     return result;
 }
 
@@ -6743,7 +6721,7 @@ int DcePayloadTest15(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6763,15 +6741,10 @@ int DcePayloadTest15(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -6806,12 +6779,12 @@ int DcePayloadTest15(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -6830,6 +6803,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -6858,7 +6832,7 @@ int DcePayloadTest16(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6878,15 +6852,10 @@ int DcePayloadTest16(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -6921,12 +6890,12 @@ int DcePayloadTest16(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -6945,6 +6914,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -6973,7 +6943,7 @@ int DcePayloadTest17(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -6993,15 +6963,10 @@ int DcePayloadTest17(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7036,12 +7001,12 @@ int DcePayloadTest17(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -7060,6 +7025,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7088,7 +7054,7 @@ int DcePayloadTest18(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7108,15 +7074,10 @@ int DcePayloadTest18(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7151,12 +7112,12 @@ int DcePayloadTest18(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -7175,6 +7136,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7203,7 +7165,7 @@ int DcePayloadTest19(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7223,15 +7185,10 @@ int DcePayloadTest19(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7266,12 +7223,12 @@ int DcePayloadTest19(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -7290,6 +7247,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7318,7 +7276,7 @@ int DcePayloadTest20(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7338,15 +7296,10 @@ int DcePayloadTest20(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7381,12 +7334,12 @@ int DcePayloadTest20(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
-    if (!(PacketAlertCheck(&p, 2))) {
+    if (!(PacketAlertCheck(p, 2))) {
         printf("sid 2 didn't match but should have for packet: ");
         goto end;
     }
@@ -7405,6 +7358,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7427,7 +7381,7 @@ int DcePayloadTest21(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7445,15 +7399,10 @@ int DcePayloadTest21(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7485,8 +7434,8 @@ int DcePayloadTest21(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
@@ -7505,6 +7454,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7527,7 +7477,7 @@ int DcePayloadTest22(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7545,15 +7495,10 @@ int DcePayloadTest22(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7585,8 +7530,8 @@ int DcePayloadTest22(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
@@ -7605,6 +7550,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7627,7 +7573,7 @@ int DcePayloadTest23(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7646,15 +7592,10 @@ int DcePayloadTest23(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7686,8 +7627,8 @@ int DcePayloadTest23(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
@@ -7706,6 +7647,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -7727,7 +7669,7 @@ int DcePayloadTest24(void)
     uint32_t request1_len = sizeof(request1);
 
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -7745,15 +7687,10 @@ int DcePayloadTest24(void)
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    memset(&p, 0, sizeof(Packet));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = NULL;
-    p.payload_len = 0;
-    p.proto = IPPROTO_TCP;
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -7785,8 +7722,8 @@ int DcePayloadTest24(void)
         goto end;
     }
     /* detection phase */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
-    if (!(PacketAlertCheck(&p, 1))) {
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
         printf("sid 1 didn't match but should have for packet: ");
         goto end;
     }
@@ -7805,6 +7742,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -9909,6 +9847,546 @@ int DcePayloadParseTest41(void)
     return result;
 }
 
+/**
+ * \test Test the working of consecutive relative matches with a negated content.
+ */
+int DcePayloadTest42(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x77, 0x65, 0x20, 0x6e, 0x65, 0x65, 0x64, 0x20, /* "we need " */
+        0x74, 0x6f, 0x20, 0x66, 0x69, 0x78, 0x20, 0x74, /* "to fix t" */
+        0x68, 0x69, 0x73, 0x20, 0x61, 0x6e, 0x64, 0x20, /* "his and " */
+        0x79, 0x65, 0x73, 0x20, 0x66, 0x69, 0x78, 0x20, /* "yes fix " */
+        0x74, 0x68, 0x69, 0x73, 0x20, 0x6e, 0x6f, 0x77  /* "this now" */
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "content:fix; distance:0; content:this; within:6; "
+        "content:!\"and\"; distance:0; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if ((PacketAlertCheck(p, 1))) {
+        printf("sid 1 matched but shouldn't have for packet: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    UTHFreePackets(&p, 1);
+    return result;
+}
+
+/**
+ * \test Test the working of consecutive relative pcres.
+ */
+int DcePayloadTest43(void)
+{
+    int result = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x68, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x1a, 0x00,
+        0x74, 0x68, 0x69, 0x73, 0x20, 0x69, 0x73, 0x20,
+        0x61, 0x20, 0x73, 0x75, 0x70, 0x65, 0x72, 0x20,
+        0x64, 0x75, 0x70, 0x65, 0x72, 0x20, 0x6e, 0x6f,
+        0x76, 0x61, 0x20, 0x69, 0x6e, 0x20, 0x73, 0x75,
+        0x70, 0x65, 0x72, 0x20, 0x6e, 0x6f, 0x76, 0x61,
+        0x20, 0x6e, 0x6f, 0x77
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    TcpSession ssn;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    Flow f;
+    int r;
+
+    char *sig1 = "alert tcp any any -> any any "
+        "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
+        "pcre:/super/R; content:nova; within:7; sid:1;)";
+
+    Signature *s;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+    f.alproto = ALPROTO_DCERPC;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, sig1);
+    s = de_ctx->sig_list;
+    if (s == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request 1 */
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+    /* detection phase */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    if ( !(PacketAlertCheck(p, 1))) {
+        printf("sid 1 didn't match but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&tv, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+
+    UTHFreePackets(&p, 1);
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest44(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectIsdataatData *isd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "content:one; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "isdataat:10,relative; "
+                                   "content:one; within:4; distance:8; "
+                                   "content:two; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_ISDATAAT) {
+        result = 0;
+        goto end;
+    }
+    isd = (DetectIsdataatData *)sm->ctx;
+    if ( isd->flags & ISDATAAT_RAWBYTES ||
+         !(isd->flags & ISDATAAT_RELATIVE)) {
+        result = 0;
+        goto end;
+    }
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        !(data->flags & DETECT_CONTENT_WITHIN) ||
+        !(data->flags & DETECT_CONTENT_DISTANCE) ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        result = 0;
+        printf("two failed\n");
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("three failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("two failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest45(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytejumpData *bjd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "content:one; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "byte_jump:1,2,relative,align,dce; "
+                                   "content:two; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTEJUMP) {
+        result = 0;
+        goto end;
+    }
+    bjd = (DetectBytejumpData *)sm->ctx;
+    if (bjd->flags & DETECT_BYTEJUMP_BEGIN ||
+        bjd->flags & DETECT_BYTEJUMP_LITTLE ||
+        bjd->flags & DETECT_BYTEJUMP_BIG ||
+        bjd->flags & DETECT_BYTEJUMP_STRING ||
+        !(bjd->flags & DETECT_BYTEJUMP_RELATIVE) ||
+        !(bjd->flags & DETECT_BYTEJUMP_ALIGN) ||
+        !(bjd->flags & DETECT_BYTEJUMP_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("one failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("two failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DcePayloadParseTest46(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+    Signature *s = NULL;
+    SigMatch *sm = NULL;
+    DetectContentData *data = NULL;
+    DetectBytetestData *btd = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                                   "(msg:\"Testing bytejump_body\"; "
+                                   "dce_iface:12345678-1234-1234-1234-123456789012; "
+                                   "content:one; "
+                                   "dce_opnum:10; dce_stub_data; "
+                                   "byte_test:1,=,2,0,relative,dce; "
+                                   "content:two; "
+                                   "sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    if (s->dmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+    if (s->pmatch_tail == NULL) {
+        result = 0;
+        goto end;
+    }
+
+    sm = s->dmatch;
+    if (sm->type != DETECT_BYTETEST) {
+        result = 0;
+        goto end;
+    }
+    btd = (DetectBytetestData *)sm->ctx;
+    if (btd->flags & DETECT_BYTETEST_LITTLE ||
+        btd->flags & DETECT_BYTETEST_BIG ||
+        btd->flags & DETECT_BYTETEST_STRING ||
+        !(btd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(btd->flags & DETECT_BYTETEST_DCE) ) {
+        result = 0;
+        printf("one failed\n");
+        goto end;
+    }
+
+    result &= (sm->next == NULL);
+
+    sm = s->pmatch;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("one failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "one", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    sm = sm->next;
+    if (sm->type != DETECT_CONTENT) {
+        result = 0;
+        goto end;
+    }
+    data = (DetectContentData *)sm->ctx;
+    if (data->flags & DETECT_CONTENT_RAWBYTES ||
+        data->flags & DETECT_CONTENT_NOCASE ||
+        data->flags & DETECT_CONTENT_WITHIN ||
+        data->flags & DETECT_CONTENT_DISTANCE ||
+        data->flags & DETECT_CONTENT_FAST_PATTERN ||
+        data->flags & DETECT_CONTENT_RELATIVE_NEXT ||
+        data->flags & DETECT_CONTENT_NEGATED ) {
+        printf("two failed\n");
+        result = 0;
+        goto end;
+    }
+    result &= (strncmp((char *)data->content, "two", 3) == 0);
+    if (result == 0)
+        goto end;
+
+    result &= (sm->next == NULL);
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void DcePayloadRegisterTests(void)
@@ -9957,6 +10435,13 @@ void DcePayloadRegisterTests(void)
     UtRegisterTest("DcePayloadParseTest39", DcePayloadParseTest39, 1);
     UtRegisterTest("DcePayloadParseTest40", DcePayloadParseTest40, 1);
     UtRegisterTest("DcePayloadParseTest41", DcePayloadParseTest41, 1);
+
+    UtRegisterTest("DcePayloadTest42", DcePayloadTest42, 1);
+    UtRegisterTest("DcePayloadTest43", DcePayloadTest43, 1);
+
+    UtRegisterTest("DcePayloadParseTest44", DcePayloadParseTest44, 1);
+    UtRegisterTest("DcePayloadParseTest45", DcePayloadParseTest45, 1);
+    UtRegisterTest("DcePayloadParseTest46", DcePayloadParseTest46, 1);
 #endif /* UNITTESTS */
 
     return;
