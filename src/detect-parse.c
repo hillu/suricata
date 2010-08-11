@@ -35,6 +35,7 @@
 #include "detect-content.h"
 #include "detect-uricontent.h"
 #include "detect-reference.h"
+#include "detect-flow.h"
 
 #include "flow.h"
 
@@ -52,6 +53,7 @@
 #include "string.h"
 #include "detect-parse.h"
 #include "detect-engine-iponly.h"
+#include "app-layer-detect-proto.h"
 
 extern int sc_set_caps;
 
@@ -62,6 +64,9 @@ static pcre_extra *option_pcre_extra = NULL;
 
 static uint32_t dbg_srcportany_cnt = 0;
 static uint32_t dbg_dstportany_cnt = 0;
+
+/* Context of the app layer proto detection */
+extern AlpProtoDetectCtx alp_proto_ctx;
 
 /**
  * \brief We use this as data to the hash table DetectEngineCtx->dup_sig_hash_table.
@@ -85,7 +90,7 @@ typedef struct SigDuplWrapper_ {
 #define CONFIG_OPTS   7
 
 //                    action       protocol       src                                      sp                        dir              dst                                    dp                            options
-#define CONFIG_PCRE "^([A-z]+)\\s+([A-z0-9]+)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/]+)\\s+([\\:A-z0-9_\\$\\!,]+)\\s+(-\\>|\\<\\>)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,/]+)\\s+([\\:A-z0-9_\\$\\!,]+)(?:\\s+\\((.*)?(?:\\s*)\\))?(?:(?:\\s*)\\n)?$"
+#define CONFIG_PCRE "^([A-z]+)\\s+([A-z0-9]+)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/]+)\\s+([\\:A-z0-9_\\$\\!,]+)\\s+(-\\>|\\<\\>)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,/]+)\\s+([\\:A-z0-9_\\$\\!,]+)(?:\\s+\\((.*)?(?:\\s*)\\))?(?:(?:\\s*)\\n)?\\s*$"
 #define OPTION_PARTS 3
 #define OPTION_PCRE "^\\s*([A-z_0-9-\\.]+)(?:\\s*\\:\\s*(.*)(?<!\\\\))?\\s*;\\s*(?:\\s*(.*))?\\s*$"
 
@@ -459,10 +464,11 @@ SigMatch *SigMatchGetLastSM(SigMatch *sm, uint8_t type)
 
 SigMatch *SigMatchGetLastSMFromLists(Signature *s, int args, ...)
 {
-    if (args % 2 != 0) {
+    if (args == 0 || args % 2 != 0) {
         SCLogError(SC_ERR_INVALID_ARGUMENTS, "You need to send an even no of args "
-                   "to this function, since we need a SigMatch list for every "
-                   "SigMatch type(send a map of sm_type and sm_list) sent");
+                   "(non zero as well) to this function, since we need a "
+                   "SigMatch list for every SigMatch type(send a map of sm_type "
+                   "and sm_list) sent");
         return NULL;
     }
 
@@ -486,6 +492,9 @@ SigMatch *SigMatchGetLastSMFromLists(Signature *s, int args, ...)
     }
 
     va_end(ap);
+
+    if (list_index == 0)
+        return NULL;
 
     SigMatch *sm[list_index];
     int sm_entries = 0;
@@ -715,8 +724,18 @@ int SigParseProto(Signature *s, const char *protostr) {
             /* indicate that the signature is app-layer */
             s->flags |= SIG_FLAG_APPLAYER;
 
-            /* app layer is always TCP for now */
-            s->proto.proto[IPPROTO_TCP / 8] |= 1 << (IPPROTO_TCP % 8);
+            /* We are going to set ip proto from the
+             * registered applayer signatures for proto detection */
+            AlpProtoSignature *als = alp_proto_ctx.head;
+            while (als != NULL) {
+                if (als->proto == s->alproto) {
+                    /* Set the ipproto that this AL proto detection sig needs
+                     * Note that an AL proto can be present in more than one
+                     * IP proto (over TCP, UDP..) */
+                    s->proto.proto[als->ip_proto / 8] |= 1 << (als->ip_proto % 8);
+                }
+                als = als->next;
+            }
             return 0;
         }
 
@@ -1053,9 +1072,158 @@ void SigFree(Signature *s) {
     if (s->msg != NULL)
         SCFree(s->msg);
 
+    if (s->addr_src_match4 != NULL) {
+        SCFree(s->addr_src_match4);
+    }
+    if (s->addr_dst_match4 != NULL) {
+        SCFree(s->addr_dst_match4);
+    }
+    if (s->addr_src_match6 != NULL) {
+        SCFree(s->addr_src_match6);
+    }
+    if (s->addr_dst_match6 != NULL) {
+        SCFree(s->addr_dst_match6);
+    }
+
     SigRefFree(s);
 
     SCFree(s);
+}
+
+/**
+ *  \internal
+ *  \brief build address match array for cache efficient matching
+ *
+ *  \param s the signature
+ */
+static void SigBuildAddressMatchArray(Signature *s) {
+    /* source addresses */
+    uint16_t cnt = 0;
+    uint16_t idx = 0;
+    DetectAddress *da = s->src.ipv4_head;
+    for ( ; da != NULL; da = da->next) {
+        cnt++;
+    }
+    if (cnt > 0) {
+        s->addr_src_match4 = SCMalloc(cnt * sizeof(DetectMatchAddressIPv4));
+        if (s->addr_src_match4 == NULL) {
+            exit(EXIT_FAILURE);
+        }
+
+        for (da = s->src.ipv4_head; da != NULL; da = da->next) {
+            s->addr_src_match4[idx].ip = ntohl(da->ip.addr_data32[0]);
+            s->addr_src_match4[idx].ip2 = ntohl(da->ip2.addr_data32[0]);
+            idx++;
+        }
+        s->addr_src_match4_cnt = cnt;
+    }
+
+    /* destination addresses */
+    cnt = 0;
+    idx = 0;
+    da = s->dst.ipv4_head;
+    for ( ; da != NULL; da = da->next) {
+        cnt++;
+    }
+    if (cnt > 0) {
+        s->addr_dst_match4 = SCMalloc(cnt * sizeof(DetectMatchAddressIPv4));
+        if (s->addr_dst_match4 == NULL) {
+            exit(EXIT_FAILURE);
+        }
+
+        for (da = s->dst.ipv4_head; da != NULL; da = da->next) {
+            s->addr_dst_match4[idx].ip = ntohl(da->ip.addr_data32[0]);
+            s->addr_dst_match4[idx].ip2 = ntohl(da->ip2.addr_data32[0]);
+            idx++;
+        }
+        s->addr_dst_match4_cnt = cnt;
+    }
+
+    /* source addresses IPv6 */
+    cnt = 0;
+    idx = 0;
+    da = s->src.ipv6_head;
+    for ( ; da != NULL; da = da->next) {
+        cnt++;
+    }
+    if (cnt > 0) {
+        s->addr_src_match6 = SCMalloc(cnt * sizeof(DetectMatchAddressIPv6));
+        if (s->addr_src_match6 == NULL) {
+            exit(EXIT_FAILURE);
+        }
+
+        for (da = s->src.ipv6_head; da != NULL; da = da->next) {
+            s->addr_src_match6[idx].ip[0] = ntohl(da->ip.addr_data32[0]);
+            s->addr_src_match6[idx].ip[1] = ntohl(da->ip.addr_data32[1]);
+            s->addr_src_match6[idx].ip[2] = ntohl(da->ip.addr_data32[2]);
+            s->addr_src_match6[idx].ip[3] = ntohl(da->ip.addr_data32[3]);
+            s->addr_src_match6[idx].ip2[0] = ntohl(da->ip2.addr_data32[0]);
+            s->addr_src_match6[idx].ip2[1] = ntohl(da->ip2.addr_data32[1]);
+            s->addr_src_match6[idx].ip2[2] = ntohl(da->ip2.addr_data32[2]);
+            s->addr_src_match6[idx].ip2[3] = ntohl(da->ip2.addr_data32[3]);
+            idx++;
+        }
+        s->addr_src_match6_cnt = cnt;
+    }
+
+    /* destination addresses IPv6 */
+    cnt = 0;
+    idx = 0;
+    da = s->dst.ipv6_head;
+    for ( ; da != NULL; da = da->next) {
+        cnt++;
+    }
+    if (cnt > 0) {
+        s->addr_dst_match6 = SCMalloc(cnt * sizeof(DetectMatchAddressIPv6));
+        if (s->addr_dst_match6 == NULL) {
+            exit(EXIT_FAILURE);
+        }
+
+        for (da = s->dst.ipv6_head; da != NULL; da = da->next) {
+            s->addr_dst_match6[idx].ip[0] = ntohl(da->ip.addr_data32[0]);
+            s->addr_dst_match6[idx].ip[1] = ntohl(da->ip.addr_data32[1]);
+            s->addr_dst_match6[idx].ip[2] = ntohl(da->ip.addr_data32[2]);
+            s->addr_dst_match6[idx].ip[3] = ntohl(da->ip.addr_data32[3]);
+            s->addr_dst_match6[idx].ip2[0] = ntohl(da->ip2.addr_data32[0]);
+            s->addr_dst_match6[idx].ip2[1] = ntohl(da->ip2.addr_data32[1]);
+            s->addr_dst_match6[idx].ip2[2] = ntohl(da->ip2.addr_data32[2]);
+            s->addr_dst_match6[idx].ip2[3] = ntohl(da->ip2.addr_data32[3]);
+            idx++;
+        }
+        s->addr_dst_match6_cnt = cnt;
+    }
+}
+
+/**
+ *  \internal
+ *  \brief validate a just parsed signature for internal inconsistencies
+ *
+ *  \param s just parsed signature
+ *
+ *  \retval 0 invalid
+ *  \retval 1 valid
+ */
+static int SigValidate(Signature *s) {
+    SCEnter();
+
+    /* check for uricontent + from_server/to_client */
+    if (s->flags & SIG_FLAG_MPM_URI) {
+        SigMatch *sm;
+        for (sm = s->match; sm != NULL; sm = sm->next) {
+            if (sm->type == DETECT_FLOW) {
+                DetectFlowData *fd = (DetectFlowData *)sm->ctx;
+                if (fd == NULL)
+                    continue;
+
+                if (fd->flags & FLOW_PKT_TOCLIENT) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use uricontent with flow:to_client or flow:from_server");
+                    SCReturnInt(0);
+                }
+            }
+        }
+    }
+
+    SCReturnInt(1);
 }
 
 /**
@@ -1175,10 +1343,20 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",
         sig->flags & SIG_FLAG_PACKET ? "set" : "not set");
 
+    SigBuildAddressMatchArray(sig);
+
+    /* validate signature, SigValidate will report the error reason */
+    if (SigValidate(sig) == 0) {
+        goto error;
+    }
+
     SCReturnPtr(sig, "Signature");
 
 error:
-    if ( sig != NULL ) SigFree(sig);
+    if (sig != NULL) {
+        SigFree(sig);
+    }
+
     if (de_ctx->failure_fatal == 1) {
         SCLogError(SC_ERR_INVALID_SIGNATURE,"Signature parsing failed: \"%s\"", sigstr);
         exit(EXIT_FAILURE);
@@ -1351,9 +1529,16 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
     if (sig->amatch)
         sig->flags |= SIG_FLAG_AMATCH;
 
+    SigBuildAddressMatchArray(sig);
+
     SCLogDebug("sig %"PRIu32" SIG_FLAG_APPLAYER: %s, SIG_FLAG_PACKET: %s",
         sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",
         sig->flags & SIG_FLAG_PACKET ? "set" : "not set");
+
+    /* validate signature, SigValidate will report the error reason */
+    if (SigValidate(sig) == 0) {
+        goto error;
+    }
 
     /**
      * In SigInitReal, the signature returned will point from the ptr next
@@ -1363,9 +1548,10 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
     return sig;
 
 error:
-    if ( sig != NULL ) {
-        if ( sig->next != NULL)
+    if (sig != NULL) {
+        if (sig->next != NULL) {
             SigFree(sig->next);
+        }
         SigFree(sig);
     }
     /* if something failed, restore the old signum count
@@ -1919,6 +2105,38 @@ int SigParseTest10(void) {
                (de_ctx->sig_list->next->next->next->id == 4) &&
                (de_ctx->sig_list->next->next->next->next->id == 1));
 
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test Parsing sig with trailing space(s) as reported by
+ *       Morgan Cox on oisf-users.
+ */
+int SigParseTest11(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "drop tcp any any -> any 80 (msg:\"Snort_Inline is blocking the http link\";) ");
+    if (s == NULL) {
+        printf("sig 1 didn't parse: ");
+        goto end;
+    }
+
+    s = DetectEngineAppendSig(de_ctx, "drop tcp any any -> any 80 (msg:\"Snort_Inline is blocking the http link\"; sid:1;)            ");
+    if (s == NULL) {
+        printf("sig 2 didn't parse: ");
+        goto end;
+    }
+
+    result = 1;
 end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
@@ -2791,6 +3009,7 @@ void SigParseRegisterTests(void) {
     UtRegisterTest("SigParseTest08", SigParseTest08, 1);
     UtRegisterTest("SigParseTest09", SigParseTest09, 1);
     UtRegisterTest("SigParseTest10", SigParseTest10, 1);
+    UtRegisterTest("SigParseTest11", SigParseTest11, 1);
 
     UtRegisterTest("SigParseBidirecTest06", SigParseBidirecTest06, 1);
     UtRegisterTest("SigParseBidirecTest07", SigParseBidirecTest07, 1);

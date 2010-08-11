@@ -47,6 +47,7 @@
 #include "util-debug.h"
 #include "util-cidr.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 
 
 /* prototypes */
@@ -1441,36 +1442,48 @@ int SigGroupHeadClearUricontent(SigGroupHead *sh)
  */
 int SigGroupHeadLoadStreamContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
+    SCEnter();
+
     Signature *s = NULL;
     SigMatch *sm = NULL;
     uint32_t sig = 0;
     DetectContentData *co = NULL;
 
-    if (sgh == NULL)
-        return 0;
+    if (sgh == NULL) {
+        SCReturnInt(0);
+    }
 
-    if (DetectContentMaxId(de_ctx) == 0)
-        return 0;
+    if (DetectContentMaxId(de_ctx) == 0) {
+        SCReturnInt(0);
+    }
 
     BUG_ON(sgh->init == NULL);
 
     sgh->init->stream_content_size = (DetectContentMaxId(de_ctx) / 8) + 1;
     sgh->init->stream_content_array = SCMalloc(sgh->init->stream_content_size);
-    if (sgh->init->stream_content_array == NULL)
-        return -1;
+    if (sgh->init->stream_content_array == NULL) {
+        SCReturnInt(-1);
+    }
 
     memset(sgh->init->stream_content_array,0, sgh->init->stream_content_size);
 
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
         s = sgh->match_array[sig];
+
+        SCLogDebug("s %"PRIu32, s->id);
+
         if (s == NULL)
             continue;
 
-        if (!(s->flags & SIG_FLAG_MPM))
+        if (!(s->flags & SIG_FLAG_MPM)) {
+            SCLogDebug("no mpm");
             continue;
+        }
 
-        if (s->flags & SIG_FLAG_DSIZE)
+        if (s->flags & SIG_FLAG_DSIZE) {
+            SCLogDebug("dsize");
             continue;
+        }
 
         sm = s->pmatch;
         if (sm == NULL)
@@ -1485,7 +1498,7 @@ int SigGroupHeadLoadStreamContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         }
     }
 
-    return 0;
+    SCReturnInt(0);
 }
 
 /**
@@ -1583,6 +1596,7 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 
         sgh->head_array[idx].flags = s->flags;
         sgh->head_array[idx].mpm_pattern_id = s->mpm_pattern_id;
+        sgh->head_array[idx].mpm_stream_pattern_id = s->mpm_stream_pattern_id;
         sgh->head_array[idx].alproto = s->alproto;
         sgh->head_array[idx].num = s->num;
         sgh->head_array[idx].full_sig = s;
@@ -1590,6 +1604,7 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         BUG_ON(s->flags != sgh->head_array[idx].flags);
         BUG_ON(s->alproto != sgh->head_array[idx].alproto);
         BUG_ON(s->mpm_pattern_id != sgh->head_array[idx].mpm_pattern_id);
+        BUG_ON(s->mpm_stream_pattern_id != sgh->head_array[idx].mpm_stream_pattern_id);
         BUG_ON(s->num != sgh->head_array[idx].num);
         BUG_ON(s != sgh->head_array[idx].full_sig);
 
@@ -2123,19 +2138,20 @@ static int SigGroupHeadTest10(void)
     int result = 0;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     Signature *s = NULL;
-    Packet p;
+    Packet *p = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
     ThreadVars th_v;
 
     memset(&th_v, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
-    p.proto = IPPROTO_ICMP;
-    p.type = 5;
-    p.code = 1;
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
+
+    p = UTHBuildPacketSrcDst(NULL, 0, IPPROTO_ICMP, "192.168.1.1", "1.2.3.4");
+    p->icmpv4h->type = 5;
+    p->icmpv4h->code = 1;
+
+    /* originally ip's were
     p.src.addr_data32[0] = 0xe08102d3;
     p.dst.addr_data32[0] = 0x3001a8c0;
+    */
 
     if (de_ctx == NULL)
         return 0;
@@ -2152,9 +2168,9 @@ static int SigGroupHeadTest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    AddressDebugPrint(&p.dst);
+    AddressDebugPrint(&p->dst);
 
-    SigGroupHead *sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, &p);
+    SigGroupHead *sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, p);
     if (sgh == NULL) {
         goto end;
     }
@@ -2163,6 +2179,7 @@ static int SigGroupHeadTest10(void)
 end:
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
+    UTHFreePackets(&p, 1);
     return result;
 }
 #endif

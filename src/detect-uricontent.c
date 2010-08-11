@@ -50,6 +50,7 @@
 #include "util-print.h"
 #include "util-debug.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-binsearch.h"
 #include "util-spm.h"
 #include "util-spm-bm.h"
@@ -321,7 +322,6 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
     cd->offset = 0;
     cd->within = 0;
     cd->distance = 0;
-    cd->flags = 0;
 
     /* Prepare Boyer Moore context for searching faster */
     cd->bm_ctx = BoyerMooreCtxInit(cd->uricontent, cd->uricontent_len);
@@ -814,31 +814,26 @@ static int DetectUriSigTest02(void) {
                          " hellocatch\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     HtpState *http_state = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = httpbuf1;
-    p.payload_len = httplen1;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(httpbuf1, httplen1, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -889,15 +884,15 @@ static int DetectUriSigTest02(void) {
     }
 
     /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if ((PacketAlertCheck(&p, 1))) {
+    if ((PacketAlertCheck(p, 1))) {
         printf("sig: 1 alerted, but it should not\n");
         goto end;
-    } else if (!PacketAlertCheck(&p, 2)) {
+    } else if (!PacketAlertCheck(p, 2)) {
         printf("sig: 2 did not alerted, but it should\n");
         goto end;
-    }  else if ((PacketAlertCheck(&p, 3))) {
+    }  else if ((PacketAlertCheck(p, 3))) {
         printf("sig: 3 alerted, but it should not\n");
         goto end;
     }
@@ -913,6 +908,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -929,30 +925,25 @@ static int DetectUriSigTest03(void) {
                          " hellocatch\r\n\r\n";
     uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = httpbuf1;
-    p.payload_len = httplen1;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(httpbuf1, httplen1, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -997,15 +988,15 @@ static int DetectUriSigTest03(void) {
     }
 
     /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if ((PacketAlertCheck(&p, 1))) {
+    if ((PacketAlertCheck(p, 1))) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
-    } else if (!PacketAlertCheck(&p, 2)) {
+    } else if (!PacketAlertCheck(p, 2)) {
         printf("sig 2 did not alert, but it should: ");
         goto end;
-    } else if ((PacketAlertCheck(&p, 3))) {
+    } else if ((PacketAlertCheck(p, 3))) {
         printf("sig 3 alerted, but it should not: ");
         goto end;
     }
@@ -1024,15 +1015,15 @@ static int DetectUriSigTest03(void) {
     }
 
     /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if ((PacketAlertCheck(&p, 1))) {
+    if ((PacketAlertCheck(p, 1))) {
         printf("sig 1 alerted, but it should not (chunk 2): ");
         goto end;
-    } else if (PacketAlertCheck(&p, 2)) {
+    } else if (PacketAlertCheck(p, 2)) {
         printf("sig 2 alerted, but it should not (chunk 2): ");
         goto end;
-    } else if (!(PacketAlertCheck(&p, 3))) {
+    } else if (!(PacketAlertCheck(p, 3))) {
         printf("sig 3 did not alert, but it should (chunk 2): ");
         goto end;
     }
@@ -1048,6 +1039,7 @@ end:
     //FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -1091,7 +1083,7 @@ static int DetectUriSigTest04(void) {
     if (s == NULL ||
         s->umatch == NULL ||
         s->pmatch == NULL ||
-        ((DetectContentData *)s->pmatch->ctx)->depth != 10 ||
+        ((DetectContentData *)s->pmatch->ctx)->depth != 15 ||
         ((DetectContentData *)s->pmatch->ctx)->offset != 5 ||
         s->match != NULL)
     {
@@ -1106,7 +1098,7 @@ static int DetectUriSigTest04(void) {
     if (s == NULL ||
         s->umatch == NULL ||
         s->pmatch == NULL ||
-        ((DetectUricontentData *)s->umatch->ctx)->depth != 10 ||
+        ((DetectUricontentData *)s->umatch->ctx)->depth != 15 ||
         ((DetectUricontentData *)s->umatch->ctx)->offset != 5 ||
         s->match != NULL)
     {
@@ -1141,7 +1133,7 @@ static int DetectUriSigTest04(void) {
         goto end;
     } else if (s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->within != 30 ||
             s->match != NULL)
@@ -1160,7 +1152,7 @@ static int DetectUriSigTest04(void) {
         goto end;
     } else if (s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectUricontentData*) s->umatch_tail->ctx)->within != 30 ||
             s->match != NULL)
@@ -1180,7 +1172,7 @@ static int DetectUriSigTest04(void) {
     } else if (
             s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->pmatch_tail->ctx)->distance != 30 ||
             s->match != NULL)
@@ -1200,7 +1192,7 @@ static int DetectUriSigTest04(void) {
     } else if (
             s->umatch == NULL ||
             s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
+            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectContentData*) s->umatch_tail->ctx)->distance != 30 ||
             s->match != NULL)
@@ -1227,7 +1219,7 @@ static int DetectUriSigTest04(void) {
         goto end;
     }
 
-    if (    ((DetectContentData*) s->pmatch->ctx)->depth != 10 ||
+    if (    ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
             ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
             ((DetectUricontentData*) s->umatch_tail->ctx)->distance != 30 ||
             ((DetectUricontentData*) s->umatch_tail->ctx)->within != 60 ||
@@ -1260,37 +1252,29 @@ static int DetectUriSigTest05(void) {
                          " hellocatch\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
-    TCPHdr tcp_hdr;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
-    memset(&tcp_hdr, 0, sizeof(tcp_hdr));
 
-    tcp_hdr.th_seq = htonl(1000);
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = httpbuf1;
-    p.payload_len = httplen1;
-    p.proto = IPPROTO_TCP;
-    p.tcph = &tcp_hdr;
+    p = UTHBuildPacket(httpbuf1, httplen1, IPPROTO_TCP);
+    p->tcph->th_seq = htonl(1000);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
-    f.proto = p.proto;
+    f.proto = p->proto;
 
     StreamTcpInitConfig(TRUE);
     FlowL7DataPtrInit(&f);
@@ -1344,7 +1328,7 @@ static int DetectUriSigTest05(void) {
     }
 
     /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
@@ -1352,13 +1336,13 @@ static int DetectUriSigTest05(void) {
         goto end;
     }
 
-    if ((PacketAlertCheck(&p, 1))) {
+    if ((PacketAlertCheck(p, 1))) {
         printf("sig: 1 alerted, but it should not: ");
         goto end;
-    } else if (! PacketAlertCheck(&p, 2)) {
+    } else if (! PacketAlertCheck(p, 2)) {
         printf("sig: 2 did not alert, but it should: ");
         goto end;
-    } else if (! (PacketAlertCheck(&p, 3))) {
+    } else if (! (PacketAlertCheck(p, 3))) {
         printf("sig: 3 did not alert, but it should: ");
         goto end;
     }
@@ -1373,6 +1357,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -1388,37 +1373,31 @@ static int DetectUriSigTest06(void) {
                          " hellocatch\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     TCPHdr tcp_hdr;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     memset(&tcp_hdr, 0, sizeof(tcp_hdr));
 
-    tcp_hdr.th_seq = htonl(1000);
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = httpbuf1;
-    p.payload_len = httplen1;
-    p.proto = IPPROTO_TCP;
-    p.tcph = &tcp_hdr;
+    p = UTHBuildPacket(httpbuf1, httplen1, IPPROTO_TCP);
+    p->tcph->th_seq = htonl(1000);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
-    f.proto = p.proto;
+    f.proto = p->proto;
 
     StreamTcpInitConfig(TRUE);
     FlowL7DataPtrInit(&f);
@@ -1484,7 +1463,7 @@ static int DetectUriSigTest06(void) {
     }
 
    /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
@@ -1492,13 +1471,13 @@ static int DetectUriSigTest06(void) {
         goto end;
     }
 
-    if ((PacketAlertCheck(&p, 1))) {
+    if ((PacketAlertCheck(p, 1))) {
         printf("sig: 1 alerted, but it should not:");
         goto end;
-    } else if (! PacketAlertCheck(&p, 2)) {
+    } else if (! PacketAlertCheck(p, 2)) {
         printf("sig: 2 did not alert, but it should:");
         goto end;
-    } else if (! (PacketAlertCheck(&p, 3))) {
+    } else if (! (PacketAlertCheck(p, 3))) {
         printf("sig: 3 did not alert, but it should:");
         goto end;
     }
@@ -1514,6 +1493,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePackets(&p, 1);
     return result;
 }
 
@@ -1528,30 +1508,25 @@ static int DetectUriSigTest07(void) {
                          " hellocatch\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = httpbuf1;
-    p.payload_len = httplen1;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(httpbuf1, httplen1, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1605,8 +1580,8 @@ static int DetectUriSigTest07(void) {
         goto end;
     }
 
-   /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (http_state == NULL) {
@@ -1614,13 +1589,13 @@ static int DetectUriSigTest07(void) {
         goto end;
     }
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig: 1 alerted, but it should not:");
         goto end;
-    } else if (PacketAlertCheck(&p, 2)) {
+    } else if (PacketAlertCheck(p, 2)) {
         printf("sig: 2 alerted, but it should not:");
         goto end;
-    } else if (PacketAlertCheck(&p, 3)) {
+    } else if (PacketAlertCheck(p, 3)) {
         printf("sig: 3 alerted, but it should not:");
         goto end;
     }
@@ -1636,6 +1611,7 @@ end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePackets(&p, 1);
     return result;
 }
 #endif /* UNITTESTS */

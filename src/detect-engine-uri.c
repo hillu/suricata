@@ -184,11 +184,16 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
 
             //PrintawDataFp(stdout,ud->uricontent,ud->uricontent_len);
 
-            /* do the actual search with boyer moore precooked ctx */
-            if (ud->flags & DETECT_URICONTENT_NOCASE)
-                found = BoyerMooreNocase(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
-            else
-                found = BoyerMoore(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
+            /* If we got no matches from the mpm, avoid searching (just check if negated) */
+            if (det_ctx->de_have_httpuri == TRUE) {
+                /* do the actual search with boyer moore precooked ctx */
+                if (ud->flags & DETECT_URICONTENT_NOCASE)
+                    found = BoyerMooreNocase(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
+                else
+                    found = BoyerMoore(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
+            } else {
+                found = NULL;
+            }
 
             /* next we evaluate the result in combination with the
              * negation flag. */
@@ -199,9 +204,8 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
             } else if (found == NULL && ud->flags & DETECT_URICONTENT_NEGATED) {
                 goto match;
             } else if (found != NULL && ud->flags & DETECT_URICONTENT_NEGATED) {
-                /* why are we saving match offset here? */
-                match_offset = (uint32_t)((found - payload) + ud->uricontent_len);
                 SCLogDebug("uricontent %"PRIu32" matched at offset %"PRIu32", but negated so no match", ud->id, match_offset);
+                det_ctx->discontinue_matching = 1;
                 SCReturnInt(0);
             } else {
                 match_offset = (uint32_t)((found - payload) + ud->uricontent_len);
@@ -224,6 +228,9 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
                     SCReturnInt(1);
                 }
 
+                if (det_ctx->discontinue_matching)
+                    SCReturnInt(0);
+
                 /* set the previous match offset to the start of this match + 1 */
                 prev_offset = (match_offset - (ud->uricontent_len - 1));
                 SCLogDebug("trying to see if there is another match after prev_offset %"PRIu32, prev_offset);
@@ -232,15 +239,43 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
         } while(1);
     } else if (sm->type == DETECT_PCRE) {
         SCLogDebug("inspecting pcre");
+        DetectPcreData *pe = (DetectPcreData *)sm->ctx;
+        uint32_t prev_payload_offset = det_ctx->payload_offset;
+        uint32_t prev_offset = 0;
+        int r = 0;
 
-        int r = DetectPcrePayloadMatch(det_ctx, s, sm, /* no packet */NULL,
-                                       NULL, payload, payload_len);
-        /* PrintRawDataFp(stdout, payload, payload_len); */
-        if (r == 1) {
-            goto match;
-        }
+        det_ctx->pcre_match_start_offset = 0;
+        do {
+            r = DetectPcrePayloadMatch(det_ctx, s, sm, NULL, NULL,
+                                       payload, payload_len);
+            if (r == 0) {
+                det_ctx->discontinue_matching = 1;
+                SCReturnInt(0);
+            }
 
-        SCReturnInt(0);
+            if (!(pe->flags & DETECT_PCRE_RELATIVE_NEXT)) {
+                SCLogDebug("no relative match coming up, so this is a match");
+                goto match;
+            }
+
+            /* save it, in case we need to do a pcre match once again */
+            prev_offset = det_ctx->pcre_match_start_offset;
+
+            /* see if the next payload keywords match. If not, we will
+             * search for another occurence of this pcre and see
+             * if the others match, until we run out of matches */
+            r = DoInspectPacketUri(de_ctx, det_ctx, s, sm->next,
+                                   payload, payload_len);
+            if (r == 1) {
+                SCReturnInt(1);
+            }
+
+            if (det_ctx->discontinue_matching)
+                SCReturnInt(0);
+
+            det_ctx->payload_offset = prev_payload_offset;
+            det_ctx->pcre_match_start_offset = prev_offset;
+        } while (1);
     } else if (sm->type == DETECT_AL_URILEN) {
         SCLogDebug("inspecting uri len");
 
@@ -350,7 +385,7 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     }
 
     /* if we don't have a uri, don't bother inspecting */
-    if (det_ctx->de_have_httpuri == FALSE) {
+    if (det_ctx->de_have_httpuri == FALSE && !(s->flags & SIG_FLAG_MPM_URI_NEG)) {
         SCLogDebug("We don't have uri");
         goto end;
     }
@@ -370,8 +405,6 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
 
     sm = s->umatch;
 
-    det_ctx->payload_offset = 0;
-
 #ifdef DEBUG
     DetectUricontentData *co = (DetectUricontentData *)sm->ctx;
     SCLogDebug("co->id %"PRIu32, co->id);
@@ -385,6 +418,9 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL || tx->request_uri_normalized == NULL)
             continue;
+
+        det_ctx->discontinue_matching = 0;
+        det_ctx->payload_offset = 0;
 
         /* Inspect all the uricontents fetched on each
          * transaction at the app layer */
@@ -423,30 +459,25 @@ static int UriTestSig01(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -482,9 +513,9 @@ static int UriTestSig01(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -503,13 +534,13 @@ static int UriTestSig01(void)
         goto end;
     }
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
     result = 1;
 
@@ -523,6 +554,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -541,30 +573,25 @@ static int UriTestSig02(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -600,9 +627,9 @@ static int UriTestSig02(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted with payload2, but it should not: ");
         goto end;
     }
@@ -622,9 +649,9 @@ static int UriTestSig02(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert, but it should: ");
         goto end;
     }
@@ -641,6 +668,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -659,30 +687,25 @@ static int UriTestSig03(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -718,9 +741,9 @@ static int UriTestSig03(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -740,10 +763,9 @@ static int UriTestSig03(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -760,6 +782,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -778,30 +801,25 @@ static int UriTestSig04(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -837,9 +855,9 @@ static int UriTestSig04(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -859,10 +877,9 @@ static int UriTestSig04(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -879,6 +896,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -897,30 +915,25 @@ static int UriTestSig05(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -956,9 +969,9 @@ static int UriTestSig05(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -978,10 +991,9 @@ static int UriTestSig05(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -998,6 +1010,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1016,30 +1029,25 @@ static int UriTestSig06(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1075,9 +1083,9 @@ static int UriTestSig06(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1097,9 +1105,9 @@ static int UriTestSig06(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert on payload2, but it should: ");
         goto end;
     }
@@ -1116,6 +1124,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1134,30 +1143,25 @@ static int UriTestSig07(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1193,9 +1197,9 @@ static int UriTestSig07(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert, but it should: ");
         goto end;
     }
@@ -1215,9 +1219,9 @@ static int UriTestSig07(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -1234,6 +1238,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1252,30 +1257,25 @@ static int UriTestSig08(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1311,9 +1311,9 @@ static int UriTestSig08(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1333,9 +1333,9 @@ static int UriTestSig08(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1352,6 +1352,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1370,30 +1371,25 @@ static int UriTestSig09(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1429,9 +1425,9 @@ static int UriTestSig09(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1451,9 +1447,9 @@ static int UriTestSig09(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1470,6 +1466,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1488,30 +1485,25 @@ static int UriTestSig10(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1547,9 +1539,9 @@ static int UriTestSig10(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1569,9 +1561,9 @@ static int UriTestSig10(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1588,6 +1580,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1606,30 +1599,25 @@ static int UriTestSig11(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1666,9 +1654,9 @@ static int UriTestSig11(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1688,9 +1676,9 @@ static int UriTestSig11(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1707,6 +1695,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1725,30 +1714,25 @@ static int UriTestSig12(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1785,9 +1769,9 @@ static int UriTestSig12(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -1807,9 +1791,9 @@ static int UriTestSig12(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -1826,6 +1810,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1844,30 +1829,25 @@ static int UriTestSig13(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1903,9 +1883,9 @@ static int UriTestSig13(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with pkt, but it should: ");
         goto end;
     }
@@ -1925,10 +1905,10 @@ static int UriTestSig13(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -1945,6 +1925,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -1963,30 +1944,25 @@ static int UriTestSig14(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2022,9 +1998,9 @@ static int UriTestSig14(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with pkt, but it should: ");
         goto end;
     }
@@ -2044,10 +2020,10 @@ static int UriTestSig14(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -2064,6 +2040,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2082,30 +2059,25 @@ static int UriTestSig15(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2141,9 +2113,9 @@ static int UriTestSig15(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with pkt, but it should: ");
         goto end;
     }
@@ -2163,10 +2135,10 @@ static int UriTestSig15(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didnt alert with payload2, but it should: ");
         goto end;
     }
@@ -2183,6 +2155,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2201,30 +2174,25 @@ static int UriTestSig16(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet p;
+    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf1;
-    p.payload_len = http_buf1_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2258,17 +2226,17 @@ static int UriTestSig16(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 2009024)) {
+    if (!PacketAlertCheck(p, 2009024)) {
         printf("sig 1 didnt alert with pkt, but it should: ");
         goto end;
     }
-    p.alerts.cnt = 0;
+    p->alerts.cnt = 0;
 
     DetectEngineStateReset(f.de_state);
-    p.payload = http_buf2;
-    p.payload_len = http_buf2_len;
+    p->payload = http_buf2;
+    p->payload_len = http_buf2_len;
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
@@ -2283,9 +2251,9 @@ static int UriTestSig16(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 2009024)) {
+    if (PacketAlertCheck(p, 2009024)) {
         printf("sig 1 alerted, but it should not (host should not match): ");
         goto end;
     }
@@ -2302,6 +2270,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2317,29 +2286,24 @@ static int UriTestSig17(void)
     Flow f;
     TcpSession ssn;
     HtpState *http_state = NULL;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf;
-    p.payload_len = http_buf_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2377,9 +2341,9 @@ static int UriTestSig17(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -2396,6 +2360,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2411,29 +2376,24 @@ static int UriTestSig18(void)
     Flow f;
     TcpSession ssn;
     HtpState *http_state = NULL;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf;
-    p.payload_len = http_buf_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2471,9 +2431,9 @@ static int UriTestSig18(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -2490,6 +2450,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2505,29 +2466,24 @@ static int UriTestSig19(void)
     Flow f;
     TcpSession ssn;
     HtpState *http_state = NULL;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf;
-    p.payload_len = http_buf_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2566,9 +2522,9 @@ static int UriTestSig19(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -2585,6 +2541,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2600,29 +2557,24 @@ static int UriTestSig20(void)
     Flow f;
     TcpSession ssn;
     HtpState *http_state = NULL;
-    Packet p;
+    Packet *p = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
     memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = http_buf;
-    p.payload_len = http_buf_len;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.src.family = AF_INET;
     f.dst.family = AF_INET;
 
-    p.flow = &f;
-    p.flowflags |= FLOW_PKT_TOSERVER;
-    p.flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2660,9 +2612,9 @@ static int UriTestSig20(void)
     }
 
     /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(&p, 1)) {
+    if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
@@ -2679,6 +2631,185 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test multiple relative contents with a negated content.
+ */
+static int UriTestSig21(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /we_need_to_fix_this_and_yes_fix_this_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "uricontent:fix; uricontent:this; within:6; "
+                               "uricontent:!\"and\"; distance:0; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it should not: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test relative pcre.
+ */
+static int UriTestSig22(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_is_a_super_duper_"
+        "nova_in_super_nova_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "pcre:/super/U; uricontent:nova; within:7; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
     return result;
 }
 
@@ -2708,6 +2839,8 @@ void UriRegisterTests(void)
     UtRegisterTest("UriTestSig18", UriTestSig18, 1);
     UtRegisterTest("UriTestSig19", UriTestSig19, 1);
     UtRegisterTest("UriTestSig20", UriTestSig20, 1);
+    UtRegisterTest("UriTestSig21", UriTestSig21, 1);
+    UtRegisterTest("UriTestSig22", UriTestSig22, 1);
 #endif /* UNITTESTS */
 
     return;

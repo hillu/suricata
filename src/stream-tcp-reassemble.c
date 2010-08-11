@@ -61,74 +61,7 @@ static uint64_t segment_pool_memuse = 0;
 static uint64_t segment_pool_memcnt = 0;
 #endif
 
-/* prototypes */
-static int HandleSegmentStartsBeforeListSegment(TcpStream *, TcpSegment *,
-                                                TcpSegment *);
-static int HandleSegmentStartsAtSameListSegment(TcpStream *, TcpSegment *,
-                                                TcpSegment *);
-static int HandleSegmentStartsAfterListSegment(TcpStream *, TcpSegment *,
-                                               TcpSegment *);
-void StreamTcpSegmentDataReplace(TcpSegment *, TcpSegment *, uint32_t, uint16_t);
-void StreamTcpSegmentDataCopy(TcpSegment *, TcpSegment *);
-TcpSegment* StreamTcpGetSegment(uint16_t);
-void StreamTcpSegmentReturntoPool(TcpSegment *);
-void StreamTcpCreateTestPacket(uint8_t *, uint8_t, uint8_t, uint8_t);
-
-/** \brief alloc a tcp segment pool entry */
-void *TcpSegmentPoolAlloc(void *payload_len) {
-    if (StreamTcpCheckMemcap((uint32_t)sizeof(TcpSegment) + *((uint16_t *) payload_len)) == 0)
-        return NULL;
-
-    TcpSegment *seg = SCMalloc(sizeof (TcpSegment));
-    if (seg == NULL)
-        return NULL;
-
-    memset(seg, 0, sizeof (TcpSegment));
-
-    seg->pool_size = *((uint16_t *) payload_len);
-    seg->payload_len = seg->pool_size;
-
-    seg->payload = SCMalloc(seg->payload_len);
-    if (seg->payload == NULL) {
-        SCFree(seg);
-        return NULL;
-    }
-
-#ifdef DEBUG
-    SCMutexLock(&segment_pool_memuse_mutex);
-    segment_pool_memuse += seg->payload_len;
-    segment_pool_memcnt++;
-    SCLogDebug("segment_pool_memcnt %"PRIu64"", segment_pool_memcnt);
-    SCMutexUnlock(&segment_pool_memuse_mutex);
-#endif
-
-    StreamTcpIncrMemuse((uint32_t)seg->pool_size + sizeof(TcpSegment));
-    return seg;
-}
-
-/** \brief free a tcp segment pool entry */
-void TcpSegmentPoolFree(void *ptr) {
-    if (ptr == NULL)
-        return;
-
-    TcpSegment *seg = (TcpSegment *) ptr;
-
-    StreamTcpDecrMemuse((uint32_t)seg->pool_size + sizeof(TcpSegment));
-
-#ifdef DEBUG
-    SCMutexLock(&segment_pool_memuse_mutex);
-    segment_pool_memuse -= seg->pool_size;
-    segment_pool_memcnt--;
-    SCLogDebug("segment_pool_memcnt %"PRIu64"", segment_pool_memcnt);
-    SCMutexUnlock(&segment_pool_memuse_mutex);
-#endif
-
-    SCFree(seg->payload);
-    SCFree(seg);
-    return;
-}
-
-/* We define serveral pools with prealloced segments with fixed size
+/* We define several pools with prealloced segments with fixed size
  * payloads. We do this to prevent having to do an SCMalloc call for every
  * data segment we receive, which would be a large performance penalty.
  * The cost is in memory of course. */
@@ -153,9 +86,147 @@ static uint64_t segment_pool_cnt = 0;
 /* index to the right pool for all packet sizes. */
 static uint16_t segment_pool_idx[65536]; /* O(1) lookups of the pool */
 
+/* Memory use counters */
+static SCSpinlock stream_reassembly_memuse_spinlock;
+static uint32_t stream_reassembly_memuse;
+static uint32_t stream_reassembly_memuse_max;
+
+/* prototypes */
+static int HandleSegmentStartsBeforeListSegment(TcpStream *, TcpSegment *,
+                                                TcpSegment *);
+static int HandleSegmentStartsAtSameListSegment(TcpStream *, TcpSegment *,
+                                                TcpSegment *);
+static int HandleSegmentStartsAfterListSegment(TcpStream *, TcpSegment *,
+                                               TcpSegment *);
+void StreamTcpSegmentDataReplace(TcpSegment *, TcpSegment *, uint32_t, uint16_t);
+void StreamTcpSegmentDataCopy(TcpSegment *, TcpSegment *);
+TcpSegment* StreamTcpGetSegment(uint16_t);
+void StreamTcpSegmentReturntoPool(TcpSegment *);
+void StreamTcpCreateTestPacket(uint8_t *, uint8_t, uint8_t, uint8_t);
+
+/**
+ *  \brief  Function to Increment the memory usage counter for the TCP reassembly
+ *          segments
+ *
+ *  \param  size Size of the TCP segment and its payload length memory allocated
+ */
+void StreamTcpReassembleIncrMemuse(uint32_t size) {
+
+    SCSpinLock(&stream_reassembly_memuse_spinlock);
+    stream_reassembly_memuse += size;
+
+    if (stream_reassembly_memuse > stream_reassembly_memuse_max)
+        stream_reassembly_memuse_max = stream_reassembly_memuse;
+
+    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+}
+
+/**
+ *  \brief  Function to Decrease the memory usage counter for the TCP reassembly
+ *          segments
+ *
+ *  \param  size Size of the TCP segment and its payload length memory allocated
+ */
+void StreamTcpReassembleDecrMemuse(uint32_t size) {
+    SCSpinLock(&stream_reassembly_memuse_spinlock);
+
+    if (size <= stream_reassembly_memuse) {
+        stream_reassembly_memuse -= size;
+    } else {
+        BUG_ON(size > stream_reassembly_memuse);
+        stream_reassembly_memuse = 0;
+    }
+
+    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+}
+
+
+/**
+ * \brief  Function to Check the reassembly memory usage counter against the
+ *         allowed max memory usgae for TCP segments.
+ *
+ * \param  size Size of the TCP segment and its payload length memory allocated
+ * \retval 1 if in bounds
+ * \retval 0 if not in bounds
+ */
+int StreamTcpReassembleCheckMemcap(uint32_t size) {
+    SCEnter();
+
+    int ret = 0;
+    SCSpinLock(&stream_reassembly_memuse_spinlock);
+    if (size + stream_reassembly_memuse <= stream_config.reassembly_memcap)
+        ret = 1;
+    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+
+    SCReturnInt(ret);
+}
+
+/** \brief alloc a tcp segment pool entry */
+void *TcpSegmentPoolAlloc(void *payload_len) {
+    if (StreamTcpReassembleCheckMemcap((uint32_t)sizeof(TcpSegment) +
+                                            *((uint16_t *) payload_len)) == 0)
+    {
+        return NULL;
+    }
+
+    TcpSegment *seg = SCMalloc(sizeof (TcpSegment));
+    if (seg == NULL)
+        return NULL;
+
+    memset(seg, 0, sizeof (TcpSegment));
+
+    seg->pool_size = *((uint16_t *) payload_len);
+    seg->payload_len = seg->pool_size;
+
+    seg->payload = SCMalloc(seg->payload_len);
+    if (seg->payload == NULL) {
+        SCFree(seg);
+        return NULL;
+    }
+
+#ifdef DEBUG
+    SCMutexLock(&segment_pool_memuse_mutex);
+    segment_pool_memuse += seg->payload_len;
+    segment_pool_memcnt++;
+    SCLogDebug("segment_pool_memcnt %"PRIu64"", segment_pool_memcnt);
+    SCMutexUnlock(&segment_pool_memuse_mutex);
+#endif
+
+    StreamTcpReassembleIncrMemuse((uint32_t)seg->pool_size + sizeof(TcpSegment));
+    return seg;
+}
+
+/** \brief free a tcp segment pool entry */
+void TcpSegmentPoolFree(void *ptr) {
+    if (ptr == NULL)
+        return;
+
+    TcpSegment *seg = (TcpSegment *) ptr;
+
+    StreamTcpReassembleDecrMemuse((uint32_t)seg->pool_size + sizeof(TcpSegment));
+
+#ifdef DEBUG
+    SCMutexLock(&segment_pool_memuse_mutex);
+    segment_pool_memuse -= seg->pool_size;
+    segment_pool_memcnt--;
+    SCLogDebug("segment_pool_memcnt %"PRIu64"", segment_pool_memcnt);
+    SCMutexUnlock(&segment_pool_memuse_mutex);
+#endif
+
+    SCFree(seg->payload);
+    SCFree(seg);
+    return;
+}
+
 int StreamTcpReassembleInit(char quiet)
 {
     StreamMsgQueuesInit();
+
+    /* init the memcap and it's lock */
+    stream_reassembly_memuse = 0;
+    stream_reassembly_memuse_max = 0;
+    SCSpinInit(&stream_reassembly_memuse_spinlock, PTHREAD_PROCESS_PRIVATE);
+
 #ifdef DEBUG
     SCMutexInit(&segment_pool_memuse_mutex, NULL);
 #endif
@@ -210,6 +281,14 @@ void StreamTcpReassembleFree(char quiet)
     }
 
     StreamMsgQueuesDeinit(quiet);
+
+    if (!quiet) {
+        SCLogInfo("Max memuse of the stream reassembly engine %"PRIu32" (in use"
+                " %"PRIu32")", stream_reassembly_memuse_max,
+                stream_reassembly_memuse);
+    }
+
+    SCSpinDestroy(&stream_reassembly_memuse_spinlock);
 
 #ifdef DEBUG
     SCLogDebug("segment_pool_cnt %"PRIu64"", segment_pool_cnt);
@@ -1236,10 +1315,44 @@ static int HandleSegmentStartsAfterListSegment(TcpStream *stream,
     SCReturnInt(0);
 }
 
+/**
+ * \brief  Function to Check the reassembly depth valuer against the
+ *         allowed max depth of the stream reassmbly for TCP streams.
+ *
+ * \param  size Size of the depth util now and received packet payload length
+ * \retval 1 if in bounds
+ * \retval 0 if not in bounds
+ */
+int StreamTcpReassembleCheckDepth(uint32_t size) {
+    SCEnter();
+
+    int ret = 0;
+
+    /* if the configured depth value is 0, it means there is no limit on
+       reassembly depth. Otherwise carry on my boy ;) */
+    if (stream_config.reassembly_depth == 0) {
+        ret = 1;
+    } else if (size <= stream_config.reassembly_depth) {
+        ret = 1;
+    }
+
+    SCReturnInt(ret);
+}
+
 int StreamTcpReassembleHandleSegmentHandleData(TcpSession *ssn,
                                                TcpStream *stream, Packet *p)
 {
     SCEnter();
+
+    /* If we have reached the defined depth for either of the stream, then stop
+       reassembling the TCP session */
+    if (StreamTcpReassembleCheckDepth(stream->reassembly_depth + p->payload_len)
+            != 1)
+    {
+        ssn->flags |= STREAMTCP_FLAG_NOCLIENT_REASSEMBLY;
+        ssn->flags |= STREAMTCP_FLAG_NOSERVER_REASSEMBLY;
+        SCReturnInt(0);
+    }
 
     TcpSegment *seg = StreamTcpGetSegment(p->payload_len);
     if (seg == NULL) {
@@ -1252,6 +1365,7 @@ int StreamTcpReassembleHandleSegmentHandleData(TcpSession *ssn,
     seg->seq = TCP_GET_SEQ(p);
     seg->next = NULL;
     seg->prev = NULL;
+    stream->reassembly_depth += p->payload_len;
 
     if (ReassembleInsertSegment(stream, seg, p) != 0) {
         SCLogDebug("ReassembleInsertSegment failed");
@@ -1401,13 +1515,21 @@ void StreamTcpReassembleUnPause (TcpSession *ssn, char direction)
 
 /**
  *  \brief Update the stream reassembly upon receiving an ACK packet.
- *  \todo this function is too long, we need to break it up
+ *  \todo this function is too long, we need to break it up. It needs it BAD
  */
 int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
                                                TcpSession *ssn, TcpStream *stream,
                                                Packet *p)
 {
     SCEnter();
+
+    if (PKT_IS_TOSERVER(p)) {
+        if (!(ssn->flags & STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED)) {
+            SCLogDebug("toserver reassembling is not done yet, so "
+                    "skipping reassembling at the moment for to_client");
+            SCReturnInt(0);
+        }
+    }
 
     if (stream->seg_list == NULL) {
         /* send an empty EOF msg if we have no segments but TCP state
@@ -1420,6 +1542,11 @@ int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
             }
             StreamTcpSetupMsg(ssn, stream, p, smsg);
             StreamMsgPutInQueue(ra_ctx->stream_q,smsg);
+
+            /* even if app layer detection failed, we will now move on to
+             * release reassembly for both directions. */
+            ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
+
         } else {
             SCLogDebug("no segments in the list to reassemble !!");
         }
@@ -1447,31 +1574,35 @@ int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
     /* check if we have detected the app layer protocol or not. If it has been
        detected then, process data normally, as we have sent one smsg from
        toserver side already to the app layer */
-    if (!(ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)) {
-        /* Do not perform reassembling of data from server, until the app layer
-           proto has been detected and we have sent atleast one smsg from client
-           data to app layer */
-        if (PKT_IS_TOSERVER(p)) {
-            SCLogDebug("we didn't detected the app layer protocol till "
-                    "yet, so not doing toclient reassembling");
-            SCReturnInt(0);
-        /* unset the queue init flag, as app layer protocol has not been
-           detected till yet and we need to send the initial smsg again to app
-           layer */
-        } if (PKT_IS_TOCLIENT(p)) {
+    if (ssn->state <= TCP_ESTABLISHED) {
+        if (!(ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)) {
+            /* Do not perform reassembling of data from server, until the app layer
+               proto has been detected and we have sent atleast one smsg from client
+               data to app layer */
+            if (PKT_IS_TOSERVER(p)) {
+                SCLogDebug("we didn't detected the app layer protocol till "
+                        "yet, so not doing toclient reassembling");
+                SCReturnInt(0);
+                /* unset the queue init flag, as app layer protocol has not been
+                   detected till yet and we need to send the initial smsg again to app
+                   layer */
+            } if (PKT_IS_TOCLIENT(p)) {
+                ra_ctx->stream_q->flags &= ~STREAMQUEUE_FLAG_INIT;
+            }
+            /* initialize the tmp_ra_base_seq for each new run */
+            stream->tmp_ra_base_seq = stream->ra_base_seq;
+            ra_base_seq = stream->tmp_ra_base_seq;
+            /* if app layer protocol has been detected, then restore the reassembled
+               seq. to the value till reassembling has been done and unset the queue
+               init flag permanently for this tcp session */
+        } else if (stream->tmp_ra_base_seq > stream->ra_base_seq) {
+            stream->ra_base_seq = stream->tmp_ra_base_seq;
             ra_ctx->stream_q->flags &= ~STREAMQUEUE_FLAG_INIT;
+            ra_base_seq = stream->ra_base_seq;
+            SCLogDebug("the app layer protocol has been detected");
+        } else {
+            ra_base_seq = stream->ra_base_seq;
         }
-        /* initialize the tmp_ra_base_seq for each new run */
-        stream->tmp_ra_base_seq = stream->ra_base_seq;
-        ra_base_seq = stream->tmp_ra_base_seq;
-    /* if app layer protocol has been detected, then restore the reassembled
-       seq. to the value till reassembling has been done and unset the queue
-       init flag permanently for this tcp session */
-    } else if (stream->tmp_ra_base_seq > stream->ra_base_seq) {
-        stream->ra_base_seq = stream->tmp_ra_base_seq;
-        ra_ctx->stream_q->flags &= ~STREAMQUEUE_FLAG_INIT;
-        ra_base_seq = stream->ra_base_seq;
-        SCLogDebug("the app layer protocol has been detected");
     /* set the ra_bas_seq to stream->ra_base_seq as now app layer protocol
        has been detected */
     } else {
@@ -1883,6 +2014,10 @@ int StreamTcpReassembleHandleSegmentUpdateACK (TcpReassemblyThreadCtx *ra_ctx,
             stream->ra_base_seq = ra_base_seq;
         }
     }
+
+
+    if (ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)
+        ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
     SCReturnInt(0);
 }
@@ -4313,6 +4448,12 @@ static int StreamTcpReassembleTest38 (void) {
     memset(&dst, 0, sizeof(Address));
     memset(&ssn, 0, sizeof(TcpSession));
 
+    /* prevent L7 from kicking in */
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOSERVER, 0);
+    StreamMsgQueueSetMinInitChunkLen(FLOW_PKT_TOCLIENT, 0);
+    StreamMsgQueueSetMinChunkLen(FLOW_PKT_TOSERVER, 0);
+    StreamMsgQueueSetMinChunkLen(FLOW_PKT_TOCLIENT, 0);
+
     FLOW_INITIALIZE(&f);
     StreamTcpInitConfig(TRUE);
     TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
@@ -4419,6 +4560,18 @@ static int StreamTcpReassembleTest38 (void) {
     tcph.th_seq = htonl(53);
     tcph.th_ack = htonl(100);
     s = &ssn.client;
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toserver packet\n");
+        goto end;
+    }
+
+    p.flowflags = FLOW_PKT_TOCLIENT;
+    p.payload = NULL;
+    p.payload_len = 0;
+    tcph.th_seq = htonl(100);
+    tcph.th_ack = htonl(53);
+    s = &ssn.server;
+
     if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
         printf("failed in segments reassembly, while processing toserver packet\n");
         goto end;
@@ -5448,6 +5601,306 @@ end:
     return ret;
 }
 
+/** \test   Test the memcap incrementing/decrementing and memcap check */
+static int StreamTcpReassembleTest44(void)
+{
+    uint8_t ret = 0;
+    StreamTcpInitConfig(TRUE);
+    uint32_t memuse = stream_reassembly_memuse;
+
+    StreamTcpReassembleIncrMemuse(500);
+    if (stream_reassembly_memuse != (memuse+500)) {
+        printf("failed in incrementing the memory");
+        goto end;
+    }
+
+    StreamTcpReassembleDecrMemuse(500);
+    if (stream_reassembly_memuse != memuse) {
+        printf("failed in decrementing the memory");
+        goto end;
+    }
+
+    if (StreamTcpReassembleCheckMemcap(500) != 1) {
+        printf("failed in validating the memcap");
+        goto end;
+    }
+
+    if (StreamTcpReassembleCheckMemcap((memuse + stream_config.reassembly_memcap)) != 0) {
+        printf("failed in validating the memcap");
+        goto end;
+    }
+
+    StreamTcpFreeConfig(TRUE);
+
+    if (stream_reassembly_memuse != 0) {
+        printf("failed in clearing the memory");
+        goto end;
+    }
+
+    ret = 1;
+    return ret;
+end:
+    StreamTcpFreeConfig(TRUE);
+    return ret;
+}
+
+/**
+ *  \test   Test to make sure that reassembly_depth is enforced.
+ *
+ *  \retval On success it returns 1 and on failure 0.
+ */
+
+static int StreamTcpReassembleTest45 (void) {
+    int ret = 0;
+    Packet p;
+    Flow f;
+    TCPHdr tcph;
+    Port sp;
+    Port dp;
+    Address src;
+    Address dst;
+    struct in_addr in;
+    TcpSession ssn;
+
+    memset(&p, 0, sizeof (Packet));
+    memset(&f, 0, sizeof (Flow));
+    memset(&tcph, 0, sizeof (TCPHdr));
+    memset(&src, 0, sizeof(Address));
+    memset(&dst, 0, sizeof(Address));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    uint8_t httpbuf1[] = "/ HTTP/1.0\r\nUser-Agent: Victor/1.0";
+
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+
+    FLOW_INITIALIZE(&f);
+    StreamTcpInitConfig(TRUE);
+    TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
+
+    ssn.server.ra_base_seq = 9;
+    ssn.server.isn = 9;
+    ssn.server.last_ack = 60;
+    ssn.client.ra_base_seq = 9;
+    ssn.client.isn = 9;
+    ssn.client.last_ack = 60;
+    f.alproto = ALPROTO_UNKNOWN;
+
+    inet_pton(AF_INET, "1.2.3.4", &in);
+    src.family = AF_INET;
+    src.addr_data32[0] = in.s_addr;
+    inet_pton(AF_INET, "1.2.3.5", &in);
+    dst.family = AF_INET;
+    dst.addr_data32[0] = in.s_addr;
+    sp = 200;
+    dp = 220;
+
+    f.src = src;
+    f.dst = dst;
+    f.sp = sp;
+    f.dp = dp;
+    f.protoctx = &ssn;
+    p.flow = &f;
+
+    tcph.th_win = htons(5480);
+    tcph.th_seq = htonl(10);
+    tcph.th_ack = htonl(20);
+    tcph.th_flags = TH_ACK|TH_PUSH;
+    p.tcph = &tcph;
+    p.flowflags = FLOW_PKT_TOCLIENT;
+
+    p.payload = httpbuf1;
+    p.payload_len = httplen1;
+    ssn.state = TCP_ESTABLISHED;
+    /* set the default value of reassembly depth, as there is no config file */
+    stream_config.reassembly_depth = 1048576;
+    ssn.server.reassembly_depth = 1048530;
+
+    TcpStream *s = NULL;
+    s = &ssn.server;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toclient packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if ((ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+            (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("there shouldn't be any no reassembly flag be set \n");
+        goto end;
+    }
+
+    p.flowflags = FLOW_PKT_TOSERVER;
+    p.payload_len = httplen1;
+    s = &ssn.client;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toserver packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if ((ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+            (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("there shouldn't be any no reassembly flag be set \n");
+        goto end;
+    }
+
+    p.flowflags = FLOW_PKT_TOCLIENT;
+    p.payload_len = httplen1;
+    s = &ssn.server;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toserver packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if (! (ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+            ! (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("the no_reassembly flags should be set, server.reassembly_depth "
+                "%"PRIu32" and p.payload_len %"PRIu16" stream_config.reassembly_"
+                "depth %"PRIu32"\n", ssn.server.reassembly_depth, p.payload_len,
+                stream_config.reassembly_depth);
+        goto end;
+    }
+
+    ret = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    StreamTcpReassembleFreeThreadCtx(ra_ctx);
+    return ret;
+}
+
+/**
+ *  \test   Test the undefined config value of reassembly depth.
+ *          the default value of 0 will be loaded and stream will be reassembled
+ *          until the session ended
+ *
+ *  \retval On success it returns 1 and on failure 0.
+ */
+
+static int StreamTcpReassembleTest46 (void) {
+    int ret = 0;
+    Packet p;
+    Flow f;
+    TCPHdr tcph;
+    Port sp;
+    Port dp;
+    Address src;
+    Address dst;
+    struct in_addr in;
+    TcpSession ssn;
+
+    memset(&p, 0, sizeof (Packet));
+    memset(&f, 0, sizeof (Flow));
+    memset(&tcph, 0, sizeof (TCPHdr));
+    memset(&src, 0, sizeof(Address));
+    memset(&dst, 0, sizeof(Address));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    uint8_t httpbuf1[] = "/ HTTP/1.0\r\nUser-Agent: Victor/1.0";
+
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+
+    FLOW_INITIALIZE(&f);
+    StreamTcpInitConfig(TRUE);
+    TcpReassemblyThreadCtx *ra_ctx = StreamTcpReassembleInitThreadCtx();
+
+    ssn.server.ra_base_seq = 9;
+    ssn.server.isn = 9;
+    ssn.server.last_ack = 60;
+    ssn.client.ra_base_seq = 9;
+    ssn.client.isn = 9;
+    ssn.client.last_ack = 60;
+    f.alproto = ALPROTO_UNKNOWN;
+
+    inet_pton(AF_INET, "1.2.3.4", &in);
+    src.family = AF_INET;
+    src.addr_data32[0] = in.s_addr;
+    inet_pton(AF_INET, "1.2.3.5", &in);
+    dst.family = AF_INET;
+    dst.addr_data32[0] = in.s_addr;
+    sp = 200;
+    dp = 220;
+
+    f.src = src;
+    f.dst = dst;
+    f.sp = sp;
+    f.dp = dp;
+    f.protoctx = &ssn;
+    p.flow = &f;
+
+    tcph.th_win = htons(5480);
+    tcph.th_seq = htonl(10);
+    tcph.th_ack = htonl(20);
+    tcph.th_flags = TH_ACK|TH_PUSH;
+    p.tcph = &tcph;
+    p.flowflags = FLOW_PKT_TOCLIENT;
+
+    p.payload = httpbuf1;
+    p.payload_len = httplen1;
+    ssn.state = TCP_ESTABLISHED;
+
+    ssn.server.reassembly_depth = 1048530;
+
+    TcpStream *s = NULL;
+    s = &ssn.server;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toclient packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if ((ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+            (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("there shouldn't be any no reassembly flag be set \n");
+        goto end;
+    }
+
+    p.flowflags = FLOW_PKT_TOSERVER;
+    p.payload_len = httplen1;
+    s = &ssn.client;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toserver packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if ((ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+            (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("there shouldn't be any no reassembly flag be set \n");
+        goto end;
+    }
+
+    p.flowflags = FLOW_PKT_TOCLIENT;
+    p.payload_len = httplen1;
+    s = &ssn.server;
+
+    if (StreamTcpReassembleHandleSegment(ra_ctx, &ssn, s, &p) == -1) {
+        printf("failed in segments reassembly, while processing toserver packet\n");
+        goto end;
+    }
+
+    /* Check if we have flags set or not */
+    if ((ssn.flags & STREAMTCP_FLAG_NOCLIENT_REASSEMBLY) ||
+           (ssn.flags & STREAMTCP_FLAG_NOSERVER_REASSEMBLY)) {
+        printf("the no_reassembly flags should not be set, server.reassembly_depth "
+                "%"PRIu32" and p.payload_len %"PRIu16" stream_config.reassembly_"
+                "depth %"PRIu32"\n", ssn.server.reassembly_depth, p.payload_len,
+                stream_config.reassembly_depth);
+        goto end;
+    }
+
+    ret = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    StreamTcpReassembleFreeThreadCtx(ra_ctx);
+    return ret;
+}
+
 #endif /* UNITTESTS */
 
 /** \brief  The Function Register the Unit tests to test the reassembly engine
@@ -5499,5 +5952,8 @@ void StreamTcpReassembleRegisterTests(void) {
     UtRegisterTest("StreamTcpReassembleTest41 -- app proto test", StreamTcpReassembleTest41, 1);
     UtRegisterTest("StreamTcpReassembleTest42 -- pause/unpause reassembly test", StreamTcpReassembleTest42, 1);
     UtRegisterTest("StreamTcpReassembleTest43 -- min smsg size test", StreamTcpReassembleTest43, 1);
+    UtRegisterTest("StreamTcpReassembleTest44 -- Memcap Test", StreamTcpReassembleTest44, 1);
+    UtRegisterTest("StreamTcpReassembleTest45 -- Depth Test", StreamTcpReassembleTest45, 1);
+    UtRegisterTest("StreamTcpReassembleTest46 -- Depth Test", StreamTcpReassembleTest46, 1);
 #endif /* UNITTESTS */
 }

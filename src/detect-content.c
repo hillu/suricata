@@ -1134,7 +1134,8 @@ int DetectContentParseTest19(void)
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1161,7 +1162,8 @@ int DetectContentParseTest19(void)
         !(data->flags & DETECT_CONTENT_WITHIN) ||
         data->flags & DETECT_CONTENT_DISTANCE ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1190,22 +1192,24 @@ int DetectContentParseTest19(void)
         !(data->flags & DETECT_CONTENT_WITHIN) ||
         data->flags & DETECT_CONTENT_DISTANCE ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
-    result &= (data->within == 10 && data->offset == 10 && data->depth == 13);
+    result &= (data->within == 10 && data->offset == 10 && data->depth == 23);
     data = (DetectContentData *)s->dmatch->ctx;
     if (data->flags & DETECT_CONTENT_RAWBYTES ||
         data->flags & DETECT_CONTENT_NOCASE ||
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
-    result &= (data->offset == 5 && data->depth == 9);
+    result &= (data->offset == 5 && data->depth == 14);
 
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
@@ -1230,7 +1234,8 @@ int DetectContentParseTest19(void)
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1259,7 +1264,8 @@ int DetectContentParseTest19(void)
         !(data->flags & DETECT_CONTENT_WITHIN) ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1287,7 +1293,8 @@ int DetectContentParseTest19(void)
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1315,7 +1322,8 @@ int DetectContentParseTest19(void)
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1343,7 +1351,8 @@ int DetectContentParseTest19(void)
         data->flags & DETECT_CONTENT_WITHIN ||
         !(data->flags & DETECT_CONTENT_DISTANCE) ||
         data->flags & DETECT_CONTENT_FAST_PATTERN ||
-        data->flags & DETECT_CONTENT_NEGATED ) {
+        data->flags & DETECT_CONTENT_NEGATED ||
+        result == 0) {
         result = 0;
         goto end;
     }
@@ -1374,18 +1383,13 @@ int DetectContentParseTest19(void)
 static int SigTestPositiveTestContent(char *rule, uint8_t *buf)
 {
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1401,37 +1405,35 @@ static int SigTestPositiveTestContent(char *rule, uint8_t *buf)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1) != 1) {
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1) != 1) {
         goto end;
     }
 
     result = 1;
 end:
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
 
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
 
+    UTHFreePackets(&p, 1);
     return result;
 }
 
 static int SigTestNegativeTestContent(char *rule, uint8_t *buf)
 {
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     int result = 0;
-
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+
+    p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1447,8 +1449,8 @@ static int SigTestNegativeTestContent(char *rule, uint8_t *buf)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1) != 0) {
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1) != 0) {
         goto end;
     }
 
@@ -1462,6 +1464,7 @@ end:
         SigCleanSignatures(de_ctx);
         DetectEngineCtxFree(de_ctx);
     }
+    UTHFreePackets(&p, 1);
     return result;
 }
 

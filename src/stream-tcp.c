@@ -55,6 +55,19 @@
 
 //#define DEBUG
 
+#define STREAMTCP_DEFAULT_SESSIONS              262144
+#define STREAMTCP_DEFAULT_PREALLOC              32768
+#define STREAMTCP_DEFAULT_MEMCAP                32 * 1024 * 1024 /* 32mb */
+#define STREAMTCP_DEFAULT_REASSEMBLY_MEMCAP     64 * 1024 * 1024 /* 64mb */
+
+#define STREAMTCP_NEW_TIMEOUT                   60
+#define STREAMTCP_EST_TIMEOUT                   3600
+#define STREAMTCP_CLOSED_TIMEOUT                120
+
+#define STREAMTCP_EMERG_NEW_TIMEOUT             10
+#define STREAMTCP_EMERG_EST_TIMEOUT             300
+#define STREAMTCP_EMERG_CLOSED_TIMEOUT          20
+
 typedef struct StreamTcpThread_ {
     uint64_t pkts;
 
@@ -78,18 +91,6 @@ extern void StreamTcpSegmentReturntoPool(TcpSegment *);
 int StreamTcpGetFlowState(void *);
 static int ValidTimestamp(TcpSession * , Packet *);
 void StreamTcpSetOSPolicy(TcpStream*, Packet*);
-
-#define STREAMTCP_DEFAULT_SESSIONS      262144
-#define STREAMTCP_DEFAULT_PREALLOC      32768
-#define STREAMTCP_DEFAULT_MEMCAP        64 * 1024 * 1024 /* 64mb */
-
-#define STREAMTCP_NEW_TIMEOUT           60
-#define STREAMTCP_EST_TIMEOUT           3600
-#define STREAMTCP_CLOSED_TIMEOUT        120
-
-#define STREAMTCP_EMERG_NEW_TIMEOUT     10
-#define STREAMTCP_EMERG_EST_TIMEOUT     300
-#define STREAMTCP_EMERG_CLOSED_TIMEOUT  20
 
 static Pool *ssn_pool = NULL;
 static SCMutex ssn_pool_mutex;
@@ -381,6 +382,7 @@ void StreamTcpInitConfig(char quiet)
     } else {
         stream_config.memcap = STREAMTCP_DEFAULT_MEMCAP;
     }
+
     if (!quiet) {
         SCLogInfo("stream \"memcap\": %"PRIu32"", stream_config.memcap);
     }
@@ -398,6 +400,24 @@ void StreamTcpInitConfig(char quiet)
     }
     if (!quiet) {
         SCLogInfo("stream \"async_oneside\": %s", stream_config.async_oneside ? "enabled" : "disabled");
+    }
+
+    if ((ConfGetInt("stream.reassembly.memcap", &value)) == 1) {
+        stream_config.reassembly_memcap = (uint32_t)value;
+    } else {
+        stream_config.reassembly_memcap = STREAMTCP_DEFAULT_REASSEMBLY_MEMCAP;
+    }
+    if (!quiet) {
+        SCLogInfo("stream.reassembly \"memcap\": %"PRIu32"", stream_config.reassembly_memcap);
+    }
+
+    if ((ConfGetInt("stream.reassembly.depth", &value)) == 1) {
+        stream_config.reassembly_depth = (uint32_t)value;
+    } else {
+        stream_config.reassembly_depth = 0;
+    }
+    if (!quiet) {
+        SCLogInfo("stream.reassembly \"depth\": %"PRIu32"", stream_config.reassembly_depth);
     }
 
     /* init the memcap and it's lock */
@@ -1221,7 +1241,10 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
                 }
             }
 
-            if ((SEQ_EQ(TCP_GET_SEQ(p), ssn->client.next_seq))) {
+            /* Check both seq and ack number before accepting the packet and
+               changing to ESTABLISHED state */
+            if ((SEQ_EQ(TCP_GET_SEQ(p), ssn->client.next_seq)) &&
+                    SEQ_EQ(TCP_GET_ACK(p), ssn->server.next_seq)) {
                 SCLogDebug("normal pkt");
 
                 /* process the packet normal, No Async streams :) */
@@ -1277,7 +1300,15 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
 
                 StreamTcpReassembleHandleSegment(stt->ra_ctx, ssn,
                                                      &ssn->server, p);
-
+            /* Upon receiving the packet with correct seq number and wrong
+               ACK number, it causes the other end to send RST. But some target
+               system (Linux & solaris) does not RST the connection, so it is
+               likely to avoid the detection */
+            } else if (SEQ_EQ(TCP_GET_SEQ(p), ssn->client.next_seq)){
+                ssn->flags |= STREAMTCP_FLAG_DETECTION_EVASION_ATTEMPT;
+                SCLogDebug("ssn %p: wrong ack nr on packet, possible evasion!!",
+                            ssn);
+                return -1;
             } else {
                 SCLogDebug("ssn %p: wrong seq nr on packet", ssn);
                 return -1;
@@ -1300,11 +1331,42 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
         case TH_RST|TH_ACK|TH_ECN:
 
             if(ValidReset(ssn, p)) {
-                StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
-                SCLogDebug("ssn %p: Reset received and state changed to "
-                               "TCP_CLOSED", ssn);
+                uint8_t reset = TRUE;
+                /* After receiveing the RST in SYN_RECV state and if detection
+                   evasion flags has been set, then the following operating
+                   systems will not closed the connection. As they consider the
+                   packet as stray packet and not belonging to the current
+                   session, for more information check
+http://www.packetstan.com/2010/06/recently-ive-been-on-campaign-to-make.html */
+                if (ssn->flags & STREAMTCP_FLAG_DETECTION_EVASION_ATTEMPT) {
+                    if (PKT_IS_TOSERVER(p)) {
+                        if ((ssn->server.os_policy == OS_POLICY_LINUX) ||
+                                (ssn->server.os_policy == OS_POLICY_OLD_LINUX) ||
+                                (ssn->server.os_policy == OS_POLICY_SOLARIS))
+                        {
+                            reset = FALSE;
+                            SCLogDebug("Detection evasion has been attempted, so"
+                                    " not resetting the connection !!");
+                        }
+                    } else {
+                        if ((ssn->client.os_policy == OS_POLICY_LINUX) |
+                                (ssn->client.os_policy == OS_POLICY_OLD_LINUX) ||
+                                (ssn->client.os_policy == OS_POLICY_SOLARIS))
+                        {
+                            reset = FALSE;
+                            SCLogDebug("Detection evasion has been attempted, so"
+                                    " not resetting the connection !!");
+                        }
+                    }
+                }
 
-                StreamTcpSessionPktFree(p);
+                if (reset == TRUE) {
+                    StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
+                    SCLogDebug("ssn %p: Reset received and state changed to "
+                                   "TCP_CLOSED", ssn);
+
+                    StreamTcpSessionPktFree(p);
+                }
             } else
                 return -1;
             break;
@@ -2706,7 +2768,7 @@ static int ValidReset(TcpSession *ssn, Packet *p)
         os_policy = ssn->server.os_policy;
     } else {
         if (ssn->client.os_policy == 0)
-            StreamTcpSetOSPolicy(&ssn->server, p);
+            StreamTcpSetOSPolicy(&ssn->client, p);
 
         os_policy = ssn->client.os_policy;
     }
@@ -5699,6 +5761,49 @@ end:
     return ret;
 }
 
+/** \test   Test the memcap incrementing/decrementing and memcap check */
+static int StreamTcpTest28(void)
+{
+    uint8_t ret = 0;
+    StreamTcpInitConfig(TRUE);
+    uint32_t memuse = stream_memuse;
+
+    StreamTcpIncrMemuse(500);
+    if (stream_memuse != (memuse+500)) {
+        printf("failed in incrementing the memory");
+        goto end;
+    }
+
+    StreamTcpDecrMemuse(500);
+    if (stream_memuse != memuse) {
+        printf("failed in decrementing the memory");
+        goto end;
+    }
+
+    if (StreamTcpCheckMemcap(500) != 1) {
+        printf("failed in validating the memcap");
+        goto end;
+    }
+
+    if (StreamTcpCheckMemcap((memuse + stream_config.memcap)) != 0) {
+        printf("failed in validating the memcap");
+        goto end;
+    }
+
+    StreamTcpFreeConfig(TRUE);
+
+    if (stream_memuse != 0) {
+        printf("failed in clearing the memory");
+        goto end;
+    }
+
+    ret = 1;
+    return ret;
+end:
+    StreamTcpFreeConfig(TRUE);
+    return ret;
+}
+
 #endif /* UNITTESTS */
 
 void StreamTcpRegisterTests (void) {
@@ -5749,6 +5854,7 @@ void StreamTcpRegisterTests (void) {
                     StreamTcpTest26, 1);
     UtRegisterTest("StreamTcpTest27 -- test ecn/cwr sessions",
                     StreamTcpTest27, 1);
+    UtRegisterTest("StreamTcpTest28 -- Memcap Test", StreamTcpTest28, 1);
 
     /* set up the reassembly tests as well */
     StreamTcpReassembleRegisterTests();

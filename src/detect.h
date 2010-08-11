@@ -102,9 +102,11 @@ enum {
  */
 typedef struct DetectAddress_ {
     /** address data for this group */
-    uint8_t family; /**< address family, AF_INET (IPv4) or AF_INET6 (IPv6) */
-    uint32_t ip[4]; /**< the address, or lower end of a range */
-    uint32_t ip2[4]; /**< higher end of a range */
+    Address ip;
+    Address ip2;
+//    uint8_t family; /**< address family, AF_INET (IPv4) or AF_INET6 (IPv6) */
+//    uint32_t ip[4]; /**< the address, or lower end of a range */
+//    uint32_t ip2[4]; /**< higher end of a range */
 
     /** ptr to the next address (dst addr in that case) or to the src port */
     union {
@@ -132,6 +134,16 @@ typedef struct DetectAddressHead_ {
     DetectAddress *ipv4_head;
     DetectAddress *ipv6_head;
 } DetectAddressHead;
+
+typedef struct DetectMatchAddressIPv4_ {
+    uint32_t ip;    /**< address in host order, start of range */
+    uint32_t ip2;   /**< address in host order, end of range */
+} DetectMatchAddressIPv4;
+
+typedef struct DetectMatchAddressIPv6_ {
+    uint32_t ip[4];
+    uint32_t ip2[4];
+} DetectMatchAddressIPv6;
 
 /*
  * DETECT PORT
@@ -203,6 +215,9 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_AMATCH         0x00080000
 #define SIG_FLAG_DMATCH         0x00100000
 
+#define SIG_FLAG_MPM_PACKET     0x00200000
+#define SIG_FLAG_MPM_STREAM     0x00400000
+
 /* Detection Engine flags */
 #define DE_QUIET           0x01     /**< DE is quiet (esp for unittests) */
 
@@ -232,6 +247,7 @@ typedef struct SignatureHeader_ {
 
     /** pattern in the mpm matcher */
     uint32_t mpm_pattern_id;
+    uint32_t mpm_stream_pattern_id;
 
     SigIntId num; /**< signature number, internal id */
 
@@ -248,11 +264,21 @@ typedef struct Signature_ {
 
     /** pattern in the mpm matcher */
     uint32_t mpm_pattern_id;
+    uint32_t mpm_stream_pattern_id;
 
     SigIntId num; /**< signature number, internal id */
 
-    /** address settings for this signature */
-    DetectAddressHead src, dst;
+    /** ipv4 match arrays */
+    DetectMatchAddressIPv4 *addr_dst_match4;
+    uint16_t addr_dst_match4_cnt;
+    DetectMatchAddressIPv4 *addr_src_match4;
+    uint16_t addr_src_match4_cnt;
+    /** ipv6 match arrays */
+    DetectMatchAddressIPv6 *addr_dst_match6;
+    uint16_t addr_dst_match6_cnt;
+    DetectMatchAddressIPv6 *addr_src_match6;
+    uint16_t addr_src_match6_cnt;
+
     /** port settings for this signature */
     DetectPort *sp, *dp;
 
@@ -319,6 +345,9 @@ typedef struct Signature_ {
 #ifdef PROFILING
     uint16_t profiling_id;
 #endif
+
+    /** address settings for this signature */
+    DetectAddressHead src, dst;
 } Signature;
 
 typedef struct DetectEngineIPOnlyThreadCtx_ {
@@ -519,10 +548,15 @@ typedef struct DetectionEngineThreadCtx_ {
     /** offset into the payload of the last match by:
      *  content, pcre, etc */
     uint32_t payload_offset;
+    /* used by pcre match function alone */
+    uint32_t pcre_match_start_offset;
 
     /** offset into the uri payload of the last match by
      *  uricontent */
     uint32_t uricontent_payload_offset;
+
+    /* used to discontinue any more matching */
+    int discontinue_matching;
 
     /* dce stub data */
     uint8_t *dce_stub_data;
