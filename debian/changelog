@@ -1,3 +1,11 @@
+suricata (1.0.1-1) unstable; urgency=low
+
+  * Imported Upstream version 1.0.1 (Closes: #591559)
+  * Bump Standards version to 3.9.1
+  * Create /var/log/suricata (Closes: #590861)
+
+ -- Pierre Chifflier <pollux@debian.org>  Wed, 11 Aug 2010 14:45:14 +0200
+
 suricata (1.0.0-1) unstable; urgency=low
 
   * Imported Upstream version 1.0.0
