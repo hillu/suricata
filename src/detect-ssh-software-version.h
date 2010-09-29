@@ -18,19 +18,20 @@
 /**
  * \file
  *
- * \author Victor Julien <victor@inliniac.net>
+ * \author Pablo Rincon <pablo.rincon.crespo@gmail.com>
  */
 
-#ifndef __DETECT_ENGINE_ALERT_H__
-#define __DETECT_ENGINE_ALERT_H__
-#include "suricata-common.h"
-#include "decode.h"
-#include "detect.h"
+#ifndef __DETECT_SSH_SOFTWARE_VERSION_H__
+#define __DETECT_SSH_SOFTWARE_VERSION_H__
 
-void PacketAlertFinalize(DetectEngineCtx *, DetectEngineThreadCtx *, Packet *);
-int PacketAlertAppend(DetectEngineThreadCtx *, Signature *, Packet *, uint8_t);
-int PacketAlertAppendTag(Packet *, PacketAlert *);
-int PacketAlertCheck(Packet *, uint32_t);
-int PacketAlertRemove(Packet *, uint16_t);
+typedef struct DetectSshSoftwareVersionData_ {
+    uint8_t *software_ver; /** ssh version to match */
+    uint16_t len; /** ssh version length to match */
+} DetectSshSoftwareVersionData;
 
-#endif /* __DETECT_ENGINE_ALERT_H__ */
+/* prototypes */
+void DetectSshSoftwareVersionRegister(void);
+void DetectSshSoftwareVersionRegisterTests(void);
+
+#endif /* __DETECT_SSH_SOFTWARE_VERSION_H__ */
+

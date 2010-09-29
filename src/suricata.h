@@ -30,7 +30,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "1.0.1"
+#define PROG_VER "1.0.2"
 
 /* runtime engine control flags */
 #define SURICATA_STOP    0x01   /**< gracefully stop the engine: process all
@@ -50,6 +50,25 @@ enum {
     MODE_ERF_FILE,
     MODE_DAG,
 };
+
+/* Engine stage/status*/
+enum {
+    SURICATA_INIT = 0,
+    SURICATA_RUNTIME,
+    SURICATA_DEINIT
+};
+
+/* Engine is acting as */
+enum {
+    ENGINE_MODE_IDS,
+    ENGINE_MODE_IPS,
+};
+
+/** You can use this macros to set/check if we have real drop capabilities */
+#define SET_ENGINE_MODE_IPS(engine_mode) (engine_mode = ENGINE_MODE_IPS);
+#define SET_ENGINE_MODE_IDS(engine_mode) (engine_mode = ENGINE_MODE_IDS);
+#define IS_ENGINE_MODE_IPS(engine_mode) (engine_mode == ENGINE_MODE_IPS)
+#define IS_ENGINE_MODE_IDS(engine_mode) (engine_mode == ENGINE_MODE_IDS)
 
 /* queue's between various other threads
  * XXX move to the TmQueue structure later

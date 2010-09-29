@@ -34,6 +34,7 @@
 #include "threads.h"
 #include "threadvars.h"
 
+#include "util-atomic.h"
 #include "util-spm.h"
 #include "util-hash.h"
 #include "util-hashlist.h"
@@ -106,6 +107,7 @@
 #include "app-layer-htp.h"
 #include "app-layer-ftp.h"
 #include "app-layer-ssl.h"
+#include "app-layer-ssh.h"
 
 #include "util-radix-tree.h"
 #include "util-host-os-info.h"
@@ -141,6 +143,7 @@
 #include "tmqh-packetpool.h"
 
 #include "util-ringbuffer.h"
+#include "util-mem.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -148,6 +151,13 @@
 volatile sig_atomic_t sigint_count = 0;
 volatile sig_atomic_t sighup_count = 0;
 volatile sig_atomic_t sigterm_count = 0;
+
+/*
+ * Flag to indicate if the engine is at the initialization
+ * or already processing packets. 2 stages: SURICATA_INIT,
+ * SURICATA_RUNTIME and SURICATA_FINALIZE
+ */
+SC_ATOMIC_DECLARE(unsigned int, engine_stage);
 
 /* Max packets processed simultaniously. */
 #define DEFAULT_MAX_PENDING_PACKETS 50
@@ -157,6 +167,10 @@ uint8_t suricata_ctl_flags = 0;
 
 /** Run mode selected */
 int run_mode = MODE_UNKNOWN;
+
+/** Engine mode: inline (ENGINE_MODE_IPS) or just
+  * detection mode (ENGINE_MODE_IDS by default) */
+uint8_t engine_mode = ENGINE_MODE_IDS;
 
 /** Maximum packets to simultaneously process. */
 intmax_t max_pending_packets;
@@ -371,8 +385,14 @@ int main(int argc, char **argv)
 
     sc_set_caps = FALSE;
 
+    SC_ATOMIC_INIT(engine_stage);
+
     /* initialize the logging subsys */
     SCLogInitLogModule(NULL);
+
+    /* By default use IDS mode, but if nfq or ipfw
+     * are specified, IPS mode will overwrite this */
+    SET_ENGINE_MODE_IDS(engine_mode);
 
 #ifdef OS_WIN32
 	/* service initialization */
@@ -615,6 +635,7 @@ int main(int argc, char **argv)
 #ifdef NFQ
             if (run_mode == MODE_UNKNOWN) {
                 run_mode = MODE_NFQ;
+                SET_ENGINE_MODE_IPS(engine_mode);
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
@@ -631,6 +652,7 @@ int main(int argc, char **argv)
 #ifdef IPFW
             if (run_mode == MODE_UNKNOWN) {
                 run_mode = MODE_IPFW;
+                SET_ENGINE_MODE_IPS(engine_mode);
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
@@ -828,6 +850,7 @@ int main(int argc, char **argv)
     RegisterDCERPCUDPParsers();
     RegisterFTPParsers();
     RegisterSSLParsers();
+    RegisterSSHParsers();
     AppLayerParsersInitPostProcess();
 
 #ifdef UNITTESTS
@@ -864,6 +887,7 @@ int main(int argc, char **argv)
         DecodeVLANRegisterTests();
         HTPParserRegisterTests();
         TLSParserRegisterTests();
+        SSHParserRegisterTests();
         SMBParserRegisterTests();
         DCERPCParserRegisterTests();
         DCERPCUDPParserRegisterTests();
@@ -1105,6 +1129,8 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+    SC_ATOMIC_CAS(&engine_stage, SURICATA_INIT, SURICATA_RUNTIME);
+
     /* Un-pause all the paused threads */
     TmThreadContinueThreads();
 
@@ -1162,6 +1188,9 @@ int main(int argc, char **argv)
 
         usleep(100);
     }
+
+    /* Update the engine stage/status flag */
+    SC_ATOMIC_CAS(&engine_stage, SURICATA_RUNTIME, SURICATA_DEINIT);
 
 
     FlowShutdown();
@@ -1232,5 +1261,7 @@ int main(int argc, char **argv)
 		return 0;
 	}
 #endif /* OS_WIN32 */
+
+    SC_ATOMIC_DESTROY(engine_stage);
     exit(EXIT_SUCCESS);
 }
