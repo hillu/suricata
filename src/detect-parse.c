@@ -1244,6 +1244,9 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
     if (sig == NULL)
         goto error;
 
+    /* default gid to 1 */
+    sig->gid = 1;
+
     if (SigParse(de_ctx, sig, sigstr, SIG_DIREC_NORMAL) < 0)
         goto error;
 
@@ -1386,6 +1389,8 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
     /* XXX one day we will support this the way Snort does,
      * through classifications.config */
     sig->prio = 3;
+    /* default gid to 1 */
+    sig->gid = 1;
 
     if (SigParse(de_ctx, sig, sigstr, SIG_DIREC_NORMAL) < 0)
         goto error;
@@ -2062,6 +2067,8 @@ int SigParseTest09(void) {
     DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (msg:\"boo\"; sid:2; rev:1;)");
     result &= (de_ctx->sig_list != NULL && de_ctx->sig_list->id == 2 &&
               de_ctx->sig_list->rev == 2);
+    if (result == 0)
+        goto end;
     result &= (de_ctx->sig_list->next != NULL && de_ctx->sig_list->next->id == 1 &&
               de_ctx->sig_list->next->rev == 6);
     if (result == 0)
@@ -2070,6 +2077,8 @@ int SigParseTest09(void) {
     DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (msg:\"boo\"; sid:2; rev:4;)");
     result &= (de_ctx->sig_list != NULL && de_ctx->sig_list->id == 2 &&
               de_ctx->sig_list->rev == 4);
+    if (result == 0)
+        goto end;
     result &= (de_ctx->sig_list->next != NULL && de_ctx->sig_list->next->id == 1 &&
               de_ctx->sig_list->next->rev == 6);
     if (result == 0)

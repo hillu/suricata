@@ -106,10 +106,11 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	detect-icode.$(OBJEXT) detect-http-cookie.$(OBJEXT) \
 	detect-http-method.$(OBJEXT) detect-http-header.$(OBJEXT) \
 	detect-http-uri.$(OBJEXT) detect-tls-version.$(OBJEXT) \
-	detect-icmp-id.$(OBJEXT) detect-icmp-seq.$(OBJEXT) \
-	detect-dce-iface.$(OBJEXT) detect-dce-opnum.$(OBJEXT) \
-	detect-dce-stub-data.$(OBJEXT) detect-urilen.$(OBJEXT) \
-	detect-detection-filter.$(OBJEXT) \
+	detect-ssh-proto-version.$(OBJEXT) \
+	detect-ssh-software-version.$(OBJEXT) detect-icmp-id.$(OBJEXT) \
+	detect-icmp-seq.$(OBJEXT) detect-dce-iface.$(OBJEXT) \
+	detect-dce-opnum.$(OBJEXT) detect-dce-stub-data.$(OBJEXT) \
+	detect-urilen.$(OBJEXT) detect-detection-filter.$(OBJEXT) \
 	detect-http-client-body.$(OBJEXT) detect-asn1.$(OBJEXT) \
 	util-print.$(OBJEXT) util-fmemopen.$(OBJEXT) \
 	util-cpu.$(OBJEXT) util-pidfile.$(OBJEXT) util-mpm.$(OBJEXT) \
@@ -149,10 +150,10 @@ am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
 	app-layer-tls.$(OBJEXT) app-layer-smb.$(OBJEXT) \
 	app-layer-smb2.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
 	app-layer-dcerpc-udp.$(OBJEXT) app-layer-ftp.$(OBJEXT) \
-	app-layer-ssl.$(OBJEXT) defrag.$(OBJEXT) output.$(OBJEXT) \
-	win32-misc.$(OBJEXT) win32-service.$(OBJEXT) \
-	util-action.$(OBJEXT) util-profiling.$(OBJEXT) \
-	cuda-packet-batcher.$(OBJEXT)
+	app-layer-ssl.$(OBJEXT) app-layer-ssh.$(OBJEXT) \
+	defrag.$(OBJEXT) output.$(OBJEXT) win32-misc.$(OBJEXT) \
+	win32-service.$(OBJEXT) util-action.$(OBJEXT) \
+	util-profiling.$(OBJEXT) cuda-packet-batcher.$(OBJEXT)
 suricata_OBJECTS = $(am_suricata_OBJECTS)
 @BUILD_LIBHTP_TRUE@suricata_DEPENDENCIES =  \
 @BUILD_LIBHTP_TRUE@	$(top_builddir)/libhtp/htp/libhtp.la
@@ -418,6 +419,8 @@ detect-http-method.c detect-http-method.h \
 detect-http-header.c detect-http-header.h \
 detect-http-uri.c detect-http-uri.h \
 detect-tls-version.c detect-tls-version.h \
+detect-ssh-proto-version.c detect-ssh-proto-version.h \
+detect-ssh-software-version.c detect-ssh-software-version.h \
 detect-icmp-id.c detect-icmp-id.h \
 detect-icmp-seq.c detect-icmp-seq.h \
 detect-dce-iface.c detect-dce-iface.h \
@@ -509,6 +512,7 @@ app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-ssl.c app-layer-ssl.h \
+app-layer-ssh.c app-layer-ssh.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
@@ -626,6 +630,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-parser.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smb.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smb2.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ssh.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ssl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer.Po@am__quote@
@@ -721,6 +726,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-sameip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-seq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-sid.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssh-proto-version.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssh-software-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-stream_size.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tag.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-threshold.Po@am__quote@

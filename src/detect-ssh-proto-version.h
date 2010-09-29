@@ -18,19 +18,23 @@
 /**
  * \file
  *
- * \author Victor Julien <victor@inliniac.net>
+ * \author Pablo Rincon <pablo.rincon.crespo@gmail.com>
  */
 
-#ifndef __DETECT_ENGINE_ALERT_H__
-#define __DETECT_ENGINE_ALERT_H__
-#include "suricata-common.h"
-#include "decode.h"
-#include "detect.h"
+#ifndef __DETECT_SSH_VERSION_H__
+#define __DETECT_SSH_VERSION_H__
 
-void PacketAlertFinalize(DetectEngineCtx *, DetectEngineThreadCtx *, Packet *);
-int PacketAlertAppend(DetectEngineThreadCtx *, Signature *, Packet *, uint8_t);
-int PacketAlertAppendTag(Packet *, PacketAlert *);
-int PacketAlertCheck(Packet *, uint32_t);
-int PacketAlertRemove(Packet *, uint16_t);
+/** proto version 1.99 is considered proto version 2 */
+#define SSH_FLAG_PROTOVERSION_2_COMPAT 0x01
 
-#endif /* __DETECT_ENGINE_ALERT_H__ */
+typedef struct DetectSshVersionData_ {
+    uint8_t *ver; /** ssh version to match */
+    uint16_t len; /** ssh version length to match */
+    uint8_t flags;
+} DetectSshVersionData;
+
+/* prototypes */
+void DetectSshVersionRegister (void);
+
+#endif /* __DETECT_SSH_VERSION_H__ */
+
