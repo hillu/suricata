@@ -1,3 +1,10 @@
+suricata (1.0.2-2) unstable; urgency=low
+
+  * Add init script (thanks to Edward Fjellskål)
+  * Switch to dpkg-source 3.0 (quilt) format
+
+ -- Pierre Chifflier <pollux@debian.org>  Sun, 19 Dec 2010 18:35:50 +0100
+
 suricata (1.0.2-1) unstable; urgency=low
 
   * New Upstream version 1.0.2 (Closes: #598389)
