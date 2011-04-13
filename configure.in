@@ -3,7 +3,7 @@
 AC_INIT(configure.in)
 
     AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 1.0.2)
+    AM_INIT_AUTOMAKE(suricata, 1.0.3)
 
     AC_LANG_C
     AC_PROG_CC_C99
@@ -810,6 +810,18 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
             echo "  ERROR! libdag library not found"
             echo
             exit 1
+        fi
+    fi
+
+# get revision
+    if test -f ./revision; then
+        REVISION=`cat ./revision`
+        CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
+    else
+        GIT=`which git`
+        if test "$GIT" != ""; then
+            REVISION=`git rev-parse --short HEAD`
+            CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
         fi
     fi
 

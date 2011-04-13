@@ -756,8 +756,7 @@ static int HandleSegmentStartsBeforeListSegment(TcpStream *stream,
                 uint16_t copy_len = (uint16_t) (list_seg->seq - seg->seq);
                 SCLogDebug("copy_len %" PRIu32 " (%" PRIu32 " - %" PRIu32 ")",
                             copy_len, list_seg->seq, seg->seq);
-                StreamTcpSegmentDataReplace(new_seg, seg, (list_seg->prev->seq +
-                                    list_seg->prev->payload_len), copy_len);
+                StreamTcpSegmentDataReplace(new_seg, seg, seg->seq, copy_len);
 
                 /*update the stream last_seg in case of removal of list_seg*/
                 if (stream->seg_list_tail == list_seg)
@@ -773,6 +772,44 @@ static int HandleSegmentStartsBeforeListSegment(TcpStream *stream,
                 }
             }
         } else if (end_after == TRUE) {
+            if (list_seg->prev != NULL && SEQ_LT((list_seg->prev->seq + list_seg->prev->payload_len), list_seg->seq)) {
+                SCLogDebug("GAP to fill before list segment, size %u", list_seg->seq - (list_seg->prev->seq + list_seg->prev->payload_len));
+
+                packet_length = list_seg->seq - seg->seq;
+                if (packet_length > seg->payload_len) {
+                    packet_length = seg->payload_len;
+                }
+
+                TcpSegment *new_seg = StreamTcpGetSegment(packet_length);
+                if (new_seg == NULL) {
+                    SCLogDebug("segment_pool[%"PRIu16"] is empty", segment_pool_idx[packet_length]);
+                    SCReturnInt(-1);
+                }
+                new_seg->payload_len = packet_length;
+
+                if (SEQ_GT((list_seg->prev->seq +
+                                list_seg->prev->payload_len), seg->seq))
+                {
+                    new_seg->seq = (list_seg->prev->seq +
+                            list_seg->prev->payload_len);
+                } else {
+                    new_seg->seq = seg->seq;
+                }
+
+                SCLogDebug("new_seg->seq %"PRIu32" and new->payload_len "
+                        "%" PRIu16"", new_seg->seq, new_seg->payload_len);
+
+                new_seg->next = list_seg;
+                new_seg->prev = list_seg->prev;
+                list_seg->prev->next = new_seg;
+                list_seg->prev = new_seg;
+
+                /* create a new seg, copy the list_seg data over */
+                StreamTcpSegmentDataCopy(new_seg, seg);
+
+                PrintList(stream->seg_list);
+            }
+
             if (list_seg->next != NULL) {
                 if (SEQ_LEQ((seg->seq + seg->payload_len), list_seg->next->seq))
                 {
@@ -2118,13 +2155,16 @@ int StreamTcpReassembleHandleSegment(TcpReassemblyThreadCtx *ra_ctx,
  *  \param  len         Length up to which data is need to be replaced
  *
  *  \todo VJ We can remove the abort()s later.
+ *  \todo VJ Why not memcpy?
  */
 void StreamTcpSegmentDataReplace(TcpSegment *dst_seg, TcpSegment *src_seg,
                                  uint32_t start_point, uint16_t len)
 {
     uint32_t seq;
-    uint16_t s_cnt = 0;
+    uint16_t src_pos = 0;
     uint16_t dst_pos = 0;
+
+    SCLogDebug("start_point %u", start_point);
 
     if (SEQ_GT(start_point, dst_seg->seq)) {
         dst_pos = start_point - dst_seg->seq;
@@ -2139,23 +2179,19 @@ void StreamTcpSegmentDataReplace(TcpSegment *dst_seg, TcpSegment *src_seg,
             return;
     }
 
+    src_pos = (uint16_t)(start_point - src_seg->seq);
+
     SCLogDebug("Replacing data from dst_pos %"PRIu16"", dst_pos);
 
-    for (seq = start_point; SEQ_LT(seq, (start_point + len)); seq++) {
-        if (SCLogDebugEnabled()) {
-            BUG_ON((dst_pos > dst_seg->payload_len));
-        } else {
-            if (dst_pos > dst_seg->payload_len)
-                return;
-        }
-
-        dst_seg->payload[dst_pos] = src_seg->payload[s_cnt];
-
-        dst_pos++;
-        s_cnt++;
+    for (seq = start_point; SEQ_LT(seq, (start_point + len)) &&
+            src_pos < src_seg->payload_len && dst_pos < dst_seg->payload_len;
+            seq++, dst_pos++, src_pos++)
+    {
+        dst_seg->payload[dst_pos] = src_seg->payload[src_pos];
     }
-    SCLogDebug("Replaced data of size %"PRIu16" up to dst_pos %"PRIu16"",
-                s_cnt, dst_pos);
+
+    SCLogDebug("Replaced data of size %"PRIu16" up to src_pos %"PRIu16
+            " dst_pos %"PRIu16, len, src_pos, dst_pos);
 }
 
 /**
@@ -2171,18 +2207,26 @@ void StreamTcpSegmentDataReplace(TcpSegment *dst_seg, TcpSegment *src_seg,
 
 void StreamTcpSegmentDataCopy(TcpSegment *dst_seg, TcpSegment *src_seg)
 {
-    uint32_t i;
+    uint32_t u;
     uint16_t dst_pos = 0;
     uint16_t src_pos = 0;
+    uint32_t seq;
 
-    if (SEQ_GT(src_seg->seq, dst_seg->seq))
+    if (SEQ_GT(dst_seg->seq, src_seg->seq)) {
+        src_pos = dst_seg->seq - src_seg->seq;
+        seq = dst_seg->seq;
+    } else {
         dst_pos = src_seg->seq - dst_seg->seq;
-    else
-        dst_pos = dst_seg->seq - src_seg->seq;
+        seq = src_seg->seq;
+    }
 
-    SCLogDebug("Copying data from dst_pos %"PRIu16"", dst_pos);
-    for (i = src_seg->seq; SEQ_LT(i, (src_seg->seq + src_seg->payload_len)); i++)
+    SCLogDebug("Copying data from seq %"PRIu32"", seq);
+    for (u = seq;
+            (SEQ_LT(u, (src_seg->seq + src_seg->payload_len)) &&
+             SEQ_LT(u, (dst_seg->seq + dst_seg->payload_len))); u++)
     {
+        //SCLogDebug("u %"PRIu32, u);
+
         dst_seg->payload[dst_pos] = src_seg->payload[src_pos];
 
         dst_pos++;
