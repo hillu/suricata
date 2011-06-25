@@ -1,3 +1,11 @@
+suricata (1.0.4-1) unstable; urgency=low
+
+  * Imported Upstream version 1.0.4
+  * Bump Standards Version to 3.9.2
+  * Enable hardening-wrapper
+
+ -- Pierre Chifflier <pollux@debian.org>  Sat, 25 Jun 2011 13:45:44 +0200
+
 suricata (1.0.3-1) unstable; urgency=low
 
   * Imported Upstream version 1.0.3
