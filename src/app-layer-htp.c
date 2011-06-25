@@ -178,12 +178,15 @@ void HTPStateFree(void *state)
     SCEnter();
 
     HtpState *s = (HtpState *)state;
+    if (s == NULL) {
+        SCReturn;
+    }
 
     /* Unset the body inspection */
     s->flags &=~ HTP_FLAG_NEW_BODY_SET;
 
     /* free the connection parser memory used by HTP library */
-    if (s != NULL && s->connp != NULL) {
+    if (s->connp != NULL) {
         size_t i;
         /* free the list of body chunks */
         if (s->connp->conn != NULL) {
@@ -265,24 +268,6 @@ void AppLayerHtpEnableRequestBodyCallback(void)
 {
     SCEnter();
     need_htp_request_body = 1;
-    SCReturn;
-}
-
-
-/**
- *  \brief  Function to convert the IP addresses in to the string
- *
- *  \param  f               pointer to the flow which contains the IP addresses
- *  \param  remote_addr     pointer the string which will contain the remote address
- *  \param  local_addr     pointer the string which will contain the local address
- */
-void HTPGetIPAddr(Flow *f, int family, char *remote_addr, char *local_addr)
-{
-    SCEnter();
-    inet_ntop(family, (const void *)&f->src.addr_data32[0], remote_addr,
-            sizeof (remote_addr));
-    inet_ntop(family, (const void *)&f->dst.addr_data32[0], local_addr,
-            sizeof (local_addr));
     SCReturn;
 }
 
@@ -555,6 +540,8 @@ void HtpBodyAppendChunk(HtpBody *body, uint8_t *data, uint32_t len)
         bd->len = len;
         bd->data = SCMalloc(len);
         if (bd->data == NULL) {
+            SCFree(bd);
+
             SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
             goto error;
         }
@@ -588,6 +575,8 @@ void HtpBodyAppendChunk(HtpBody *body, uint8_t *data, uint32_t len)
             bd->len = len;
             bd->data = SCMalloc(len);
             if (bd->data == NULL) {
+                SCFree(bd);
+
                 SCLogError(SC_ERR_MEM_ALLOC, "malloc failed: %s", strerror(errno));
                 goto error;
             }

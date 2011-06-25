@@ -290,6 +290,10 @@ int RunModeIdsPcap(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -475,6 +479,10 @@ int RunModeIdsPcap2(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -826,6 +834,10 @@ int RunModeIpsNFQ(DetectEngineCtx *de_ctx, char *nfq_id) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -945,6 +957,10 @@ int RunModeFilePcap(DetectEngineCtx *de_ctx, char *file) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -1181,6 +1197,10 @@ int RunModeIdsPfring(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -1366,6 +1386,10 @@ int RunModeIdsPfring2(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -1707,6 +1731,10 @@ int RunModeIpsIPFW(DetectEngineCtx *de_ctx) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -2040,6 +2068,10 @@ int RunModeIdsPfring4(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
     if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -2265,8 +2297,6 @@ int RunModeIdsPcapAuto(DetectEngineCtx *de_ctx, char *iface) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -2339,6 +2369,10 @@ int RunModeIdsPcapAuto(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {
@@ -2573,8 +2607,6 @@ int RunModeFilePcapAuto(DetectEngineCtx *de_ctx, char *file) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -2624,6 +2656,10 @@ int RunModeFilePcapAuto(DetectEngineCtx *de_ctx, char *file) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {
@@ -2785,6 +2821,10 @@ int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx, char *file) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {
@@ -2865,8 +2905,6 @@ int RunModeFilePcapAuto2(DetectEngineCtx *de_ctx, char *file) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -2912,6 +2950,10 @@ int RunModeFilePcapAuto2(DetectEngineCtx *de_ctx, char *file) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {
@@ -3042,8 +3084,6 @@ int RunModeIpsIPFWAuto(DetectEngineCtx *de_ctx) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -3139,6 +3179,10 @@ int RunModeIpsIPFWAuto(DetectEngineCtx *de_ctx) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
 
     if (threading_set_cpu_affinity) {
         TmThreadSetCPUAffinity(tv_outputs, 0);
@@ -3268,8 +3312,6 @@ int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx, char *nfq_id) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -3365,6 +3407,10 @@ int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx, char *nfq_id) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
 
     if (threading_set_cpu_affinity) {
         TmThreadSetCPUAffinity(tv_outputs, 0);
@@ -3493,8 +3539,6 @@ int RunModeIdsPfringAuto(DetectEngineCtx *de_ctx, char *iface) {
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -3567,6 +3611,10 @@ int RunModeIdsPfringAuto(DetectEngineCtx *de_ctx, char *iface) {
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
 
     if (threading_set_cpu_affinity) {
         TmThreadSetCPUAffinity(tv_outputs, 0);
@@ -3666,8 +3714,6 @@ int RunModeErfFileAuto(DetectEngineCtx *de_ctx, char *file)
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -3717,6 +3763,10 @@ int RunModeErfFileAuto(DetectEngineCtx *de_ctx, char *file)
 
     ThreadVars *tv_outputs = TmThreadCreatePacketHandler("Outputs",
         "alert-queue1", "simple", "packetpool", "packetpool", "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {
@@ -3833,8 +3883,6 @@ int RunModeErfDagAuto(DetectEngineCtx *de_ctx, char *file)
     int thread;
     for (thread = 0; thread < thread_max; thread++) {
         snprintf(tname, sizeof(tname),"Detect%"PRIu16, thread+1);
-        if (tname == NULL)
-            break;
 
         char *thread_name = SCStrdup(tname);
         SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
@@ -3880,6 +3928,10 @@ int RunModeErfDagAuto(DetectEngineCtx *de_ctx, char *file)
                                     "alert-queue1", "simple",
                                     "packetpool", "packetpool",
                                     "varslot");
+    if (tv_outputs == NULL) {
+        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
+        exit(EXIT_FAILURE);
+    }
     SetupOutputs(tv_outputs);
 
     if (threading_set_cpu_affinity) {

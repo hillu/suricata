@@ -140,9 +140,11 @@ int SCClassConfInitContext(DetectEngineCtx *de_ctx)
  */
 static char *SCClassConfGetConfFilename(void)
 {
-    char *log_filename = (char *)default_file_path;
+    char *log_filename = NULL;
 
-    ConfGet("classification-file", &log_filename);
+    if (ConfGet("classification-file", &log_filename) != 1) {
+        log_filename = (char *)default_file_path;
+    }
 
     return log_filename;
 }
@@ -234,6 +236,9 @@ int SCClassConfAddClasstype(char *rawstr, uint8_t index, DetectEngineCtx *de_ctx
     ret = pcre_get_substring((char *)rawstr, ov, 30, 3, &ct_priority_str);
     if (ret < 0) {
         SCLogInfo("pcre_get_substring() failed");
+        goto error;
+    }
+    if (ct_priority_str == NULL) {
         goto error;
     }
 

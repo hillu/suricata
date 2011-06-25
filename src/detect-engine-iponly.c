@@ -375,7 +375,6 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                 o_set = 0;
             } else if (d_set == 1) {
                 address[x - 1] = '\0';
-                x = 0;
                 rule_var_address = SCRuleVarsGetConfVar(address,
                                                   SC_RULE_VARS_ADDRESS_GROUPS);
                 if (rule_var_address == NULL)
@@ -502,8 +501,11 @@ int IPOnlyCIDRListParse(IPOnlyCIDRItem **gh, char *str)
 {
     SCLogDebug("gh %p, str %s", gh, str);
 
+    if (gh == NULL)
+        goto error;
+
     *gh = IPOnlyCIDRListParse2(str, 0);
-    if (gh == NULL) {
+    if (*gh == NULL) {
         SCLogDebug("DetectAddressParse2 returned null");
         goto error;
     }

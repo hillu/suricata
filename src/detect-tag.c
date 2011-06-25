@@ -124,6 +124,8 @@ int DetectTagFlowAdd(Packet *p, DetectTagDataEntry *tde) {
 
     if (p->flow->tag_list == NULL) {
         p->flow->tag_list = SCMalloc(sizeof(DetectTagDataEntryList));
+        if (p->flow->tag_list == NULL)
+            goto end;
         memset(p->flow->tag_list, 0, sizeof(DetectTagDataEntryList));
     } else {
         iter = p->flow->tag_list->header_entry;
@@ -156,7 +158,7 @@ int DetectTagFlowAdd(Packet *p, DetectTagDataEntry *tde) {
     }
 
     SCMutexUnlock(&p->flow->m);
-
+end:
     return updated;
 }
 
@@ -200,8 +202,9 @@ int DetectTagMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
 
             } else {
                 SCLogError(SC_ERR_INVALID_VALUE, "Error on direction of a tag keyword (not src nor dst)");
+                SCFree(tde);
             }
-        break;
+            break;
         case DETECT_TAG_TYPE_SESSION:
             if (p->flow != NULL) {
                 /* If it already exists it will be updated */
@@ -211,11 +214,13 @@ int DetectTagMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
                     SC_ATOMIC_ADD(num_tags, 1);
             } else {
                 SCLogDebug("No flow to append the session tag");
+                SCFree(tde);
             }
-        break;
+            break;
         default:
             SCLogError(SC_ERR_INVALID_VALUE, "Error on type of a tag keyword (not session nor host)");
-        break;
+            SCFree(tde);
+            break;
     }
 
     return 1;

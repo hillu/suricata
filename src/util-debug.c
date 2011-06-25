@@ -140,22 +140,31 @@ static inline int SCLogMapLogLevelToSyslogLevel(int log_level)
     switch (log_level) {
         case SC_LOG_EMERGENCY:
             syslog_log_level = LOG_EMERG;
+            break;
         case SC_LOG_ALERT:
             syslog_log_level = LOG_ALERT;
+            break;
         case SC_LOG_CRITICAL:
             syslog_log_level = LOG_CRIT;
+            break;
         case SC_LOG_ERROR:
             syslog_log_level = LOG_ERR;
+            break;
         case SC_LOG_WARNING:
             syslog_log_level = LOG_WARNING;
+            break;
         case SC_LOG_NOTICE:
             syslog_log_level = LOG_NOTICE;
+            break;
         case SC_LOG_INFO:
             syslog_log_level = LOG_INFO;
+            break;
         case SC_LOG_DEBUG:
             syslog_log_level = LOG_DEBUG;
+            break;
         default:
             syslog_log_level = LOG_EMERG;
+            break;
     }
 
     return syslog_log_level;
@@ -293,43 +302,34 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
     /* no of characters_written(cw) by snprintf */
     int cw = 0;
 
-    char *temp_fmt = strdup(sc_log_config->log_format);
-    char *temp_fmt_h = temp_fmt;
-    char *substr = temp_fmt;
-
-    if (temp_fmt == NULL) {
-        goto error;
-    }
-
     if (sc_log_module_initialized != 1) {
 #ifdef DEBUG
         printf("Logging module not initialized.  Call SCLogInitLogModule(), "
                "before using the logging API\n");
 #endif
-        if (temp_fmt != NULL)
-            free(temp_fmt);
         return SC_ERR_LOG_MODULE_NOT_INIT;
     }
 
     if (sc_log_fg_filters_present == 1) {
         if (SCLogMatchFGFilterWL(file, function, line) != 1) {
-            if (temp_fmt != NULL)
-                free(temp_fmt);
             return SC_ERR_LOG_FG_FILTER_MATCH;
         }
 
         if (SCLogMatchFGFilterBL(file, function, line) != 1) {
-            if (temp_fmt != NULL)
-                free(temp_fmt);
             return SC_ERR_LOG_FG_FILTER_MATCH;
         }
     }
 
     if (sc_log_fd_filters_present == 1 && SCLogMatchFDFilter(function) != 1) {
-        if (temp_fmt != NULL)
-            free(temp_fmt);
         return SC_ERR_LOG_FG_FILTER_MATCH;
     }
+
+    char *temp_fmt = SCStrdup(sc_log_config->log_format);
+    if (temp_fmt == NULL) {
+        return SC_ERR_MEM_ALLOC;
+    }
+    char *temp_fmt_h = temp_fmt;
+    char *substr = temp_fmt;
 
 	while ( (temp_fmt = index(temp_fmt, SC_LOG_FMT_PREFIX)) ) {
         if ((temp - *msg) > SC_LOG_MAX_LOG_MSG_LEN) {
@@ -454,11 +454,28 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
         }
         temp_fmt++;
 	}
+    if ((temp - *msg) > SC_LOG_MAX_LOG_MSG_LEN) {
+        printf("Warning: Log message exceeded message length limit of %d\n",
+               SC_LOG_MAX_LOG_MSG_LEN);
+        *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
+        if (temp_fmt_h != NULL)
+            free(temp_fmt_h);
+        return SC_OK;
+    }
     cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg), "%s", substr);
     if (cw < 0)
         goto error;
+    temp += cw;
+    if ((temp - *msg) > SC_LOG_MAX_LOG_MSG_LEN) {
+        printf("Warning: Log message exceeded message length limit of %d\n",
+               SC_LOG_MAX_LOG_MSG_LEN);
+        *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
+        if (temp_fmt_h != NULL)
+            free(temp_fmt_h);
+        return SC_OK;
+    }
 
-    *msg = temp + cw;
+    *msg = temp;
 
     free(temp_fmt_h);
 
@@ -572,11 +589,11 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
         goto error;
     }
 
-    if ((iface_ctx->file = strdup(file)) == NULL) {
+    if ((iface_ctx->file = SCStrdup(file)) == NULL) {
         goto error;
     }
 
-    if ((iface_ctx->log_format = strdup(log_format)) == NULL) {
+    if ((iface_ctx->log_format = SCStrdup(log_format)) == NULL) {
         goto error;
     }
 
@@ -585,17 +602,20 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
     return iface_ctx;
 
 error:
-    if (iface_ctx->file != NULL) {
-        free((char *)iface_ctx->file);
-        iface_ctx->file = NULL;
-    }
-    if (iface_ctx->log_format != NULL) {
-        free((char *)iface_ctx->log_format);
-        iface_ctx->log_format = NULL;
-    }
-    if (iface_ctx->file_d != NULL) {
-        fclose(iface_ctx->file_d);
-        iface_ctx->file_d = NULL;
+    if (iface_ctx != NULL) {
+        if (iface_ctx->file != NULL) {
+            SCFree((char *)iface_ctx->file);
+            iface_ctx->file = NULL;
+        }
+        if (iface_ctx->log_format != NULL) {
+            SCFree((char *)iface_ctx->log_format);
+            iface_ctx->log_format = NULL;
+        }
+        if (iface_ctx->file_d != NULL) {
+            fclose(iface_ctx->file_d);
+            iface_ctx->file_d = NULL;
+        }
+        SCFree(iface_ctx);
     }
     return NULL;
 }

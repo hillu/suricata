@@ -68,9 +68,11 @@ static pcre_extra *rate_regex_study = NULL;
  */
 char *SCThresholdConfGetConfFilename(void)
 {
-    char *log_filename = (char *)THRESHOLD_CONF_DEF_CONF_FILEPATH;
+    char *log_filename = NULL;
 
-    ConfGet("threshold-file", &log_filename);
+    if (ConfGet("threshold-file", &log_filename) != 1) {
+        log_filename = (char *)THRESHOLD_CONF_DEF_CONF_FILEPATH;
+    }
 
     return log_filename;
 }
@@ -604,12 +606,15 @@ int SCThresholdConfLineIsMultiline(char *line)
  * \retval int of the line length
  */
 int SCThresholdConfLineLength(FILE *fd) {
-    int pos = ftell(fd);
+    long pos = ftell(fd);
     int len = 0;
-    char c;
+    int c;
 
     while ( (c = fgetc(fd)) && c != '\n' && !feof(fd))
         len++;
+
+    if (pos < 0)
+        pos = 0;
 
     fseek(fd, pos, SEEK_SET);
     return len;
@@ -625,7 +630,7 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
 {
     char *line = NULL;
     int len = 0;
-    char c;
+    int c;
     int rule_num = 0;
 
     /* position of "\", on multiline rules */
@@ -648,7 +653,8 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
                 break;
             }
 
-            if (fgets(line + esc_pos, len + 1, fd) == NULL) break;
+            if (fgets(line + esc_pos, len + 1, fd) == NULL)
+                break;
 
             /* Skip EOL to inspect the next line (or read EOF) */
             c = fgetc(fd);
