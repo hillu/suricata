@@ -10,6 +10,8 @@
 # Uncomment this to turn on verbose mode.
 export DH_VERBOSE=1
 
+export DEB_BUILD_HARDENING=1
+
 build:
 	dh_testdir
 	dh_auto_configure -- --enable-nfqueue --enable-prelude --enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native

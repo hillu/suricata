@@ -12,7 +12,8 @@ Build-Depends: debhelper (>= 7),
     libnetfilter-queue-dev,
     libprelude-dev,
     zlib1g-dev | libz-dev,
-    libcap-ng-dev
+    libcap-ng-dev,
+    hardening-wrapper
 Standards-Version: 3.9.2
 Homepage: http://www.openinfosecfoundation.org/
 
