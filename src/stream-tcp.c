@@ -437,9 +437,11 @@ void StreamTcpInitConfig(char quiet)
     }
 
     /* init the memcap and it's lock */
+    SCSpinInit(&stream_memuse_spinlock, PTHREAD_PROCESS_PRIVATE);
+    SCSpinLock(&stream_memuse_spinlock);
     stream_memuse = 0;
     stream_memuse_max = 0;
-    SCSpinInit(&stream_memuse_spinlock, PTHREAD_PROCESS_PRIVATE);
+    SCSpinUnlock(&stream_memuse_spinlock);
 
     ssn_pool = PoolInit(stream_config.max_sessions,
                         stream_config.prealloc_sessions,
@@ -480,8 +482,10 @@ void StreamTcpFreeConfig(char quiet)
     SCLogDebug("ssn_pool_cnt %"PRIu64"", ssn_pool_cnt);
 
     if (!quiet) {
+        SCSpinLock(&stream_memuse_spinlock);
         SCLogInfo("Max memuse of stream engine %"PRIu32" (in use %"PRIu32")",
             stream_memuse_max, stream_memuse);
+        SCSpinUnlock(&stream_memuse_spinlock);
     }
     SCMutexDestroy(&ssn_pool_mutex);
 
@@ -2933,21 +2937,21 @@ int StreamTcpValidateChecksum(Packet *p)
 {
     int ret = 1;
 
-    if (p->tcpc.comp_csum == -1) {
+    if (p->tcpvars.comp_csum == -1) {
         if (PKT_IS_IPV4(p)) {
-            p->tcpc.comp_csum = TCPCalculateChecksum((uint16_t *)&(p->ip4h->ip_src),
+            p->tcpvars.comp_csum = TCPCalculateChecksum((uint16_t *)&(p->ip4h->ip_src),
                                                  (uint16_t *)p->tcph,
                                                  (p->payload_len +
                                                   p->tcpvars.hlen) );
         } else if (PKT_IS_IPV6(p)) {
-            p->tcpc.comp_csum = TCPV6CalculateChecksum((uint16_t *)&(p->ip6h->ip6_src),
+            p->tcpvars.comp_csum = TCPV6CalculateChecksum((uint16_t *)&(p->ip6h->ip6_src),
                                                    (uint16_t *)p->tcph,
                                                    (p->payload_len +
                                                     p->tcpvars.hlen) );
         }
     }
 
-    if (p->tcpc.comp_csum != p->tcph->th_sum) {
+    if (p->tcpvars.comp_csum != p->tcph->th_sum) {
         ret = 0;
         SCLogDebug("Checksum of recevied packet %p is invalid",p);
     }
@@ -3867,8 +3871,6 @@ static int StreamTcpTest07 (void) {
     p.flowflags = FLOW_PKT_TOSERVER;
 
     data[0] = htonl(2);
-    p.tcpc.ts1 = 0;
-    p.tcpc.ts2 = 0;
     p.tcpvars.ts->data = (uint8_t *)data;
 
     if (StreamTcpPacket(&tv, &p, &stt) == -1) {
@@ -3953,8 +3955,6 @@ static int StreamTcpTest08 (void) {
     p.flowflags = FLOW_PKT_TOSERVER;
 
     data[0] = htonl(12);
-    p.tcpc.ts1 = 0;
-    p.tcpc.ts2 = 0;
     p.tcpvars.ts->data = (uint8_t *)data;
 
     if (StreamTcpPacket(&tv, &p, &stt) == -1)

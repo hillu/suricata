@@ -347,6 +347,8 @@ Asn1Ctx *SCAsn1CtxNew(void) {
     ac->asn1_stack = SCMalloc(sizeof(Asn1Node *) * asn1_max_frames_config);
     if (ac->asn1_stack == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+
+        SCFree(ac);
         return NULL;
     }
     memset(ac->asn1_stack, 0, sizeof(Asn1Node *) * asn1_max_frames_config);
@@ -389,8 +391,7 @@ Asn1Node *SCAsn1CtxNewFrame(Asn1Ctx *ac, uint16_t node) {
 
     if (ac->asn1_stack[node] == NULL)
         ac->asn1_stack[node] = SCMalloc(sizeof(Asn1Node));
-
-    if (&ac->asn1_stack[node] == NULL)
+    if (ac->asn1_stack[node] == NULL)
         return NULL;
 
     memset(ac->asn1_stack[node], 0, sizeof(Asn1Node));

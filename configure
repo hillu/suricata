@@ -2930,7 +2930,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=1.0.3
+ VERSION=1.0.4
 
 
 cat >>confdefs.h <<_ACEOF

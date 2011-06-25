@@ -618,7 +618,8 @@ static int SigParseOptions(DetectEngineCtx *de_ctx, Signature *s, char *optstr) 
 
     /* extract the substrings */
     for (i = 1; i <= ret-1; i++) {
-        pcre_get_substring(optstr, ov, MAX_SUBSTRINGS, i, &arr[i-1]);
+        if (pcre_get_substring(optstr, ov, MAX_SUBSTRINGS, i, &arr[i-1]) < 0)
+            goto error;
         //printf("SigParseOptions: arr[%" PRId32 "] = \"%s\"\n", i-1, arr[i-1]);
     }
     arr[i-1]=NULL;
@@ -868,7 +869,9 @@ int SigParseBasics(Signature *s, char *sigstr, char ***result, uint8_t addrs_dir
     }
 
     for (i = 1; i <= ret - 1; i++) {
-        pcre_get_substring(sigstr, ov, MAX_SUBSTRINGS, i, &arr[i - 1]);
+        if (pcre_get_substring(sigstr, ov, MAX_SUBSTRINGS, i, &arr[i - 1]) < 0 ) {
+            goto error;
+        }
         //printf("SigParseBasics: arr[%" PRId32 "] = \"%s\"\n", i-1, arr[i-1]);
     }
     arr[i - 1] = NULL;
@@ -934,7 +937,7 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
     s->sig_str = sigstr;
 
     int ret = SigParseBasics(s, sigstr, &basics, addrs_direction);
-    if (ret < 0) {
+    if (ret < 0 || basics == NULL) {
         SCLogDebug("SigParseBasics failed");
         SCReturnInt(-1);
     }
@@ -955,14 +958,12 @@ int SigParse(DetectEngineCtx *de_ctx, Signature *s, char *sigstr, uint8_t addrs_
     }
 
     /* cleanup */
-    if (basics != NULL) {
-        int i = 0;
-        while (basics[i] != NULL) {
-            SCFree(basics[i]);
-            i++;
-        }
-        SCFree(basics);
+    int i = 0;
+    while (basics[i] != NULL) {
+        SCFree(basics[i]);
+        i++;
     }
+    SCFree(basics);
 
     s->sig_str = NULL;
 
@@ -1462,9 +1463,9 @@ Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
         /* Allocate a copy of this signature with the addresses siwtched
            This copy will be installed at sig->next */
         sig->next = SigAlloc();
-        sig->next->prio = 3;
         if (sig->next == NULL)
             goto error;
+        sig->next->prio = 3;
 
         if (SigParse(de_ctx, sig->next, sigstr, SIG_DIREC_SWITCHED) < 0)
             goto error;

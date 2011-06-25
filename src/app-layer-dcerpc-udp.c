@@ -187,7 +187,7 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
 					sstate->dcerpc.dcerpchdrudp.if_vers = *(p + 60);
 					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 61) << 8;
 					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 62) << 16;
-					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 63) >> 24;
+					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 63) << 24;
 					sstate->dcerpc.dcerpchdrudp.seqnum = *(p + 64);
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 65) << 8;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 66) << 16;
@@ -215,8 +215,8 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 65) << 16;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 66) << 8;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 67);
-					sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 24;
-					sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69) << 16;
+					sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 8;
+					sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69);
 					sstate->dcerpc.dcerpchdrudp.ihint = *(p + 70) << 8;
 					sstate->dcerpc.dcerpchdrudp.ihint |= *(p + 71);
 					sstate->dcerpc.dcerpchdrudp.ahint = *(p + 72) << 8;

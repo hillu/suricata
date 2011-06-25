@@ -37,12 +37,9 @@ build_triplet = @build@
 host_triplet = @host@
 subdir = htp
 DIST_COMMON = $(library_include_HEADERS) $(srcdir)/Makefile.am \
-	$(srcdir)/Makefile.in TODO
+	$(srcdir)/Makefile.in
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
-am__aclocal_m4_deps = $(top_srcdir)/m4/libtool.m4 \
-	$(top_srcdir)/m4/ltoptions.m4 $(top_srcdir)/m4/ltsugar.m4 \
-	$(top_srcdir)/m4/ltversion.m4 $(top_srcdir)/m4/lt~obsolete.m4 \
-	$(top_srcdir)/configure.ac
+am__aclocal_m4_deps = $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(SHELL) $(top_srcdir)/../mkinstalldirs
@@ -74,14 +71,15 @@ am__installdirs = "$(DESTDIR)$(libdir)" \
 	"$(DESTDIR)$(library_includedir)"
 LTLIBRARIES = $(lib_LTLIBRARIES)
 libhtp_la_LIBADD =
-am__objects_1 = bstr.lo hooks.lo htp_config.lo \
+am__objects_1 =
+am__objects_2 = bstr.lo hooks.lo htp_config.lo \
 	htp_connection_parser.lo htp_request_apache_2_2.lo \
 	htp_request_generic.lo htp_request_parsers.lo \
 	htp_response_generic.lo htp_util.lo dslib.lo htp.lo \
 	htp_connection.lo htp_parsers.lo htp_request.lo \
 	htp_response.lo htp_transaction.lo utf8_decoder.lo \
 	htp_decompressors.lo
-am_libhtp_la_OBJECTS = $(am__objects_1)
+am_libhtp_la_OBJECTS = $(am__objects_1) $(am__objects_2)
 libhtp_la_OBJECTS = $(am_libhtp_la_OBJECTS)
 libhtp_la_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) \
 	$(LIBTOOLFLAGS) --mode=link $(CCLD) $(AM_CFLAGS) $(CFLAGS) \
@@ -225,12 +223,11 @@ h_sources = bstr.h dslib.h hooks.h htp.h utf8_decoder.h htp_decompressors.h
 c_sources = bstr.c hooks.c htp_config.c htp_connection_parser.c htp_request_apache_2_2.c htp_request_generic.c htp_request_parsers.c htp_response_generic.c htp_util.c dslib.c htp.c htp_connection.c htp_parsers.c htp_request.c htp_response.c htp_transaction.c utf8_decoder.c htp_decompressors.c
 library_includedir = $(includedir)/$(GENERIC_LIBRARY_NAME)
 library_include_HEADERS = $(h_sources)
-INCLUDES = -I. -I$(top_srcdir)
+INCLUDES = -I$(top_srcdir)
 AM_CFLAGS = -D_GNU_SOURCE -g -O2 -Wall -Wextra -std=gnu99 -pedantic
 lib_LTLIBRARIES = libhtp.la
-libhtp_la_SOURCES = $(c_sources)
+libhtp_la_SOURCES = $(h_sources) $(c_sources)
 libhtp_la_LDFLAGS = -version-info $(GENERIC_LIBRARY_VERSION) -release $(GENERIC_RELEASE)
-libhtp_la_DEPENDENCIES = $(libhtp_la_SOURCES) ../config.h
 all: all-am
 
 .SUFFIXES:

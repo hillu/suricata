@@ -315,7 +315,7 @@ static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
         SCReturnInt(ret);
 
     ret = idmef_target_new_service(target, &service);
-    if ( ! ret < 0 )
+    if ( ret < 0 )
         SCReturnInt(ret);
 
     if ( p->tcph || p->udph )
@@ -828,8 +828,14 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
     ctx->client = client;
 
     output_ctx = SCMalloc(sizeof(OutputCtx));
-    if (output_ctx == NULL)
-        return NULL;
+    if (output_ctx == NULL) {
+        SCFree(ctx);
+
+        prelude_perror(ret, "Unable to allocate memory");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
     output_ctx->data = ctx;
     output_ctx->DeInit = AlertPreludeDeinitCtx;
 
