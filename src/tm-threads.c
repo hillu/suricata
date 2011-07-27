@@ -116,7 +116,6 @@ void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag) {
 void *TmThreadsSlot1NoIn(void *td) {
     ThreadVars *tv = (ThreadVars *)td;
     Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
-    Packet *p = NULL;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
@@ -146,13 +145,11 @@ void *TmThreadsSlot1NoIn(void *td) {
     while(run) {
         TmThreadTestThreadUnPaused(tv);
 
-        r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
+        r = s->s.SlotFunc(tv, NULL, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
         /* handle error */
         if (r == TM_ECODE_FAILED) {
             TmqhReleasePacketsToPacketPool(&s->s.slot_pre_pq);
             TmqhReleasePacketsToPacketPool(&s->s.slot_post_pq);
-            if (p != NULL)
-                TmqhOutputPacketpool(tv, p);
             TmThreadsSetFlag(tv, THV_FAILED);
             break;
         }
@@ -164,9 +161,6 @@ void *TmThreadsSlot1NoIn(void *td) {
                 tv->tmqh_out(tv, extra_p);
             }
         }
-
-        if (p != NULL)
-            tv->tmqh_out(tv, p);
 
         /* handle post queue */
         while (s->s.slot_post_pq.top != NULL) {
@@ -828,7 +822,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
         tmq = TmqGetQueueByName(inq_name);
         if (tmq == NULL) {
             tmq = TmqCreateQueue(inq_name);
-            if (tmq == NULL) goto error;
+            if (tmq == NULL)
+                goto error;
         }
         SCLogDebug("tmq %p", tmq);
 
@@ -840,7 +835,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
         SCLogDebug("inqh_name \"%s\"", inqh_name);
 
         tmqh = TmqhGetQueueHandlerByName(inqh_name);
-        if (tmqh == NULL) goto error;
+        if (tmqh == NULL)
+            goto error;
 
         tv->tmqh_in = tmqh->InHandler;
         tv->InShutdownHandler = tmqh->InShutdownHandler;
@@ -852,7 +848,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
         SCLogDebug("outqh_name \"%s\"", outqh_name);
 
         tmqh = TmqhGetQueueHandlerByName(outqh_name);
-        if (tmqh == NULL) goto error;
+        if (tmqh == NULL)
+            goto error;
 
         tv->tmqh_out = tmqh->OutHandler;
 
@@ -866,7 +863,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
                 tmq = TmqGetQueueByName(outq_name);
                 if (tmq == NULL) {
                     tmq = TmqCreateQueue(outq_name);
-                    if (tmq == NULL) goto error;
+                    if (tmq == NULL)
+                        goto error;
                 }
                 SCLogDebug("tmq %p", tmq);
 
@@ -887,6 +885,10 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
     return tv;
 error:
     printf("ERROR: failed to setup a thread.\n");
+
+    if (tv != NULL) {
+        SCFree(tv);
+    }
     return NULL;
 }
 
