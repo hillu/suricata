@@ -1,3 +1,9 @@
+suricata (1.0.5-1) unstable; urgency=low
+
+  * Imported Upstream version 1.0.5
+
+ -- Pierre Chifflier <pollux@debian.org>  Wed, 27 Jul 2011 08:20:25 +0200
+
 suricata (1.0.4-1) unstable; urgency=low
 
   * Imported Upstream version 1.0.4
