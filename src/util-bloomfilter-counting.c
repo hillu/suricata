@@ -184,9 +184,24 @@ int BloomFilterCountingTest(BloomFilterCounting *bf, void *data, uint16_t datale
     /* check each hash iteration */
     for (iter = 0; iter < bf->hash_iterations; iter++) {
         hash = bf->Hash(data, datalen, iter, bf->array_size) * bf->type;
-        if (!(bf->array[hash])) {
-            hit = 0;
-            break;
+        if (bf->type == 1) {
+            uint8_t *u8 = (uint8_t *)&bf->array[hash];
+            if ((*u8) == 0x00) {
+                hit = 0;
+                break;
+            }
+        } else if (bf->type == 2) {
+            uint16_t *u16 = (uint16_t *)&bf->array[hash];
+            if ((*u16) == 0x0000) {
+                hit = 0;
+                break;
+            }
+        } else if (bf->type == 4) {
+            uint32_t *u32 = (uint32_t *)&bf->array[hash];
+            if ((*u32) == 0x00000000) {
+                hit = 0;
+                break;
+            }
         }
     }
 
@@ -212,8 +227,6 @@ static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t h
 /*
  * ONLY TESTS BELOW THIS COMMENT
  */
-
-#ifdef UNITTESTS
 
 static int BloomFilterCountingTestInit01 (void) {
     BloomFilterCounting *bf = BloomFilterCountingInit(1024, 4, 4, BloomHash);
@@ -310,40 +323,45 @@ end:
 
 static int BloomFilterCountingTestFull01 (void) {
     int result = 0;
-    int r = 0;
-
     BloomFilterCounting *bf = BloomFilterCountingInit(32, 4, 4, BloomHash);
-    if (bf == NULL)
+    if (bf == NULL) {
+        printf("init failed: ");
         goto end;
+    }
 
-    r = BloomFilterCountingAdd(bf, "test", 4);
-    if (r != 0)
+    int r = BloomFilterCountingAdd(bf, "test", 4);
+    if (r != 0) {
+        printf("first add: ");
         goto end;
+    }
 
     r = BloomFilterCountingTest(bf, "test", 4);
-    if (r != 1)
+    if (r != 1) {
+        printf("2nd add: ");
         goto end;
+    }
 
     r = BloomFilterCountingRemove(bf, "test", 4);
-    if (r != 0)
+    if (r != 0) {
+        printf("3rd add: ");
         goto end;
+    }
 
     /* all is good! */
     result = 1;
 end:
-    if (bf != NULL) BloomFilterCountingFree(bf);
+    if (bf != NULL)
+        BloomFilterCountingFree(bf);
     return result;
 }
 
 static int BloomFilterCountingTestFull02 (void) {
     int result = 0;
-    int r = 0;
-
     BloomFilterCounting *bf = BloomFilterCountingInit(32, 4, 4, BloomHash);
     if (bf == NULL)
         goto end;
 
-    r = BloomFilterCountingTest(bf, "test", 4);
+    int r = BloomFilterCountingTest(bf, "test", 4);
     if (r != 0)
         goto end;
 
@@ -353,10 +371,8 @@ end:
     if (bf != NULL) BloomFilterCountingFree(bf);
     return result;
 }
-#endif
 
 void BloomFilterCountingRegisterTests(void) {
-#ifdef UNITTESTS
     UtRegisterTest("BloomFilterCountingTestInit01", BloomFilterCountingTestInit01, 1);
     UtRegisterTest("BloomFilterCountingTestInit02", BloomFilterCountingTestInit02, 1);
     UtRegisterTest("BloomFilterCountingTestInit03", BloomFilterCountingTestInit03, 1);
@@ -369,6 +385,5 @@ void BloomFilterCountingRegisterTests(void) {
 
     UtRegisterTest("BloomFilterCountingTestFull01", BloomFilterCountingTestFull01, 1);
     UtRegisterTest("BloomFilterCountingTestFull02", BloomFilterCountingTestFull02, 1);
-#endif
 }
 

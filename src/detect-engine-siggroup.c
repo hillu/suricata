@@ -48,7 +48,7 @@
 #include "util-cidr.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
-
+#include "util-memcmp.h"
 
 /* prototypes */
 int SigGroupHeadClearSigs(SigGroupHead *);
@@ -175,6 +175,19 @@ void SigGroupHeadFree(SigGroupHead *sgh)
 
     PatternMatchDestroyGroup(sgh);
 
+#if defined(__SSE3__)
+    if (sgh->mask_array != NULL) {
+        /* mask is aligned */
+        SCFreeAligned(sgh->mask_array);
+        sgh->mask_array = NULL;
+    }
+#endif
+
+    if (sgh->head_array != NULL) {
+        SCFree(sgh->head_array);
+        sgh->head_array = NULL;
+    }
+
     if (sgh->match_array != NULL) {
         detect_siggroup_matcharray_free_cnt++;
         detect_siggroup_matcharray_memory -= (sgh->sig_cnt * sizeof(Signature *));
@@ -240,7 +253,7 @@ char SigGroupHeadMpmCompareFunc(void *data1, uint16_t len1, void *data2,
     if (sgh1->init->content_size != sgh2->init->content_size)
         return 0;
 
-    if (memcmp(sgh1->init->content_array, sgh2->init->content_array,
+    if (SCMemcmp(sgh1->init->content_array, sgh2->init->content_array,
                sgh1->init->content_size) != 0) {
         return 0;
     }
@@ -367,7 +380,7 @@ char SigGroupHeadMpmUriCompareFunc(void *data1, uint16_t len1, void *data2,
     if (sgh1->init->uri_content_size != sgh2->init->uri_content_size)
         return 0;
 
-    if (memcmp(sgh1->init->uri_content_array, sgh2->init->uri_content_array,
+    if (SCMemcmp(sgh1->init->uri_content_array, sgh2->init->uri_content_array,
                sgh1->init->uri_content_size) != 0) {
         return 0;
     }
@@ -494,7 +507,7 @@ char SigGroupHeadMpmStreamCompareFunc(void *data1, uint16_t len1, void *data2,
     if (sgh1->init->stream_content_size != sgh2->init->stream_content_size)
         return 0;
 
-    if (memcmp(sgh1->init->stream_content_array, sgh2->init->stream_content_array,
+    if (SCMemcmp(sgh1->init->stream_content_array, sgh2->init->stream_content_array,
                sgh1->init->stream_content_size) != 0) {
         return 0;
     }
@@ -626,7 +639,7 @@ char SigGroupHeadCompareFunc(void *data1, uint16_t len1, void *data2,
     if (sgh1->init->sig_size != sgh2->init->sig_size)
         return 0;
 
-    if (memcmp(sgh1->init->sig_array, sgh2->init->sig_array, sgh1->init->sig_size) != 0)
+    if (SCMemcmp(sgh1->init->sig_array, sgh2->init->sig_array, sgh1->init->sig_size) != 0)
         return 0;
 
     return 1;
@@ -892,16 +905,16 @@ static void SigGroupHeadFreeSigArraysHash2(DetectEngineCtx *de_ctx,
             continue;
         }
 
+        if (sgh->init->sig_array != NULL) {
+            detect_siggroup_sigarray_free_cnt++;
+            detect_siggroup_sigarray_memory -= sgh->init->sig_size;
+
+            SCFree(sgh->init->sig_array);
+            sgh->init->sig_array = NULL;
+            sgh->init->sig_size = 0;
+        }
+
         if (sgh->init != NULL) {
-            if (sgh->init->sig_array != NULL) {
-                detect_siggroup_sigarray_free_cnt++;
-                detect_siggroup_sigarray_memory -= sgh->init->sig_size;
-
-                SCFree(sgh->init->sig_array);
-                sgh->init->sig_array = NULL;
-                sgh->init->sig_size = 0;
-            }
-
             SigGroupHeadInitDataFree(sgh->init);
             sgh->init = NULL;
         }
@@ -1310,7 +1323,7 @@ int SigGroupHeadLoadContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (s->alproto != ALPROTO_UNKNOWN)
             continue;
 
-        sm = s->pmatch;
+        sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
         if (sm == NULL)
             continue;
 
@@ -1365,7 +1378,7 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     Signature *s = NULL;
     SigMatch *sm = NULL;
     uint32_t sig = 0;
-    DetectUricontentData *co = NULL;
+    DetectContentData *co = NULL;
 
     if (sgh == NULL)
         return 0;
@@ -1391,13 +1404,13 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (!(s->flags & SIG_FLAG_MPM_URI))
             continue;
 
-        sm = s->umatch;
+        sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
         if (sm == NULL)
             continue;
 
         for ( ;sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_URICONTENT) {
-                co = (DetectUricontentData *)sm->ctx;
+                co = (DetectContentData *)sm->ctx;
 
                 sgh->init->uri_content_array[co->id / 8] |= 1 << (co->id % 8);
             }
@@ -1478,17 +1491,17 @@ int SigGroupHeadLoadStreamContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (s == NULL)
             continue;
 
+        if (SignatureHasPacketContent(s)) {
+            SCLogDebug("Sig has packet content");
+            continue;
+        }
+
         if (!(s->flags & SIG_FLAG_MPM)) {
             SCLogDebug("no mpm");
             continue;
         }
 
-        if (s->flags & SIG_FLAG_DSIZE) {
-            SCLogDebug("dsize");
-            continue;
-        }
-
-        sm = s->pmatch;
+        sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
         if (sm == NULL)
             continue;
 
@@ -1582,6 +1595,28 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         return 0;
 
     BUG_ON(sgh->head_array != NULL);
+#if defined(__SSE3__)
+    BUG_ON(sgh->mask_array != NULL);
+
+    /* mask array is 16 byte aligned for SIMD checking, also we always
+     * alloc a multiple of 32/64 bytes */
+    int cnt = sgh->sig_cnt;
+#if __WORDSIZE == 32
+    if (cnt % 32 != 0) {
+        cnt += (32 - (cnt % 32));
+    }
+#elif __WORDSIZE == 64
+    if (cnt % 64 != 0) {
+        cnt += (64 - (cnt % 64));
+    }
+#endif /* __WORDSIZE */
+
+    sgh->mask_array = SCMallocAligned((cnt * sizeof(SignatureMask)), 16);
+    if (sgh->mask_array == NULL)
+        return -1;
+
+    memset(sgh->mask_array, 0, (cnt * sizeof(SignatureMask)));
+#endif
 
     sgh->head_array = SCMalloc(sgh->sig_cnt * sizeof(SignatureHeader));
     if (sgh->head_array == NULL)
@@ -1597,20 +1632,14 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (s == NULL)
             continue;
 
-        sgh->head_array[idx].flags = s->flags;
-        sgh->head_array[idx].mpm_pattern_id = s->mpm_pattern_id;
-        sgh->head_array[idx].mpm_stream_pattern_id = s->mpm_stream_pattern_id;
-        sgh->head_array[idx].alproto = s->alproto;
-        sgh->head_array[idx].num = s->num;
+        sgh->head_array[idx].hdr_copy1 = s->hdr_copy1;
+        sgh->head_array[idx].hdr_copy2 = s->hdr_copy2;
+        sgh->head_array[idx].hdr_copy3 = s->hdr_copy3;
         sgh->head_array[idx].full_sig = s;
 
-        BUG_ON(s->flags != sgh->head_array[idx].flags);
-        BUG_ON(s->alproto != sgh->head_array[idx].alproto);
-        BUG_ON(s->mpm_pattern_id != sgh->head_array[idx].mpm_pattern_id);
-        BUG_ON(s->mpm_stream_pattern_id != sgh->head_array[idx].mpm_stream_pattern_id);
-        BUG_ON(s->num != sgh->head_array[idx].num);
-        BUG_ON(s != sgh->head_array[idx].full_sig);
-
+#if defined(__SSE3__)
+        sgh->mask_array[idx] = s->mask;
+#endif
         idx++;
     }
 
@@ -1798,8 +1827,8 @@ static int SigGroupHeadTest06(void)
         return 0;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"SigGroupHead tests\"; content:test1; "
-                               "content:test2; content:test3; sid:0;)");
+                               "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                               "content:\"test2\"; content:\"test3\"; sid:0;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
@@ -1807,8 +1836,8 @@ static int SigGroupHeadTest06(void)
     prev_sig = de_ctx->sig_list;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:1;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:1;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1816,8 +1845,8 @@ static int SigGroupHeadTest06(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:2;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:2;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1825,8 +1854,8 @@ static int SigGroupHeadTest06(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:3;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:3;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1834,8 +1863,8 @@ static int SigGroupHeadTest06(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:4;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:4;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1882,8 +1911,8 @@ static int SigGroupHeadTest07(void)
         return 0;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"SigGroupHead tests\"; content:test1; "
-                               "content:test2; content:test3; sid:0;)");
+                               "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                               "content:\"test2\"; content:\"test3\"; sid:0;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
@@ -1891,8 +1920,8 @@ static int SigGroupHeadTest07(void)
     prev_sig = de_ctx->sig_list;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:1;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:1;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1900,8 +1929,8 @@ static int SigGroupHeadTest07(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:2;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:2;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1909,8 +1938,8 @@ static int SigGroupHeadTest07(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:3;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:3;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1918,8 +1947,8 @@ static int SigGroupHeadTest07(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:4;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:4;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1974,8 +2003,8 @@ static int SigGroupHeadTest08(void)
         return 0;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"SigGroupHead tests\"; content:test1; "
-                               "content:test2; content:test3; sid:0;)");
+                               "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                               "content:\"test2\"; content:\"test3\"; sid:0;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
@@ -1983,8 +2012,8 @@ static int SigGroupHeadTest08(void)
     prev_sig = de_ctx->sig_list;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:1;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:1;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -1992,8 +2021,8 @@ static int SigGroupHeadTest08(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:2;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:2;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2001,8 +2030,8 @@ static int SigGroupHeadTest08(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:3;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:3;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2010,8 +2039,8 @@ static int SigGroupHeadTest08(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:4;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:4;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2068,8 +2097,8 @@ static int SigGroupHeadTest09(void)
         return 0;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                               "(msg:\"SigGroupHead tests\"; content:test1; "
-                               "content:test2; content:test3; sid:0;)");
+                               "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                               "content:\"test2\"; content:\"test3\"; sid:0;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
@@ -2077,8 +2106,8 @@ static int SigGroupHeadTest09(void)
     prev_sig = de_ctx->sig_list;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:1;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:1;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2086,8 +2115,8 @@ static int SigGroupHeadTest09(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:2;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:2;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2095,8 +2124,8 @@ static int SigGroupHeadTest09(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:3;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:3;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;
@@ -2104,8 +2133,8 @@ static int SigGroupHeadTest09(void)
     prev_sig = prev_sig->next;
 
     prev_sig->next = SigInit(de_ctx, "alert tcp any any -> any any "
-                             "(msg:\"SigGroupHead tests\"; content:test1; "
-                             "content:test2; content:test3; sid:4;)");
+                             "(msg:\"SigGroupHead tests\"; content:\"test1\"; "
+                             "content:\"test2\"; content:\"test3\"; sid:4;)");
     if (prev_sig->next == NULL) {
         result = 0;
         goto end;

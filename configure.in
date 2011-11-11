@@ -3,7 +3,7 @@
 AC_INIT(configure.in)
 
     AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 1.0.5)
+    AM_INIT_AUTOMAKE(suricata, 1.1)
 
     AC_LANG_C
     AC_PROG_CC_C99
@@ -74,10 +74,29 @@ AC_INIT(configure.in)
     exit 1
     fi
 
+    AC_PATH_PROG(HAVE_COCCINELLE_CONFIG, spatch, "no")
+    if test "$HAVE_COCCINELLE_CONFIG" = "no"; then
+    echo
+    echo "   Warning! spatch not found, you will not be  "
+    echo "   able to run code checking with coccinelle "
+    echo "   get it from http://coccinelle.lip6.fr       "
+    echo "   or install from your distribution           "
+    echo
+    fi
+    AM_CONDITIONAL([HAVE_COCCINELLE], [test "$HAVE_COCCINELLE_CONFIG" != "no"])
+
+
+
 # Checks for libraries.
 
 # Checks for header files.
-    AC_CHECK_HEADERS([arpa/inet.h inttypes.h limits.h netdb.h netinet/in.h poll.h signal.h stdint.h stdlib.h string.h syslog.h sys/prctl.h sys/socket.h sys/syscall.h sys/time.h unistd.h windows.h winsock2.h ws2tcpip.h])
+    AC_CHECK_HEADERS([arpa/inet.h inttypes.h limits.h netdb.h poll.h signal.h stdint.h stdlib.h string.h syslog.h sys/ioctl.h sys/prctl.h sys/socket.h sys/syscall.h netinet/in.h sys/time.h unistd.h windows.h winsock2.h ws2tcpip.h])
+   AC_CHECK_HEADERS([sys/socket.h net/if.h], [], [],
+    [[#ifdef HAVE_SYS_SOCKET_H
+#include <sys/socket.h>
+#endif
+    ]])
+
 
 # Checks for typedefs, structures, and compiler characteristics.
     AC_C_INLINE
@@ -95,6 +114,9 @@ AC_INIT(configure.in)
     AC_FUNC_REALLOC
     AC_CHECK_FUNCS([gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul])
 
+# Add large file support
+    AC_SYS_LARGEFILE
+
 #check for os
     AC_MSG_CHECKING([host os])
 
@@ -109,6 +131,11 @@ AC_INIT(configure.in)
 		    CFLAGS="${CFLAGS} -DOS_FREEBSD"
                     CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet11"
                     LDFLAGS="${LDFLAGS} -L/usr/local/lib -L/usr/local/lib/libnet11"
+                    ;;
+           *-*-openbsd*)
+                    CFLAGS="${CFLAGS} -D__OpenBSD__"
+                    CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet-1.1"
+                    LDFLAGS="${LDFLAGS} -L/usr/local/lib -I/usr/local/lib/libnet-1.1"
                     ;;
 	   *darwin*|*Darwin*)
                     CFLAGS="${CFLAGS} -DOS_DARWIN"
@@ -272,6 +299,64 @@ AC_INIT(configure.in)
     echo
    fi
 
+    #enable support for PCRE-jit available since pcre-8.20
+    AC_ARG_ENABLE(pcre-jit,
+           AS_HELP_STRING([--enable-pcre-jit], [Enable experimental support for PCRE-jit]),,[enable_pcre_jit=no])
+    AS_IF([test "x$enable_pcre_jit" = "xyes"], [
+        AC_MSG_CHECKING(for PCRE JIT support)
+        AC_TRY_COMPILE([ #include <pcre.h> ],
+            [
+            int jit = 0;
+            pcre_config(PCRE_CONFIG_JIT, &jit);
+            ],
+            [ pcre_jit_available=yes ], [:]
+            )
+
+        if test "x$pcre_jit_available" = "xyes"; then
+            AC_MSG_RESULT(yes)
+            AC_DEFINE([PCRE_HAVE_JIT], [1], [Pcre with JIT compiler support enabled])
+
+            AC_MSG_CHECKING(for PCRE JIT support usability)
+            AC_TRY_COMPILE([ #include <pcre.h> ],
+                [
+                const char* regexstr = "(a|b|c|d)";
+                pcre *re;
+                const char *error;
+                pcre_extra *extra;
+                int err_offset;
+                re = pcre_compile(regexstr,0, &error, &err_offset,NULL);
+                extra = pcre_study(re, PCRE_STUDY_JIT_COMPILE, &error);
+                if (extra == NULL)
+                    exit(EXIT_FAILURE);
+                int jit = 0;
+                int ret = pcre_fullinfo(re, extra, PCRE_INFO_JIT, &jit);
+                if (ret != 0 || jit != 1)
+                    exit(EXIT_FAILURE);
+                exit(EXIT_SUCCESS);
+                ],
+                [ pcre_jit_works=yes ], [:]
+            )
+            if test "x$pcre_jit_works" != "xyes"; then
+                AC_MSG_RESULT(no)
+                echo
+                echo "   PCRE JIT support detection worked but testing it failed"
+                echo "   something odd is going on, please file a bug report."
+                echo
+                exit 1
+            else
+                AC_MSG_RESULT(yes)
+            fi
+        else
+            AC_MSG_RESULT(no)
+            echo
+            echo "   Error! --enable-pcre-jit set but PCRE_CONFIG_JIT not found"
+            echo "   Make sure your PCRE supports JIT. Version 8.20+ with"
+            echo "   --enable-jit passed to it's configure script."
+            echo
+            exit 1
+        fi
+    ])
+
 #libyaml
     AC_ARG_WITH(libyaml_includes,
             [  --with-libyaml-includes=DIR  libyaml include directory],
@@ -412,6 +497,29 @@ case $host in
 ;;
 *)
     AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",)
+    AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_maxlen],AC_DEFINE_UNQUOTED([HAVE_NFQ_MAXLEN],[1],[Found queue max length support in netfilter_queue]) ,,[-lnfnetlink])
+    AC_CHECK_LIB([netfilter_queue], [nfq_set_verdict2],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_VERDICT2],[1],[Found nfq_set_verdict2 function in netfilter_queue]) ,,[-lnfnetlink])
+
+    # check if the argument to nfq_get_payload is signed or unsigned
+    AC_MSG_CHECKING([for signed nfq_get_payload payload argument])
+    STORECFLAGS="${CFLAGS}"
+    CFLAGS="${CFLAGS} -Werror"
+    AC_COMPILE_IFELSE(
+            [AC_LANG_PROGRAM(
+                [
+                #include <libnetfilter_queue/libnetfilter_queue.h>
+                ],
+                [
+                char *pktdata;
+                nfq_get_payload(NULL, &pktdata);
+                ])],
+            [libnetfilter_queue_nfq_get_payload_signed="yes"],
+            [libnetfilter_queue_nfq_get_payload_signed="no"])
+    AC_MSG_RESULT($libnetfilter_queue_nfq_get_payload_signed)
+    if test "x$libnetfilter_queue_nfq_get_payload_signed" = "xyes"; then
+        AC_DEFINE([NFQ_GET_PAYLOAD_SIGNED], [], [For signed version of nfq_get_payload])
+    fi
+    CFLAGS="${STORECFLAGS}"
 ;;
 esac
 
@@ -420,7 +528,7 @@ esac
     echo "   ERROR!  libnetfilter_queue library not found, go get it"
     echo "   from www.netfilter.org."
     echo "   we automatically append libnetfilter_queue/ when searching"
-    echo "   for headers etc. when the --with-libnfq-inlcudes directive"
+    echo "   for headers etc. when the --with-libnfq-includes directive"
     echo "   is used"
     echo
     exit 1 
@@ -531,43 +639,83 @@ esac
            AS_HELP_STRING([--enable-pfring], [Enable Native PF_RING support]),,[enable_pfring=no])
     AS_IF([test "x$enable_pfring" = "xyes"], [
         CFLAGS="$CFLAGS -DHAVE_PFRING"
-    ])
 
 #We have to set CFLAGS for AC_TRY_COMPILE as it doesn't pay attention to CPPFLAGS
-    AC_ARG_WITH(libpfring_includes,
-            [  --with-libpfring-includes=DIR  libpfring include directory],
-            [with_libpfring_includes="$withval"],[with_libpfring_includes=no])
-    AC_ARG_WITH(libpfring_libraries,
-            [  --with-libpfring-libraries=DIR    libpfring library directory],
-            [with_libpfring_libraries="$withval"],[with_libpfring_libraries="no"])
+        AC_ARG_WITH(libpfring_includes,
+                [  --with-libpfring-includes=DIR  libpfring include directory],
+                [with_libpfring_includes="$withval"],[with_libpfring_includes=no])
+        AC_ARG_WITH(libpfring_libraries,
+                [  --with-libpfring-libraries=DIR    libpfring library directory],
+                [with_libpfring_libraries="$withval"],[with_libpfring_libraries="no"])
 
-    if test "$with_libpfring_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libpfring_includes}"
-    fi
-
-    if test "$with_libpfring_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libpfring_libraries}"
-    fi
-
-    LIBPFRING=""
-    AC_CHECK_LIB(pfring, pfring_set_cluster,, LIBPFRING="no")
-    if test "$LIBPFRING" = "no"; then
-        if test "x$enable_pfring" = "xyes"; then
-        echo
-        echo "   ERROR! --enable-pfring was passed but the library was not found or version is >4, go get it"
-        echo "   from http://www.ntop.org/PF_RING.html"
-        echo
-        exit 1
+        if test "$with_libpfring_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libpfring_includes}"
         fi
-    fi
 
-    AC_TRY_COMPILE([ #include <pfring.h> ],
-    [ pfring *pd; pd = pfring_open("eth1", 1,  1515, 1); pfring_set_cluster(pd, 99, cluster_round_robin); ],
-    [ pfring_cluster_type_available=yes ], [:]
-    )
-    if test "$pfring_cluster_type_available" = "yes"; then
-     CFLAGS="${CFLAGS} -DHAVE_PFRING_CLUSTER_TYPE"
-    fi
+        if test "$with_libpfring_libraries" != "no"; then
+        LDFLAGS="${LDFLAGS}  -L${with_libpfring_libraries}"
+        fi
+
+        LIBPFRING=""
+        AC_CHECK_LIB(pfring, pfring_set_cluster,, LIBPFRING="no")
+        if test "$LIBPFRING" = "no"; then
+            if test "x$enable_pfring" = "xyes"; then
+            echo
+            echo "   ERROR! --enable-pfring was passed but the library was not found or version is >4, go get it"
+            echo "   from http://www.ntop.org/PF_RING.html"
+            echo
+            exit 1
+            fi
+        fi
+
+        LIBPFRING_ENABLE_RING=""
+        AC_CHECK_LIB(pfring, pfring_enable_ring,, LIBPFRING_ENABLE_RING="no")
+        if test "$LIBPFRING_ENABLE_RING" != "no"; then
+            AC_DEFINE([HAVE_PFRING_ENABLE],[1],[PF_RING pfring_enable_ring is available])
+        fi
+
+        AC_MSG_CHECKING([if pfring_set_cluster is available])
+        AC_TRY_COMPILE([
+                    #include <pfring.h>
+                ],
+                [
+                    pfring *pd;
+                    pd = pfring_open("eth1", 1,  1515, 1);
+                    pfring_set_cluster(pd, 99, cluster_round_robin);
+                ],
+                [ pfring_cluster_type_available=yes ], [:])
+
+        if test "$pfring_cluster_type_available" = "yes"; then
+            AC_DEFINE([HAVE_PFRING_CLUSTER_TYPE],[1],[PF_RING pfring_set_cluster is available])
+            AC_MSG_RESULT(yes)
+        else
+            AC_MSG_RESULT(no)
+        fi
+
+        STORE_CFLAGS="${CFLAGS}"
+        CFLAGS="${CFLAGS} -Werror"
+        AC_MSG_CHECKING([if pfring_recv expects u_char**])
+        AC_TRY_COMPILE([
+                    #include <pfring.h>
+                ],
+                [
+                    u_char *buffer;
+                    struct pfring_pkthdr hdr;
+                    pfring *pd; memset(&hdr, 0, sizeof(hdr));
+                    pd = pfring_open("eth1", 1,  1515, 1);
+                    pfring_recv(pd, &buffer, 0, &hdr, 1);
+                ],
+                [ pfring_recv_uchar_buff=yes ], [:])
+
+        CFLAGS="${STORE_CFLAGS}"
+
+        if test "$pfring_recv_uchar_buff" = "yes"; then
+            AC_DEFINE([HAVE_PFRING_RECV_UCHAR],[1],[PF_RING pfring_recv buffer is u_char**])
+            AC_MSG_RESULT(yes)
+        else
+            AC_MSG_RESULT(no)
+        fi
+    ])
 
 
 # libpcap
@@ -630,11 +778,30 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
         CFLAGS="${CFLAGS} -DUNITTESTS"
     ])
 
-# enable native timeval for unified alert output
-    AC_ARG_ENABLE(unified-native-timeval,
-           AS_HELP_STRING([--enable-unified-native-timeval], [Use native timeval for unified outputs]),,[enable_unified_native_timeval=no])
-    AS_IF([test "x$enable_unified_native_timeval" = "xyes"], [
-        CFLAGS="${CFLAGS} -DUNIFIED_NATIVE_TIMEVAL"
+    AM_CONDITIONAL([BUILD_UNITTESTS], [test "x$enable_unittests" = "xyes"])
+
+# AF_PACKET support
+    AC_ARG_ENABLE(af-packet,
+           AS_HELP_STRING([--enable-af-packet], [Enable AF_PACKET support]),
+                        ,[enable_af_packet=no])
+    AS_IF([test "x$enable_af_packet" = "xyes"], [
+        AC_CHECK_DECL([AF_PACKET],
+            AC_DEFINE([HAVE_AF_PACKET],[1],[AF_PACKET support is available]),
+            [enable_af_packet=no],
+            [[#include <sys/socket.h>]])
+        AC_CHECK_DECL([PACKET_FANOUT],
+            AC_DEFINE([HAVE_PACKET_FANOUT],[1],[Packet fanout support is available]),
+            [],
+            [[#include <linux/if_packet.h>]])
+        CFLAGS="${CFLAGS} -DUNITTESTS"
+    ])
+
+
+# enable workaround for old barnyard2 for unified alert output
+    AC_ARG_ENABLE(old-barnyard2,
+           AS_HELP_STRING([--enable-old-barnyard2], [Use workaround for old barnyard2 in unified2 output]),,[enable_old_barnyard2=no])
+    AS_IF([test "x$enable_old_barnyard2" = "xyes"], [
+        CFLAGS="${CFLAGS} -DHAVE_OLD_BARNYARD2"
     ])
 
 # enable debug output
@@ -687,11 +854,17 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
         echo
         exit 1
         fi
+
+        AC_CHECK_LIB([htp], [htp_config_register_request_uri_normalize],AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Found htp_config_register_request_uri_normalize function in libhtp]) ,,[-lhtp])
     ])
 
-   #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
-   AC_CONFIG_SUBDIRS([libhtp])
-   AM_CONDITIONAL([BUILD_LIBHTP], [test "x$enable_non_bundled_htp" = "xno"])
+    #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
+    AC_CONFIG_SUBDIRS([libhtp])
+    AM_CONDITIONAL([BUILD_LIBHTP], [test "x$enable_non_bundled_htp" = "xno"])
+    AS_IF([test "x$enable_non_bundled_htp" = "xno"], [
+        AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Assuming htp_config_register_request_uri_normalize function in bundled libhtp])
+    ])
+
 
 # enable CUDA output
     AC_ARG_ENABLE(cuda,
@@ -703,17 +876,26 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
         AC_ARG_WITH(cuda_libraries,
                 [  --with-cuda-libraries=DIR    cuda library directory],
                 [with_cuda_libraries="$withval"],[with_cuda_libraries="no"])
+        AC_ARG_WITH(cuda_nvcc,
+                [  --with-cuda-nvcc=DIR  cuda nvcc compiler directory],
+                [with_cuda_nvcc="$withval"],[with_cuda_nvcc=no])
 
         CFLAGS="${CFLAGS} -D__SC_CUDA_SUPPORT__"
 
         if test "$with_cuda_includes" != "no"; then
             CPPFLAGS="${CPPFLAGS} -I${with_cuda_includes}"
         else
-            CPPFLAGS="${CPPFLAGS} -I/usr/include/cuda"
+            CPPFLAGS="${CPPFLAGS} -I/usr/local/cuda/include"
         fi
 
         if test "$with_cuda_libraries" != "no"; then
             LDFLAGS="${LDFLAGS} -L${with_cuda_libraries}"
+        fi
+
+        if test "$with_cuda_nvcc" != "no"; then
+            NVCC_DIR="${with_cuda_nvcc}"
+        else
+            NVCC_DIR="/usr/local/cuda/bin"
         fi
 
         AC_CHECK_HEADER(cuda.h,,[AC_ERROR(cuda.h not found ...)])
@@ -726,8 +908,35 @@ AC_CHECK_HEADER(pcap.h,,[AC_ERROR(pcap.h not found ...)])
             echo
             exit 1
         fi
-    ])
 
+        AC_PATH_PROG([NVCC], [nvcc], no, [$PATH:$NVCC_DIR])
+        if test "x$NVCC" = "xno"; then
+            echo
+            echo "   ERROR! CUDA nvcc compiler not found: use --with-cuda-nvcc=DIR"
+            echo
+            exit 1
+        fi
+
+        AC_MSG_CHECKING(for nvcc version)
+        NVCCVER=`$NVCC --version | grep "release" | sed 's/.*release \(@<:@0-9@:>@\)\.\(@<:@0-9@:>@\).*/\1\2/'`
+        AC_MSG_RESULT($NVCCVER)
+        if test "$NVCCVER" -lt 31; then
+            echo
+            echo "   Warning! Your CUDA nvcc version might be outdated."
+            echo "   If compilation fails try the latest CUDA toolkit from"
+            echo "   www.nvidia.com/object/cuda_develop.html"
+            echo
+        fi
+
+        AM_PATH_PYTHON(,, no)
+        if test "x$PYTHON" = "xno"; then
+            echo
+            echo "   ERROR! Compiling CUDA kernels requires python."
+            echo
+            exit 1
+        fi
+    ])
+    AM_CONDITIONAL([BUILD_CUDA], [test "x$enable_cuda" = "xyes"])
 
 # Check for libcap-ng
 
@@ -829,13 +1038,14 @@ AC_SUBST(CFLAGS)
 AC_SUBST(LDFLAGS)
 AC_SUBST(CPPFLAGS)
 
-AC_OUTPUT(Makefile src/Makefile)
+AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile)
 
 echo "
 Suricata Configuration:
   NFQueue support:          ${enable_nfqueue}
   IPFW support:             ${enable_ipfw}
   PF_RING support:          ${enable_pfring}
+  AF_PACKET support:        ${enable_af_packet}
   Prelude support:          ${enable_prelude}
   Unit tests enabled:       ${enable_unittests}
   Debug output enabled:     ${enable_debug}
@@ -846,6 +1056,7 @@ Suricata Configuration:
   GCC Protect enabled:      ${enable_gccprotect}
   GCC march native enabled: ${enable_gccmarch_native}
   GCC Profile enabled:      ${enable_gccprofile}
-  Unified native time:      ${enable_unified_native_timeval}
+  Old barnyard2 support:    ${enable_old_barnyard2}
   Non-bundled htp:          ${enable_non_bundled_htp}
+  PCRE jit:                 ${enable_pcre_jit}
 "

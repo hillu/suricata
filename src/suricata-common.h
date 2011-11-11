@@ -26,6 +26,10 @@
 #ifndef __SURICATA_COMMON_H__
 #define __SURICATA_COMMON_H__
 
+#ifdef DEBUG
+#define DBG_PERF
+#endif
+
 #define TRUE   1
 #define FALSE  0
 
@@ -43,6 +47,7 @@
 #include <ctype.h>
 #include <string.h>
 #include <fcntl.h>
+#include <time.h>
 
 #if HAVE_SYS_SYSCALL_H
 #include <sys/syscall.h>
@@ -57,19 +62,22 @@
 
 #include <pcre.h>
 
+#if HAVE_CONFIG_H
+#include <config.h>
+#endif
+
 #ifdef HAVE_SYSLOG_H
 #include <syslog.h>
 #else
+#ifdef OS_WIN32
 #include "win32-syslog.h"
+#endif /* OS_WIN32 */
 #endif /* HAVE_SYSLOG_H */
 
 #ifdef OS_WIN32
 #include "win32-misc.h"
 #include "win32-service.h"
 #endif /* OS_WIN32 */
-#if HAVE_CONFIG_H
-#include <config.h>
-#endif
 
 #include <sys/time.h>
 
@@ -93,12 +101,12 @@
 
 #include <sys/stat.h>
 
-#if HAVE_ARPA_INET_H
-#include <arpa/inet.h>
-#endif
-
 #if HAVE_NETINET_IN_H
 #include <netinet/in.h>
+#endif
+
+#if HAVE_ARPA_INET_H
+#include <arpa/inet.h>
 #endif
 
 #if HAVE_NETDB_H
@@ -135,13 +143,65 @@
 #define SigIntId uint16_t
 //#define SigIntId uint32_t
 
+/** same for pattern id's */
+#define PatIntId uint16_t
+
+/** FreeBSD does not define __WORDSIZE, but it uses __LONG_BIT */
+#ifndef __WORDSIZE
+    #ifdef __LONG_BIT
+        #define __WORDSIZE __LONG_BIT
+    #else
+        #ifdef LONG_BIT
+            #define __WORDSIZE LONG_BIT
+        #endif
+    #endif
+
+/** Windows does not define __WORDSIZE, but it uses __X86__ */
+	#if defined(__X86__) || defined(_X86_)
+		#define __WORDSIZE 32
+	#else
+		#if defined(__X86_64__) || defined(_X86_64_)
+			#define __WORDSIZE 64
+		#endif
+	#endif
+
+    #ifndef __WORDSIZE
+        #warning Defaulting to __WORDSIZE 32
+        #define __WORDSIZE 32
+    #endif
+#endif
+
+typedef enum PacketProfileDetectId_ {
+    PROF_DETECT_MPM,
+    PROF_DETECT_MPM_PACKET,         /* PKT MPM */
+    PROF_DETECT_MPM_PKT_STREAM,     /* PKT inspected with stream MPM */
+    PROF_DETECT_MPM_STREAM,         /* STREAM MPM */
+    PROF_DETECT_MPM_URI,
+    PROF_DETECT_MPM_HCBD,
+    PROF_DETECT_MPM_HHD,
+    PROF_DETECT_MPM_HRHD,
+    PROF_DETECT_MPM_HMD,
+    PROF_DETECT_MPM_HCD,
+    PROF_DETECT_MPM_HRUD,
+    PROF_DETECT_IPONLY,
+    PROF_DETECT_RULES,
+    PROF_DETECT_STATEFUL,
+    PROF_DETECT_PREFILTER,
+    PROF_DETECT_ALERT,
+    PROF_DETECT_CLEANUP,
+    PROF_DETECT_GETSGH,
+
+    PROF_DETECT_SIZE,
+} PacketProfileDetectId;
 
 #include <htp/htp.h>
 #include "threads.h"
+#include "tm-threads-common.h"
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-mem.h"
 #include "detect-engine-alert.h"
+#include "util-optimize.h"
 
 size_t strlcat(char *, const char *src, size_t siz);
 size_t strlcpy(char *dst, const char *src, size_t siz);

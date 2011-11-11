@@ -25,6 +25,7 @@
 
 #include "suricata.h"
 #include "suricata-common.h"
+#include "runmodes.h"
 #include "util-daemon.h"
 #include "util-debug.h"
 
@@ -78,18 +79,23 @@ static void WaitForChild (pid_t pid) {
  * \brief Close stdin, stdout, stderr.Redirect logging info to syslog
  *
  */
-static void SetupLogging () {
-    int fd0, fd1, fd2;
-
+static void SetupLogging (void) {
     /* Close stdin, stdout, stderr */
     close(0);
     close(1);
     close(2);
 
     /* Redirect stdin, stdout, stderr to /dev/null  */
-    fd0 = open("/dev/null", O_RDWR);
-    fd1 = dup(0);
-    fd2 = dup(0);
+    int fd = open("/dev/null", O_RDWR);
+    if (fd < 0)
+        return;
+    if (dup2(fd, 0) < 0)
+        return;
+    if (dup2(fd, 1) < 0)
+        return;
+    if (dup2(fd, 2) < 0)
+        return;
+    close(fd);
 }
 
 /**
@@ -165,10 +171,10 @@ void Daemonize (void) {
 int CheckValidDaemonModes (int daemon, int mode) {
     if (daemon) {
         switch (mode) {
-            case MODE_PCAP_FILE:
+            case RUNMODE_PCAP_FILE:
                 SCLogError(SC_ERR_INVALID_RUNMODE, "ERROR: pcap offline mode cannot run as daemon");
                 return 0;
-            case MODE_UNITTEST:
+            case RUNMODE_UNITTEST:
                 SCLogError(SC_ERR_INVALID_RUNMODE, "ERROR: unittests cannot run as daemon");
                 return 0;
             default:

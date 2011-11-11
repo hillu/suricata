@@ -45,7 +45,11 @@ typedef struct ConfNode_ {
 /**
  * The default log directory.
  */
+#ifdef OS_WIN32
+#define DEFAULT_LOG_DIR "C:\\WINDOWS\\Temp"
+#else
 #define DEFAULT_LOG_DIR "/var/log/suricata"
+#endif /* OS_WIN32 */
 
 void ConfInit(void);
 void ConfDeInit(void);
@@ -68,5 +72,13 @@ const char *ConfNodeLookupChildValue(ConfNode *node, const char *key);
 void ConfNodeRemove(ConfNode *);
 void ConfRegisterTests();
 int ConfNodeChildValueIsTrue(ConfNode *node, const char *key);
+int ConfValIsTrue(const char *val);
+int ConfValIsFalse(const char *val);
+
+
+ConfNode *ConfNodeLookupKeyValue(ConfNode *base, const char *key, const char *value);
+int ConfGetChildValue(ConfNode *base, char *name, char **vptr);
+int ConfGetChildValueInt(ConfNode *base, char *name, intmax_t *val);
+int ConfGetChildValueBool(ConfNode *base, char *name, int *val);
 
 #endif /* ! __CONF_H__ */

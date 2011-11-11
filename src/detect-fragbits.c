@@ -117,7 +117,7 @@ static int DetectFragBitsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, P
     uint16_t fragbits = 0;
     DetectFragBitsData *de = (DetectFragBitsData *)m->ctx;
 
-    if(!de || !PKT_IS_IPV4(p) || !p)
+    if (!de || !PKT_IS_IPV4(p) || !p || PKT_IS_PSEUDOPKT(p))
         return ret;
 
     if(IPV4_GET_MF(p))
@@ -252,16 +252,19 @@ static DetectFragBitsData *DetectFragBitsParse (char *rawstr)
     if(found == 0)
         goto error;
 
-    for (i = 0; i < 2; i++){
-        if (args[i] != NULL) SCFree(args[i]);
+    for (i = 0; i < 2; i++) {
+        if (args[i] != NULL)
+            SCFree(args[i]);
     }
     return de;
 
 error:
-    for (i = 0; i < 2; i++){
-        if (args[i] != NULL) SCFree(args[i]);
+    for (i = 0; i < 2; i++) {
+        if (args[i] != NULL)
+            SCFree(args[i]);
     }
-    if (de) SCFree(de);
+    if (de != NULL)
+        SCFree(de);
     return NULL;
 }
 
@@ -294,6 +297,8 @@ static int DetectFragBitsSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     sm->ctx = (void *)de;
 
     SigMatchAppendPacket(s, sm);
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
+
     return 0;
 
 error:
@@ -397,7 +402,9 @@ static int FragBitsTestParse03 (void) {
         0x0b ,0xc0 ,0x9f ,0x00 ,0x01 ,0x00 ,0x01 ,0x00,
         0x00 ,0x0e ,0x10 ,0x00 ,0x04 ,0x81 ,0x6f ,0x0b,
         0x51};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
     IPV4Hdr ipv4h;
@@ -406,16 +413,17 @@ static int FragBitsTestParse03 (void) {
     SigMatch *sm = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     AlpProtoFinalize2Thread(&dtv.udp_dp_ctx);
 
-    p.ip4h = &ipv4h;
+    p->ip4h = &ipv4h;
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeEthernet(&tv, &dtv, &p, raw_eth, sizeof(raw_eth), NULL);
+    DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
     de = DetectFragBitsParse("D");
 
@@ -429,11 +437,12 @@ static int FragBitsTestParse03 (void) {
     sm->type = DETECT_FRAGBITS;
     sm->ctx = (void *)de;
 
-    ret = DetectFragBitsMatch(&tv,NULL,&p,NULL,sm);
+    ret = DetectFragBitsMatch(&tv,NULL,p,NULL,sm);
 
     if(ret) {
         if (de) SCFree(de);
         if (sm) SCFree(sm);
+        SCFree(p);
         return 1;
     }
 
@@ -441,6 +450,7 @@ error:
     FlowShutdown();
     if (de) SCFree(de);
     if (sm) SCFree(sm);
+    SCFree(p);
     return 0;
 }
 
@@ -489,7 +499,9 @@ static int FragBitsTestParse04 (void) {
         0x0b ,0xc0 ,0x9f ,0x00 ,0x01 ,0x00 ,0x01 ,0x00,
         0x00 ,0x0e ,0x10 ,0x00 ,0x04 ,0x81 ,0x6f ,0x0b,
         0x51};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
     IPV4Hdr ipv4h;
@@ -498,16 +510,17 @@ static int FragBitsTestParse04 (void) {
     SigMatch *sm = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
     AlpProtoFinalize2Thread(&dtv.udp_dp_ctx);
 
-    p.ip4h = &ipv4h;
+    p->ip4h = &ipv4h;
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeEthernet(&tv, &dtv, &p, raw_eth, sizeof(raw_eth), NULL);
+    DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
     FlowShutdown();
 
@@ -523,17 +536,19 @@ static int FragBitsTestParse04 (void) {
     sm->type = DETECT_FRAGBITS;
     sm->ctx = (void *)de;
 
-    ret = DetectFragBitsMatch(&tv,NULL,&p,NULL,sm);
+    ret = DetectFragBitsMatch(&tv,NULL,p,NULL,sm);
 
     if(ret) {
         if (de) SCFree(de);
         if (sm) SCFree(sm);
+        SCFree(p);
         return 1;
     }
 
 error:
     if (de) SCFree(de);
     if (sm) SCFree(sm);
+    SCFree(p);
     return 0;
 }
 #endif /* UNITTESTS */

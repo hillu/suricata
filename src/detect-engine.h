@@ -25,7 +25,7 @@
 #define __DETECT_ENGINE_H__
 
 #include "detect.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 /* prototypes */
 DetectEngineCtx *DetectEngineCtxInit(void);
@@ -37,6 +37,7 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *, void *);
 /* faster as a macro than a inline function on my box -- VJ */
 #define DetectEngineGetMaxSigId(de_ctx) ((de_ctx)->signum)
 void DetectEngineResetMaxSigId(DetectEngineCtx *);
+void DetectEngineRegisterTests(void);
 
 #endif /* __DETECT_ENGINE_H__ */
 

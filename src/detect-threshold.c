@@ -16,11 +16,19 @@
  */
 
 /**
+ * \ingroup threshold
+ * @{
+ */
+
+/**
  * \file
  *
  * \author Breno Silva <breno.silva@gmail.com>
  *
- * Implements the threshold keyword
+ * Implements the threshold keyword.
+ *
+ * The feature depends on what is provided
+ * by detect-engine-threshold.c and util-threshold-config.c
  */
 
 #include "suricata-common.h"
@@ -36,6 +44,7 @@
 
 #include "detect-threshold.h"
 #include "detect-parse.h"
+#include "detect-engine-address.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
@@ -121,8 +130,9 @@ static DetectThresholdData *DetectThresholdParse (char *rawstr)
     int i = 0;
 
     copy_str = SCStrdup(rawstr);
-    if (copy_str == NULL)
+    if (copy_str == NULL) {
         goto error;
+    }
 
     for(pos = 0, threshold_opt = strtok(copy_str,",");  pos < strlen(copy_str) &&  threshold_opt != NULL;  pos++, threshold_opt = strtok(NULL,",")) {
 
@@ -136,7 +146,10 @@ static DetectThresholdData *DetectThresholdParse (char *rawstr)
             track_found++;
     }
 
-    SCFree(copy_str);
+    if (copy_str != NULL) {
+        SCFree(copy_str);
+        copy_str = NULL;
+    }
 
     if(count_found != 1 || second_found != 1 || type_found != 1 || track_found != 1)
         goto error;
@@ -175,7 +188,7 @@ static DetectThresholdData *DetectThresholdParse (char *rawstr)
             de->track = TRACK_DST;
         if (strncasecmp(args[i],"by_src",strlen("by_src")) == 0)
             de->track = TRACK_SRC;
-        if (strncasecmp(args[i],"count",strlen("seconds")) == 0)
+        if (strncasecmp(args[i],"count",strlen("count")) == 0)
             count_pos = i+1;
         if (strncasecmp(args[i],"seconds",strlen("seconds")) == 0)
             second_pos = i+1;
@@ -204,7 +217,10 @@ error:
     for (i = 0; i < (ret - 1); i++){
         if (args[i] != NULL) SCFree(args[i]);
     }
-    if (de) SCFree(de);
+    if (de != NULL)
+        SCFree(de);
+    if (copy_str != NULL)
+        SCFree(copy_str);
     return NULL;
 }
 
@@ -226,7 +242,7 @@ static int DetectThresholdSetup (DetectEngineCtx *de_ctx, Signature *s, char *ra
     SigMatch *tmpm = NULL;
 
     /* checks if there is a previous instance of detection_filter */
-    tmpm = SigMatchGetLastSM(s->match_tail, DETECT_DETECTION_FILTER);
+    tmpm = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and \"threshold\" are not allowed in the same rule");
         SCReturnInt(-1);
@@ -261,7 +277,10 @@ error:
  */
 static void DetectThresholdFree(void *de_ptr) {
     DetectThresholdData *de = (DetectThresholdData *)de_ptr;
-    if (de) SCFree(de);
+    if (de) {
+        DetectAddressFree(de->addr);
+        SCFree(de);
+    }
 }
 
 /*
@@ -392,7 +411,7 @@ static int DetectThresholdTestSig1(void) {
 
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any 80 (msg:\"Threshold limit\"; threshold: type limit, track by_dst, count 5, seconds 60; sid:1;)");
+    s = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any 80 (msg:\"Threshold limit\"; content:\"A\"; threshold: type limit, track by_dst, count 5, seconds 60; sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -871,3 +890,7 @@ void ThresholdRegisterTests(void) {
     UtRegisterTest("DetectThresholdTestSig6Ticks", DetectThresholdTestSig6Ticks, 1);
 #endif /* UNITTESTS */
 }
+
+/**
+ * @}
+ */

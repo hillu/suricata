@@ -93,6 +93,9 @@ int DetectIcmpIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
     uint16_t pid;
     DetectIcmpIdData *iid = (DetectIcmpIdData *)m->ctx;
 
+    if (PKT_IS_PSEUDOPKT(p))
+        return 0;
+
     if (PKT_IS_ICMPV4(p)) {
         SCLogDebug("ICMPV4_GET_ID(p) %"PRIu16" (network byte order), "
                 "%"PRIu16" (host byte order)", ICMPV4_GET_ID(p),
@@ -148,9 +151,6 @@ DetectIcmpIdData *DetectIcmpIdParse (char *icmpidstr) {
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
-    uint16_t id = 0;
-    int i;
-    const char *str_ptr;
 
     ret = pcre_exec(parse_regex, parse_regex_study, icmpidstr, strlen(icmpidstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1 || ret > 4) {
@@ -158,6 +158,8 @@ DetectIcmpIdData *DetectIcmpIdParse (char *icmpidstr) {
         goto error;
     }
 
+    int i;
+    const char *str_ptr;
     for (i = 1; i < ret; i++) {
         res = pcre_get_substring((char *)icmpidstr, ov, MAX_SUBSTRINGS, i, &str_ptr);
         if (res < 0) {
@@ -185,6 +187,7 @@ DetectIcmpIdData *DetectIcmpIdParse (char *icmpidstr) {
     }
 
     /** \todo can ByteExtractStringUint16 do this? */
+    uint16_t id = 0;
     if (ByteExtractStringUint16(&id, 10, 0, substr[1]) < 0) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "specified icmp id %s is not "
                                         "valid", substr[1]);
@@ -230,6 +233,7 @@ static int DetectIcmpIdSetup (DetectEngineCtx *de_ctx, Signature *s, char *icmpi
     sm->ctx = (void *)iid;
 
     SigMatchAppendPacket(s, sm);
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
 
@@ -402,28 +406,31 @@ int DetectIcmpIdMatchTest02 (void) {
         0x51, 0xa6, 0xbb, 0x35, 0x59, 0x8a, 0x5a, 0xe2,
         0x00, 0x14, 0x00, 0x00 };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     DecodeThreadVars dtv;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     IPV4Hdr ip4h;
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&ip4h, 0, sizeof(IPV4Hdr));
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(ThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
-    p.src.addr_data32[0] = 0x01020304;
-    p.dst.addr_data32[0] = 0x04030201;
+    p->src.addr_data32[0] = 0x01020304;
+    p->dst.addr_data32[0] = 0x04030201;
 
-    ip4h.ip_src.s_addr = p.src.addr_data32[0];
-    ip4h.ip_dst.s_addr = p.dst.addr_data32[0];
-    p.ip4h = &ip4h;
+    ip4h.ip_src.s_addr = p->src.addr_data32[0];
+    ip4h.ip_dst.s_addr = p->dst.addr_data32[0];
+    p->ip4h = &ip4h;
 
-    DecodeICMPV4(&th_v, &dtv, &p, raw_icmpv4, sizeof(raw_icmpv4), NULL);
+    DecodeICMPV4(&th_v, &dtv, p, raw_icmpv4, sizeof(raw_icmpv4), NULL);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -440,8 +447,8 @@ int DetectIcmpIdMatchTest02 (void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1)) {
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
         printf("sid 1 alerted, but should not have: ");
         goto cleanup;
     }
@@ -457,6 +464,7 @@ cleanup:
 
     FlowShutdown();
 end:
+    SCFree(p);
     return result;
 }
 #endif /* UNITTESTS */

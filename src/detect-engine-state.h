@@ -16,6 +16,12 @@
  */
 
 /**
+ * \ingroup sigstate
+ *
+ * @{
+ */
+
+/**
  * \file
  *
  * \brief Data structures and function prototypes for keeping
@@ -42,12 +48,28 @@
 #define __DETECT_ENGINE_STATE_H__
 
 /** number of DeStateStoreItem's in one DeStateStore object */
-#define DE_STATE_CHUNK_SIZE         16
+#define DE_STATE_CHUNK_SIZE         15
 
-#define DE_STATE_FLAG_PAYLOAD_MATCH 0x01 /**< payload part of the sig matched */
-#define DE_STATE_FLAG_URI_MATCH     0x02 /**< uri part of the sig matched */
-#define DE_STATE_FLAG_DCE_MATCH     0x04 /**< dce payload inspection part matched */
-#define DE_STATE_FLAG_FULL_MATCH    0x08 /**< sig already fully matched */
+#define DE_STATE_FLAG_PAYLOAD_MATCH 0x0001 /**< payload part of the sig matched */
+#define DE_STATE_FLAG_URI_MATCH     0x0002 /**< uri part of the sig matched */
+#define DE_STATE_FLAG_DCE_MATCH     0x0004 /**< dce payload inspection part matched */
+#define DE_STATE_FLAG_HCBD_MATCH    0x0008 /**< hcbd payload inspection part matched */
+#define DE_STATE_FLAG_HHD_MATCH     0x0010 /**< hhd payload inspection part matched */
+#define DE_STATE_FLAG_HRHD_MATCH    0x0020 /**< hrhd payload inspection part matched */
+#define DE_STATE_FLAG_HMD_MATCH     0x0040 /**< hmd payload inspection part matched */
+#define DE_STATE_FLAG_HCD_MATCH     0x0080 /**< hcd payload inspection part matched */
+#define DE_STATE_FLAG_HRUD_MATCH    0x0100 /**< hrud payload inspection part matched */
+#define DE_STATE_FLAG_FULL_MATCH    0x0200 /**< sig already fully matched */
+
+#define DE_STATE_FLAG_URI_INSPECT   DE_STATE_FLAG_URI_MATCH     /**< uri part of the sig inspected */
+#define DE_STATE_FLAG_DCE_INSPECT   DE_STATE_FLAG_DCE_MATCH     /**< dce payload inspection part inspected */
+#define DE_STATE_FLAG_HCBD_INSPECT  DE_STATE_FLAG_HCBD_MATCH    /**< hcbd payload inspection part inspected */
+#define DE_STATE_FLAG_HHD_INSPECT   DE_STATE_FLAG_HHD_MATCH     /**< hhd payload inspection part inspected */
+#define DE_STATE_FLAG_HRHD_INSPECT  DE_STATE_FLAG_HRHD_MATCH    /**< hrhd payload inspection part inspected */
+#define DE_STATE_FLAG_HMD_INSPECT   DE_STATE_FLAG_HMD_MATCH     /**< hmd payload inspection part inspected */
+#define DE_STATE_FLAG_HCD_INSPECT   DE_STATE_FLAG_HCD_MATCH     /**< hcd payload inspection part inspected */
+#define DE_STATE_FLAG_HRUD_INSPECT  DE_STATE_FLAG_HRUD_MATCH    /**< hrud payload inspection part inspected */
+
 
 /** per signature detection engine state */
 typedef enum {
@@ -76,6 +98,8 @@ typedef struct DetectEngineState_ {
     DeStateStore *head; /**< signature state storage */
     DeStateStore *tail; /**< tail item of the storage list */
     SigIntId cnt;       /**< number of sigs in the storage */
+    uint16_t toclient_version;
+    uint16_t toserver_version;
 } DetectEngineState;
 
 void DeStateRegisterTests(void);
@@ -89,16 +113,21 @@ void DetectEngineStateFree(DetectEngineState *);
 
 //void DeStateSignatureAppend(DetectEngineState *, Signature *, SigMatch *, char);
 
-int DeStateFlowHasState(Flow *);
+int DeStateFlowHasState(Flow *, uint8_t, uint16_t);
 
 int DeStateDetectStartDetection(ThreadVars *, DetectEngineCtx *,
-        DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *, uint16_t);
+        DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *,
+        uint16_t, uint16_t);
 
 int DeStateDetectContinueDetection(ThreadVars *, DetectEngineCtx *,
-        DetectEngineThreadCtx *, Flow *, uint8_t, void *, uint16_t);
+        DetectEngineThreadCtx *, Flow *, uint8_t, void *, uint16_t,
+        uint16_t);
 
 const char *DeStateMatchResultToString(DeStateMatchResult);
 int DeStateUpdateInspectTransactionId(Flow *, char);
 
 #endif /* __DETECT_ENGINE_STATE_H__ */
 
+/**
+ * @}
+ */

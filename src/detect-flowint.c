@@ -287,6 +287,9 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
 
     /* If we need another arg, check it out(isset doesn't need another arg) */
     if (modifier != FLOWINT_MODIFIER_ISSET && modifier != FLOWINT_MODIFIER_NOTSET) {
+        if (ret < 4)
+            goto error;
+
         res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 3,
                                    &str_ptr);
         varval =(char *) str_ptr;
@@ -330,8 +333,8 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
 
     return sfd;
 error:
-    if (sfd != NULL) SCFree(sfd);
-    SCFree(str);
+    if (sfd != NULL)
+        SCFree(sfd);
     return NULL;
 }
 
@@ -1368,7 +1371,9 @@ int DetectFlowintTestPacket01Real()
         sizeof(pkt11)
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     DecodeThreadVars dtv;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -1403,47 +1408,42 @@ int DetectFlowintTestPacket01Real()
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *) de_ctx,(void *) &det_ctx);
 
-    /* Get the idx of the vars we are going to track */
-    uint16_t idx1, idx2;
-    idx1 = VariableNameGetIdx("myvar", DETECT_FLOWINT);
-    idx2 = VariableNameGetIdx("cntpackets", DETECT_FLOWINT);
-
-    int i;
-
     /* Decode the packets, and test the matches*/
+    int i;
     for (i = 0;i < 11;i++) {
-        memset(&p, 0, sizeof(Packet));
-        DecodeEthernet(&th_v, &dtv, &p, pkts[i], pktssizes[i], NULL);
+        memset(p, 0, SIZE_OF_PACKET);
+        p->pkt = (uint8_t *)(p + 1);
+        DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
-        SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+        SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
         switch(i) {
             case 3:
-                if (PacketAlertCheck(&p, 101) == 0) {
+                if (PacketAlertCheck(p, 101) == 0) {
                     SCLogDebug("Not declared/initialized!");
                     result = 0;
                 }
                 break;
             case 5:
-                if (PacketAlertCheck(&p, 102) == 0) {
+                if (PacketAlertCheck(p, 102) == 0) {
                     SCLogDebug("Not incremented!");
                     result = 0;
                 }
 
-                if (PacketAlertCheck(&p, 103) == 0) {
+                if (PacketAlertCheck(p, 103) == 0) {
                     SCLogDebug("myvar is not 3 or bad cmp!!");
                     result = 0;
                 }
                 break;
             case 10:
-                if (PacketAlertCheck(&p, 105) == 0) {
+                if (PacketAlertCheck(p, 105) == 0) {
                     SCLogDebug("Not declared/initialized/or well incremented the"
                                 " second var!");
                     result = 0;
                 }
                 break;
         }
-        SCLogDebug("Raw Packet %d has %u alerts ", i, p.alerts.cnt);
+        SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
     }
 
     SigGroupCleanup(de_ctx);
@@ -1453,6 +1453,7 @@ int DetectFlowintTestPacket01Real()
     DetectEngineCtxFree(de_ctx);
     FlowShutdown();
 
+    SCFree(p);
     return result;
 
 end:
@@ -1466,6 +1467,7 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     FlowShutdown();
+    SCFree(p);
     return result;
 }
 
@@ -1703,7 +1705,9 @@ int DetectFlowintTestPacket02Real()
         sizeof(pkt11)
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     DecodeThreadVars dtv;
 
     ThreadVars th_v;
@@ -1737,50 +1741,45 @@ int DetectFlowintTestPacket02Real()
     de_ctx->sig_list->next->next->next->next->next = NULL;
 
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, MPM_B2G);
     DetectEngineThreadCtxInit(&th_v,(void *) de_ctx,(void *) &det_ctx);
-
-    /* Get the idx of the vars we are going to track */
-    uint16_t idx1, idx2;
-    idx1 = VariableNameGetIdx("myvar", DETECT_FLOWINT);
-    idx2 = VariableNameGetIdx("cntpackets", DETECT_FLOWINT);
 
     int i;
 
     /* Decode the packets, and test the matches*/
     for (i = 0;i < 11;i++) {
-        memset(&p, 0, sizeof(Packet));
-        DecodeEthernet(&th_v, &dtv, &p, pkts[i], pktssizes[i], NULL);
+        memset(p, 0, SIZE_OF_PACKET);
+        p->pkt = (uint8_t *)(p + 1);
+        DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
-        SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+        SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
         switch(i) {
             case 3:
-                if (PacketAlertCheck(&p, 101) == 0) {
+                if (PacketAlertCheck(p, 101) == 0) {
                     SCLogDebug("Not declared/initialized!");
                     result = 0;
                 }
                 break;
             case 5:
-                if (PacketAlertCheck(&p, 102) == 0) {
+                if (PacketAlertCheck(p, 102) == 0) {
                     SCLogDebug("Not incremented!");
                     result = 0;
                 }
 
-                if (PacketAlertCheck(&p, 103) == 0) {
+                if (PacketAlertCheck(p, 103) == 0) {
                     SCLogDebug("myvar is not 3 or bad cmp!!");
                     result = 0;
                 }
                 break;
             case 10:
-                if (PacketAlertCheck(&p, 105) == 0) {
+                if (PacketAlertCheck(p, 105) == 0) {
                     SCLogDebug("Not declared/initialized/or well incremented the"
                                 " second var!");
                     result = 0;
                 }
                 break;
         }
-        SCLogDebug("Raw Packet %d has %u alerts ", i, p.alerts.cnt);
+        SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
     }
 
     SigGroupCleanup(de_ctx);
@@ -1791,6 +1790,7 @@ int DetectFlowintTestPacket02Real()
     DetectEngineCtxFree(de_ctx);
     FlowShutdown();
 
+    SCFree(p);
     return result;
 
 end:
@@ -1805,6 +1805,7 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     FlowShutdown();
+    SCFree(p);
     return result;
 }
 
@@ -2042,7 +2043,9 @@ int DetectFlowintTestPacket03Real()
         sizeof(pkt11)
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     DecodeThreadVars dtv;
 
     ThreadVars th_v;
@@ -2070,47 +2073,42 @@ int DetectFlowintTestPacket03Real()
     de_ctx->sig_list->next->next->next = NULL;
 
     SigGroupBuild(de_ctx);
-    //PatternMatchPrepare(mpm_ctx, MPM_B2G);
     DetectEngineThreadCtxInit(&th_v,(void *) de_ctx,(void *) &det_ctx);
-
-    /* Get the idx of the vars we are going to track */
-    uint16_t idx1, idx2;
-    idx1 = VariableNameGetIdx("myvar", DETECT_FLOWINT);
-    idx2 = VariableNameGetIdx("cntpackets", DETECT_FLOWINT);
 
     int i;
 
     /* Decode the packets, and test the matches*/
     for (i = 0;i < 11;i++) {
-        memset(&p, 0, sizeof(Packet));
-        DecodeEthernet(&th_v, &dtv, &p, pkts[i], pktssizes[i], NULL);
+        memset(p, 0, SIZE_OF_PACKET);
+        p->pkt = (uint8_t *)(p + 1);
+        DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
-        SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+        SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
         switch(i) {
             case 3:
-                if (PacketAlertCheck(&p, 101) == 0) {
+                if (PacketAlertCheck(p, 101) == 0) {
                     SCLogDebug("Not declared/initialized but match!");
                     result = 0;
                 }
-                if (PacketAlertCheck(&p, 103) != 0) {
+                if (PacketAlertCheck(p, 103) != 0) {
                     SCLogDebug(" var lala is never set, it should NOT match!!");
                     result = 0;
                 }
                 break;
             case 5:
-                if (PacketAlertCheck(&p, 102) == 0) {
+                if (PacketAlertCheck(p, 102) == 0) {
                     SCLogDebug("Not incremented!");
                     result = 0;
                 }
 
-                if (PacketAlertCheck(&p, 103) != 0) {
+                if (PacketAlertCheck(p, 103) != 0) {
                     SCLogDebug(" var lala is never set, it should NOT match!!");
                     result = 0;
                 }
                 break;
         }
-        SCLogDebug("Raw Packet %d has %u alerts ", i, p.alerts.cnt);
+        SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
     }
 
     SigGroupCleanup(de_ctx);
@@ -2121,6 +2119,7 @@ int DetectFlowintTestPacket03Real()
     DetectEngineCtxFree(de_ctx);
     FlowShutdown();
 
+    SCFree(p);
     return result;
 
 end:
@@ -2135,6 +2134,7 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     FlowShutdown();
+    SCFree(p);
     return result;
 }
 

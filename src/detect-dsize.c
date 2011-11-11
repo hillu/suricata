@@ -101,6 +101,10 @@ int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
     SCEnter();
     int ret = 0;
 
+    if (PKT_IS_PSEUDOPKT(p)) {
+        SCReturnInt(0);
+    }
+
     DetectDsizeData *dd = (DetectDsizeData *)m->ctx;
 
     SCLogDebug("p->payload_len %"PRIu16"", p->payload_len);
@@ -271,6 +275,13 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     DetectDsizeData *dd = NULL;
     SigMatch *sm = NULL;
 
+    if (SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH],
+                          DETECT_DSIZE) != NULL) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Can't use 2 or more dsizes in "
+                   "the same sig.  Invalidating signature.");
+        goto error;
+    }
+
     SCLogDebug("\'%s\'", rawstr);
 
     dd = DetectDsizeParse(rawstr);
@@ -284,6 +295,7 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     sm = SigMatchAlloc();
     if (sm == NULL){
         SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate memory for SigMatch");
+        SCFree(dd);
         goto error;
     }
 
@@ -295,17 +307,11 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     SCLogDebug("dd->dsize %"PRIu16", dd->dsize2 %"PRIu16", dd->mode %"PRIu8"",
             dd->dsize, dd->dsize2, dd->mode);
     /* tell the sig it has a dsize to speed up engine init */
-    s->flags |= SIG_FLAG_DSIZE;
-
-    if (s->dsize_sm != NULL) {
-        s->dsize_sm = sm;
-    }
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
 
 error:
-    if (dd) SCFree(dd);
-    if (sm) SCFree(sm);
     return -1;
 }
 
@@ -715,7 +721,9 @@ int DetectDsizeIcmpv6Test01 (void) {
         0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
     DecodeThreadVars dtv;
@@ -724,17 +732,18 @@ int DetectDsizeIcmpv6Test01 (void) {
     DetectEngineThreadCtx *det_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ip6h, 0, sizeof(IPV6Hdr));
     memset(&th_v, 0, sizeof(ThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
-    p.src.family = AF_INET6;
-    p.dst.family = AF_INET6;
-    p.ip6h = &ip6h;
+    p->src.family = AF_INET6;
+    p->dst.family = AF_INET6;
+    p->ip6h = &ip6h;
 
-    DecodeIPV6(&tv, &dtv, &p, raw_icmpv6, sizeof(raw_icmpv6), NULL);
+    DecodeIPV6(&tv, &dtv, p, raw_icmpv6, sizeof(raw_icmpv6), NULL);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -758,11 +767,11 @@ int DetectDsizeIcmpv6Test01 (void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1) == 0) {
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1) == 0) {
         printf("sid 1 did not alert, but should have: ");
         goto cleanup;
-    } else if (PacketAlertCheck(&p, 2)) {
+    } else if (PacketAlertCheck(p, 2)) {
         printf("sid 2 alerted, but should not have: ");
         goto cleanup;
     }
@@ -778,6 +787,7 @@ cleanup:
 
     FlowShutdown();
 end:
+    SCFree(p);
     return result;
 
 }

@@ -30,7 +30,6 @@
 #include "threads.h"
 #include "threadvars.h"
 #include "tm-queuehandlers.h"
-#include "tm-modules.h"
 #include "tm-threads.h"
 #include "source-ipfw.h"
 #include "util-debug.h"
@@ -62,6 +61,7 @@ void TmModuleReceiveIPFWRegister (void) {
     tmm_modules[TMM_RECEIVEIPFW].RegisterTests = NULL;
     tmm_modules[TMM_RECEIVEIPFW].cap_flags = SC_CAP_NET_ADMIN | SC_CAP_NET_RAW |
         SC_CAP_NET_BIND_SERVICE | SC_CAP_NET_BROADCAST; /** \todo untested */
+    tmm_modules[TMM_RECEIVEIPFW].flags = TM_FLAG_RECEIVE_TM;
 }
 
 void TmModuleVerdictIPFWRegister (void) {
@@ -254,9 +254,8 @@ TmEcode ReceiveIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
     ptv->bytes += pktlen;
 
     p->datalink = ptv->datalink;
-    p->pktlen = pktlen;
-    memcpy(p->pkt, pkt, p->pktlen);
-    SCLogDebug("Packet info: p->pktlen: %" PRIu32 " (pkt %02x, p->pkt %02x)", p->pktlen, *pkt, *p->pkt);
+    PacketCopyData(p, pkt, pktlen);
+    SCLogDebug("Packet info: pkt_len: %" PRIu32 " (pkt %02x, pkt_data %02x)", GET_PKT_LEN(p), *pkt, GET_PKT_DATA(p));
 
     /* pass on... */
     tv->tmqh_out(tv, p);
@@ -291,7 +290,7 @@ TmEcode ReceiveIPFWThreadInit(ThreadVars *tv, void *initdata, void **data) {
     SCEnter();
 
     /* divert socket port to listen/send on */
-    if ( (ConfGet("ipfw-divert-port", &tmpdivertport)) != 1 ) {
+    if ( (ConfGet("ipfw.ipfw_divert_port", &tmpdivertport)) != 1 ) {
         SCLogError(SC_ERR_IPFW_NOPORT,"Please supply an IPFW divert port");
         SCReturnInt(TM_ECODE_FAILED);
 
@@ -401,30 +400,30 @@ TmEcode ReceiveIPFWThreadDeinit(ThreadVars *tv, void *data) {
  */
 TmEcode DecodeIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
-    IPV4Hdr *ip4h = (IPV4Hdr *)p->pkt;
-    IPV6Hdr *ip6h = (IPV6Hdr *)p->pkt;
+    IPV4Hdr *ip4h = (IPV4Hdr *)GET_PKT_DATA(p);
+    IPV6Hdr *ip6h = (IPV6Hdr *)GET_PKT_DATA(p);
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
 
     SCEnter();
 
     /* update counters */
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, p->pktlen);
+    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
+    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
 
     /* Process IP packets */
     if (IPV4_GET_RAW_VER(ip4h) == 4) {
         SCLogDebug("DecodeIPFW ip4 processing");
-        DecodeIPV4(tv, dtv, p, p->pkt, p->pktlen, pq);
+        DecodeIPV4(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
 
     } else if(IPV6_GET_RAW_VER(ip6h) == 6) {
         SCLogDebug("DecodeIPFW ip6 processing");
-        DecodeIPV6(tv, dtv, p, p->pkt, p->pktlen, pq);
+        DecodeIPV6(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
 
     } else {
         /* We don't support anything besides IP packets for now, bridged packets? */
-        SCLogInfo("IPFW unknown protocol support %02x", *p->pkt);
+        SCLogInfo("IPFW unknown protocol support %02x", *GET_PKT_DATA(p));
        SCReturnInt(TM_ECODE_FAILED);
     }
 
@@ -470,8 +469,7 @@ TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p) {
     IPFWpoll.fd=ipfw_sock;
     IPFWpoll.events= POLLWRNORM;
 
-    if (p->action & ACTION_REJECT || p->action & ACTION_REJECT_BOTH ||
-        p->action & ACTION_REJECT_DST || p->action & ACTION_DROP) {
+    if (p->action & ACTION_DROP) {
         verdict = IPFW_DROP;
     } else {
         verdict = IPFW_ACCEPT;
@@ -485,7 +483,7 @@ TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p) {
         /* For divert sockets, accepting means writing the
          * packet back to the socket for ipfw to pick up
          */
-        SCLogDebug("IPFWSetVerdict writing to socket %d, %p, %u", ipfw_sock,p->pkt,p->pktlen);
+        SCLogDebug("IPFWSetVerdict writing to socket %d, %p, %u", ipfw_sock,GET_PKT_DATA(p),GET_PKT_LEN(p));
 
 
         while ( (poll(&IPFWpoll,1,IPFW_SOCKET_POLL_MSEC)) < 1) {
@@ -498,7 +496,7 @@ TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p) {
         }
 
         SCMutexLock(&ipfw_socket_lock);
-        if (sendto(ipfw_sock, p->pkt, p->pktlen, 0,(struct sockaddr *)&ipfw_sin, ipfw_sinlen) == -1) {
+        if (sendto(ipfw_sock, GET_PKT_DATA(p), GET_PKT_LEN(p), 0,(struct sockaddr *)&ipfw_sin, ipfw_sinlen) == -1) {
             SCLogWarning(SC_WARN_IPFW_XMIT,"Write to ipfw divert socket failed: %s",strerror(errno));
             SCMutexUnlock(&ipfw_socket_lock);
             SCReturnInt(TM_ECODE_FAILED);
@@ -506,7 +504,7 @@ TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p) {
 
         SCMutexUnlock(&ipfw_socket_lock);
 
-        SCLogDebug("Sent Packet back into IPFW Len: %d",p->pktlen);
+        SCLogDebug("Sent Packet back into IPFW Len: %d",GET_PKT_LEN(p));
 
     } /* end IPFW_ACCEPT */
 
@@ -540,21 +538,30 @@ TmEcode VerdictIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
 
     SCEnter();
 
+    /* can't verdict a "fake" packet */
+    if (p->flags & PKT_PSEUDO_STREAM_END) {
+        SCReturnInt(TM_ECODE_OK);
+    }
+
     /* This came from NFQ.
      *  if this is a tunnel packet we check if we are ready to verdict
      * already. */
     if (IS_TUNNEL_PKT(p)) {
         char verdict = 1;
 
-        pthread_mutex_t *m = p->root ? &p->root->mutex_rtv_cnt : &p->mutex_rtv_cnt;
+        SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
         SCMutexLock(m);
+
         /* if there are more tunnel packets than ready to verdict packets,
          * we won't verdict this one
          */
         if (TUNNEL_PKT_TPR(p) > TUNNEL_PKT_RTV(p)) {
-            SCLogDebug("VerdictIPFW: not ready to verdict yet: TUNNEL_PKT_TPR(p) > TUNNEL_PKT_RTV(p) = %" PRId32 " > %" PRId32 "", TUNNEL_PKT_TPR(p), TUNNEL_PKT_RTV(p));
+            SCLogDebug("VerdictIPFW: not ready to verdict yet: "
+                    "TUNNEL_PKT_TPR(p) > TUNNEL_PKT_RTV(p) = %" PRId32
+                    " > %" PRId32 "", TUNNEL_PKT_TPR(p), TUNNEL_PKT_RTV(p));
             verdict = 0;
         }
+
         SCMutexUnlock(m);
 
         /* don't verdict if we are not ready */

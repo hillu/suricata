@@ -34,6 +34,7 @@
 #include "detect-isdataat.h"
 #include "detect-bytetest.h"
 #include "detect-bytejump.h"
+#include "detect-byte-extract.h"
 
 #include "util-spm.h"
 #include "util-spm-bm.h"
@@ -83,6 +84,13 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
 {
     SCEnter();
 
+    det_ctx->inspection_recursion_counter++;
+
+    if (det_ctx->inspection_recursion_counter == de_ctx->inspection_recursion_limit) {
+        det_ctx->discontinue_matching = 1;
+        SCReturnInt(0);
+    }
+
     if (sm == NULL || stub_len == 0) {
         SCReturnInt(0);
     }
@@ -96,7 +104,9 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                        cd->id, stub_len);
 
             /* rule parsers should take care of this */
+#ifdef DEBUG
             BUG_ON(cd->depth != 0 && cd->depth <= cd->offset);
+#endif
 
             /* search for our pattern, checking the matches recursively.
              * if we match we look for the next SigMatch as well */
@@ -115,50 +125,77 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                     offset = prev_payload_offset;
                     depth = stub_len;
 
+                    int distance = cd->distance;
                     if (cd->flags & DETECT_CONTENT_DISTANCE) {
-                        if (cd->distance < 0 && (uint32_t)(abs(cd->distance)) > offset) {
-                            offset = 0;
-                        } else {
-                            offset += cd->distance;
+                        if (cd->flags & DETECT_CONTENT_DISTANCE_BE) {
+                            distance = det_ctx->bj_values[cd->distance];
                         }
+                        if (distance < 0 && (uint32_t)(abs(distance)) > offset)
+                            offset = 0;
+                        else
+                            offset += distance;
 
                         SCLogDebug("cd->distance %"PRIi32", offset %"PRIu32", depth %"PRIu32,
                                    cd->distance, offset, depth);
                     }
 
                     if (cd->flags & DETECT_CONTENT_WITHIN) {
-                        if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within)) {
-                            depth = prev_payload_offset + cd->within;
-                        }
+                        if (cd->flags & DETECT_CONTENT_WITHIN_BE) {
+                            if ((int32_t)depth > (int32_t)(prev_payload_offset + det_ctx->bj_values[cd->within] + distance)) {
+                                depth = prev_payload_offset + det_ctx->bj_values[cd->within] + distance;
+                            }
+                        } else {
+                            if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within + distance)) {
+                                depth = prev_payload_offset + cd->within + distance;
+                            }
 
-                        SCLogDebug("cd->within %"PRIi32", prev_payload_offset "
-                                   "%"PRIu32", depth %"PRIu32, cd->within,
-                                   prev_payload_offset, depth);
+                            SCLogDebug("cd->within %"PRIi32", prev_payload_offset "
+                                       "%"PRIu32", depth %"PRIu32, cd->within,
+                                       prev_payload_offset, depth);
+                        }
                     }
 
-                    if (cd->depth != 0) {
-                        if ((cd->depth + prev_payload_offset) < depth) {
-                            depth = prev_payload_offset + cd->depth;
-                        }
+                    if (cd->flags & DETECT_CONTENT_DEPTH_BE) {
+                        if ((det_ctx->bj_values[cd->depth] + prev_payload_offset) < depth) {
+                            depth = prev_payload_offset + det_ctx->bj_values[cd->depth];
+                         }
+                    } else {
+                        if (cd->depth != 0) {
+                            if ((cd->depth + prev_payload_offset) < depth) {
+                                depth = prev_payload_offset + cd->depth;
+                            }
 
-                        SCLogDebug("cd->depth %"PRIu32", depth %"PRIu32,
-                                   cd->depth, depth);
+                            SCLogDebug("cd->depth %"PRIu32", depth %"PRIu32,
+                                       cd->depth, depth);
+                        }
                     }
 
-                    if (cd->offset > offset) {
-                        offset = cd->offset;
-                        SCLogDebug("setting offset %"PRIu32, offset);
+                    if (cd->flags & DETECT_CONTENT_OFFSET_BE) {
+                        if (det_ctx->bj_values[cd->offset] > offset)
+                            offset = det_ctx->bj_values[cd->offset];
+                    } else {
+                        if (cd->offset > offset) {
+                            offset = cd->offset;
+                            SCLogDebug("setting offset %"PRIu32, offset);
+                        }
                     }
 
                 /* implied no relative matches */
                 } else {
                     /* set depth */
-                    if (cd->depth != 0) {
-                        depth = cd->depth;
+                    if (cd->flags & DETECT_CONTENT_DEPTH_BE) {
+                        depth = det_ctx->bj_values[cd->depth];
+                    } else {
+                        if (cd->depth != 0) {
+                            depth = cd->depth;
+                        }
                     }
 
                     /* set offset */
-                    offset = cd->offset;
+                    if (cd->flags & DETECT_CONTENT_OFFSET_BE)
+                        offset = det_ctx->bj_values[cd->offset];
+                    else
+                        offset = cd->offset;
                     prev_payload_offset = 0;
                 }
 
@@ -190,7 +227,9 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                 uint32_t sstub_len = depth - offset;
                 uint32_t match_offset = 0;
                 SCLogDebug("sstub_len %"PRIu32, sstub_len);
+#ifdef DEBUG
                 BUG_ON(sstub_len > stub_len);
+#endif
 
                 /* do the actual search */
                 if (cd->flags & DETECT_CONTENT_NOCASE) {
@@ -228,7 +267,13 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
                         goto match;
                     }
 
-                    BUG_ON(sm->next == NULL);
+                    /* bail out if we have no next match. Technically this is an
+                     * error, as the current cd has the DETECT_CONTENT_RELATIVE_NEXT
+                     * flag set. */
+                    if (sm->next == NULL) {
+                        SCReturnInt(0);
+                    }
+
                     SCLogDebug("content %"PRIu32, cd->id);
 
                     /* see if the next payload keywords match. If not, we will
@@ -323,23 +368,28 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
         case DETECT_BYTETEST:
         {
             DetectBytetestData *data = (DetectBytetestData *)sm->ctx;
-            uint32_t temp_flags = data->flags;
+            uint8_t flags = data->flags;
+            int32_t offset = data->offset;;
+            uint64_t value = data->value;
+            if (flags & DETECT_BYTETEST_OFFSET_BE) {
+                offset = det_ctx->bj_values[offset];
+            }
+            if (flags & DETECT_BYTETEST_VALUE_BE) {
+                value = det_ctx->bj_values[value];
+            }
 
             /* if we have dce enabled we will have to use the endianness
              * specified by the dce header */
-            if (data->flags & DETECT_BYTETEST_DCE) {
+            if (flags & DETECT_BYTETEST_DCE) {
                 /* enable the endianness flag temporarily.  once we are done
                  * processing we reset the flags to the original value*/
-                data->flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] == 0x10) ?
-                                DETECT_BYTETEST_LITTLE: 0);
+                flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] & 0x10) ?
+                          DETECT_BYTETEST_LITTLE: 0);
             }
 
-            if (DetectBytetestDoMatch(det_ctx, s, sm, stub, stub_len) != 1) {
+            if (DetectBytetestDoMatch(det_ctx, s, sm, stub, stub_len, flags, offset, value) != 1) {
                 SCReturnInt(0);
             }
-
-            /* reset the flags */
-            data->flags = temp_flags;
 
             goto match;
         }
@@ -347,23 +397,47 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
         case DETECT_BYTEJUMP:
         {
             DetectBytejumpData *data = (DetectBytejumpData *)sm->ctx;
-            uint32_t temp_flags = data->flags;
+            uint8_t flags = data->flags;
+            int32_t offset = data->offset;;
+            if (flags & DETECT_BYTEJUMP_OFFSET_BE) {
+                offset = det_ctx->bj_values[offset];
+            }
 
             /* if we have dce enabled we will have to use the endianness
              * specified by the dce header */
-            if (data->flags & DETECT_BYTEJUMP_DCE) {
+            if (flags & DETECT_BYTEJUMP_DCE) {
                 /* enable the endianness flag temporarily.  once we are done
                  * processing we reset the flags to the original value*/
-                data->flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] == 0x10) ?
-                                DETECT_BYTEJUMP_LITTLE : 0);
+                flags |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] & 0x10) ?
+                          DETECT_BYTEJUMP_LITTLE : 0);
             }
 
-            if (DetectBytejumpDoMatch(det_ctx, s, sm, stub, stub_len) != 1) {
+            if (DetectBytejumpDoMatch(det_ctx, s, sm, stub, stub_len, flags, offset) != 1) {
                 SCReturnInt(0);
             }
 
-            /* reset the flags */
-            data->flags = temp_flags;
+            goto match;
+        }
+
+        case DETECT_BYTE_EXTRACT:
+        {
+            DetectByteExtractData *bed = (DetectByteExtractData *)sm->ctx;
+            uint8_t endian = bed->endian;
+
+            /* if we have dce enabled we will have to use the endianness
+             * specified by the dce header */
+            if (bed->flags & DETECT_BYTE_EXTRACT_FLAG_ENDIAN &&
+                endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE) {
+
+                /* enable the endianness flag temporarily.  once we are done
+                 * processing we reset the flags to the original value*/
+                endian |= ((dcerpc_state->dcerpc.dcerpchdr.packed_drep[0] == 0x10) ?
+                           DETECT_BYTE_EXTRACT_ENDIAN_LITTLE : DETECT_BYTE_EXTRACT_ENDIAN_BIG);
+            }
+            if (DetectByteExtractDoMatch(det_ctx, sm, s, stub, stub_len,
+                                         &det_ctx->bj_values[bed->local_id], endian) != 1) {
+                SCReturnInt(0);
+            }
 
             goto match;
         }
@@ -371,7 +445,10 @@ static int DoInspectDcePayload(DetectEngineCtx *de_ctx,
         /* we should never get here, but bail out just in case */
         default:
         {
+            SCLogDebug("sm->type %u", sm->type);
+#ifdef DEBUG
             BUG_ON(1);
+#endif
         }
     }
 
@@ -413,7 +490,7 @@ int DetectEngineInspectDcePayload(DetectEngineCtx *de_ctx,
     uint16_t dce_stub_data_len;
     int r = 0;
 
-    if (s->dmatch == NULL || dcerpc_state == NULL) {
+    if (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL || dcerpc_state == NULL) {
         SCReturnInt(0);
     }
 
@@ -425,8 +502,9 @@ int DetectEngineInspectDcePayload(DetectEngineCtx *de_ctx,
 
         det_ctx->payload_offset = 0;
         det_ctx->discontinue_matching = 0;
+        det_ctx->inspection_recursion_counter = 0;
 
-        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
+        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_DMATCH], f,
                                 dce_stub_data, dce_stub_data_len, dcerpc_state);
         if (r == 1) {
             SCReturnInt(1);
@@ -441,8 +519,9 @@ int DetectEngineInspectDcePayload(DetectEngineCtx *de_ctx,
 
         det_ctx->payload_offset = 0;
         det_ctx->discontinue_matching = 0;
+        det_ctx->inspection_recursion_counter = 0;
 
-        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->dmatch, f,
+        r = DoInspectDcePayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_DMATCH], f,
                                 dce_stub_data, dce_stub_data_len, dcerpc_state);
         if (r == 1) {
             SCReturnInt(1);
@@ -1587,21 +1666,21 @@ int DcePayloadTest01(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|26 d0 cf 80|; distance:0; sid:1;)";
+        "content:\"|26 d0 cf 80|\"; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|43 5b 67 26 65|; distance:0; sid:2;)";
+        "content:\"|43 5b 67 26 65|\"; distance:0; sid:2;)";
     char *sig3 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|71 69 75 3e|; distance:0; sid:3;)";
+        "content:\"|71 69 75 3e|\"; distance:0; sid:3;)";
     char *sig4 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|6a 68 69 3e 72|; distance:0; sid:4;)";
+        "content:\"|6a 68 69 3e 72|\"; distance:0; sid:4;)";
     char *sig5 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|61 50 71 45 29 5b 56 3d 5a|; distance:0; sid:5;)";
+        "content:\"|61 50 71 45 29 5b 56 3d 5a|\"; distance:0; sid:5;)";
     char *sig6 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|23 75 40 5d 32 55|; distance:0; sid:6;)";
+        "content:\"|23 75 40 5d 32 55|\"; distance:0; sid:6;)";
     char *sig7 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|ee 70 32 65 c1|; distance:0; sid:7;)";
+        "content:\"|ee 70 32 65 c1|\"; distance:0; sid:7;)";
     char *sig8 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|79 26 46 f7 bf a1|; distance:0; sid:8;)";
+        "content:\"|79 26 46 f7 bf a1|\"; distance:0; sid:8;)";
 
     Signature *s;
 
@@ -1612,6 +1691,7 @@ int DcePayloadTest01(void)
     for (i = 0; i < 11; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -2464,7 +2544,7 @@ int DcePayloadTest02(void)
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
         "sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "dce_stub_data; content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
+        "dce_stub_data; content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -2475,6 +2555,7 @@ int DcePayloadTest02(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -2516,11 +2597,11 @@ int DcePayloadTest02(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
-    if (!(PacketAlertCheck(p[0], 1))) {
+    if (PacketAlertCheck(p[0], 1)) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
-    if ((PacketAlertCheck(p[0], 2))) {
+    if (PacketAlertCheck(p[0], 2)) {
         printf("sid 2 matched but shouldn't have for packet 0: ");
         goto end;
     }
@@ -2910,7 +2991,7 @@ int DcePayloadTest03(void)
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef4; "
         "dce_stub_data; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
+        "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -2921,6 +3002,7 @@ int DcePayloadTest03(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -3353,9 +3435,9 @@ int DcePayloadTest04(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "dce_stub_data; content:|91 27 27 40|; distance:0; sid:1;)";
+        "dce_stub_data; content:\"|91 27 27 40|\"; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
+        "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -3366,6 +3448,7 @@ int DcePayloadTest04(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -3797,9 +3880,9 @@ int DcePayloadTest05(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef4; "
-        "dce_stub_data; content:|91 27 27 40|; distance:0; sid:1;)";
+        "dce_stub_data; content:\"|91 27 27 40|\"; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "dce_stub_data; content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
+        "dce_stub_data; content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -3810,6 +3893,7 @@ int DcePayloadTest05(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -4242,9 +4326,9 @@ int DcePayloadTest06(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "dce_stub_data; content:|91 27 27 30|; distance:0; sid:1;)";
+        "dce_stub_data; content:\"|91 27 27 30|\"; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 2a 4c|; distance:0; sid:2;)";
+        "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -4255,6 +4339,7 @@ int DcePayloadTest06(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -4686,9 +4771,9 @@ int DcePayloadTest07(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-        "dce_stub_data; content:|91 27 27 30|; distance:0; sid:1;)";
+        "dce_stub_data; content:\"|91 27 27 30|\"; distance:0; sid:1;)";
     char *sig2 = "alert tcp any any -> any any (dce_stub_data; "
-        "content:|2d 5e 63 35 25|; distance:0; sid:2;)";
+        "content:\"|2d 5e 63 35 25|\"; distance:0; sid:2;)";
 
     Signature *s;
 
@@ -4699,6 +4784,7 @@ int DcePayloadTest07(void)
     for (i = 0; i < 4; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -4969,7 +5055,7 @@ int DcePayloadTest08(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5d 5b 35|; distance:0; content:|9e a3|; "
+        "(dce_stub_data; content:\"|5d 5b 35|\"; distance:0; content:\"|9e a3|\"; "
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
@@ -4981,6 +5067,7 @@ int DcePayloadTest08(void)
     for (i = 0; i < 1; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -5190,7 +5277,7 @@ int DcePayloadTest09(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5d 5b 35|; distance:0; content:|9e a3|; "
+        "(dce_stub_data; content:\"|5d 5b 35|\"; distance:0; content:\"|9e a3|\"; "
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
@@ -5202,6 +5289,7 @@ int DcePayloadTest09(void)
     for (i = 0; i < 1; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -5411,7 +5499,7 @@ int DcePayloadTest10(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|ad 0d|; distance:0; content:|ad 0d 00|; "
+        "(dce_stub_data; content:\"|ad 0d|\"; distance:0; content:\"|ad 0d 00|\"; "
         "distance:-10; within:3; sid:1;)";
 
     Signature *s;
@@ -5423,6 +5511,7 @@ int DcePayloadTest10(void)
     for (i = 0; i < 1; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -5767,7 +5856,7 @@ int DcePayloadTest11(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|af, 26, d0|; distance:0; content:|80 98 6d|; "
+        "(dce_stub_data; content:\"|af, 26, d0|\"; distance:0; content:\"|80 98 6d|\"; "
         "distance:1; within:3; sid:1;)";
 
     Signature *s;
@@ -5779,6 +5868,7 @@ int DcePayloadTest11(void)
     for (i = 0; i < 2; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -6137,7 +6227,7 @@ int DcePayloadTest12(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|af, 26, d0|; distance:0; content:|80 98 6d|; "
+        "(dce_stub_data; content:\"|af, 26, d0|\"; distance:0; content:\"|80 98 6d|\"; "
         "distance:2; within:3; sid:1;)";
 
     Signature *s;
@@ -6149,6 +6239,7 @@ int DcePayloadTest12(void)
     for (i = 0; i < 2; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -6328,6 +6419,7 @@ int DcePayloadTest13(void)
     for (i = 0; i < 8; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -6569,6 +6661,7 @@ int DcePayloadTest14(void)
     for (i = 0; i < 6; i++) {
         p[i] = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
         p[i]->flow = &f;
+        p[i]->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
         p[i]->flowflags |= FLOW_PKT_TOSERVER;
         p[i]->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -6729,10 +6822,10 @@ int DcePayloadTest15(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,14080,0,relative,dce; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,46,5,relative,dce; sid:2;)";
 
     Signature *s;
@@ -6743,6 +6836,7 @@ int DcePayloadTest15(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -6840,10 +6934,10 @@ int DcePayloadTest16(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,55,0,relative; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,11776,5,relative; sid:2;)";
 
     Signature *s;
@@ -6854,6 +6948,7 @@ int DcePayloadTest16(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -6951,10 +7046,10 @@ int DcePayloadTest17(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,55,0,relative,big; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_test:2,=,46,5,relative,little; sid:2;)";
 
     Signature *s;
@@ -6965,6 +7060,7 @@ int DcePayloadTest17(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7062,10 +7158,10 @@ int DcePayloadTest18(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,0,relative,dce; byte_test:2,=,46,0,relative,dce; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,2,relative,dce; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
@@ -7076,6 +7172,7 @@ int DcePayloadTest18(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7173,10 +7270,10 @@ int DcePayloadTest19(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,0,relative; byte_test:2,=,46,0,relative,dce; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,2,relative; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
@@ -7187,6 +7284,7 @@ int DcePayloadTest19(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7284,10 +7382,10 @@ int DcePayloadTest20(void)
     int r;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,0,relative,big; byte_test:2,=,46,0,relative,dce; sid:1;)";
     char *sig2 = "alert tcp any any -> any any "
-        "(dce_stub_data; content:|5c 00 5c 00 31|; distance:0; "
+        "(dce_stub_data; content:\"|5c 00 5c 00 31|\"; distance:0; "
         "byte_jump:2,2,little,relative; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
@@ -7298,6 +7396,7 @@ int DcePayloadTest20(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7390,8 +7489,8 @@ int DcePayloadTest21(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "content:this; distance:0; content:is; within:6; content:big; within:8; "
-        "content:string; within:8; sid:1;)";
+        "content:\"this\"; distance:0; content:\"is\"; within:6; content:\"big\"; within:8; "
+        "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
 
@@ -7401,6 +7500,7 @@ int DcePayloadTest21(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7486,8 +7586,8 @@ int DcePayloadTest22(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "content:this; distance:0; content:is; within:9; content:big; within:12; "
-        "content:string; within:8; sid:1;)";
+        "content:\"this\"; distance:0; content:\"is\"; within:9; content:\"big\"; within:12; "
+        "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
 
@@ -7497,6 +7597,7 @@ int DcePayloadTest22(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7582,9 +7683,9 @@ int DcePayloadTest23(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "content:now; distance:0; content:this; distance:-20; "
-        "content:is; within:12; content:big; within:8; "
-        "content:string; within:8; sid:1;)";
+        "content:\"now\"; distance:0; content:\"this\"; distance:-20; "
+        "content:\"is\"; within:12; content:\"big\"; within:8; "
+        "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
 
@@ -7594,6 +7695,7 @@ int DcePayloadTest23(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7678,8 +7780,8 @@ int DcePayloadTest24(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "content:thus; distance:0; offset:8; content:is; within:6; "
-        "content:big; within:8; sid:1;)";
+        "content:\"thus\"; distance:0; offset:8; content:\"is\"; within:6; "
+        "content:\"big\"; within:8; sid:1;)";
 
     Signature *s;
 
@@ -7689,6 +7791,7 @@ int DcePayloadTest24(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -7764,9 +7867,9 @@ int DcePayloadParseTest25(void)
     de_ctx->flags |= DE_QUIET;
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
-                                   "content:one; content:two; "
-                                   "content:three; within:10; "
-                                   "content:four; distance:4; "
+                                   "content:\"one\"; content:\"two\"; "
+                                   "content:\"three\"; within:10; "
+                                   "content:\"four\"; distance:4; "
                                    "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -7774,16 +7877,16 @@ int DcePayloadParseTest25(void)
         goto end;
     }
 
-    if (s->dmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -7886,26 +7989,26 @@ int DcePayloadParseTest26(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
-                                   "content: one; "
-                                   "content:two; "
-                                   "content:three; within:5; "
-                                   "content:four; distance:10; "
+                                   "content:\"one\"; "
+                                   "content:\"two\"; "
+                                   "content:\"three\"; within:5; "
+                                   "content:\"four\"; distance:10; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8012,26 +8115,26 @@ int DcePayloadParseTest27(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
-                                   "content: one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three; within:5; "
-                                   "content:four; distance:10; "
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\"; within:5; "
+                                   "content:\"four\"; distance:10; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] != NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8138,26 +8241,26 @@ int DcePayloadParseTest28(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
-                                   "content: one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four;"
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\";"
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8197,7 +8300,7 @@ int DcePayloadParseTest28(void)
     if (result == 0)
         goto end;
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8266,26 +8369,26 @@ int DcePayloadParseTest29(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
                                    "pcre:/boom/; "
-                                   "content:one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four;"
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\";"
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_PCRE) {
         result = 0;
         goto end;
@@ -8407,26 +8510,26 @@ int DcePayloadParseTest30(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
                                    "byte_jump:2,5; "
-                                   "content:one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four;"
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\";"
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_BYTEJUMP) {
         result = 0;
         goto end;
@@ -8553,26 +8656,26 @@ int DcePayloadParseTest31(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
                                    "byte_jump:2,5,relative; "
-                                   "content:one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four;"
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\";"
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTEJUMP) {
         result = 0;
         goto end;
@@ -8630,7 +8733,7 @@ int DcePayloadParseTest31(void)
     if (result == 0)
         goto end;
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8699,26 +8802,26 @@ int DcePayloadParseTest32(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
                                    "byte_jump:2,5,relative; "
-                                   "content:one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four; within:4; "
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\"; within:4; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTEJUMP) {
         result = 0;
         goto end;
@@ -8776,7 +8879,7 @@ int DcePayloadParseTest32(void)
     if (result == 0)
         goto end;
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8845,26 +8948,26 @@ int DcePayloadParseTest33(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
                                    "pcre:/boom/R; "
-                                   "content:one; distance:10; within:5; "
-                                   "content:two; within:5;"
-                                   "content:three;"
-                                   "content:four; distance:5;"
+                                   "content:\"one\"; distance:10; within:5; "
+                                   "content:\"two\"; within:5;"
+                                   "content:\"three\";"
+                                   "content:\"four\"; distance:5;"
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_PCRE) {
         result = 0;
         goto end;
@@ -8917,7 +9020,7 @@ int DcePayloadParseTest33(void)
     if (result == 0)
         goto end;
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -8989,24 +9092,24 @@ int DcePayloadParseTest34(void)
                                    "dce_opnum:10; dce_stub_data; "
                                    "pcre:/boom/R; "
                                    "byte_jump:1,2,relative,align,dce; "
-                                   "content:one; within:4; distance:8; "
-                                   "content:two; "
+                                   "content:\"one\"; within:4; distance:8; "
+                                   "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_PCRE) {
         result = 0;
         goto end;
@@ -9023,7 +9126,6 @@ int DcePayloadParseTest34(void)
         result = 0;
         goto end;
     }
-    bd = (DetectBytejumpData *)sm->ctx;
     bd = (DetectBytejumpData *)sm->ctx;
     if (bd->flags & DETECT_BYTEJUMP_BEGIN ||
         bd->flags & DETECT_BYTEJUMP_LITTLE ||
@@ -9059,7 +9161,7 @@ int DcePayloadParseTest34(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9111,23 +9213,23 @@ int DcePayloadParseTest35(void)
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_test:1,=,0,0,relative,dce; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTETEST) {
         result = 0;
         goto end;
@@ -9145,7 +9247,7 @@ int DcePayloadParseTest35(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9197,24 +9299,24 @@ int DcePayloadParseTest36(void)
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "isdataat:10,relative; "
-                                   "content:one; within:4; distance:8; "
-                                   "content:two; "
+                                   "content:\"one\"; within:4; distance:8; "
+                                   "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_ISDATAAT) {
         result = 0;
         goto end;
@@ -9248,7 +9350,7 @@ int DcePayloadParseTest36(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9302,23 +9404,23 @@ int DcePayloadParseTest37(void)
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_jump:1,2,relative,align,dce; "
                                    "byte_test:1,=,2,0,relative,dce; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTEJUMP) {
         result = 0;
         goto end;
@@ -9354,7 +9456,7 @@ int DcePayloadParseTest37(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9410,23 +9512,23 @@ int DcePayloadParseTest38(void)
                                    "pcre:/boom/R; "
                                    "byte_jump:1,2,relative,align,dce; "
                                    "byte_test:1,=,2,0,relative,dce; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_PCRE) {
         result = 0;
         goto end;
@@ -9475,7 +9577,7 @@ int DcePayloadParseTest38(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9523,26 +9625,26 @@ int DcePayloadParseTest39(void)
     de_ctx->flags |= DE_QUIET;
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
-                                   "content:two; within:4; distance:8; "
+                                   "content:\"two\"; within:4; distance:8; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9564,7 +9666,7 @@ int DcePayloadParseTest39(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     data = (DetectContentData *)sm->ctx;
     if (data->flags & DETECT_CONTENT_RAWBYTES ||
         data->flags & DETECT_CONTENT_NOCASE ||
@@ -9611,26 +9713,26 @@ int DcePayloadParseTest40(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
-                                   "content: one; within:10; "
-                                   "content:two; distance:20; within:30; "
+                                   "content:\"one\"; within:10; "
+                                   "content:\"two\"; distance:20; within:30; "
                                    "byte_test:1,=,2,0,relative,dce; "
-                                   "content:three; "
+                                   "content:\"three\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9689,7 +9791,7 @@ int DcePayloadParseTest40(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9740,26 +9842,26 @@ int DcePayloadParseTest41(void)
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
-                                   "content: one; within:10; "
-                                   "content:two; "
+                                   "content:\"one\"; within:10; "
+                                   "content:\"two\"; "
                                    "byte_test:1,=,2,0,relative,dce; "
-                                   "content:three; "
+                                   "content:\"three\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9781,7 +9883,7 @@ int DcePayloadParseTest41(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -9876,7 +9978,7 @@ int DcePayloadTest42(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "content:fix; distance:0; content:this; within:6; "
+        "content:\"fix\"; distance:0; content:\"this\"; within:6; "
         "content:!\"and\"; distance:0; sid:1;)";
 
     Signature *s;
@@ -9887,6 +9989,7 @@ int DcePayloadTest42(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -9974,7 +10077,7 @@ int DcePayloadTest43(void)
 
     char *sig1 = "alert tcp any any -> any any "
         "(msg:\"testing dce consecutive relative matches\"; dce_stub_data; "
-        "pcre:/super/R; content:nova; within:7; sid:1;)";
+        "pcre:/super/R; content:\"nova\"; within:7; sid:1;)";
 
     Signature *s;
 
@@ -9984,6 +10087,7 @@ int DcePayloadTest43(void)
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -10060,28 +10164,28 @@ int DcePayloadParseTest44(void)
     de_ctx->flags |= DE_QUIET;
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "isdataat:10,relative; "
-                                   "content:one; within:4; distance:8; "
-                                   "content:two; "
+                                   "content:\"one\"; within:4; distance:8; "
+                                   "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_ISDATAAT) {
         result = 0;
         goto end;
@@ -10116,7 +10220,7 @@ int DcePayloadParseTest44(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -10187,26 +10291,26 @@ int DcePayloadParseTest45(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_jump:1,2,relative,align,dce; "
-                                   "content:two; "
+                                   "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTEJUMP) {
         result = 0;
         goto end;
@@ -10226,7 +10330,7 @@ int DcePayloadParseTest45(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -10298,26 +10402,26 @@ int DcePayloadParseTest46(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
-                                   "content:one; "
+                                   "content:\"one\"; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_test:1,=,2,0,relative,dce; "
-                                   "content:two; "
+                                   "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
 
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    if (s->pmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->dmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_DMATCH];
     if (sm->type != DETECT_BYTETEST) {
         result = 0;
         goto end;
@@ -10335,7 +10439,7 @@ int DcePayloadParseTest46(void)
 
     result &= (sm->next == NULL);
 
-    sm = s->pmatch;
+    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;

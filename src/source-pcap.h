@@ -28,6 +28,10 @@ void TmModuleReceivePcapRegister (void);
 void TmModuleDecodePcapRegister (void);
 void PcapTranslateIPToDevice(char *pcap_dev, size_t len);
 
+int PcapLiveRegisterDevice(char *);
+int PcapLiveGetDeviceCount(void);
+char *PcapLiveGetDevice(int);
+
 /* XXX replace with user configurable options */
 #define LIBPCAP_SNAPLEN     1518
 #define LIBPCAP_COPYWAIT    500
@@ -37,6 +41,23 @@ void PcapTranslateIPToDevice(char *pcap_dev, size_t len);
 typedef struct PcapPacketVars_
 {
 } PcapPacketVars;
+
+/** needs to be able to contain Windows adapter id's, so
+ *  must be quite long. */
+#define PCAP_IFACE_NAME_LENGTH 128
+
+typedef struct PcapIfaceConfig_
+{
+    char iface[PCAP_IFACE_NAME_LENGTH];
+    /* socket buffer size */
+    int buffer_size;
+    /* BPF filter */
+    char *bpf_filter;
+    SC_ATOMIC_DECLARE(unsigned int, ref);
+    void (*DerefFunc)(void *);
+} PcapIfaceConfig;
+
+
 
 #endif /* __SOURCE_PCAP_H__ */
 

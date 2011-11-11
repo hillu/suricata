@@ -76,7 +76,7 @@ static uint32_t FragmentDataParser(Flow *f, void *dcerpcudp_state,
         *stub_data_buffer_len = 0;
     }
 
-    *stub_data_buffer = realloc(*stub_data_buffer, *stub_data_buffer_len + stub_len);
+    *stub_data_buffer = SCRealloc(*stub_data_buffer, *stub_data_buffer_len + stub_len);
     if (*stub_data_buffer == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto end;
@@ -190,7 +190,7 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
 					sstate->dcerpc.dcerpchdrudp.if_vers = *(p + 60);
 					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 61) << 8;
 					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 62) << 16;
-					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 63) << 24;
+					sstate->dcerpc.dcerpchdrudp.if_vers |= *(p + 63) >> 24;
 					sstate->dcerpc.dcerpchdrudp.seqnum = *(p + 64);
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 65) << 8;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 66) << 16;
@@ -218,8 +218,8 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 65) << 16;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 66) << 8;
 					sstate->dcerpc.dcerpchdrudp.seqnum |= *(p + 67);
-					sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 8;
-					sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69);
+					sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 24;
+					sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69) << 16;
 					sstate->dcerpc.dcerpchdrudp.ihint = *(p + 70) << 8;
 					sstate->dcerpc.dcerpchdrudp.ihint |= *(p + 71);
 					sstate->dcerpc.dcerpchdrudp.ahint = *(p + 72) << 8;
@@ -676,7 +676,7 @@ static int DCERPCUDPParse(Flow *f, void *dcerpc_state,
 }
 
 static void *DCERPCUDPStateAlloc(void) {
-	void *s = malloc(sizeof(DCERPCUDPState));
+	void *s = SCMalloc(sizeof(DCERPCUDPState));
 	if (s == NULL)
 		return NULL;
 
@@ -692,25 +692,29 @@ static void DCERPCUDPStateFree(void *s) {
 	while ((item = TAILQ_FIRST(&sstate->uuid_list))) {
 		//printUUID("Free", item);
 		TAILQ_REMOVE(&sstate->uuid_list, item, next);
-		free(item);
+		SCFree(item);
 	}
     if (sstate->dcerpc.dcerpcrequest.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
         sstate->dcerpc.dcerpcrequest.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcrequest.stub_data_buffer_len = 0;
     }
     if (sstate->dcerpc.dcerpcresponse.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
         sstate->dcerpc.dcerpcresponse.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcresponse.stub_data_buffer_len = 0;
     }
 	if (s) {
-		free(s);
+		SCFree(s);
 		s = NULL;
 	}
 }
 
 void RegisterDCERPCUDPParsers(void) {
+    /** DCERPC */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_UDP, ALPROTO_DCERPC_UDP, "|04 00|", 2, 0, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_UDP, ALPROTO_DCERPC_UDP, "|04 00|", 2, 0, STREAM_TOSERVER);
+
 	AppLayerRegisterProto("dcerpcudp", ALPROTO_DCERPC_UDP, STREAM_TOSERVER,
 			DCERPCUDPParse);
 	AppLayerRegisterProto("dcerpcudp", ALPROTO_DCERPC_UDP, STREAM_TOCLIENT,

@@ -16,6 +16,12 @@
  */
 
 /**
+ * \defgroup httplayer HTTP layer support
+ *
+ * @{
+ */
+
+/**
  * \file
  *
  * \author Gurvinder Singh <gurvindersinghdahiya@gmail.com>
@@ -31,6 +37,9 @@
 
 #include <htp/htp.h>
 
+/* default request body limit */
+#define HTP_CONFIG_DEFAULT_REQUEST_BODY_LIMIT    4096U
+
 #define HTP_FLAG_STATE_OPEN         0x01    /**< Flag to indicate that HTTP
                                              connection is open */
 #define HTP_FLAG_STATE_CLOSED       0x02    /**< Flag to indicate that HTTP
@@ -43,10 +52,6 @@
 #define HTP_FLAG_NEW_BODY_SET       0x10    /**< Flag to indicate that HTTP
                                              has parsed a new body (for
                                              pcre) */
-#define HTP_FLAG_NEW_REQUEST        0x20    /**< Flag to indicate that we have
-                                                 a new HTTP requesta and we
-                                                 need to log it */
-
 enum {
     HTP_BODY_NONE,                      /**< Flag to indicate the current
                                              operation */
@@ -78,25 +83,31 @@ typedef struct HtpBody_ {
     uint32_t nchunks;    /**< Number of chunks in the current operation */
     uint8_t operation;   /**< This flag indicate if it's a request
                               or a response */
-    uint8_t pcre_flags;  /**< This flag indicate if no chunk matched
-                              any pcre (so we can free() without waiting) */
 } HtpBody;
+
+#define HTP_BODY_COMPLETE   0x01    /* body is complete or limit is reached,
+                                       either way, this is it. */
 
 /** Now the Body Chunks will be stored per transaction, at
   * the tx user data */
 typedef struct SCHtpTxUserData_ {
-    HtpBody body;           /**< Body of the request (if any) */
+    /* Body of the request (if any) */
+    HtpBody body;
+    /* Holds the length of the htp request body */
+    uint32_t content_len;
+    /* Holds the length of the htp request body seen so far */
+    uint32_t content_len_so_far;
+    uint8_t flags;
 } SCHtpTxUserData;
 
 typedef struct HtpState_ {
 
     htp_connp_t *connp;     /**< Connection parser structure for
                                  each connection */
-//    size_t new_in_tx_index; /**< Index to indicate that after this we have
-//                                 new requests to log */
     uint8_t flags;
     uint16_t transaction_cnt;
     uint16_t transaction_done;
+    uint32_t request_body_limit;
 } HtpState;
 
 void RegisterHTPParsers(void);
@@ -107,12 +118,17 @@ void HTPFreeConfig(void);
 htp_tx_t *HTPTransactionMain(const HtpState *);
 
 int HTPCallbackRequestBodyData(htp_tx_data_t *);
+int HtpTransactionGetLoggableId(Flow *);
 void HtpBodyPrint(HtpBody *);
 void HtpBodyFree(HtpBody *);
 void AppLayerHtpRegisterExtraCallbacks(void);
 /* To free the state from unittests using app-layer-htp */
 void HTPStateFree(void *);
 void AppLayerHtpEnableRequestBodyCallback(void);
+void AppLayerHtpPrintStats(void);
 
 #endif	/* __APP_LAYER_HTP_H__ */
 
+/**
+ * @}
+ */

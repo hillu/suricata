@@ -49,6 +49,7 @@
 #include "flow-private.h"
 
 #include "util-byte.h"
+#include "util-memcmp.h"
 
 /**
  * \brief Function to parse the SSH version string of the server
@@ -131,7 +132,7 @@ static int SSHParseServerVersion(Flow *f, void *ssh_state, AppLayerParserState *
         }
 
         /* is it the version line? */
-        if (memcmp("SSH-", line_ptr, 4) == 0) {
+        if (SCMemcmp("SSH-", line_ptr, 4) == 0) {
             if (line_len > 255) {
                 SCLogDebug("Invalid version string, it should be less than 255 characters including <CR><NL>");
                 SCReturnInt(-1);
@@ -156,7 +157,6 @@ static int SSHParseServerVersion(Flow *f, void *ssh_state, AppLayerParserState *
         uint64_t proto_ver_len = (uint64_t)(proto_end - line_ptr);
         state->server_proto_version = SCMalloc(proto_ver_len + 1);
         if (state->server_proto_version == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
             SCReturnInt(-1);
         }
         memcpy(state->server_proto_version, line_ptr, proto_ver_len);
@@ -183,7 +183,6 @@ static int SSHParseServerVersion(Flow *f, void *ssh_state, AppLayerParserState *
         uint64_t sw_ver_len = (uint64_t)(sw_end - line_ptr);
         state->server_software_version = SCMalloc(sw_ver_len + 1);
         if (state->server_software_version == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
             SCReturnInt(-1);
         }
         memcpy(state->server_software_version, line_ptr, sw_ver_len);
@@ -464,7 +463,7 @@ static int SSHParseClientVersion(Flow *f, void *ssh_state, AppLayerParserState *
         }
 
         /* is it the version line? */
-        if (memcmp("SSH-", line_ptr, 4) == 0) {
+        if (SCMemcmp("SSH-", line_ptr, 4) == 0) {
             if (line_len > 255) {
                 SCLogDebug("Invalid version string, it should be less than 255 characters including <CR><NL>");
                 SCReturnInt(-1);
@@ -489,7 +488,6 @@ static int SSHParseClientVersion(Flow *f, void *ssh_state, AppLayerParserState *
         uint64_t proto_ver_len = (uint64_t)(proto_end - line_ptr);
         state->client_proto_version = SCMalloc(proto_ver_len + 1);
         if (state->client_proto_version == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
             SCReturnInt(-1);
         }
         memcpy(state->client_proto_version, line_ptr, proto_ver_len);
@@ -516,7 +514,6 @@ static int SSHParseClientVersion(Flow *f, void *ssh_state, AppLayerParserState *
         uint64_t sw_ver_len = (uint64_t)(sw_end - line_ptr);
         state->client_software_version = SCMalloc(sw_ver_len + 1);
         if (state->client_software_version == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
             SCReturnInt(-1);
         }
         memcpy(state->client_software_version, line_ptr, sw_ver_len);
@@ -749,6 +746,10 @@ static void SSHStateFree(void *state)
  */
 void RegisterSSHParsers(void)
 {
+    /** SSH */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSH, "SSH-", 4, 0, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SSH, "SSH-", 4, 0, STREAM_TOSERVER);
+
     AppLayerRegisterProto("ssh", ALPROTO_SSH, STREAM_TOCLIENT,
                           SSHParseServerRecord);
     AppLayerRegisterProto("ssh", ALPROTO_SSH, STREAM_TOSERVER,

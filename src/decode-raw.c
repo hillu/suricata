@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author William Metcalf <william.metcalf@gmail.com>
@@ -37,19 +44,19 @@ void DecodeRaw(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
 
     /* If it is ipv4 or ipv6 it should at least be the size of ipv4 */
     if (len < IPV4_HEADER_LEN) {
-        DECODER_SET_EVENT(p,IPV4_PKT_TOO_SMALL);
+        ENGINE_SET_EVENT(p,IPV4_PKT_TOO_SMALL);
         return;
     }
 
     if (IP_GET_RAW_VER(pkt) == 4) {
         SCLogDebug("IPV4 Packet");
-        DecodeIPV4(tv, dtv, p, p->pkt, p->pktlen, pq);
+        DecodeIPV4(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
     } else if (IP_GET_RAW_VER(pkt) == 6) {
         SCLogDebug("IPV6 Packet");
-        DecodeIPV6(tv, dtv, p, p->pkt, p->pktlen, pq);
+        DecodeIPV6(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
     } else {
         SCLogDebug("Unknown ip version %" PRIu8 "", IP_GET_RAW_VER(pkt));
-        DECODER_SET_EVENT(p,IPRAW_INVALID_IPV);
+        ENGINE_SET_EVENT(p,IPRAW_INVALID_IPV);
     }
     return;
 }
@@ -76,27 +83,34 @@ static int DecodeRawTest01 (void)   {
         0x29, 0x9c, 0x00, 0x00, 0x02, 0x04, 0x05, 0x8c,
         0x04, 0x02, 0x08, 0x0a, 0x00, 0xdd, 0x1a, 0x39,
         0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x02 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv,  0, sizeof(ThreadVars));
-    memset(&p,   0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
 
-    p.pktlen = sizeof(raw_ip);
-    memcpy(p.pkt, raw_ip, p.pktlen);
+    if (PacketCopyData(p, raw_ip, sizeof(raw_ip)) == -1) {
+    SCFree(p);
+    return 1;
+    }
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeRaw(&tv, &dtv, &p, raw_ip, p.pktlen, NULL);
-    if (p.ip6h == NULL) {
+    DecodeRaw(&tv, &dtv, p, raw_ip, GET_PKT_LEN(p), NULL);
+    if (p->ip6h == NULL) {
         printf("expected a valid ipv6 header but it was NULL: ");
         FlowShutdown();
+        SCFree(p);
         return 1;
     }
 
     FlowShutdown();
+    SCFree(p);
     return 0;
 
 }
@@ -115,26 +129,33 @@ static int DecodeRawTest02 (void)   {
         0x70, 0x02, 0x40, 0x00, 0xb8, 0xc8, 0x00, 0x00,
         0x02, 0x04, 0x05, 0xb4, 0x01, 0x01, 0x04, 0x02 };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv,  0, sizeof(ThreadVars));
-    memset(&p,   0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
 
-    p.pktlen = sizeof(raw_ip);
-    memcpy(p.pkt, raw_ip, p.pktlen);
+    if (PacketCopyData(p, raw_ip, sizeof(raw_ip)) == -1) {
+    SCFree(p);
+    return 1;
+    }
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeRaw(&tv, &dtv, &p, raw_ip, p.pktlen, NULL);
+    DecodeRaw(&tv, &dtv, p, raw_ip, GET_PKT_LEN(p), NULL);
     FlowShutdown();
-    if (p.ip4h == NULL) {
+    if (p->ip4h == NULL) {
         printf("expected a valid ipv4 header but it was NULL: ");
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 /** DecodeRawtest03
@@ -154,27 +175,34 @@ static int DecodeRawTest03 (void)   {
         0x34, 0x40, 0x67, 0x31, 0x3b, 0x63, 0x61, 0x74,
         0x20, 0x6b, 0x65, 0x79, 0x3b };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv,  0, sizeof(ThreadVars));
-    memset(&p,   0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
 
-    p.pktlen = sizeof(raw_ip);
-    memcpy(p.pkt, raw_ip, p.pktlen);
+    if (PacketCopyData(p, raw_ip, sizeof(raw_ip)) == -1) {
+    SCFree(p);
+    return 1;
+    }
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeRaw(&tv, &dtv, &p, raw_ip, p.pktlen, NULL);
-    if (DECODER_ISSET_EVENT(&p,IPRAW_INVALID_IPV)) {
+    DecodeRaw(&tv, &dtv, p, raw_ip, GET_PKT_LEN(p), NULL);
+    if (ENGINE_ISSET_EVENT(p,IPRAW_INVALID_IPV)) {
         FlowShutdown();
+        SCFree(p);
         return 0;
     } else {
         printf("expected IPRAW_INVALID_IPV to be set but it wasn't: ");
     }
     FlowShutdown();
+    SCFree(p);
     return 1;
 }
 
@@ -191,3 +219,6 @@ void DecodeRawRegisterTests(void) {
     UtRegisterTest("DecodeRawTest03", DecodeRawTest03, 0);
 #endif /* UNITTESTS */
 }
+/**
+ * @}
+ */

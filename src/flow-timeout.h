@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2011 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -18,14 +18,14 @@
 /**
  * \file
  *
- * \author Victor Julien <victor@inliniac.net>
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
  */
 
-#ifndef __ALERT_UNIFIED_ALERT_H__
-#define __ALERT_UNIFIED_ALERT_H__
+#ifndef __FLOW_TIMEOUT_H__
+#define __FLOW_TIMEOUT_H__
 
-void TmModuleAlertUnifiedAlertRegister (void);
-OutputCtx *AlertUnifiedAlertInitCtx(ConfNode *);
+int FlowForceReassemblyForFlowV2(Flow *);
+void FlowForceReassembly(void);
+void FlowForceReassemblySetup(void);
 
-#endif /* __ALERT_UNIFIED_ALERT_H__ */
-
+#endif /* __FLOW_TIMEOUT_H__ */

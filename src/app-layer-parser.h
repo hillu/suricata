@@ -60,9 +60,9 @@ typedef struct AppLayerParserResultElmt_ {
     uint16_t flags; /* flags. E.g. local alloc */
     uint16_t name_idx; /* idx for names like "http.request_line.uri" */
 
+    uint32_t data_len; /* length of the data from the ptr */
     uint8_t  *data_ptr; /* point to the position in the "input" data
                           * or ptr to new mem if local alloc flag set */
-    uint32_t data_len; /* length of the data from the ptr */
     struct AppLayerParserResultElmt_ *next;
 } AppLayerParserResultElmt;
 
@@ -117,6 +117,9 @@ typedef struct AppLayerParserStateStore_ {
      *  state. As transactions may be cleaned up before the entire state is
      *  freed, id's may "disappear". */
     uint16_t base_id;
+
+    uint16_t version;       /**< state version, incremented for each update,
+                             *   can wrap around */
 } AppLayerParserStateStore;
 
 typedef struct AppLayerParserTableElement_ {
@@ -132,6 +135,88 @@ typedef struct AppLayerParserTableElement_ {
                              to be a certain size */
 } AppLayerParserTableElement;
 
+typedef struct AppLayerProbingParserElement_ {
+    const char *al_proto_name;
+    uint16_t al_proto;
+    uint16_t port;
+    uint16_t ip_proto;
+    uint8_t priority;
+    uint8_t top;
+    uint32_t al_proto_mask;
+    /* the min length of data that has to be supplied to invoke the parser */
+    uint32_t min_depth;
+    /* the max length of data after which this parser won't be invoked */
+    uint32_t max_depth;
+    /* the probing parser function */
+    uint16_t (*ProbingParser)(uint8_t *input, uint32_t input_len);
+
+    struct AppLayerProbingParserElement_ *next;
+} AppLayerProbingParserElement;
+
+typedef struct AppLayerProbingParser_ {
+    /* the port no for which probing parser(s) are invoked */
+    uint16_t port;
+    uint32_t toserver_al_proto_mask;
+    uint32_t toclient_al_proto_mask;
+    /* the max depth for all the probing parsers registered for this port */
+    uint16_t toserver_max_depth;
+    uint16_t toclient_max_depth;
+
+    AppLayerProbingParserElement *toserver;
+    AppLayerProbingParserElement *toclient;
+
+    struct AppLayerProbingParser_ *next;
+} AppLayerProbingParser;
+
+typedef struct AppLayerProbingParserInfo_ {
+    const char *al_proto_name;
+    uint16_t ip_proto;
+    uint16_t al_proto;
+    uint16_t (*ProbingParser)(uint8_t *input, uint32_t input_len);
+    struct AppLayerProbingParserInfo_ *next;
+} AppLayerProbingParserInfo;
+
+#define APP_LAYER_PROBING_PARSER_PRIORITY_HIGH   1
+#define APP_LAYER_PROBING_PARSER_PRIORITY_MEDIUM 2
+#define APP_LAYER_PROBING_PARSER_PRIORITY_LOW    3
+
+static inline
+AppLayerProbingParser *AppLayerGetProbingParsers(AppLayerProbingParser *probing_parsers,
+                                                 uint16_t ip_proto,
+                                                 uint16_t port)
+{
+    if (probing_parsers == NULL)
+        return NULL;
+
+    AppLayerProbingParser *pp = probing_parsers;
+    while (pp != NULL) {
+        if (pp->port == port || pp->port == 0) {
+            break;
+        }
+        pp = pp->next;
+    }
+
+    return pp;
+}
+
+static inline
+AppLayerProbingParserInfo *AppLayerGetProbingParserInfo(AppLayerProbingParserInfo *ppi,
+                                                        const char *al_proto_name)
+{
+    while (ppi != NULL) {
+        if (strcmp(ppi->al_proto_name, al_proto_name) == 0)
+            return ppi;
+        ppi = ppi->next;
+    }
+
+    return NULL;
+}
+extern uint16_t app_layer_sid;
+
+struct AlpProtoDetectCtx_;
+
+extern uint16_t app_layer_sid;
+
 /* prototypes */
 void AppLayerParsersInitPostProcess(void);
 void RegisterAppLayerParsers(void);
@@ -145,6 +230,11 @@ int AppLayerRegisterParser(char *name, uint16_t proto, uint16_t parser_id,
                            AppLayerParserState *parser_state, uint8_t *input,
                            uint32_t input_len, AppLayerParserResult *output),
                            char *dependency);
+void AppLayerRegisterProbingParser(struct AlpProtoDetectCtx_ *, uint16_t, uint16_t,
+                                   const char *, uint16_t,
+                                   uint16_t, uint16_t, uint8_t, uint8_t,
+                                   uint8_t,
+                                   uint16_t (*ProbingParser)(uint8_t *, uint32_t));
 void AppLayerRegisterStateFuncs(uint16_t proto, void *(*StateAlloc)(void),
                                 void (*StateFree)(void *));
 void AppLayerRegisterTransactionIdFuncs(uint16_t proto,
@@ -163,6 +253,7 @@ int AlpParseFieldByDelimiter(AppLayerParserResult *, AppLayerParserState *,
                              uint16_t, const uint8_t *, uint8_t, uint8_t *,
                              uint32_t, uint32_t *);
 uint16_t AlpGetStateIdx(uint16_t);
+void AppLayerSetEOF(Flow *);
 
 uint16_t AppLayerGetProtoByName(const char *);
 
@@ -178,10 +269,12 @@ void AppLayerParserRegisterTests(void);
 
 void AppLayerParserCleanupState(Flow *);
 
-
 uint8_t AppLayerRegisterModule(void);
 uint8_t AppLayerGetStorageSize(void);
+void AppLayerFreeProbingParsers(AppLayerProbingParser *);
+void AppLayerFreeProbingParsersInfo(AppLayerProbingParserInfo *);
+void AppLayerPrintProbingParsers(AppLayerProbingParser *);
 
+uint16_t AppLayerGetStateVersion(Flow *f);
 
 #endif /* __APP_LAYER_PARSER_H__ */
-

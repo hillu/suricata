@@ -15,17 +15,19 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
+/** \file
  *
- * \author Victor Julien <victor@inliniac.net>
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
  */
 
-#ifndef __ALERT_UNIFIED_LOG_H__
-#define __ALERT_UNIFIED_LOG_H__
+#ifndef __DETECT_ENGINE_HRHD_H__
+#define __DETECT_ENGINE_HRHD_H__
 
-void TmModuleAlertUnifiedLogRegister (void);
-OutputCtx *AlertUnifiedLogInitCtx(ConfNode *);
+#include "app-layer-htp.h"
 
-#endif /* __ALERT_UNIFIED_LOG_H__ */
+int DetectEngineInspectHttpRawHeader(DetectEngineCtx *, DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *);
+int DetectEngineRunHttpRawHeaderMpm(DetectEngineThreadCtx *, Flow *, HtpState *);
+void DetectEngineHttpRawHeaderRegisterTests(void);
+
+#endif /* __DETECT_ENGINE_HHD_H__ */
 

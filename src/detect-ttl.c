@@ -98,6 +98,9 @@ int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
     uint8_t pttl;
     DetectTtlData *ttld = (DetectTtlData *) m->ctx;
 
+    if (PKT_IS_PSEUDOPKT(p))
+        return 0;
+
     if (PKT_IS_IPV4(p)) {
         pttl = IPV4_GET_IPTTL(p);
     } else if (PKT_IS_IPV6(p)) {
@@ -279,6 +282,7 @@ static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, char *ttlstr) 
     sm->ctx = (void *)ttld;
 
     SigMatchAppendPacket(s, sm);
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
 
@@ -516,7 +520,9 @@ end:
 
 static int DetectTtlTestSig1(void) {
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
@@ -524,14 +530,15 @@ static int DetectTtlTestSig1(void) {
     IPV4Hdr ip4h;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&ip4h, 0, sizeof(ip4h));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.proto = IPPROTO_TCP;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->proto = IPPROTO_TCP;
     ip4h.ip_ttl = 15;
-    p.ip4h = &ip4h;
+    p->ip4h = &ip4h;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -563,17 +570,17 @@ static int DetectTtlTestSig1(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
-    if (PacketAlertCheck(&p, 1)) {
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
         printf("sid 1 alerted, but should not have: ");
         goto cleanup;
-    } else if (PacketAlertCheck(&p, 2) == 0) {
+    } else if (PacketAlertCheck(p, 2) == 0) {
         printf("sid 2 did not alert, but should have: ");
         goto cleanup;
-    } else if (PacketAlertCheck(&p, 3) == 0) {
+    } else if (PacketAlertCheck(p, 3) == 0) {
         printf("sid 3 did not alert, but should have: ");
         goto cleanup;
-    } else if (PacketAlertCheck(&p, 4) == 0) {
+    } else if (PacketAlertCheck(p, 4) == 0) {
         printf("sid 4 did not alert, but should have: ");
         goto cleanup;
     }
@@ -588,6 +595,7 @@ cleanup:
     DetectEngineCtxFree(de_ctx);
 
 end:
+    SCFree(p);
     return result;
 }
 

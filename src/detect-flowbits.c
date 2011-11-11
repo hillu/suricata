@@ -61,6 +61,8 @@ void DetectFlowbitsRegister (void) {
     sigmatch_table[DETECT_FLOWBITS].Setup = DetectFlowbitSetup;
     sigmatch_table[DETECT_FLOWBITS].Free  = DetectFlowbitFree;
     sigmatch_table[DETECT_FLOWBITS].RegisterTests = FlowBitsRegisterTests;
+    /* this is compatible to ip-only signatures */
+    sigmatch_table[DETECT_FLOWBITS].flags |= SIGMATCH_IPONLY_COMPAT;
 
     const char *eb;
     int eo;
@@ -286,7 +288,9 @@ static int FlowBitsTestSig01(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -294,12 +298,13 @@ static int FlowBitsTestSig01(void) {
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -318,7 +323,7 @@ static int FlowBitsTestSig01(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     result = 1;
 
@@ -341,6 +346,7 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
+    SCFree(p);
     return result;
 }
 
@@ -357,7 +363,9 @@ static int FlowBitsTestSig02(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -366,12 +374,13 @@ static int FlowBitsTestSig02(void) {
     int error_count = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -417,21 +426,21 @@ static int FlowBitsTestSig02(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(&p, 1)) {
+    if (PacketAlertCheck(p, 1)) {
         goto cleanup;
     }
-    if (PacketAlertCheck(&p, 2)) {
+    if (PacketAlertCheck(p, 2)) {
         goto cleanup;
     }
-    if (PacketAlertCheck(&p, 3)) {
+    if (PacketAlertCheck(p, 3)) {
         goto cleanup;
     }
-    if (PacketAlertCheck(&p, 4)) {
+    if (PacketAlertCheck(p, 4)) {
         goto cleanup;
     }
-    if (PacketAlertCheck(&p, 5)) {
+    if (PacketAlertCheck(p, 5)) {
         goto cleanup;
     }
 
@@ -459,6 +468,7 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
+    SCFree(p);
     return result;
 }
 
@@ -475,7 +485,9 @@ static int FlowBitsTestSig03(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -483,12 +495,13 @@ static int FlowBitsTestSig03(void) {
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -507,7 +520,7 @@ static int FlowBitsTestSig03(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     result = 1;
 
@@ -533,6 +546,7 @@ end:
     }
 
 
+    SCFree(p);
     return result;
 }
 
@@ -549,7 +563,9 @@ static int FlowBitsTestSig04(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -558,12 +574,13 @@ static int FlowBitsTestSig04(void) {
     int idx = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -584,7 +601,7 @@ static int FlowBitsTestSig04(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     result = 1;
 
@@ -593,6 +610,7 @@ static int FlowBitsTestSig04(void) {
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
+    SCFree(p);
     return result;
 
 end:
@@ -610,6 +628,7 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
+    SCFree(p);
     return result;
 }
 
@@ -626,7 +645,9 @@ static int FlowBitsTestSig05(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -634,12 +655,13 @@ static int FlowBitsTestSig05(void) {
     int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
-    memset(&p, 0, sizeof(p));
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -658,7 +680,7 @@ static int FlowBitsTestSig05(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     result = 1;
 
@@ -668,6 +690,7 @@ static int FlowBitsTestSig05(void) {
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    SCFree(p);
     return result;
 end:
 
@@ -684,6 +707,7 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
+    SCFree(p);
     return result;
 }
 
@@ -700,7 +724,9 @@ static int FlowBitsTestSig06(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -710,20 +736,23 @@ static int FlowBitsTestSig06(void) {
     int result = 0;
     int idx = 0;
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
     FLOW_INITIALIZE(&f);
-    p.flow = &f;
-    p.flow->flowvar = &flowvar;
+    p->flow = &f;
+    p->flow->flowvar = &flowvar;
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
+    p->flags |= PKT_HAS_FLOW;
+    p->flowflags |= FLOW_PKT_TOSERVER;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -742,11 +771,11 @@ static int FlowBitsTestSig06(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     idx = VariableNameGetIdx("myflow",DETECT_FLOWBITS);
 
-    gv = p.flow->flowvar;
+    gv = p->flow->flowvar;
 
     for ( ; gv != NULL; gv = gv->next) {
         if (gv->type == DETECT_FLOWBITS && gv->idx == idx) {
@@ -763,6 +792,7 @@ static int FlowBitsTestSig06(void) {
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
 
+    SCFree(p);
     return result;
 end:
 
@@ -781,6 +811,7 @@ end:
 
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
+    SCFree(p);
     return result;
 }
 
@@ -797,7 +828,9 @@ static int FlowBitsTestSig07(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -807,20 +840,21 @@ static int FlowBitsTestSig07(void) {
     int result = 0;
     int idx = 0;
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
     FLOW_INITIALIZE(&f);
-    p.flow = &f;
-    p.flow->flowvar = &flowvar;
+    p->flow = &f;
+    p->flow->flowvar = &flowvar;
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -843,11 +877,11 @@ static int FlowBitsTestSig07(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     idx = VariableNameGetIdx("myflow",DETECT_FLOWBITS);
 
-    gv = p.flow->flowvar;
+    gv = p->flow->flowvar;
 
     for ( ; gv != NULL; gv = gv->next) {
         if (gv->type == DETECT_FLOWBITS && gv->idx == idx) {
@@ -864,6 +898,7 @@ static int FlowBitsTestSig07(void) {
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
 
+    SCFree(p);
     return result;
 end:
 
@@ -883,6 +918,7 @@ end:
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
 
+    SCFree(p);
     return result;
 }
 
@@ -899,7 +935,9 @@ static int FlowBitsTestSig08(void) {
                     "Host: one.example.org\r\n"
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -909,20 +947,21 @@ static int FlowBitsTestSig08(void) {
     int result = 0;
     int idx = 0;
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
 
     FLOW_INITIALIZE(&f);
-    p.flow = &f;
-    p.flow->flowvar = &flowvar;
+    p->flow = &f;
+    p->flow->flowvar = &flowvar;
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.payload = buf;
-    p.payload_len = buflen;
-    p.proto = IPPROTO_TCP;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->payload = buf;
+    p->payload_len = buflen;
+    p->proto = IPPROTO_TCP;
 
     de_ctx = DetectEngineCtxInit();
 
@@ -947,11 +986,11 @@ static int FlowBitsTestSig08(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, &p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     idx = VariableNameGetIdx("myflow",DETECT_FLOWBITS);
 
-    gv = p.flow->flowvar;
+    gv = p->flow->flowvar;
 
     for ( ; gv != NULL; gv = gv->next) {
         if (gv->type == DETECT_FLOWBITS && gv->idx == idx) {
@@ -968,6 +1007,7 @@ static int FlowBitsTestSig08(void) {
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
 
+    SCFree(p);
     return result;
 end:
 
@@ -987,6 +1027,7 @@ end:
     if(gv) GenericVarFree(gv);
     FLOW_DESTROY(&f);
 
+    SCFree(p);
     return result;
 }
 #endif /* UNITTESTS */

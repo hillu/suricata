@@ -38,36 +38,58 @@
 /* per flow flags */
 
 /** At least on packet from the source address was seen */
-#define FLOW_TO_SRC_SEEN            0x0001
+#define FLOW_TO_SRC_SEEN                  0x00000001
 /** At least on packet from the destination address was seen */
-#define FLOW_TO_DST_SEEN            0x0002
+#define FLOW_TO_DST_SEEN                  0x00000002
 
 /** Flow lives in the flow-state-NEW list */
-#define FLOW_NEW_LIST               0x0004
+#define FLOW_NEW_LIST                     0x00000004
 /** Flow lives in the flow-state-EST (established) list */
-#define FLOW_EST_LIST               0x0008
+#define FLOW_EST_LIST                     0x00000008
 /** Flow lives in the flow-state-CLOSED list */
-#define FLOW_CLOSED_LIST            0x0010
+#define FLOW_CLOSED_LIST                  0x00000010
 
 /** Flow was inspected against IP-Only sigs in the toserver direction */
-#define FLOW_TOSERVER_IPONLY_SET    0x0020
+#define FLOW_TOSERVER_IPONLY_SET          0x00000020
 /** Flow was inspected against IP-Only sigs in the toclient direction */
-#define FLOW_TOCLIENT_IPONLY_SET    0x0040
+#define FLOW_TOCLIENT_IPONLY_SET          0x00000040
 
 /** Packet belonging to this flow should not be inspected at all */
-#define FLOW_NOPACKET_INSPECTION    0x0080
+#define FLOW_NOPACKET_INSPECTION          0x00000080
 /** Packet payloads belonging to this flow should not be inspected */
-#define FLOW_NOPAYLOAD_INSPECTION   0x0100
+#define FLOW_NOPAYLOAD_INSPECTION         0x00000100
 
 /** All packets in this flow should be dropped */
-#define FLOW_ACTION_DROP            0x0200
+#define FLOW_ACTION_DROP                  0x00000200
 /** All packets in this flow should be accepted */
-#define FLOW_ACTION_PASS            0x0400
+#define FLOW_ACTION_PASS                  0x00000400
 
 /** Sgh for toserver direction set (even if it's NULL) */
-#define FLOW_SGH_TOSERVER           0x0800
+#define FLOW_SGH_TOSERVER                 0x00000800
 /** Sgh for toclient direction set (even if it's NULL) */
-#define FLOW_SGH_TOCLIENT           0x1000
+#define FLOW_SGH_TOCLIENT                 0x00001000
+
+/** packet to server direction has been logged in drop file (only in IPS mode) */
+#define FLOW_TOSERVER_DROP_LOGGED         0x00002000
+/** packet to client direction has been logged in drop file (only in IPS mode) */
+#define FLOW_TOCLIENT_DROP_LOGGED         0x00004000
+/** alproto detect done.  Right now we need it only for udp */
+#define FLOW_ALPROTO_DETECT_DONE          0x00008000
+#define FLOW_NO_APPLAYER_INSPECTION       0x00010000
+
+/* Pattern matcher alproto detection done */
+#define FLOW_TS_PM_ALPROTO_DETECT_DONE    0x00020000
+/* Probing parser alproto detection done */
+#define FLOW_TS_PP_ALPROTO_DETECT_DONE    0x00040000
+/* Both pattern matcher and probing parser alproto detection done */
+#define FLOW_TS_PM_PP_ALPROTO_DETECT_DONE 0x00080000
+/* Pattern matcher alproto detection done */
+#define FLOW_TC_PM_ALPROTO_DETECT_DONE    0x00100000
+/* Probing parser alproto detection done */
+#define FLOW_TC_PP_ALPROTO_DETECT_DONE    0x00200000
+/* Both pattern matcher and probing parser alproto detection done */
+#define FLOW_TC_PM_PP_ALPROTO_DETECT_DONE 0x00400000
+#define FLOW_TIMEOUT_REASSEMBLY_DONE      0x00800000
 
 /* pkt flow flags */
 #define FLOW_PKT_TOSERVER               0x01
@@ -84,8 +106,8 @@ typedef struct FlowCnf_
 {
     uint32_t hash_rand;
     uint32_t hash_size;
+    uint64_t memcap;
     uint32_t max_flows;
-    uint32_t memcap;
     uint32_t prealloc;
 
     uint32_t timeout_new;
@@ -144,26 +166,6 @@ typedef struct Flow_
 
     /* end of flow "header" */
 
-    uint16_t flags;
-
-    /* ts of flow init and last update */
-    struct timeval startts;
-    struct timeval lastts;
-
-    /* pointer to the var list */
-    GenericVar *flowvar;
-
-    uint32_t todstpktcnt;
-    uint32_t tosrcpktcnt;
-    uint64_t bytecnt;
-
-    /** mapping to Flow's protocol specific protocols for timeouts
-        and state and free functions. */
-    uint8_t protomap;
-
-    /** protocol specific data pointer, e.g. for TcpSession */
-    void *protoctx;
-
     /** how many pkts and stream msgs are using the flow *right now*. This
      *  variable is atomic so not protected by the Flow mutex "m".
      *
@@ -172,9 +174,39 @@ typedef struct Flow_
      */
     SC_ATOMIC_DECLARE(unsigned short, use_cnt);
 
+    uint32_t probing_parser_toserver_al_proto_masks;
+    uint32_t probing_parser_toclient_al_proto_masks;
+
+    uint32_t flags;
+
+    /* ts of flow init and last update */
+    int32_t lastts_sec;
+
+    SCMutex m;
+
+    /** protocol specific data pointer, e.g. for TcpSession */
+    void *protoctx;
+
+    /** mapping to Flow's protocol specific protocols for timeouts
+        and state and free functions. */
+    uint8_t protomap;
+    uint8_t pad0;
+
+    uint16_t alproto; /**< \brief application level protocol */
+
+    /** \brief array of application level storage ptrs.
+     *
+     * The size of array is ALPROTO_MAX and thus depends on the number of protocol
+     * supported. Regarding the memeber of the arrays, for an HTTP flow member
+     * can point to a ::HtpState.
+     *
+     * Use AppLayerGetProtoStateFromPacket() to get a pointer to the application
+     * layer the packet belongs to.
+     */
+
+    void **aldata;
     /** detection engine state */
     struct DetectEngineState_ *de_state;
-    SCMutex de_state_m;          /**< mutex lock for the de_state object */
 
     /** toclient sgh for this flow. Only use when FLOW_SGH_TOCLIENT flow flag
      *  has been set. */
@@ -183,36 +215,30 @@ typedef struct Flow_
      *  has been set. */
     struct SigGroupHead_ *sgh_toserver;
 
-    SCMutex m;
-
     /** List of tags of this flow (from "tag" keyword of type "session") */
     DetectTagDataEntryList *tag_list;
+
+    /* pointer to the var list */
+    GenericVar *flowvar;
+
+    SCMutex de_state_m;          /**< mutex lock for the de_state object */
 
     /* list flow ptrs
      * NOTE!!! These are NOT protected by the
      * above mutex, but by the FlowQ's */
     struct Flow_ *hnext; /* hash list */
     struct Flow_ *hprev;
+    struct FlowBucket_ *fb;
     struct Flow_ *lnext; /* list */
     struct Flow_ *lprev;
 
-    struct FlowBucket_ *fb;
-
-    uint16_t alproto; /**< application level protocol */
-    void **aldata; /**< application level storage ptrs */
-    uint8_t alflags; /**< application level specific flags */
-
+    struct timeval startts;
+#ifdef DEBUG
+    uint32_t todstpktcnt;
+    uint32_t tosrcpktcnt;
+    uint64_t bytecnt;
+#endif
 } Flow;
-
-/** Flow Application Level flags */
-#define FLOW_AL_PROTO_UNKNOWN           0x01
-#define FLOW_AL_PROTO_DETECT_DONE       0x02
-#define FLOW_AL_NO_APPLAYER_INSPECTION  0x04 /** \todo move to flow flags later */
-#define FLOW_AL_STREAM_START            0x08
-#define FLOW_AL_STREAM_EOF              0x10
-#define FLOW_AL_STREAM_TOSERVER         0x20
-#define FLOW_AL_STREAM_TOCLIENT         0x40
-#define FLOW_AL_STREAM_GAP              0x80
 
 enum {
     FLOW_STATE_NEW = 0,
@@ -244,15 +270,17 @@ void FlowDecrUsecnt(Flow *);
 uint32_t FlowPruneFlowsCnt(struct timeval *, int);
 uint32_t FlowKillFlowsCnt(int);
 
-void *FlowManagerThread(void *td);
-
-void FlowManagerThreadSpawn(void);
 void FlowRegisterTests (void);
 int FlowSetProtoTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoEmergencyTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoFreeFunc (uint8_t , void (*Free)(void *));
 int FlowSetFlowStateFunc (uint8_t , int (*GetProtoState)(void *));
 void FlowUpdateQueue(Flow *);
+
+struct FlowQueue_;
+
+int FlowUpdateSpareFlows(void);
+uint32_t FlowPruneFlowQueue(struct FlowQueue_ *, struct timeval *);
 
 static inline void FlowLockSetNoPacketInspectionFlag(Flow *);
 static inline void FlowSetNoPacketInspectionFlag(Flow *);
@@ -328,7 +356,7 @@ static inline void FlowSetNoPayloadInspectionFlag(Flow *f) {
  *  \param f *LOCKED* flow
  */
 static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *f) {
-    f->alflags |= FLOW_AL_NO_APPLAYER_INSPECTION;
+    f->flags |= FLOW_NO_APPLAYER_INSPECTION;
 }
 
 

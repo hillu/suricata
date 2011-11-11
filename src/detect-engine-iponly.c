@@ -48,9 +48,11 @@
 #include "util-classification-config.h"
 #include "util-rule-vars.h"
 
+#include "flow-util.h"
 #include "util-debug.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
+#include "util-print.h"
 
 #ifdef OS_WIN32
 #include <winsock.h>
@@ -75,6 +77,18 @@ IPOnlyCIDRItem *IPOnlyCIDRItemNew() {
     SCReturnPtr(item, "IPOnlyCIDRItem");
 }
 
+uint8_t IPOnlyCIDRItemCompare(IPOnlyCIDRItem *head,
+                                         IPOnlyCIDRItem *item) {
+    uint8_t i = 0;
+    for (; i < head->netmask / 32 || i < 1; i++) {
+        if (item->ip[i] < head->ip[i])
+        //if (*(uint8_t *)(item->ip + i) < *(uint8_t *)(head->ip + i))
+            return 1;
+    }
+    return 0;
+}
+
+
 /**
  * \brief This function insert a IPOnlyCIDRItem
  *        to a list of IPOnlyCIDRItems sorted by netmask
@@ -93,9 +107,15 @@ IPOnlyCIDRItem *IPOnlyCIDRItemInsertReal(IPOnlyCIDRItem *head,
         return head;
 
     /* Compare with the head */
-    if (item->netmask <= head->netmask) {
+    if (item->netmask < head->netmask || (item->netmask == head->netmask && IPOnlyCIDRItemCompare(head, item))) {
         item->next = head;
         return item;
+    }
+
+    if (item->netmask == head->netmask && !IPOnlyCIDRItemCompare(head, item)) {
+        item->next = head->next;
+        head->next = item;
+        return head;
     }
 
     for (prev = it = head;
@@ -105,6 +125,7 @@ IPOnlyCIDRItem *IPOnlyCIDRItemInsertReal(IPOnlyCIDRItem *head,
 
     if (it == NULL) {
         prev->next = item;
+        item->next = NULL;
     } else {
         item->next = it;
         prev->next = item;
@@ -138,7 +159,7 @@ IPOnlyCIDRItem *IPOnlyCIDRItemInsert(IPOnlyCIDRItem *head,
         return head;
     }
 
-    SCLogDebug("Inserting item(%p)->netmast %u head %p", item, item->netmask, head);
+    SCLogDebug("Inserting item(%p)->netmask %u head %p", item, item->netmask, head);
 
     prev = item;
     while (prev != NULL) {
@@ -147,7 +168,11 @@ IPOnlyCIDRItem *IPOnlyCIDRItemInsert(IPOnlyCIDRItem *head,
         /* Separate from the item list */
         prev->next = NULL;
 
+        //SCLogDebug("Before:");
+        //IPOnlyCIDRListPrint(head);
         head = IPOnlyCIDRItemInsertReal(head, prev);
+        //SCLogDebug("After:");
+        //IPOnlyCIDRListPrint(head);
         prev = it;
     }
 
@@ -261,7 +286,6 @@ SigNumArray *SigNumArrayNew(DetectEngineCtx *de_ctx,
 
     new->array = SCMalloc(io_ctx->max_idx / 8 + 1);
     if (new->array == NULL) {
-       SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayNew. Exiting...");
        exit(EXIT_FAILURE);
     }
 
@@ -294,7 +318,6 @@ SigNumArray *SigNumArrayCopy(SigNumArray *orig) {
 
     new->array = SCMalloc(orig->size);
     if (new->array == NULL) {
-        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigNumArrayCopy. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -375,6 +398,7 @@ IPOnlyCIDRItem *IPOnlyCIDRListParse2(char *s, int negate)
                 o_set = 0;
             } else if (d_set == 1) {
                 address[x - 1] = '\0';
+                x = 0;
                 rule_var_address = SCRuleVarsGetConfVar(address,
                                                   SC_RULE_VARS_ADDRESS_GROUPS);
                 if (rule_var_address == NULL)
@@ -842,7 +866,6 @@ void DetectEngineIPOnlyThreadInit(DetectEngineCtx *de_ctx,
     io_tctx->sig_match_size = de_ctx->io_ctx.max_idx / 8 + 1;
     io_tctx->sig_match_array = SCMalloc(io_tctx->sig_match_size);
     if (io_tctx->sig_match_array == NULL) {
-        SCLogError(SC_ERR_FATAL, "Fatal error encountered in DetectEngineIPOnlyThreadInit. Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -898,6 +921,31 @@ void DetectEngineIPOnlyThreadDeinit(DetectEngineIPOnlyThreadCtx *io_tctx) {
     SCFree(io_tctx->sig_match_array);
 }
 
+static inline
+int IPOnlyMatchCompatSMs(ThreadVars *tv,
+                         DetectEngineThreadCtx *det_ctx,
+                         Signature *s, Packet *p)
+{
+    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_MATCH];
+    int match;
+
+    while (sm != NULL) {
+        if (sm->type != DETECT_FLOWBITS) {
+            sm = sm->next;
+            continue;
+        }
+
+        match = sigmatch_table[sm->type].Match(tv, det_ctx, p, s, sm);
+        if (match > 0) {
+            sm = sm->next;
+            continue;
+        }
+        return 0;
+    }
+
+    return 1;
+}
+
 /**
  * \brief Match a packet against the IP Only detection engine contexts
  *
@@ -906,7 +954,8 @@ void DetectEngineIPOnlyThreadDeinit(DetectEngineIPOnlyThreadCtx *io_tctx) {
  * \param io_ctx Pointer to the current ip only thread detection engine
  * \param p Pointer to the Packet to match against
  */
-void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
+void IPOnlyMatchPacket(ThreadVars *tv,
+                       DetectEngineCtx *de_ctx,
                        DetectEngineThreadCtx *det_ctx,
                        DetectEngineIPOnlyCtx *io_ctx,
                        DetectEngineIPOnlyThreadCtx *io_tctx, Packet *p)
@@ -977,18 +1026,48 @@ void IPOnlyMatchPacket(DetectEngineCtx *de_ctx,
                 if (bitarray & 0x01) {
                     Signature *s = de_ctx->sig_array[u * 8 + i];
 
-                    /* Need to check the protocol first */
-                    if (!(s->proto.proto[(IP_GET_IPPROTO(p)/8)] & (1 << (IP_GET_IPPROTO(p) % 8))))
+                    if (DetectProtoContainsProto(&s->proto, IP_GET_IPPROTO(p)) == 0) {
+                        SCLogDebug("proto didn't match");
                         continue;
+                    }
+
+                    /* check the source & dst port in the sig */
+                    if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP || p->proto == IPPROTO_SCTP) {
+                        if (!(s->flags & SIG_FLAG_DP_ANY)) {
+                            DetectPort *dport = DetectPortLookupGroup(s->dp,p->dp);
+                            if (dport == NULL) {
+                                SCLogDebug("dport didn't match.");
+                                continue;
+                            }
+                        }
+                        if (!(s->flags & SIG_FLAG_SP_ANY)) {
+                            DetectPort *sport = DetectPortLookupGroup(s->sp,p->sp);
+                            if (sport == NULL) {
+                                SCLogDebug("sport didn't match.");
+                                continue;
+                            }
+                        }
+                    } else {
+                        if (!(s->flags & SIG_FLAG_DP_ANY)) {
+                            continue;
+                        }
+                        if (!(s->flags & SIG_FLAG_SP_ANY)) {
+                            continue;
+                        }
+                    }
+
+                    if (!IPOnlyMatchCompatSMs(tv, det_ctx, s, p)) {
+                        continue;
+                    }
 
                     SCLogDebug("Signum %"PRIu16" match (sid: %"PRIu16", msg: %s)",
                                u * 8 + i, s->id, s->msg);
 
                     if ( !(s->flags & SIG_FLAG_NOALERT)) {
                         if (s->action & ACTION_DROP)
-                            PacketAlertAppend(det_ctx, s, p, PACKET_ALERT_FLAG_DROP_FLOW);
+                            PacketAlertAppend(det_ctx, s, p, PACKET_ALERT_FLAG_DROP_FLOW, NULL);
                         else
-                            PacketAlertAppend(det_ctx, s, p, 0);
+                            PacketAlertAppend(det_ctx, s, p, 0, NULL);
                     }
                 }
             }
@@ -1018,14 +1097,14 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx) {
     /* Prepare Src radix trees */
     for (src = (de_ctx->io_ctx).ip_src; src != NULL; ) {
         if (src->family == AF_INET) {
-            /*
+        /*
             SCLogDebug("To IPv4");
             SCLogDebug("Item has netmask %"PRIu16" negated: %s; IP: %s; "
                        "signum: %"PRIu16, src->netmask,
                         (src->negated) ? "yes":"no",
                         inet_ntoa( *(struct in_addr*)&src->ip[0]),
                         src->signum);
-            */
+        */
 
             if (src->netmask == 32)
                 node = SCRadixFindKeyIPV4ExactMatch((uint8_t *)&src->ip[0],
@@ -1095,9 +1174,14 @@ void IPOnlyPrepare(DetectEngineCtx *de_ctx) {
                                                          (de_ctx->io_ctx).tree_ipv4src, sna,
                                                          src->netmask);
 
-                    if (node == NULL)
+                    if (node == NULL) {
+                        char tmpstr[64];
+                        PrintInet(src->family, &src->ip[0], tmpstr, sizeof(tmpstr));
                         SCLogError(SC_ERR_IPONLY_RADIX, "Error inserting in the"
-                                   " src ipv4 radix tree");
+                                   " src ipv4 radix tree ip %s netmask %"PRIu8, tmpstr, src->netmask);
+                        //SCRadixPrintTree((de_ctx->io_ctx).tree_ipv4src);
+                        exit(-1);
+                    }
                 }
             } else {
                 SCLogDebug("Exact match found");
@@ -1476,10 +1560,10 @@ static int IPOnlyTestSig02 (void) {
     if (s == NULL) {
         goto end;
     }
-    if(!(SignatureIsIPOnly(&de_ctx, s)))
-        result=1;
+    if ((SignatureIsIPOnly(&de_ctx, s)))
+        result = 1;
     else
-        printf("got a IPOnly signature: ");
+        printf("got a non-IPOnly signature: ");
 
     SigFree(s);
 
@@ -1972,6 +2056,107 @@ int IPOnlyTestSig12(void) {
     return result;
 }
 
+static int IPOnlyTestSig13(void)
+{
+    int result = 0;
+    DetectEngineCtx de_ctx;
+
+    memset(&de_ctx, 0, sizeof(DetectEngineCtx));
+
+    de_ctx.flags |= DE_QUIET;
+
+    Signature *s = SigInit(&de_ctx,
+                           "alert tcp any any -> any any (msg:\"Test flowbits ip only\"; "
+                           "flowbits:set,myflow1; sid:1; rev:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+    if (SignatureIsIPOnly(&de_ctx, s))
+        result = 1;
+    else
+        printf("expected a IPOnly signature: ");
+
+    SigFree(s);
+end:
+    return result;
+}
+
+static int IPOnlyTestSig14(void)
+{
+    int result = 0;
+    DetectEngineCtx de_ctx;
+
+    memset(&de_ctx, 0, sizeof(DetectEngineCtx));
+
+    de_ctx.flags |= DE_QUIET;
+
+    Signature *s = SigInit(&de_ctx,
+                           "alert tcp any any -> any any (msg:\"Test flowbits ip only\"; "
+                           "flowbits:set,myflow1; flowbits:isset,myflow2; sid:1; rev:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+    if (SignatureIsIPOnly(&de_ctx, s))
+        printf("expected a IPOnly signature: ");
+    else
+        result = 1;
+
+    SigFree(s);
+end:
+    return result;
+}
+
+int IPOnlyTestSig15(void)
+{
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"Hi all!";
+    uint16_t buflen = strlen((char *)buf);
+
+    uint8_t numpkts = 1;
+    uint8_t numsigs = 7;
+
+    Packet *p[1];
+    Flow f;
+    GenericVar flowvar;
+    memset(&f, 0, sizeof(Flow));
+    memset(&flowvar, 0, sizeof(GenericVar));
+    FLOW_INITIALIZE(&f);
+
+    p[0] = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    p[0]->flow = &f;
+    p[0]->flow->flowvar = &flowvar;
+    p[0]->flags |= PKT_HAS_FLOW;
+    p[0]->flowflags |= FLOW_PKT_TOSERVER;
+
+    char *sigs[numsigs];
+    sigs[0]= "alert tcp 192.168.1.5 any -> any any (msg:\"Testing src ip (sid 1)\"; "
+        "flowbits:set,one; sid:1;)";
+    sigs[1]= "alert tcp any any -> 192.168.1.1 any (msg:\"Testing dst ip (sid 2)\"; "
+        "flowbits:set,two; sid:2;)";
+    sigs[2]= "alert tcp 192.168.1.5 any -> 192.168.1.1 any (msg:\"Testing src/dst ip (sid 3)\"; "
+        "flowbits:set,three; sid:3;)";
+    sigs[3]= "alert tcp 192.168.1.5 any -> 192.168.1.1 any (msg:\"Testing src/dst ip (sid 4)\"; "
+        "flowbits:set,four; sid:4;)";
+    sigs[4]= "alert tcp 192.168.1.0/24 any -> any any (msg:\"Testing src/dst ip (sid 5)\"; "
+        "flowbits:set,five; sid:5;)";
+    sigs[5]= "alert tcp any any -> 192.168.0.0/16 any (msg:\"Testing src/dst ip (sid 6)\"; "
+        "flowbits:set,six; sid:6;)";
+    sigs[6]= "alert tcp 192.168.1.0/24 any -> 192.168.0.0/16 any (msg:\"Testing src/dst ip (sid 7)\"; "
+        "flowbits:set,seven; content:\"Hi all\"; sid:7;)";
+
+    /* Sid numbers (we could extract them from the sig) */
+    uint32_t sid[7] = { 1, 2, 3, 4, 5, 6, 7};
+    uint32_t results[7] = { 1, 1, 1, 1, 1, 1, 1};
+
+    result = UTHGenericTest(p, numpkts, sigs, sid, (uint32_t *) results, numsigs);
+
+    UTHFreePackets(p, numpkts);
+
+    FLOW_DESTROY(&f);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void IPOnlyRegisterTests(void) {
@@ -1990,6 +2175,11 @@ void IPOnlyRegisterTests(void) {
     UtRegisterTest("IPOnlyTestSig10", IPOnlyTestSig10, 1);
     UtRegisterTest("IPOnlyTestSig11", IPOnlyTestSig11, 1);
     UtRegisterTest("IPOnlyTestSig12", IPOnlyTestSig12, 1);
+    UtRegisterTest("IPOnlyTestSig13", IPOnlyTestSig13, 1);
+    UtRegisterTest("IPOnlyTestSig14", IPOnlyTestSig14, 1);
+    UtRegisterTest("IPOnlyTestSig15", IPOnlyTestSig15, 1);
 #endif
+
+    return;
 }
 

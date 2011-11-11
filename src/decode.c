@@ -16,6 +16,30 @@
  */
 
 /**
+ * \defgroup decode Packet decoding
+ *
+ * \brief Code in charge of protocol decoding
+ *
+ * The task of decoding packets is made in different files and
+ * as Suricata is supporting encapsulation there is a potential
+ * recursivity in the call.
+ *
+ * For each protocol a DecodePROTO function is provided. For
+ * example we have DecodeIPV4() for IPv4 and DecodePPP() for
+ * PPP.
+ *
+ * These functions have all a pkt and and a len argument which
+ * are respectively a pointer to the protocol data and the length
+ * of this protocol data.
+ *
+ * \attention The pkt parameter must point to the effective data because
+ * it will be used later to set per protocol pointer like Packet::tcph
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
@@ -27,14 +51,18 @@
 #include "suricata.h"
 #include "decode.h"
 #include "util-debug.h"
+#include "util-mem.h"
 #include "app-layer-detect-proto.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 #include "util-error.h"
+#include "util-print.h"
 #include "tmqh-packetpool.h"
+#include "util-profiling.h"
 
-void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
+void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+        uint8_t *pkt, uint16_t len, PacketQueue *pq, uint8_t proto)
 {
-    switch (p->tunnel_proto) {
+    switch (proto) {
         case PPP_OVER_GRE:
             return DecodePPP(tv, dtv, p, pkt, len, pq);
         case IPPROTO_IP:
@@ -44,9 +72,30 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
        case VLAN_OVER_GRE:
             return DecodeVLAN(tv, dtv, p, pkt, len, pq);
         default:
-            SCLogInfo("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", p->tunnel_proto);
+            SCLogInfo("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", proto);
             break;
     }
+}
+
+/**
+ * \brief Get a malloced packet.
+ *
+ * \retval p packet, NULL on error
+ */
+Packet *PacketGetFromAlloc(void)
+{
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL) {
+        return NULL;
+    }
+
+    PACKET_INITIALIZE(p);
+    p->flags |= PKT_ALLOC;
+
+    SCLogDebug("allocated a new packet only using alloc...");
+
+    PACKET_PROFILING_START(p);
+    return p;
 }
 
 /**
@@ -56,7 +105,8 @@ void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt
  *
  *  \retval p packet, NULL on error
  */
-Packet *PacketGetFromQueueOrAlloc(void) {
+Packet *PacketGetFromQueueOrAlloc(void)
+{
     Packet *p = NULL;
 
     /* try the pool first */
@@ -66,16 +116,9 @@ Packet *PacketGetFromQueueOrAlloc(void) {
 
     if (p == NULL) {
         /* non fatal, we're just not processing a packet then */
-        p = SCMalloc(sizeof(Packet));
-        if (p == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed: %s", strerror(errno));
-            return NULL;
-        }
-
-        PACKET_INITIALIZE(p);
-        p->flags |= PKT_ALLOC;
-
-        SCLogDebug("allocated a new packet...");
+        p = PacketGetFromAlloc();
+    } else {
+        PACKET_PROFILING_START(p);
     }
 
     return p;
@@ -93,10 +136,12 @@ Packet *PacketGetFromQueueOrAlloc(void) {
  */
 Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto)
 {
+    SCEnter();
+
     /* get us a packet */
     Packet *p = PacketGetFromQueueOrAlloc();
     if (p == NULL) {
-        return NULL;
+        SCReturnPtr(NULL, "Packet");
     }
 
     /* set the root ptr to the lowest layer */
@@ -106,9 +151,7 @@ Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
         p->root = parent;
 
     /* copy packet and set lenght, proto */
-    p->tunnel_proto = proto;
-    p->pktlen = len;
-    memcpy(&p->pkt, pkt, len);
+    PacketCopyData(p, pkt, len);
     p->recursion_level = parent->recursion_level + 1;
     p->ts.tv_sec = parent->ts.tv_sec;
     p->ts.tv_usec = parent->ts.tv_usec;
@@ -127,7 +170,7 @@ Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
      * is the packet we will now run through the system separately. We do
      * check it against the ip/port/other header checks though */
     DecodeSetNoPayloadInspectionFlag(parent);
-    return p;
+    SCReturnPtr(p, "Packet");
 }
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
@@ -163,6 +206,8 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     dtv->counter_tcp = SCPerfTVRegisterCounter("decoder.tcp", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_udp = SCPerfTVRegisterCounter("decoder.udp", tv,
+                                               SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_sctp = SCPerfTVRegisterCounter("decoder.sctp", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_icmpv4 = SCPerfTVRegisterCounter("decoder.icmpv4", tv,
                                                   SC_PERF_TYPE_UINT64, "NULL");
@@ -221,7 +266,7 @@ void AddressDebugPrint(Address *a) {
         case AF_INET:
         {
             char s[16];
-            inet_ntop(AF_INET, (const void *)&a->addr_data32[0], s, sizeof(s));
+            PrintInet(AF_INET, (const void *)&a->addr_data32[0], s, sizeof(s));
             SCLogDebug("%s", s);
             break;
         }
@@ -243,3 +288,63 @@ DecodeThreadVars *DecodeThreadVarsAlloc() {
 
     return dtv;
 }
+
+/**
+ *  \brief Copy data to Packet payload at given offset
+ *
+ * This function copies data/payload to a Packet. It uses the
+ * space allocated at Packet creation (pointed by Packet::pkt)
+ * or allocate some memory (pointed by Packet::ext_pkt) if the
+ * data size is to big to fit in initial space (of size
+ * default_packet_size).
+ *
+ *  \param Pointer to the Packet to modify
+ *  \param Offset of the copy relatively to payload of Packet
+ *  \param Pointer to the data to copy
+ *  \param Length of the data to copy
+ */
+inline int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen)
+{
+    if (offset + datalen > MAX_PAYLOAD_SIZE) {
+        /* too big */
+        return -1;
+    }
+
+    /* Do we have already an packet with allocated data */
+    if (! p->ext_pkt) {
+        if (offset + datalen <= default_packet_size) {
+            /* data will fit in memory allocated with packet */
+            memcpy(p->pkt + offset, data, datalen);
+        } else {
+            /* here we need a dynamic allocation */
+            p->ext_pkt = SCMalloc(MAX_PAYLOAD_SIZE);
+            if (p->ext_pkt == NULL) {
+                SET_PKT_LEN(p, 0);
+                return -1;
+            }
+            /* copy initial data */
+            memcpy(p->ext_pkt, GET_PKT_DIRECT_DATA(p), GET_PKT_DIRECT_MAX_SIZE(p));
+            /* copy data as asked */
+            memcpy(p->ext_pkt + offset, data, datalen);
+        }
+    } else {
+        memcpy(p->ext_pkt + offset, data, datalen);
+    }
+    return 0;
+}
+
+/**
+ *  \brief Copy data to Packet payload and set packet length
+ *
+ *  \param Pointer to the Packet to modify
+ *  \param Pointer to the data to copy
+ *  \param Length of the data to copy
+ */
+inline int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen)
+{
+    SET_PKT_LEN(p, (size_t)pktlen);
+    return PacketCopyDataOffset(p, 0, pktdata, pktlen);
+}
+/**
+ * @}
+ */

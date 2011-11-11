@@ -29,11 +29,15 @@
 #include "decode.h"
 
 #include "detect.h"
+#include "detect-engine.h"
+#include "detect-parse.h"
 #include "detect-content.h"
 #include "detect-pcre.h"
 #include "detect-isdataat.h"
 #include "detect-bytetest.h"
 #include "detect-bytejump.h"
+#include "detect-byte-extract.h"
+#include "detect-replace.h"
 
 #include "util-spm.h"
 #include "util-spm-bm.h"
@@ -74,6 +78,13 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
 {
     SCEnter();
 
+    det_ctx->inspection_recursion_counter++;
+
+    if (det_ctx->inspection_recursion_counter == de_ctx->inspection_recursion_limit) {
+        det_ctx->discontinue_matching = 1;
+        SCReturnInt(0);
+    }
+
     if (sm == NULL || payload_len == 0) {
         SCReturnInt(0);
     }
@@ -81,12 +92,31 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
     switch(sm->type) {
         case DETECT_CONTENT:
         {
-            DetectContentData *cd = NULL;
-            cd = (DetectContentData *)sm->ctx;
+
+            DetectContentData *cd = (DetectContentData *)sm->ctx;
             SCLogDebug("inspecting content %"PRIu32" payload_len %"PRIu32, cd->id, payload_len);
 
+            /* we might have already have this content matched by the mpm.
+             * (if there is any other reason why we'd want to avoid checking
+             *  it here, please fill it in) */
+            //if (det_ctx->flags & DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET) {
+            //    if (cd->flags & DETECT_CONTENT_PACKET_MPM && !(cd->flags & DETECT_CONTENT_NEGATED)) {
+            //        /* we will remove this check in the end */
+            //        if (!DETECT_CONTENT_IS_SINGLE(cd))
+            //            abort();
+            //        //goto match;
+            //    }
+            //} else if (det_ctx->flags & DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM) {
+            if (det_ctx->flags & DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM) {
+                if (cd->flags & DETECT_CONTENT_STREAM_MPM && !(cd->flags & DETECT_CONTENT_NEGATED)) {
+                    goto match;
+                }
+            }
+
             /* rule parsers should take care of this */
+#ifdef DEBUG
             BUG_ON(cd->depth != 0 && cd->depth <= cd->offset);
+#endif
 
             /* search for our pattern, checking the matches recursively.
              * if we match we look for the next SigMatch as well */
@@ -104,45 +134,73 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
                     offset = prev_payload_offset;
                     depth = payload_len;
 
+                    int distance = cd->distance;
                     if (cd->flags & DETECT_CONTENT_DISTANCE) {
-                        if (cd->distance < 0 && (uint32_t)(abs(cd->distance)) > offset)
+                        if (cd->flags & DETECT_CONTENT_DISTANCE_BE) {
+                            distance = det_ctx->bj_values[cd->distance];
+                        }
+                        if (distance < 0 && (uint32_t)(abs(distance)) > offset)
                             offset = 0;
                         else
-                            offset += cd->distance;
+                            offset += distance;
 
                         SCLogDebug("cd->distance %"PRIi32", offset %"PRIu32", depth %"PRIu32,
-                            cd->distance, offset, depth);
+                            distance, offset, depth);
                     }
 
                     if (cd->flags & DETECT_CONTENT_WITHIN) {
-                        if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within)) {
-                            depth = prev_payload_offset + cd->within;
-                        }
+                        if (cd->flags & DETECT_CONTENT_WITHIN_BE) {
+                            if ((int32_t)depth > (int32_t)(prev_payload_offset + det_ctx->bj_values[cd->within] + distance)) {
+                                depth = prev_payload_offset + det_ctx->bj_values[cd->within] + distance;
+                            }
+                        } else {
+                            if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within + distance)) {
+                                depth = prev_payload_offset + cd->within + distance;
+                            }
 
-                        SCLogDebug("cd->within %"PRIi32", det_ctx->payload_offset %"PRIu32", depth %"PRIu32,
-                            cd->within, prev_payload_offset, depth);
+                            SCLogDebug("cd->within %"PRIi32", det_ctx->payload_offset %"PRIu32", depth %"PRIu32,
+                                       cd->within, prev_payload_offset, depth);
+                        }
                     }
 
-                    if (cd->depth != 0) {
-                        if ((cd->depth + prev_payload_offset) < depth) {
-                            depth = prev_payload_offset + cd->depth;
+                    if (cd->flags & DETECT_CONTENT_DEPTH_BE) {
+                        if ((det_ctx->bj_values[cd->depth] + prev_payload_offset) < depth) {
+                            depth = prev_payload_offset + det_ctx->bj_values[cd->depth];
                         }
+                    } else {
+                        if (cd->depth != 0) {
+                            if ((cd->depth + prev_payload_offset) < depth) {
+                                depth = prev_payload_offset + cd->depth;
+                            }
 
-                        SCLogDebug("cd->depth %"PRIu32", depth %"PRIu32, cd->depth, depth);
+                            SCLogDebug("cd->depth %"PRIu32", depth %"PRIu32, cd->depth, depth);
+                        }
                     }
 
-                    if (cd->offset > offset) {
-                        offset = cd->offset;
-                        SCLogDebug("setting offset %"PRIu32, offset);
+                    if (cd->flags & DETECT_CONTENT_OFFSET_BE) {
+                        if (det_ctx->bj_values[cd->offset] > offset)
+                            offset = det_ctx->bj_values[cd->offset];
+                    } else {
+                        if (cd->offset > offset) {
+                            offset = cd->offset;
+                            SCLogDebug("setting offset %"PRIu32, offset);
+                        }
                     }
                 } else { /* implied no relative matches */
                     /* set depth */
-                    if (cd->depth != 0) {
-                        depth = cd->depth;
+                    if (cd->flags & DETECT_CONTENT_DEPTH_BE) {
+                        depth = det_ctx->bj_values[cd->depth];
+                    } else {
+                        if (cd->depth != 0) {
+                            depth = cd->depth;
+                        }
                     }
 
                     /* set offset */
-                    offset = cd->offset;
+                    if (cd->flags & DETECT_CONTENT_OFFSET_BE)
+                        offset = det_ctx->bj_values[cd->offset];
+                    else
+                        offset = cd->offset;
                     prev_payload_offset = 0;
                 }
 
@@ -171,7 +229,9 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
                 uint32_t spayload_len = depth - offset;
                 uint32_t match_offset = 0;
                 SCLogDebug("spayload_len %"PRIu32, spayload_len);
+#ifdef DEBUG
                 BUG_ON(spayload_len > payload_len);
+#endif
 
                 //PrintRawDataFp(stdout,cd->content,cd->content_len);
                 //PrintRawDataFp(stdout,spayload,spayload_len);
@@ -204,6 +264,14 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
                     SCLogDebug("content %"PRIu32" matched at offset %"PRIu32"", cd->id, match_offset);
                     det_ctx->payload_offset = match_offset;
 
+                    /* Match branch, add replace to the list if needed */
+                    if (cd->flags & DETECT_CONTENT_REPLACE) {
+                        if (p) {
+                            /* we will need to replace content if match is confirmed */
+                            det_ctx->replist = DetectReplaceAddToList(det_ctx->replist, found, cd);
+                        } else
+                            SCLogWarning(SC_ERR_INVALID_VALUE, "Can't modify payload without packet");
+                    }
                     if (!(cd->flags & DETECT_CONTENT_RELATIVE_NEXT)) {
                         SCLogDebug("no relative match coming up, so this is a match");
                         goto match;
@@ -244,17 +312,25 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
             if (id->flags & ISDATAAT_RELATIVE) {
                 if (det_ctx->payload_offset + id->dataat > payload_len) {
                     SCLogDebug("det_ctx->payload_offset + id->dataat %"PRIu32" > %"PRIu32, det_ctx->payload_offset + id->dataat, payload_len);
+                    if (id->flags & ISDATAAT_NEGATED)
+                        goto match;
                     SCReturnInt(0);
                 } else {
                     SCLogDebug("relative isdataat match");
+                    if (id->flags & ISDATAAT_NEGATED)
+                        SCReturnInt(0);
                     goto match;
                 }
             } else {
                 if (id->dataat < payload_len) {
                     SCLogDebug("absolute isdataat match");
+                    if (id->flags & ISDATAAT_NEGATED)
+                        SCReturnInt(0);
                     goto match;
                 } else {
                     SCLogDebug("absolute isdataat mismatch, id->isdataat %"PRIu32", payload_len %"PRIu32"", id->dataat,payload_len);
+                    if (id->flags & ISDATAAT_NEGATED)
+                        goto match;
                     SCReturnInt(0);
                 }
             }
@@ -302,7 +378,18 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
         }
         case DETECT_BYTETEST:
         {
-            if (DetectBytetestDoMatch(det_ctx,s,sm,payload,payload_len) != 1) {
+            DetectBytetestData *btd = (DetectBytetestData *)sm->ctx;
+            int32_t offset = btd->offset;
+            uint64_t value = btd->value;
+            if (btd->flags & DETECT_BYTETEST_OFFSET_BE) {
+                offset = det_ctx->bj_values[offset];
+            }
+            if (btd->flags & DETECT_BYTETEST_VALUE_BE) {
+                value = det_ctx->bj_values[value];
+            }
+
+            if (DetectBytetestDoMatch(det_ctx,s,sm,payload,payload_len, btd->flags,
+                                      offset, value) != 1) {
                 SCReturnInt(0);
             }
 
@@ -310,7 +397,28 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
         }
         case DETECT_BYTEJUMP:
         {
-            if (DetectBytejumpDoMatch(det_ctx,s,sm,payload,payload_len) != 1) {
+            DetectBytejumpData *bjd = (DetectBytejumpData *)sm->ctx;
+            int32_t offset = bjd->offset;
+
+            if (bjd->flags & DETECT_BYTEJUMP_OFFSET_BE) {
+                offset = det_ctx->bj_values[offset];
+            }
+
+            if (DetectBytejumpDoMatch(det_ctx,s,sm,payload,payload_len,
+                                      bjd->flags, offset) != 1) {
+                SCReturnInt(0);
+            }
+
+            goto match;
+        }
+        case DETECT_BYTE_EXTRACT:
+        {
+            DetectByteExtractData *bed = (DetectByteExtractData *)sm->ctx;
+
+            if (DetectByteExtractDoMatch(det_ctx, sm, s, payload,
+                                         payload_len,
+                                         &det_ctx->bj_values[bed->local_id],
+                                         bed->endian) != 1) {
                 SCReturnInt(0);
             }
 
@@ -319,7 +427,10 @@ static int DoInspectPacketPayload(DetectEngineCtx *de_ctx,
         /* we should never get here, but bail out just in case */
         default:
         {
+            SCLogDebug("sm->type %u", sm->type);
+#ifdef DEBUG
             BUG_ON(1);
+#endif
         }
     }
 
@@ -357,18 +468,21 @@ int DetectEngineInspectPacketPayload(DetectEngineCtx *de_ctx,
     SCEnter();
     int r = 0;
 
-    if (s->pmatch == NULL) {
+    if (s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
         SCReturnInt(0);
     }
 
     det_ctx->payload_offset = 0;
     det_ctx->discontinue_matching = 0;
+    det_ctx->inspection_recursion_counter = 0;
+    det_ctx->replist = NULL;
+    //det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
 
-    r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->pmatch, p, f, p->payload, p->payload_len);
+    r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], p, f, p->payload, p->payload_len);
+    //det_ctx->flags &= ~DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
     if (r == 1) {
         SCReturnInt(1);
     }
-
     SCReturnInt(0);
 }
 
@@ -396,13 +510,17 @@ int DetectEngineInspectStreamPayload(DetectEngineCtx *de_ctx,
     SCEnter();
     int r = 0;
 
-    if (s->pmatch == NULL) {
+    if (s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
         SCReturnInt(0);
     }
 
     det_ctx->payload_offset = 0;
+    det_ctx->discontinue_matching = 0;
+    det_ctx->inspection_recursion_counter = 0;
+    det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM;
 
-    r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->pmatch, NULL, f, payload, payload_len);
+    r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], NULL, f, payload, payload_len);
+    det_ctx->flags &= ~DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM;
     if (r == 1) {
         SCReturnInt(1);
     }
@@ -487,8 +605,8 @@ static int PayloadTestSig04(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "content:this; content:is; within:6; content:big; within:8; "
-        "content:string; within:8; sid:1;)";
+        "content:\"this\"; content:\"is\"; within:6; content:\"big\"; within:8; "
+        "content:\"string\"; within:8; sid:1;)";
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
         result = 0;
         goto end;
@@ -512,8 +630,8 @@ static int PayloadTestSig05(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "content:this; content:is; within:9; content:big; within:12; "
-        "content:string; within:8; sid:1;)";
+        "content:\"this\"; content:\"is\"; within:9; content:\"big\"; within:12; "
+        "content:\"string\"; within:8; sid:1;)";
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
         result = 0;
         goto end;
@@ -537,8 +655,8 @@ static int PayloadTestSig06(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "content:now; content:this; content:is; within:12; content:big; within:8; "
-        "content:string; within:8; sid:1;)";
+        "content:\"now\"; content:\"this\"; content:\"is\"; within:12; content:\"big\"; within:8; "
+        "content:\"string\"; within:8; sid:1;)";
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
         result = 0;
         goto end;
@@ -562,7 +680,7 @@ static int PayloadTestSig07(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "content:thus; offset:8; content:is; within:6; content:big; within:8; sid:1;)";
+        "content:\"thus\"; offset:8; content:\"is\"; within:6; content:\"big\"; within:8; sid:1;)";
 
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
         result = 0;
@@ -588,7 +706,7 @@ static int PayloadTestSig08(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "content:fix; content:this; within:6; content:!\"and\"; distance:0; sid:1;)";
+        "content:\"fix\"; content:\"this\"; within:6; content:!\"and\"; distance:0; sid:1;)";
 
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 1) {
         goto end;
@@ -612,7 +730,7 @@ static int PayloadTestSig09(void)
     int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
-        "pcre:/super/; content:nova; within:7; sid:1;)";
+        "pcre:/super/; content:\"nova\"; within:7; sid:1;)";
 
     if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
         result = 0;
@@ -701,6 +819,403 @@ end:
     return result;
 }
 
+/**
+ * \test Used to check the working of recursion_limit counter.
+ */
+static int PayloadTestSig13(void)
+{
+    uint8_t *buf = (uint8_t *)"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+    uint16_t mpm_type = MPM_B2G;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"aa\"; content:\"aa\"; distance:0; content:\"aa\"; distance:0; "
+        "byte_test:1,>,200,0,relative; sid:1;)";
+
+#include <sys/time.h>
+    struct timeval tv_start, tv_end, tv_diff;
+
+    gettimeofday(&tv_start, NULL);
+
+    do {
+        DecodeThreadVars dtv;
+        ThreadVars th_v;
+        DetectEngineThreadCtx *det_ctx = NULL;
+
+        memset(&dtv, 0, sizeof(DecodeThreadVars));
+        memset(&th_v, 0, sizeof(th_v));
+
+        DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+        if (de_ctx == NULL) {
+            printf("de_ctx == NULL: ");
+            goto end;
+        }
+        de_ctx->inspection_recursion_limit = 3000;
+
+        de_ctx->flags |= DE_QUIET;
+        de_ctx->mpm_matcher = mpm_type;
+
+        de_ctx->sig_list = SigInit(de_ctx, sig);
+        if (de_ctx->sig_list == NULL) {
+            printf("signature == NULL: ");
+            goto end;
+        }
+
+        SigGroupBuild(de_ctx);
+        DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+        SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+        if (PacketAlertCheck(p, de_ctx->sig_list->id) != 1) {
+            goto end;
+        }
+
+        result = 1;
+    end:
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        if (det_ctx != NULL)
+            DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+
+        if (de_ctx != NULL)
+            DetectEngineCtxFree(de_ctx);
+    } while (0);
+
+    gettimeofday(&tv_end, NULL);
+
+    tv_diff.tv_sec = tv_end.tv_sec - tv_start.tv_sec;
+    tv_diff.tv_usec = tv_end.tv_usec - tv_start.tv_usec;
+
+    printf("%ld.%06ld\n", tv_diff.tv_sec, tv_diff.tv_usec);
+
+    result = 1;
+
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test normal & negated matching, both absolute and relative
+ */
+static int PayloadTestSig14(void)
+{
+    uint8_t *buf = (uint8_t *)"User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; en-US; rv:1.9.1b4) Gecko/20090423 Firefox/3.6 GTB5";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (content:\"User-Agent|3A| Mozilla/5.0 |28|Macintosh|3B| \"; content:\"Firefox/3.\"; distance:0; content:!\"Firefox/3.6.12\"; distance:-10; content:!\"Mozilla/5.0 |28|Macintosh|3B| U|3B| Intel Mac OS X 10.5|3B| en-US|3B| rv|3A|1.9.1b4|29| Gecko/20090423 Firefox/3.6 GTB5\"; sid:1; rev:1;)";
+
+    //char sig[] = "alert tcp any any -> any any (content:\"User-Agent: Mozilla/5.0 (Macintosh; \"; content:\"Firefox/3.\"; distance:0; content:!\"Firefox/3.6.12\"; distance:-10; content:!\"Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.5; en-US; rv:1.9.1b4) Gecko/20090423 Firefox/3.6 GTB5\"; sid:1; rev:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 1) {
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig15(void)
+{
+    uint8_t *buf = (uint8_t *)"this is a super duper nova in super nova now";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"nova\"; isdataat:18,relative; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig16(void)
+{
+    uint8_t *buf = (uint8_t *)"this is a super duper nova in super nova now";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"nova\"; isdataat:!20,relative; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig17(void)
+{
+    uint8_t buf[] = { 0xEB, 0x29, 0x25, 0x38, 0x78, 0x25, 0x38, 0x78, 0x25 };
+    uint16_t buflen = 9;
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"%\"; depth:4; offset:0; "
+        "content:\"%\"; within:2; distance:1; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig18(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x35, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "content:\"|0C 0D 0E 0F|\"; distance:one; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig19(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x35, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,hex,relative; "
+        "content:\"|0C 0D 0E 0F|\"; distance:one; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig20(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x35, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "content:\"|06 35 07 08|\"; offset:one; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig21(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x36, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "content:\"|03 04 05 06|\"; depth:one; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig22(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x36, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "content:\"|09 0A 0B 0C|\"; within:one; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig23(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x32, /* the last byte is 2 */
+        0x07, 0x08, 0x09, 0x33, 0x0B, 0x0C, 0x0D,
+        0x32, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "byte_extract:1,3,two,string,dec,relative; "
+        "byte_test:1,=,one,two,string,dec,relative; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig24(void)
+{
+    uint8_t buf[] = {
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x32, /* the last byte is 2 */
+        0x07, 0x08, 0x33, 0x0A, 0x0B, 0x0C, 0x0D,
+        0x0E, 0x0F,
+    };
+    uint16_t buflen = sizeof(buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"dummy\"; "
+        "content:\"|01 02 03 04|\"; "
+        "byte_extract:1,2,one,string,dec,relative; "
+        "byte_jump:1,one,string,dec,relative; "
+        "content:\"|0D 0E 0F|\"; distance:0; sid:1;)";
+
+    if (UTHPacketMatchSigMpm(p, sig, MPM_AC) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void PayloadRegisterTests(void) {
@@ -717,5 +1232,20 @@ void PayloadRegisterTests(void) {
     UtRegisterTest("PayloadTestSig10", PayloadTestSig10, 1);
     UtRegisterTest("PayloadTestSig11", PayloadTestSig11, 1);
     UtRegisterTest("PayloadTestSig12", PayloadTestSig12, 1);
+    UtRegisterTest("PayloadTestSig13", PayloadTestSig13, 1);
+    UtRegisterTest("PayloadTestSig14", PayloadTestSig14, 1);
+    UtRegisterTest("PayloadTestSig15", PayloadTestSig15, 1);
+    UtRegisterTest("PayloadTestSig16", PayloadTestSig16, 1);
+    UtRegisterTest("PayloadTestSig17", PayloadTestSig17, 1);
+
+    UtRegisterTest("PayloadTestSig18", PayloadTestSig18, 1);
+    UtRegisterTest("PayloadTestSig19", PayloadTestSig19, 1);
+    UtRegisterTest("PayloadTestSig20", PayloadTestSig20, 1);
+    UtRegisterTest("PayloadTestSig21", PayloadTestSig21, 1);
+    UtRegisterTest("PayloadTestSig22", PayloadTestSig22, 1);
+    UtRegisterTest("PayloadTestSig23", PayloadTestSig23, 1);
+    UtRegisterTest("PayloadTestSig24", PayloadTestSig24, 1);
 #endif /* UNITTESTS */
+
+    return;
 }

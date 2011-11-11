@@ -165,7 +165,7 @@ int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
 
     /* Ok, now we have all the data. Let's check the nodes */
 
-    if (ac->cur_frame > 0 || ac->asn1_stack[0]->id.ptr != NULL) {
+    if (ac->cur_frame > 0 || (ac->asn1_stack[0] != NULL && ac->asn1_stack[0]->id.ptr != NULL)) {
         /* We spect at least one node */
         uint16_t n_iter = 0;
         ret = 0;
@@ -260,7 +260,6 @@ DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
 
     fd = SCMalloc(sizeof(DetectAsn1Data));
     if (fd == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating DetectAsn1Data");
         exit(EXIT_FAILURE);
     }
     memset(fd, 0x00, sizeof(DetectAsn1Data));

@@ -134,7 +134,7 @@ typedef struct IPV4Hdr_
 #define IPV4_GET_MF(p) \
     (uint8_t)((_IPV4_GET_IPOFFSET((p)) & 0x2000) >> 13)
 #define IPV4_GET_IPTTL(p) \
-    IPV4_GET_RAW_IPTTL(p->ip4h)
+     IPV4_GET_RAW_IPTTL(p->ip4h)
 #define IPV4_GET_IPPROTO(p) \
     IPV4_GET_RAW_IPPROTO((p)->ip4h)
 
@@ -143,7 +143,6 @@ typedef struct IPV4Hdr_
     (p)->ip4vars.comp_csum = 0; \
     (p)->ip4vars.ip_src_u32 = 0; \
     (p)->ip4vars.ip_dst_u32 = 0; \
-    (p)->ip4vars.ip_opt_len = 0; \
     (p)->ip4vars.ip_opt_cnt = 0; \
     (p)->ip4vars.o_rr = NULL; \
     (p)->ip4vars.o_qs = NULL; \
@@ -163,7 +162,6 @@ typedef struct IPV4Vars_
     uint32_t ip_src_u32;   /* source IP */
     uint32_t ip_dst_u32;   /* dest IP */
 
-    uint8_t ip_opt_len;
     IPV4Opt ip_opts[IPV4_OPTMAX];
     uint8_t ip_opt_cnt;
 

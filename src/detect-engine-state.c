@@ -16,9 +16,35 @@
  */
 
 /**
+ * \defgroup sigstate State support
+ *
+ * It is possible to do matching on reconstructed applicative flow.
+ * This is done by this code. It uses the ::Flow structure to store
+ * the list of signatures to match on the reconstructed stream.
+ *
+ * The Flow::de_state is a ::DetectEngineState structure. This is
+ * basically a containter for storage item of type ::DeStateStore.
+ * They contains an array of ::DeStateStoreItem which store the
+ * state of match for an individual signature identified by
+ * DeStateStoreItem::sid.
+ *
+ * The state is constructed by DeStateDetectStartDetection() which
+ * also starts the matching. Work is continued by
+ * DeStateDetectContinueDetection().
+ *
+ * Once a transaction has been analysed DeStateRestartDetection()
+ * is used to reset the structures.
+ *
+ * @{
+ */
+
+/**
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
+ *
+ * \brief State based signature handling
+ *
  */
 
 #include "suricata-common.h"
@@ -31,6 +57,12 @@
 #include "detect-engine-state.h"
 
 #include "detect-engine-uri.h"
+#include "detect-engine-hcbd.h"
+#include "detect-engine-hhd.h"
+#include "detect-engine-hrhd.h"
+#include "detect-engine-hmd.h"
+#include "detect-engine-hcd.h"
+#include "detect-engine-hrud.h"
 #include "detect-engine-dcepayload.h"
 
 #include "stream-tcp.h"
@@ -194,15 +226,20 @@ int DeStateUpdateInspectTransactionId(Flow *f, char direction) {
 }
 
 /**
- *  \brief Append a signature to the detect engine state
+ * \brief Append a signature to the detect engine state
  *
- *  \param state the detect engine state
- *  \param s signature
- *  \param sm sigmatch
- *  \param uri did uri already match (if any)
- *  \param dce did dce already match (if any)
+ * \param state the detect engine state
+ * \param s signature
+ * \param sm sigmatch
+ * \param uri did uri already match (if any)
+ * \param dce did dce already match (if any)
+ * \param hcbd did http client body already match (if any)
+ *
+ * \todo Need to use an array to transfer all these args.  Pushing so
+ *       many args is slow.
  */
-static void DeStateSignatureAppend(DetectEngineState *state, Signature *s, SigMatch *sm, char uri, char dce) {
+static void DeStateSignatureAppend(DetectEngineState *state, Signature *s,
+                                   SigMatch *sm, uint16_t match_flags) {
     DeStateStore *store = state->tail;
 
     if (store == NULL) {
@@ -228,18 +265,15 @@ static void DeStateSignatureAppend(DetectEngineState *state, Signature *s, SigMa
     SigIntId idx = state->cnt % DE_STATE_CHUNK_SIZE;
     store->store[idx].sid = s->num;
     store->store[idx].flags = 0;
-    if (uri) {
-        store->store[idx].flags |= DE_STATE_FLAG_URI_MATCH;
-    }
-    if (dce) {
-        store->store[idx].flags |= DE_STATE_FLAG_DCE_MATCH;
-    }
+    store->store[idx].flags |= match_flags;
     store->store[idx].nm = sm;
     state->cnt++;
 
     SCLogDebug("store %p idx %"PRIuMAX" cnt %"PRIuMAX" sig id %"PRIuMAX"",
             store, (uintmax_t)idx, (uintmax_t)state->cnt,
             (uintmax_t)store->store[idx].sid);
+
+    return;
 }
 
 
@@ -259,18 +293,46 @@ static void DeStateSignatureAppend(DetectEngineState *state, Signature *s, SigMa
             uricontent + app layer sm
 */
 
-/** \brief Check if a flow already contains a flow detect state
+uint16_t DeStateGetStateVersion(DetectEngineState *de_state, uint8_t direction) {
+    if (direction & STREAM_TOSERVER) {
+        SCReturnUInt(de_state->toserver_version);
+    } else {
+        SCReturnUInt(de_state->toclient_version);
+    }
+}
+
+void DeStateStoreStateVersion(DetectEngineState *de_state, uint8_t direction,
+        uint16_t alversion)
+{
+    if (direction & STREAM_TOSERVER) {
+        SCLogDebug("STREAM_TOSERVER updated to %"PRIu16, alversion);
+        de_state->toserver_version = alversion;
+    } else {
+        SCLogDebug("STREAM_TOCLIENT updated to %"PRIu16, alversion);
+        de_state->toclient_version = alversion;
+    }
+}
+
+/**
+ *  \brief Check if a flow already contains a flow detect state
+ *
+ *  \retval 2 has state, but it's not updated
  *  \retval 1 has state
  *  \retval 0 has no state
  */
-int DeStateFlowHasState(Flow *f) {
+int DeStateFlowHasState(Flow *f, uint8_t flags, uint16_t alversion) {
     SCEnter();
+
     int r = 0;
     SCMutexLock(&f->de_state_m);
+
     if (f->de_state == NULL || f->de_state->cnt == 0)
         r = 0;
+    else if (DeStateGetStateVersion(f->de_state, flags) == alversion)
+        r = 2;
     else
         r = 1;
+
     SCMutexUnlock(&f->de_state_m);
     SCReturnInt(r);
 }
@@ -282,19 +344,15 @@ int DeStateFlowHasState(Flow *f) {
  */
 int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
         DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags,
-        void *alstate, uint16_t alproto)
+        void *alstate, uint16_t alproto, uint16_t alversion)
 {
     SCEnter();
 
-    SigMatch *sm = s->amatch;
+    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_AMATCH];
     int match = 0;
     int r = 0;
-    char umatch = 0;
-    char uinspect = 0;
-    char dmatch = 0;
-    char dinspect = 0;
-    char appinspect = 0;
-    char appmatch = 0;
+    uint16_t inspect_flags = 0;
+    uint16_t match_flags = 0;
 
     if (alstate == NULL) {
         SCReturnInt(0);
@@ -302,37 +360,126 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
     SCLogDebug("s->id %"PRIu32, s->id);
 
-    /* Check the uricontent keywords here. */
-    if (alproto == ALPROTO_HTTP && (flags & STREAM_TOSERVER)) {
-        if (s->umatch != NULL) {
-            uinspect = 1;
+    /* Check the uricontent, http client body, http header keywords here */
+    if (alproto == ALPROTO_HTTP) {
+        if (flags & STREAM_TOSERVER) {
+            if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_URI_INSPECT;
 
-            SCLogDebug("inspecting uri");
+                SCLogDebug("inspecting uri");
 
-            if (DetectEngineInspectPacketUris(de_ctx, det_ctx, s, f,
-                        flags, alstate) == 1)
-            {
-                SCLogDebug("uri matched");
-                umatch = 1;
-            } else {
-                SCLogDebug("uri inspected but no match");
+                if (DetectEngineInspectPacketUris(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1)
+                {
+                    SCLogDebug("uri matched");
+                    match_flags |= DE_STATE_FLAG_URI_MATCH;
+                } else {
+                    SCLogDebug("uri inspected but no match");
+                }
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HCBD_INSPECT;
+                if (DetectEngineInspectHttpClientBody(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HCBD_MATCH;
+                }
+                SCLogDebug("inspecting http client body");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
+                if (DetectEngineInspectHttpHeader(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HHD_MATCH;
+                }
+                SCLogDebug("inspecting http header");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HRHDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HRHD_INSPECT;
+                if (DetectEngineInspectHttpRawHeader(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HRHD_MATCH;
+                }
+                SCLogDebug("inspecting http raw header");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HMDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HMD_INSPECT;
+                if (DetectEngineInspectHttpMethod(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HMD_MATCH;
+                }
+                SCLogDebug("inspecting http method");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HCDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HCD_INSPECT;
+                if (DetectEngineInspectHttpCookie(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HCD_MATCH;
+                }
+                SCLogDebug("inspecting http cookie");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HRUD_INSPECT;
+                if (DetectEngineInspectHttpRawUri(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HRUD_MATCH;
+                }
+                SCLogDebug("inspecting http raw uri");
+            }
+        } else if (flags & STREAM_TOCLIENT) {
+            /* For to client set the flags in inspect so it can't match
+             * if the sig requires something only the request has. The rest
+             * will be inspected in the opposite direction. */
+            if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_URI_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HCBD_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
+                if (DetectEngineInspectHttpHeader(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HHD_MATCH;
+                }
+                SCLogDebug("inspecting http header");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HRHDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HRHD_INSPECT;
+                if (DetectEngineInspectHttpRawHeader(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HRHD_MATCH;
+                }
+                SCLogDebug("inspecting http raw header");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HMDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HMD_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HCDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HCD_INSPECT;
+                if (DetectEngineInspectHttpCookie(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HCD_MATCH;
+                }
+                SCLogDebug("inspecting http cookie");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HRUD_INSPECT;
             }
         }
     } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
-        if (s->dmatch != NULL) {
-            dinspect = 1;
+        if (s->sm_lists[DETECT_SM_LIST_DMATCH] != NULL) {
+            inspect_flags |= DE_STATE_FLAG_DCE_INSPECT;
 
             SCLogDebug("inspecting dce payload");
 
             if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                 SMBState *smb_state = (SMBState *)alstate;
-                //DCERPCState dcerpc_state;
-                //dcerpc_state.dcerpc = smb_state->dcerpc;
+
                 if (smb_state->dcerpc_present &&
                     DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
                                                   flags, &smb_state->dcerpc) == 1) {
                     SCLogDebug("dce payload matched");
-                    dmatch = 1;
+                    match_flags |= DE_STATE_FLAG_DCE_MATCH;
                 } else {
                     SCLogDebug("dce payload inspected but no match");
                 }
@@ -340,7 +487,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 if (DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
                                                   flags, alstate) == 1) {
                     SCLogDebug("dce payload matched");
-                    dmatch = 1;
+                    match_flags |= DE_STATE_FLAG_DCE_MATCH;
                 } else {
                     SCLogDebug("dce payload inspected but no match");
                 }
@@ -348,10 +495,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
         }
     }
 
-    appinspect = uinspect + dinspect;
-    appmatch = umatch + dmatch;
-
-    if (s->amatch != NULL) {
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         for ( ; sm != NULL; sm = sm->next) {
             SCLogDebug("sm %p, sm->next %p", sm, sm->next);
 
@@ -361,8 +505,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
             {
                 if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                     SMBState *smb_state = (SMBState *)alstate;
-                    //DCERPCState dcerpc_state;
-                    //dcerpc_state.dcerpc = smb_state->dcerpc;
+
                     if (smb_state->dcerpc_present) {
                         match = sigmatch_table[sm->type].
                             AppLayerMatch(tv, det_ctx, f, flags, &smb_state->dcerpc,
@@ -378,7 +521,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 } else if (sm->next == NULL) {
                     sm = NULL; /* set to NULL as we have a match */
 
-                    if (!appinspect || (appinspect == appmatch)) {
+                    if (inspect_flags == 0 || (inspect_flags == match_flags)) {
                         r = 1;
                     }
                     break;
@@ -386,13 +529,13 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
             }
         }
     } else {
-        if (appinspect > 0 && (appinspect == appmatch)) {
+        if (inspect_flags != 0 && (inspect_flags == match_flags)) {
             r = 1;
         }
     }
 
-    SCLogDebug("detection done, store results: sm %p, uri %d, dce %d",
-            sm, umatch, dmatch);
+    SCLogDebug("detection done, store results: sm %p, inspect_flags %04X, "
+            "match_flags %04X", sm, inspect_flags, match_flags);
 
     SCMutexLock(&f->de_state_m);
     /* match or no match, we store the state anyway
@@ -402,9 +545,10 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
         f->de_state = DetectEngineStateAlloc();
     }
     if (f->de_state != NULL) {
-        DeStateSignatureAppend(f->de_state, s, sm, umatch, dmatch);
+        /* \todo shift to an array to transfer these match values*/
+        DeStateSignatureAppend(f->de_state, s, sm, match_flags);
+        DeStateStoreStateVersion(f->de_state, flags, alversion);
     }
-
     SCMutexUnlock(&f->de_state_m);
 
     SCReturnInt(r);
@@ -415,19 +559,15 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
  *  \retval 0 all is good
  */
 int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-        Flow *f, uint8_t flags, void *alstate, uint16_t alproto)
+        Flow *f, uint8_t flags, void *alstate, uint16_t alproto, uint16_t alversion)
 {
     SCEnter();
     SigIntId cnt = 0;
     SigIntId store_cnt = 0;
     DeStateStore *store = NULL;
+    uint16_t inspect_flags = 0;
+    uint16_t match_flags = 0;
     int match = 0;
-    char umatch = 0;
-    char uinspect = 0;
-    char dmatch = 0;
-    char dinspect = 0;
-    char appinspect = 0;
-    char appmatch = 0;
 
     if (f == NULL || alstate == NULL || alproto == ALPROTO_UNKNOWN) {
         return 0;
@@ -437,6 +577,10 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
 
     if (f->de_state == NULL || f->de_state->cnt == 0)
         goto end;
+
+    if (DeStateGetStateVersion(f->de_state, flags) == alversion) {
+        goto end;
+    }
 
     /* loop through the stores */
     for (store = f->de_state->head; store != NULL; store = store->next)
@@ -448,10 +592,8 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
         {
             DeStateStoreItem *item = &store->store[store_cnt];
 
-            umatch = 0;
-            uinspect = 0;
-            dmatch = 0;
-            dinspect = 0;
+            inspect_flags = 0;
+            match_flags = 0;
             match = 0;
 
             SCLogDebug("internal id of signature to inspect: %"PRIuMAX,
@@ -461,7 +603,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
             SCLogDebug("id of signature to inspect: %"PRIuMAX,
                     (uintmax_t)s->id);
 
-            PROFILING_START;
+            RULE_PROFILING_START;
 
             /* if we already fully matched previously, detect that here */
             if (item->flags & DE_STATE_FLAG_FULL_MATCH) {
@@ -473,17 +615,16 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
 
             /* first, check uricontent */
             if (alproto == ALPROTO_HTTP && (flags & STREAM_TOSERVER)) {
-                if (s->umatch != NULL) {
+                if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
                     if (!(item->flags & DE_STATE_FLAG_URI_MATCH)) {
                         SCLogDebug("inspecting uri");
-                        uinspect = 1;
+                        inspect_flags |= DE_STATE_FLAG_URI_INSPECT;
 
                         if (DetectEngineInspectPacketUris(de_ctx, det_ctx, s,
                                     f, flags, alstate) == 1)
                         {
                             SCLogDebug("uri matched");
-                            item->flags |= DE_STATE_FLAG_URI_MATCH;
-                            umatch = 1;
+                            match_flags |= DE_STATE_FLAG_URI_MATCH;
                         } else {
                             SCLogDebug("uri inspected but no match");
                         }
@@ -491,11 +632,84 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         SCLogDebug("uri already inspected");
                     }
                 }
+                if (s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HCBD_MATCH)) {
+                        SCLogDebug("inspecting http client body data");
+                        inspect_flags |= DE_STATE_FLAG_HCBD_INSPECT;
+
+                        if (DetectEngineInspectHttpClientBody(de_ctx, det_ctx, s, f,
+                                                              flags, alstate) == 1) {
+                            SCLogDebug("http client body matched");
+                            match_flags |= DE_STATE_FLAG_HCBD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HHD_MATCH)) {
+                        SCLogDebug("inspecting http header data");
+                        inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
+
+                        if (DetectEngineInspectHttpHeader(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            SCLogDebug("http header matched");
+                            match_flags |= DE_STATE_FLAG_HHD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HRHDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HRHD_MATCH)) {
+                        SCLogDebug("inspecting http raw header data");
+                        inspect_flags |= DE_STATE_FLAG_HRHD_INSPECT;
+
+                        if (DetectEngineInspectHttpRawHeader(de_ctx, det_ctx, s, f,
+                                                             flags, alstate) == 1) {
+                            SCLogDebug("http raw header matched");
+                            match_flags |= DE_STATE_FLAG_HRHD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HMDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HMD_MATCH)) {
+                        SCLogDebug("inspecting http method data");
+                        inspect_flags |= DE_STATE_FLAG_HMD_INSPECT;
+
+                        if (DetectEngineInspectHttpMethod(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            SCLogDebug("http method matched");
+                            match_flags |= DE_STATE_FLAG_HMD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HCDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HCD_MATCH)) {
+                        SCLogDebug("inspecting http cookie data");
+                        inspect_flags |= DE_STATE_FLAG_HCD_INSPECT;
+
+                        if (DetectEngineInspectHttpCookie(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            SCLogDebug("http cookie matched");
+                            match_flags |= DE_STATE_FLAG_HCD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HRUD_MATCH)) {
+                        SCLogDebug("inspecting http raw uri data");
+                        inspect_flags |= DE_STATE_FLAG_HRUD_INSPECT;
+
+                        if (DetectEngineInspectHttpRawUri(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            SCLogDebug("http raw uri matched");
+                            match_flags |= DE_STATE_FLAG_HRUD_MATCH;
+                        }
+                    }
+                }
+
             } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
-                if (s->dmatch != NULL) {
+                if (s->sm_lists[DETECT_SM_LIST_DMATCH] != NULL) {
                     if (!(item->flags & DE_STATE_FLAG_DCE_MATCH)) {
                         SCLogDebug("inspecting dce payload");
-                        dinspect = 1;
+                        inspect_flags |= DE_STATE_FLAG_DCE_INSPECT;
 
                         if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                             SMBState *smb_state = (SMBState *)alstate;
@@ -505,8 +719,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                                 DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
                                                               flags, &smb_state->dcerpc) == 1) {
                                 SCLogDebug("dce payload matched");
-                                item->flags |= DE_STATE_FLAG_DCE_MATCH;
-                                dmatch = 1;
+                                match_flags |= DE_STATE_FLAG_DCE_MATCH;
                             } else {
                                 SCLogDebug("dce payload inspected but no match");
                             }
@@ -514,8 +727,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                             if (DetectEngineInspectDcePayload(de_ctx, det_ctx, s, f,
                                                               flags, alstate) == 1) {
                                 SCLogDebug("dce payload matched");
-                                item->flags |= DE_STATE_FLAG_DCE_MATCH;
-                                dmatch = 1;
+                                match_flags |= DE_STATE_FLAG_DCE_MATCH;
                             } else {
                                 SCLogDebug("dce payload inspected but no match");
                             }
@@ -527,10 +739,6 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                 }
 
             }
-
-            appinspect = uinspect + dinspect;
-            appmatch = umatch + dmatch;
-            SCLogDebug("appinspect %d, appmatch %d", appinspect, appmatch);
 
             /* next, check the other sig matches */
             if (item->nm != NULL) {
@@ -562,10 +770,10 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         /* mark the sig as matched */
                         item->nm = NULL;
 
-                        if (!appinspect || (appinspect == appmatch)) {
+                        if (inspect_flags == 0 || (inspect_flags == match_flags)) {
                             det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_NEW;
                             SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_NEW));
-                            item->flags |= DE_STATE_FLAG_FULL_MATCH;
+                            match_flags |= DE_STATE_FLAG_FULL_MATCH;
                         } else {
                             det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_PARTIAL;
                             SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_PARTIAL));
@@ -573,18 +781,17 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                     }
                 }
             } else {
-                if (appinspect > 0 && (appinspect == appmatch)) {
+                if (inspect_flags != 0 && (inspect_flags == match_flags)) {
                     det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_NEW;
                     SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_NEW));
-                    item->flags |= DE_STATE_FLAG_FULL_MATCH;
-                } else if (uinspect && !umatch) {
-                    det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_PARTIAL;
-                    SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_PARTIAL));
+                    match_flags |= DE_STATE_FLAG_FULL_MATCH;
                 } else {
                     det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_PARTIAL;
                     SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_PARTIAL));
                 }
             }
+
+            item->flags |= match_flags;
 
             SCLogDebug("signature %"PRIu32" match state %s",
                     s->id, DeStateMatchResultToString(det_ctx->de_state_sig_array[item->sid]));
@@ -595,6 +802,7 @@ next_sig:
         }
     }
 
+    DeStateStoreStateVersion(f->de_state, flags, alversion);
 end:
     SCMutexUnlock(&f->de_state_m);
     SCReturnInt(0);
@@ -617,30 +825,6 @@ int DeStateRestartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngin
     SCMutexUnlock(&f->de_state_m);
 
     SCReturnInt(0);
-}
-
-/**
- *  \retval 1 match
- *  \retval 0 no match
- */
-int DeStateDetectSignature(ThreadVars *tv, DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, uint8_t flags,
-        void *alstate, uint16_t alproto)
-{
-    SCEnter();
-    int r = 0;
-
-    if (p->flow == NULL) {
-        SCReturnInt(0);
-    }
-
-    /* if there is already a state, continue the inspection of this
-     * signature using that state.
-     */
-    r = DeStateDetectStartDetection(tv, de_ctx, det_ctx, s, p->flow, flags,
-            alstate, alproto);
-
-    SCReturnInt(r);
 }
 
 #ifdef UNITTESTS
@@ -669,39 +853,39 @@ static int DeStateTest02(void) {
     memset(&s, 0x00, sizeof(s));
 
     s.num = 0;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 11;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 22;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 33;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 44;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 55;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 66;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 77;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 88;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 99;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 100;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 111;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 122;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 133;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 144;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 155;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 166;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
 
     if (state->head == NULL) {
         goto end;
@@ -715,11 +899,15 @@ static int DeStateTest02(void) {
         goto end;
     }
 
-    if (state->head->store[15].sid != 155) {
+    if (state->head->store[14].sid != 144) {
         goto end;
     }
 
-    if (state->head->next->store[0].sid != 166) {
+    if (state->head->next->store[0].sid != 155) {
+        goto end;
+    }
+
+    if (state->head->next->store[1].sid != 166) {
         goto end;
     }
 
@@ -744,9 +932,9 @@ static int DeStateTest03(void) {
     memset(&s, 0x00, sizeof(s));
 
     s.num = 11;
-    DeStateSignatureAppend(state, &s, NULL, 0, 0);
+    DeStateSignatureAppend(state, &s, NULL, 0);
     s.num = 22;
-    DeStateSignatureAppend(state, &s, NULL, 1, 0);
+    DeStateSignatureAppend(state, &s, NULL, DE_STATE_FLAG_URI_MATCH);
 
     if (state->head == NULL) {
         goto end;
@@ -806,6 +994,7 @@ static int DeStateSigTest01(void) {
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -939,6 +1128,7 @@ static int DeStateSigTest02(void) {
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1089,3 +1279,6 @@ void DeStateRegisterTests(void) {
 #endif
 }
 
+/**
+ * @}
+ */

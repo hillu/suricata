@@ -27,7 +27,6 @@
 #include "suricata.h"
 #include "counters.h"
 #include "threadvars.h"
-#include "tm-modules.h"
 #include "tm-threads.h"
 #include "conf.h"
 #include "util-time.h"
@@ -42,6 +41,13 @@
 #define SC_PERF_PCRE_TIMEBASED_INTERVAL "^(?:(\\d+)([shm]))(?:(\\d+)([shm]))?(?:(\\d+)([shm]))?$"
 
 static SCPerfOPIfaceContext *sc_perf_op_ctx = NULL;
+static time_t sc_start_time;
+/** refresh interval in seconds */
+static uint32_t sc_counter_tts = SC_PERF_MGMTT_TTS;
+/** is the stats counter enabled? */
+static char sc_counter_enabled = TRUE;
+/** append or overwrite? 1: append, 0: overwrite */
+static char sc_counter_append = TRUE;
 
 /**
  * \brief Adds a value of type uint64_t to the local counter.
@@ -263,10 +269,11 @@ void SCPerfCounterSetDouble(uint16_t id, SCPerfCounterArray *pca,
  * \retval An allocated string containing the log filename on success or NULL on
  *         failure.
  */
-static char *SCPerfGetLogFilename(void)
+static char *SCPerfGetLogFilename(ConfNode *stats)
 {
     char *log_dir = NULL;
     char *log_filename = NULL;
+    const char* filename = NULL;
 
     if (ConfGet("default-log-dir", &log_dir) != 1)
         log_dir = DEFAULT_LOG_DIR;
@@ -275,8 +282,17 @@ static char *SCPerfGetLogFilename(void)
         return NULL;
     }
 
+    if (stats != NULL) {
+        filename = ConfNodeLookupChildValue(stats, "filename");
+        if (filename == NULL) {
+            filename = SC_PERF_DEFAULT_LOG_FILENAME;
+        }
+    } else {
+        filename = SC_PERF_DEFAULT_LOG_FILENAME;
+    }
+
     if (snprintf(log_filename, PATH_MAX, "%s/%s", log_dir,
-                 SC_PERF_DEFAULT_LOG_FILENAME) < 0) {
+                 filename) < 0) {
         SCLogError(SC_ERR_SPRINTF, "Sprintf Error");
         SCFree(log_filename);
         return NULL;
@@ -294,6 +310,36 @@ static void SCPerfInitOPCtx(void)
 {
     SCEnter();
 
+    ConfNode *root = ConfGetNode("outputs");
+    ConfNode *node = NULL;
+    ConfNode *stats = NULL;
+    if (root != NULL) {
+        TAILQ_FOREACH(node, &root->head, next) {
+            if (strncmp(node->val, "stats", 5) == 0) {
+                stats = node->head.tqh_first;
+            }
+        }
+    }
+    /* Check if the stats module is enabled or not */
+    if (stats != NULL) {
+        const char *enabled = ConfNodeLookupChildValue(stats, "enabled");
+        if (enabled != NULL && ConfValIsFalse(enabled)) {
+            sc_counter_enabled = FALSE;
+            SCLogDebug("Stats module has been disabled");
+            SCReturn;
+        }
+        const char *interval = ConfNodeLookupChildValue(stats, "interval");
+        if (interval != NULL)
+            sc_counter_tts = (uint32_t) atoi(interval);
+
+        const char *append = ConfNodeLookupChildValue(stats, "append");
+        if (append != NULL)
+            sc_counter_append = ConfValIsTrue(append);
+    }
+
+    /* Store the engine start time */
+    time(&sc_start_time);
+
     if ( (sc_perf_op_ctx = SCMalloc(sizeof(SCPerfOPIfaceContext))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCPerfInitOPCtx. Exiting...");
         exit(EXIT_FAILURE);
@@ -302,11 +348,17 @@ static void SCPerfInitOPCtx(void)
 
     sc_perf_op_ctx->iface = SC_PERF_IFACE_FILE;
 
-    if ( (sc_perf_op_ctx->file = SCPerfGetLogFilename()) == NULL) {
+    if ( (sc_perf_op_ctx->file = SCPerfGetLogFilename(stats)) == NULL) {
         SCLogInfo("Error retrieving Perf Counter API output file path");
     }
 
-    if ( (sc_perf_op_ctx->fp = fopen(sc_perf_op_ctx->file, "w+")) == NULL) {
+    char *mode;
+    if (sc_counter_append)
+        mode = "a+";
+    else
+        mode = "w+";
+
+    if ( (sc_perf_op_ctx->fp = fopen(sc_perf_op_ctx->file, mode)) == NULL) {
         SCLogError(SC_ERR_FOPEN, "fopen error opening file \"%s\".  Resorting "
                    "to using the standard output for output",
                    sc_perf_op_ctx->file);
@@ -339,31 +391,34 @@ static void SCPerfInitOPCtx(void)
  */
 static void SCPerfReleaseOPCtx()
 {
+    if (sc_perf_op_ctx == NULL) {
+        SCLogDebug("Counter module has been disabled");
+        return;
+    }
+
     SCPerfClubTMInst *pctmi = NULL;
     SCPerfClubTMInst *temp = NULL;
     pctmi = sc_perf_op_ctx->pctmi;
 
-    if (sc_perf_op_ctx != NULL) {
-        if (sc_perf_op_ctx->fp != NULL)
-            fclose(sc_perf_op_ctx->fp);
+    if (sc_perf_op_ctx->fp != NULL)
+        fclose(sc_perf_op_ctx->fp);
 
-        if (sc_perf_op_ctx->file != NULL)
-            SCFree(sc_perf_op_ctx->file);
+    if (sc_perf_op_ctx->file != NULL)
+        SCFree(sc_perf_op_ctx->file);
 
-        while (pctmi != NULL) {
-            if (pctmi->tm_name != NULL)
-                SCFree(pctmi->tm_name);
+    while (pctmi != NULL) {
+        if (pctmi->tm_name != NULL)
+            SCFree(pctmi->tm_name);
 
-            if (pctmi->head != NULL)
-                SCFree(pctmi->head);
+        if (pctmi->head != NULL)
+            SCFree(pctmi->head);
 
-            temp = pctmi->next;
-            SCFree(pctmi);
-            pctmi = temp;
-        }
-
-        SCFree(sc_perf_op_ctx);
+        temp = pctmi->next;
+        SCFree(pctmi);
+        pctmi = temp;
     }
+
+    SCFree(sc_perf_op_ctx);
 
     return;
 }
@@ -400,7 +455,7 @@ static void *SCPerfMgmtThread(void *arg)
     while (run) {
         TmThreadTestThreadUnPaused(tv_local);
 
-        cond_time.tv_sec = time(NULL) + SC_PERF_MGMTT_TTS;
+        cond_time.tv_sec = time(NULL) + sc_counter_tts;
         cond_time.tv_nsec = 0;
 
         SCMutexLock(tv_local->m);
@@ -410,11 +465,13 @@ static void *SCPerfMgmtThread(void *arg)
         SCPerfOutputCounters();
 
         if (TmThreadsCheckFlag(tv_local, THV_KILL)) {
-            TmThreadsSetFlag(tv_local, THV_CLOSED);
             run = 0;
         }
     }
 
+    TmThreadWaitForFlag(tv_local, THV_DEINIT);
+
+    TmThreadsSetFlag(tv_local, THV_CLOSED);
     return NULL;
 }
 
@@ -461,28 +518,46 @@ static void *SCPerfWakeupThread(void *arg)
 
         tv = tv_root[TVT_PPT];
         while (tv != NULL) {
-            if (tv->inq == NULL || tv->sc_perf_pctx.head == NULL) {
+            if (tv->sc_perf_pctx.head == NULL) {
                 tv = tv->next;
                 continue;
             }
-
-            q = &trans_q[tv->inq->id];
 
             /* assuming the assignment of an int to be atomic, and even if it's
              * not, it should be okay */
             tv->sc_perf_pctx.perf_flag = 1;
 
-            SCCondSignal(&q->cond_q);
+            if (tv->inq != NULL) {
+                q = &trans_q[tv->inq->id];
+                SCCondSignal(&q->cond_q);
+            }
+
+            tv = tv->next;
+        }
+
+        /* mgt threads for flow manager */
+        tv = tv_root[TVT_MGMT];
+        while (tv != NULL) {
+            if (tv->sc_perf_pctx.head == NULL) {
+                tv = tv->next;
+                continue;
+            }
+
+            /* assuming the assignment of an int to be atomic, and even if it's
+             * not, it should be okay */
+            tv->sc_perf_pctx.perf_flag = 1;
 
             tv = tv->next;
         }
 
         if (TmThreadsCheckFlag(tv_local, THV_KILL)) {
-            TmThreadsSetFlag(tv_local, THV_CLOSED);
             run = 0;
         }
     }
 
+    TmThreadWaitForFlag(tv_local, THV_DEINIT);
+
+    TmThreadsSetFlag(tv_local, THV_CLOSED);
     return NULL;
 }
 
@@ -719,10 +794,8 @@ static uint16_t SCPerfRegisterQualifiedCounter(char *cname, char *tm_name,
         exit(EXIT_FAILURE);
     }
 
-    if ( (pc->type_q = SCMalloc(sizeof(SCPerfCounterTypeQ))) == NULL) {
-        SCPerfReleaseCounter(pc);
+    if ( (pc->type_q = SCMalloc(sizeof(SCPerfCounterTypeQ))) == NULL)
         return 0;
-    }
     memset(pc->type_q, 0, sizeof(SCPerfCounterTypeQ));
 
     pc->type_q->type = type_q;
@@ -750,10 +823,8 @@ static uint16_t SCPerfRegisterQualifiedCounter(char *cname, char *tm_name,
             break;
     }
 
-    if ( (pc->value->cvalue = SCMalloc(pc->value->size)) == NULL) {
-        SCPerfReleaseCounter(pc);
+    if ( (pc->value->cvalue = SCMalloc(pc->value->size)) == NULL)
         return 0;
-    }
     memset(pc->value->cvalue, 0, pc->value->size);
 
     /* display flag which specifies if the counter should be displayed or not */
@@ -949,11 +1020,21 @@ static int SCPerfOutputCounterFileIface()
     struct tm local_tm;
     tms = (struct tm *)localtime_r(&tval.tv_sec, &local_tm);
 
+    /* Calculate the Engine uptime */
+    int up_time = (int)difftime(tval.tv_sec, sc_start_time);
+    int sec = up_time % 60;     // Seconds in a minute
+    int in_min = up_time / 60;
+    int min = in_min % 60;      // Minutes in a hour
+    int in_hours = in_min / 60;
+    int hours = in_hours % 24;  // Hours in a day
+    int days = in_hours / 24;
+
     fprintf(sc_perf_op_ctx->fp, "----------------------------------------------"
             "---------------------\n");
-    fprintf(sc_perf_op_ctx->fp, "%" PRId32 "/%" PRId32 "/%04d -- %02d:%02d:%02d\n",
-            tms->tm_mday, tms->tm_mon + 1, tms->tm_year + 1900, tms->tm_hour,
-            tms->tm_min, tms->tm_sec);
+    fprintf(sc_perf_op_ctx->fp, "Date: %" PRId32 "/%" PRId32 "/%04d -- "
+            "%02d:%02d:%02d (uptime: %"PRId32"d, %02dh %02dm %02ds)\n",
+            tms->tm_mon + 1, tms->tm_mday, tms->tm_year + 1900, tms->tm_hour,
+            tms->tm_min, tms->tm_sec, days, hours, min, sec);
     fprintf(sc_perf_op_ctx->fp, "----------------------------------------------"
             "---------------------\n");
     fprintf(sc_perf_op_ctx->fp, "%-25s | %-25s | %-s\n", "Counter", "TM Name",
@@ -965,7 +1046,7 @@ static int SCPerfOutputCounterFileIface()
         for (u = 0; u < TVT_MAX; u++) {
             tv = tv_root[u];
             //if (pc_heads == NULL || pc_heads[u] == NULL)
-            //continue;
+            //    continue;
 
             while (tv != NULL) {
                 SCMutexLock(&tv->sc_perf_pctx.m);
@@ -1049,8 +1130,9 @@ static int SCPerfOutputCounterFileIface()
 
                 if (pc_heads[u] == NULL ||
                     (pc_heads[0] != NULL &&
-                        strcmp(pctmi->tm_name, pc_heads[0]->name->tm_name)))
+                        strcmp(pctmi->tm_name, pc_heads[0]->name->tm_name))) {
                     flag = 0;
+                }
             }
 
             if (pc->disp == 0 || pc->value == NULL)
@@ -1100,6 +1182,12 @@ void SCPerfInitCounterApi(void)
  */
 void SCPerfSpawnThreads(void)
 {
+    SCEnter();
+
+    if (!sc_counter_enabled) {
+        SCReturn;
+    }
+
     ThreadVars *tv_wakeup = NULL;
     ThreadVars *tv_mgmt = NULL;
 
@@ -1131,7 +1219,7 @@ void SCPerfSpawnThreads(void)
         exit(EXIT_FAILURE);
     }
 
-    return;
+    SCReturn;
 }
 
 /**
@@ -1357,6 +1445,11 @@ uint16_t SCPerfRegisterIntervalCounter(char *cname, char *tm_name, int type,
  */
 int SCPerfAddToClubbedTMTable(char *tm_name, SCPerfContext *pctx)
 {
+    if (sc_perf_op_ctx == NULL) {
+        SCLogDebug("Counter module has been disabled");
+        return 0;
+    }
+
     SCPerfClubTMInst *pctmi = NULL;
     SCPerfClubTMInst *prev = NULL;
     SCPerfClubTMInst *temp = NULL;
@@ -1385,19 +1478,14 @@ int SCPerfAddToClubbedTMTable(char *tm_name, SCPerfContext *pctx)
 
     /* get me the bugger who wrote this junk of a code :P */
     if (pctmi == NULL) {
-        if ( (temp = SCMalloc(sizeof(SCPerfClubTMInst))) == NULL) {
-            SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
+        if ( (temp = SCMalloc(sizeof(SCPerfClubTMInst))) == NULL)
             return 0;
-        }
         memset(temp, 0, sizeof(SCPerfClubTMInst));
 
         temp->size = 1;
         temp->head = SCMalloc(sizeof(SCPerfContext **));
-        if (temp->head == NULL) {
-            SCFree(temp);
-            SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
+        if (temp->head == NULL)
             return 0;
-        }
         temp->head[0] = pctx;
         temp->tm_name = SCStrdup(tm_name);
 
@@ -1421,11 +1509,9 @@ int SCPerfAddToClubbedTMTable(char *tm_name, SCPerfContext *pctx)
     }
 
     pctmi->head = SCRealloc(pctmi->head,
-                          (pctmi->size + 1) * sizeof(SCPerfContext *));
-    if (pctmi->head == NULL) {
-        SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
+                          (pctmi->size + 1) * sizeof(SCPerfContext **));
+    if (pctmi->head == NULL)
         return 0;
-    }
     hpctx = pctmi->head;
 
     hpctx[pctmi->size] = pctx;
@@ -1479,10 +1565,8 @@ SCPerfCounterArray *SCPerfGetCounterArrayRange(uint16_t s_id, uint16_t e_id,
         return NULL;
     memset(pca, 0, sizeof(SCPerfCounterArray));
 
-    if ( (pca->head = SCMalloc(sizeof(SCPCAElem) * (e_id - s_id  + 2))) == NULL) {
-        SCFree(pca);
+    if ( (pca->head = SCMalloc(sizeof(SCPCAElem) * (e_id - s_id  + 2))) == NULL)
         return NULL;
-    }
     memset(pca->head, 0, sizeof(SCPCAElem) * (e_id - s_id  + 2));
 
     pc = pctx->head;
@@ -1715,8 +1799,6 @@ void SCPerfReleasePCA(SCPerfCounterArray *pca)
 
 /*----------------------------------Unit_Tests--------------------------------*/
 
-#ifdef UNITTESTS
-
 static int SCPerfTestCounterReg01()
 {
     SCPerfContext pctx;
@@ -1776,6 +1858,10 @@ static int SCPerfTestGetCntArray05()
 
     id = SCPerfRegisterCounter("t1", "c1", SC_PERF_TYPE_UINT64, NULL,
                                &tv.sc_perf_pctx);
+    if (id != 1) {
+        printf("id %d: ", id);
+        return 0;
+    }
 
     tv.sc_perf_pca = SCPerfGetAllCountersArray(NULL);
 
@@ -1792,6 +1878,8 @@ static int SCPerfTestGetCntArray06()
 
     id = SCPerfRegisterCounter("t1", "c1", SC_PERF_TYPE_UINT64, NULL,
                                &tv.sc_perf_pctx);
+    if (id != 1)
+        return 0;
 
     tv.sc_perf_pca = SCPerfGetAllCountersArray(&tv.sc_perf_pctx);
 
@@ -1811,7 +1899,7 @@ static int SCPerfTestCntArraySize07()
 
     memset(&tv, 0, sizeof(ThreadVars));
 
-    pca = (SCPerfCounterArray *)&tv.sc_perf_pca;
+    //pca = (SCPerfCounterArray *)&tv.sc_perf_pca;
 
     SCPerfRegisterCounter("t1", "c1", SC_PERF_TYPE_UINT64, NULL,
                           &tv.sc_perf_pctx);
@@ -1932,7 +2020,6 @@ static int SCPerfTestCounterValues11()
 
     int result = 1;
     uint16_t id1, id2, id3, id4;
-    uint8_t *u8p;
 
     memset(&tv, 0, sizeof(ThreadVars));
 
@@ -1954,29 +2041,17 @@ static int SCPerfTestCounterValues11()
 
     SCPerfUpdateCounterArray(pca, &tv.sc_perf_pctx, 0);
 
-    u8p = (uint8_t *)tv.sc_perf_pctx.head->value->cvalue;
-    result &= (1 == *u8p);
-    result &= (0 == *(u8p + 1));
-    result &= (0 == *(u8p + 2));
-    result &= (0 == *(u8p + 3));
+    uint64_t *u64p = (uint64_t *)tv.sc_perf_pctx.head->value->cvalue;
+    result &= (1 == *u64p);
 
-    u8p = (uint8_t *)tv.sc_perf_pctx.head->next->value->cvalue;
-    result &= (0 == *u8p);
-    result &= (1 == *(u8p + 1));
-    result &= (0 == *(u8p + 2));
-    result &= (0 == *(u8p + 3));
+    u64p = (uint64_t *)tv.sc_perf_pctx.head->next->value->cvalue;
+    result &= (256 == *u64p);
 
-    u8p = (uint8_t *)tv.sc_perf_pctx.head->next->next->value->cvalue;
-    result &= (1 == *u8p);
-    result &= (1 == *(u8p + 1));
-    result &= (0 == *(u8p + 2));
-    result &= (0 == *(u8p + 3));
+    u64p = (uint64_t *)tv.sc_perf_pctx.head->next->next->value->cvalue;
+    result &= (257 == *u64p);
 
-    u8p = (uint8_t *)tv.sc_perf_pctx.head->next->next->next->value->cvalue;
-    result &= (16 == *u8p);
-    result &= (1 == *(u8p + 1));
-    result &= (1 == *(u8p + 2));
-    result &= (1 == *(u8p + 3));
+    u64p = (uint64_t *)tv.sc_perf_pctx.head->next->next->next->value->cvalue;
+    result &= (16843024 == *u64p);
 
     SCPerfReleasePerfCounterS(tv.sc_perf_pctx.head);
     SCPerfReleasePCA(pca);
@@ -2328,11 +2403,9 @@ static int SCPerfTestIntervalQual18()
 
     return result;
 }
-#endif /* UNITTESTS */
 
 void SCPerfRegisterTests()
 {
-#ifdef UNITTESTS
     UtRegisterTest("SCPerfTestCounterReg01", SCPerfTestCounterReg01, 0);
     UtRegisterTest("SCPerfTestCounterReg02", SCPerfTestCounterReg02, 0);
     UtRegisterTest("SCPerfTestCounterReg03", SCPerfTestCounterReg03, 1);
@@ -2352,6 +2425,6 @@ void SCPerfRegisterTests()
     UtRegisterTest("SCPerfTestIntervalQual16", SCPerfTestIntervalQual16, 1);
     UtRegisterTest("SCPerfTestIntervalQual17", SCPerfTestIntervalQual17, 1);
     UtRegisterTest("SCPerfTestIntervalQual18", SCPerfTestIntervalQual18, 1);
-#endif
+
     return;
 }

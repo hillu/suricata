@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
@@ -29,9 +36,10 @@
 #include "decode-events.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "util-optimize.h"
 #include "flow.h"
 
-static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t len)
+static int DecodeTCPOptions(Packet *p, uint8_t *pkt, uint16_t len)
 {
     uint16_t plen = len;
     while (plen)
@@ -53,7 +61,7 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
              * so here the len of the specific option must be bad.
              * Also check for invalid lengths 0 and 1. */
             if (*(pkt+1) > plen || *(pkt+1) < 2) {
-                DECODER_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                 return -1;
             }
 
@@ -70,10 +78,10 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
             switch (p->TCP_OPTS[p->TCP_OPTS_CNT].type) {
                 case TCP_OPT_WS:
                     if (p->TCP_OPTS[p->TCP_OPTS_CNT].len != TCP_OPT_WS_LEN) {
-                        DECODER_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.ws != NULL) {
-                            DECODER_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
                             p->tcpvars.ws = &p->TCP_OPTS[p->TCP_OPTS_CNT];
                         }
@@ -81,10 +89,10 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
                     break;
                 case TCP_OPT_MSS:
                     if (p->TCP_OPTS[p->TCP_OPTS_CNT].len != TCP_OPT_MSS_LEN) {
-                        DECODER_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.mss != NULL) {
-                            DECODER_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
                             p->tcpvars.mss = &p->TCP_OPTS[p->TCP_OPTS_CNT];
                         }
@@ -92,10 +100,10 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
                     break;
                 case TCP_OPT_SACKOK:
                     if (p->TCP_OPTS[p->TCP_OPTS_CNT].len != TCP_OPT_SACKOK_LEN) {
-                        DECODER_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.sackok != NULL) {
-                            DECODER_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
                             p->tcpvars.sackok = &p->TCP_OPTS[p->TCP_OPTS_CNT];
                         }
@@ -103,12 +111,27 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
                     break;
                 case TCP_OPT_TS:
                     if (p->TCP_OPTS[p->TCP_OPTS_CNT].len != TCP_OPT_TS_LEN) {
-                        DECODER_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
                     } else {
                         if (p->tcpvars.ts != NULL) {
-                            DECODER_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
                         } else {
                             p->tcpvars.ts = &p->TCP_OPTS[p->TCP_OPTS_CNT];
+                        }
+                    }
+                    break;
+                case TCP_OPT_SACK:
+                    SCLogDebug("SACK option, len %u", p->TCP_OPTS[p->TCP_OPTS_CNT].len);
+                    if (p->TCP_OPTS[p->TCP_OPTS_CNT].len < TCP_OPT_SACK_MIN_LEN ||
+                            p->TCP_OPTS[p->TCP_OPTS_CNT].len > TCP_OPT_SACK_MAX_LEN ||
+                            !((p->TCP_OPTS[p->TCP_OPTS_CNT].len - 2) % 8 == 0))
+                    {
+                        ENGINE_SET_EVENT(p,TCP_OPT_INVALID_LEN);
+                    } else {
+                        if (p->tcpvars.sack != NULL) {
+                            ENGINE_SET_EVENT(p,TCP_OPT_DUPLICATE);
+                        } else {
+                            p->tcpvars.sack = &p->TCP_OPTS[p->TCP_OPTS_CNT];
                         }
                     }
                     break;
@@ -124,36 +147,36 @@ static int DecodeTCPOptions(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t le
 
 static int DecodeTCPPacket(ThreadVars *tv, Packet *p, uint8_t *pkt, uint16_t len)
 {
-    if (len < TCP_HEADER_LEN) {
-        DECODER_SET_EVENT(p, TCP_PKT_TOO_SMALL);
+    if (unlikely(len < TCP_HEADER_LEN)) {
+        ENGINE_SET_EVENT(p, TCP_PKT_TOO_SMALL);
         return -1;
     }
 
     p->tcph = (TCPHdr *)pkt;
 
-    p->tcpvars.hlen = TCP_GET_HLEN(p);
-    if (len < p->tcpvars.hlen) {
-        DECODER_SET_EVENT(p, TCP_HLEN_TOO_SMALL);
+    uint8_t hlen = TCP_GET_HLEN(p);
+    if (unlikely(len < hlen)) {
+        ENGINE_SET_EVENT(p, TCP_HLEN_TOO_SMALL);
         return -1;
+    }
+
+    uint8_t tcp_opt_len = hlen - TCP_HEADER_LEN;
+    if (unlikely(tcp_opt_len > TCP_OPTLENMAX)) {
+        ENGINE_SET_EVENT(p, TCP_INVALID_OPTLEN);
+        return -1;
+    }
+
+    if (likely(tcp_opt_len > 0)) {
+        DecodeTCPOptions(p, pkt + TCP_HEADER_LEN, tcp_opt_len);
     }
 
     SET_TCP_SRC_PORT(p,&p->sp);
     SET_TCP_DST_PORT(p,&p->dp);
 
-    p->tcpvars.tcp_opt_len = p->tcpvars.hlen - TCP_HEADER_LEN;
-    if (p->tcpvars.tcp_opt_len > TCP_OPTLENMAX) {
-        DECODER_SET_EVENT(p, TCP_INVALID_OPTLEN);
-        return -1;
-    }
-
-    if (p->tcpvars.tcp_opt_len > 0) {
-        DecodeTCPOptions(tv, p, pkt + TCP_HEADER_LEN, p->tcpvars.tcp_opt_len);
-    }
-
-    p->payload = pkt + p->tcpvars.hlen;
-    p->payload_len = len - p->tcpvars.hlen;
-
     p->proto = IPPROTO_TCP;
+
+    p->payload = pkt + hlen;
+    p->payload_len = len - hlen;
 
     return 0;
 }
@@ -162,17 +185,17 @@ void DecodeTCP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
 {
     SCPerfCounterIncr(dtv->counter_tcp, tv->sc_perf_pca);
 
-    if (DecodeTCPPacket(tv, p,pkt,len) < 0) {
+    if (unlikely(DecodeTCPPacket(tv, p,pkt,len) < 0)) {
+        SCLogDebug("invalid TCP packet");
         p->tcph = NULL;
         return;
     }
 
 #ifdef DEBUG
-    SCLogDebug("TCP sp: %" PRIu32 " -> dp: %" PRIu32 " - HLEN: %" PRIu32 " LEN: %" PRIu32 " %s%s%s%s",
-        GET_TCP_SRC_PORT(p), GET_TCP_DST_PORT(p), p->tcpvars.hlen, len,
-        p->tcpvars.sackok ? "SACKOK " : "",
-        p->tcpvars.ws ? "WS " : "",
-        p->tcpvars.ts ? "TS " : "",
+    SCLogDebug("TCP sp: %" PRIu32 " -> dp: %" PRIu32 " - HLEN: %" PRIu32 " LEN: %" PRIu32 " %s%s%s%s%s",
+        GET_TCP_SRC_PORT(p), GET_TCP_DST_PORT(p), TCP_GET_HLEN(p), len,
+        p->tcpvars.sackok ? "SACKOK " : "", p->tcpvars.sack ? "SACK " : "",
+        p->tcpvars.ws ? "WS " : "", p->tcpvars.ts ? "TS " : "",
         p->tcpvars.mss ? "MSS " : "");
 #endif
 
@@ -278,31 +301,34 @@ static int TCPGetWscaleTest01(void)
                                 0x8a, 0xaf, 0x00, 0x00, 0x02, 0x04, 0x05, 0xb4,
                                 0x04, 0x02, 0x08, 0x0a, 0x00, 0x62, 0x88, 0x28,
                                 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x02};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     IPV4Hdr ip4h;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ip4h, 0, sizeof(IPV4Hdr));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.ip4h = &ip4h;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->ip4h = &ip4h;
 
 
     FlowInitConfig(FLOW_QUIET);
-    DecodeTCP(&tv, &dtv, &p, raw_tcp, sizeof(raw_tcp), NULL);
+    DecodeTCP(&tv, &dtv, p, raw_tcp, sizeof(raw_tcp), NULL);
     FlowShutdown();
 
-    if (p.tcph == NULL) {
+    if (p->tcph == NULL) {
         printf("tcp packet decode failed: ");
         goto end;
     }
 
-    uint8_t wscale = TCP_GET_WSCALE(&p);
+    uint8_t wscale = TCP_GET_WSCALE(p);
     if (wscale != 2) {
         printf("wscale %"PRIu8", expected 2: ", wscale);
         goto end;
@@ -310,6 +336,7 @@ static int TCPGetWscaleTest01(void)
 
     retval = 1;
 end:
+    SCFree(p);
     return retval;
 }
 
@@ -322,30 +349,33 @@ static int TCPGetWscaleTest02(void)
                                 0x8a, 0xaf, 0x00, 0x00, 0x02, 0x04, 0x05, 0xb4,
                                 0x04, 0x02, 0x08, 0x0a, 0x00, 0x62, 0x88, 0x28,
                                 0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x0f};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     IPV4Hdr ip4h;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ip4h, 0, sizeof(IPV4Hdr));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.ip4h = &ip4h;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->ip4h = &ip4h;
 
     FlowInitConfig(FLOW_QUIET);
-    DecodeTCP(&tv, &dtv, &p, raw_tcp, sizeof(raw_tcp), NULL);
+    DecodeTCP(&tv, &dtv, p, raw_tcp, sizeof(raw_tcp), NULL);
     FlowShutdown();
 
-    if (p.tcph == NULL) {
+    if (p->tcph == NULL) {
         printf("tcp packet decode failed: ");
         goto end;
     }
 
-    uint8_t wscale = TCP_GET_WSCALE(&p);
+    uint8_t wscale = TCP_GET_WSCALE(p);
     if (wscale != 0) {
         printf("wscale %"PRIu8", expected 0: ", wscale);
         goto end;
@@ -353,6 +383,7 @@ static int TCPGetWscaleTest02(void)
 
     retval = 1;
 end:
+    SCFree(p);
     return retval;
 }
 
@@ -364,30 +395,33 @@ static int TCPGetWscaleTest03(void)
                                 0xdd, 0xa3, 0x6f, 0xf8, 0x80, 0x10, 0x05, 0xb4,
                                 0x7c, 0x70, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a,
                                 0x00, 0x62, 0x88, 0x9e, 0x00, 0x00, 0x00, 0x00};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     IPV4Hdr ip4h;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ip4h, 0, sizeof(IPV4Hdr));
 
-    p.src.family = AF_INET;
-    p.dst.family = AF_INET;
-    p.ip4h = &ip4h;
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->ip4h = &ip4h;
 
     FlowInitConfig(FLOW_QUIET);
-    DecodeTCP(&tv, &dtv, &p, raw_tcp, sizeof(raw_tcp), NULL);
+    DecodeTCP(&tv, &dtv, p, raw_tcp, sizeof(raw_tcp), NULL);
     FlowShutdown();
 
-    if (p.tcph == NULL) {
+    if (p->tcph == NULL) {
         printf("tcp packet decode failed: ");
         goto end;
     }
 
-    uint8_t wscale = TCP_GET_WSCALE(&p);
+    uint8_t wscale = TCP_GET_WSCALE(p);
     if (wscale != 0) {
         printf("wscale %"PRIu8", expected 0: ", wscale);
         goto end;
@@ -395,6 +429,73 @@ static int TCPGetWscaleTest03(void)
 
     retval = 1;
 end:
+    SCFree(p);
+    return retval;
+}
+
+static int TCPGetSackTest01(void)
+{
+    int retval = 0;
+    static uint8_t raw_tcp[] = {
+        0x00, 0x50, 0x06, 0xa6, 0xfa, 0x87, 0x0b, 0xf5,
+        0xf1, 0x59, 0x02, 0xe0, 0xa0, 0x10, 0x3e, 0xbc,
+        0x1d, 0xe7, 0x00, 0x00, 0x01, 0x01, 0x05, 0x12,
+        0xf1, 0x59, 0x13, 0xfc, 0xf1, 0x59, 0x1f, 0x64,
+        0xf1, 0x59, 0x08, 0x94, 0xf1, 0x59, 0x0e, 0x48 };
+    static uint8_t raw_tcp_sack[] = {
+        0xf1, 0x59, 0x13, 0xfc, 0xf1, 0x59, 0x1f, 0x64,
+        0xf1, 0x59, 0x08, 0x94, 0xf1, 0x59, 0x0e, 0x48 };
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
+    IPV4Hdr ip4h;
+    ThreadVars tv;
+    DecodeThreadVars dtv;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
+    memset(&dtv, 0, sizeof(DecodeThreadVars));
+    memset(&ip4h, 0, sizeof(IPV4Hdr));
+
+    p->src.family = AF_INET;
+    p->dst.family = AF_INET;
+    p->ip4h = &ip4h;
+
+    FlowInitConfig(FLOW_QUIET);
+    DecodeTCP(&tv, &dtv, p, raw_tcp, sizeof(raw_tcp), NULL);
+    FlowShutdown();
+
+    if (p->tcph == NULL) {
+        printf("tcp packet decode failed: ");
+        goto end;
+    }
+
+    if (p->tcpvars.sack == NULL) {
+        printf("tcp packet sack not decoded: ");
+        goto end;
+    }
+
+    int sack = TCP_GET_SACK_CNT(p);
+    if (sack != 2) {
+        printf("expected 2 sack records, got %u: ", TCP_GET_SACK_CNT(p));
+        goto end;
+    }
+
+    uint8_t *sackptr = TCP_GET_SACK_PTR(p);
+    if (sackptr == NULL) {
+        printf("no sack data: ");
+        goto end;
+    }
+
+    if (memcmp(sackptr, raw_tcp_sack, 16) != 0) {
+        printf("malformed sack data: ");
+        goto end;
+    }
+
+    retval = 1;
+end:
+    SCFree(p);
     return retval;
 }
 #endif /* UNITTESTS */
@@ -413,5 +514,9 @@ void DecodeTCPRegisterTests(void)
     UtRegisterTest("TCPGetWscaleTest01", TCPGetWscaleTest01, 1);
     UtRegisterTest("TCPGetWscaleTest02", TCPGetWscaleTest02, 1);
     UtRegisterTest("TCPGetWscaleTest03", TCPGetWscaleTest03, 1);
+    UtRegisterTest("TCPGetSackTest01", TCPGetSackTest01, 1);
 #endif /* UNITTESTS */
 }
+/**
+ * @}
+ */

@@ -11,3 +11,4 @@ AM_CFLAGS = -D_GNU_SOURCE -g -O2 -Wall -Wextra -std=gnu99 -pedantic
 lib_LTLIBRARIES= libhtp.la
 libhtp_la_SOURCES= $(h_sources) $(c_sources)
 libhtp_la_LDFLAGS= -version-info $(GENERIC_LIBRARY_VERSION) -release $(GENERIC_RELEASE)
+

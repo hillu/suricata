@@ -93,6 +93,9 @@ int DetectIcmpSeqMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
     uint16_t seqn;
     DetectIcmpSeqData *iseq = (DetectIcmpSeqData *)m->ctx;
 
+    if (PKT_IS_PSEUDOPKT(p))
+        return 0;
+
     if (PKT_IS_ICMPV4(p)) {
         SCLogDebug("ICMPV4_GET_SEQ(p) %"PRIu16" (network byte order), "
                 "%"PRIu16" (host byte order)", ICMPV4_GET_SEQ(p),
@@ -150,7 +153,6 @@ DetectIcmpSeqData *DetectIcmpSeqParse (char *icmpseqstr) {
     int ov[MAX_SUBSTRINGS];
     int i;
     const char *str_ptr;
-    uint16_t seq = 0;
 
     ret = pcre_exec(parse_regex, parse_regex_study, icmpseqstr, strlen(icmpseqstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1 || ret > 4) {
@@ -185,6 +187,7 @@ DetectIcmpSeqData *DetectIcmpSeqParse (char *icmpseqstr) {
         }
     }
 
+    uint16_t seq = 0;
     if (ByteExtractStringUint16(&seq, 10, 0, substr[1]) < 0) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "specified icmp seq %s is not "
                                         "valid", substr[1]);

@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Breno Silva <breno.silva@gmail.com>
@@ -50,7 +57,7 @@ void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
     SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
 
     if(len < VLAN_HEADER_LEN)    {
-        DECODER_SET_EVENT(p,VLAN_HEADER_TOO_SMALL);
+        ENGINE_SET_EVENT(p,VLAN_HEADER_TOO_SMALL);
         return;
     }
 
@@ -84,7 +91,7 @@ void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
             break;
         default:
             SCLogDebug("unknown VLAN type: %" PRIx32 "",GET_VLAN_PROTO(p->vlanh));
-            DECODER_SET_EVENT(p,VLAN_UNKNOWN_TYPE);
+            ENGINE_SET_EVENT(p,VLAN_UNKNOWN_TYPE);
             return;
     }
 
@@ -104,20 +111,25 @@ void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
  */
 static int DecodeVLANtest01 (void)   {
     uint8_t raw_vlan[] = { 0x00, 0x20, 0x08 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodeVLAN(&tv, &dtv, &p, raw_vlan, sizeof(raw_vlan), NULL);
+    DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
 
-    if(DECODER_ISSET_EVENT(&p,VLAN_HEADER_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,VLAN_HEADER_TOO_SMALL))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -136,21 +148,26 @@ static int DecodeVLANtest02 (void)   {
         0x4d, 0x3d, 0x5a, 0x61, 0x80, 0x10, 0x6b, 0x50,
         0x3c, 0x4c, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a,
         0x00, 0x04, 0xf0, 0xc8, 0x01, 0x99, 0xa3, 0xf3};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodeVLAN(&tv, &dtv, &p, raw_vlan, sizeof(raw_vlan), NULL);
+    DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
 
 
-    if(DECODER_ISSET_EVENT(&p,VLAN_UNKNOWN_TYPE))  {
+    if(ENGINE_ISSET_EVENT(p,VLAN_UNKNOWN_TYPE))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -169,32 +186,39 @@ static int DecodeVLANtest03 (void)   {
         0x4d, 0x3d, 0x5a, 0x61, 0x80, 0x10, 0x6b, 0x50,
         0x3c, 0x4c, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a,
         0x00, 0x04, 0xf0, 0xc8, 0x01, 0x99, 0xa3, 0xf3};
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodeVLAN(&tv, &dtv, &p, raw_vlan, sizeof(raw_vlan), NULL);
+    DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
 
     FlowShutdown();
 
-    if(p.vlanh == NULL) {
+    if(p->vlanh == NULL) {
+        SCFree(p);
         return 0;
     }
 
-    if(DECODER_ISSET_EVENT(&p,VLAN_HEADER_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,VLAN_HEADER_TOO_SMALL))  {
+        SCFree(p);
         return 0;
     }
 
-    if(DECODER_ISSET_EVENT(&p,VLAN_UNKNOWN_TYPE))  {
+    if(ENGINE_ISSET_EVENT(p,VLAN_UNKNOWN_TYPE))  {
+        SCFree(p);
         return 0;
     }
 
+    SCFree(p);
     return 1;
 }
 #endif /* UNITTESTS */
@@ -207,3 +231,6 @@ void DecodeVLANRegisterTests(void) {
 #endif /* UNITTESTS */
 }
 
+/**
+ * @}
+ */

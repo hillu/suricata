@@ -26,7 +26,7 @@
 #include "suricata-common.h"
 #include "flow.h"
 #include "conf.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 #include "util-error.h"
 #include "util-debug.h"
 #include "output.h"
@@ -57,7 +57,7 @@ OutputRegisterModule(char *name, char *conf_name,
     module->InitFunc = InitFunc;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
-    SCLogInfo("Output module \"%s\" registered.", name);
+    SCLogDebug("Output module \"%s\" registered.", name);
 }
 
 /**

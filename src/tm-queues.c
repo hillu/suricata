@@ -46,12 +46,10 @@ error:
 }
 
 Tmq* TmqCreateQueue(char *name) {
-    Tmq *q = NULL;
-
     if (tmq_id >= TMQ_MAX_QUEUES)
         goto error;
 
-    q = &tmqs[tmq_id];
+    Tmq *q = &tmqs[tmq_id];
     q->name = name;
     q->id = tmq_id++;
     /* for cuda purposes */

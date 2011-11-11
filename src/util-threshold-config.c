@@ -16,6 +16,11 @@
  */
 
 /**
+ * \ingroup threshold
+ * @{
+ */
+
+/**
  * \file
  *
  * \author Breno Silva Pinto <breno.silva@gmail.com>
@@ -28,6 +33,7 @@
 #include "suricata-common.h"
 #include "detect.h"
 #include "detect-engine.h"
+#include "detect-engine-address.h"
 #include "detect-threshold.h"
 #include "detect-parse.h"
 
@@ -41,21 +47,44 @@
 #include "util-debug.h"
 #include "util-fmemopen.h"
 
+typedef enum ThresholdRuleType {
+    THRESHOLD_TYPE_EVENT_FILTER,
+    THRESHOLD_TYPE_THRESHOLD,
+    THRESHOLD_TYPE_RATE,
+    THRESHOLD_TYPE_SUPPRESS,
+} ThresholdRuleType;
+
 /* File descriptor for unittests */
 
-#define DETECT_THRESHOLD_REGEX "^\\s*(event_filter|threshold)\\s*gen_id\\s*(\\d+)\\s*,\\s*sig_id\\s*(\\d+)\\s*,\\s*type\\s*(limit|both|threshold)\\s*,\\s*track\\s*(by_dst|by_src)\\s*,\\s*count\\s*(\\d+)\\s*,\\s*seconds\\s*(\\d+)\\s*$"
+/* common base for all options */
+#define DETECT_BASE_REGEX "^\\s*(event_filter|threshold|rate_filter|suppress)\\s*gen_id\\s*(\\d+)\\s*,\\s*sig_id\\s*(\\d+)\\s*(.*)\\s*$"
+
+#define DETECT_THRESHOLD_REGEX "^,\\s*type\\s*(limit|both|threshold)\\s*,\\s*track\\s*(by_dst|by_src)\\s*,\\s*count\\s*(\\d+)\\s*,\\s*seconds\\s*(\\d+)\\s*$"
 
 /* TODO: "apply_to" */
-#define DETECT_RATE_REGEX "^\\s*(rate_filter)\\s*gen_id\\s*(\\d+)\\s*,\\s*sig_id\\s*(\\d+)\\s*,\\s*track\\s*(by_dst|by_src|by_rule)\\s*,\\s*count\\s*(\\d+)\\s*,\\s*seconds\\s*(\\d+)\\s*,\\s*new_action\\s*(alert|drop|pass|log|sdrop|reject)\\s*,\\s*timeout\\s*(\\d+)\\s*$"
+#define DETECT_RATE_REGEX "^,\\s*track\\s*(by_dst|by_src|by_rule)\\s*,\\s*count\\s*(\\d+)\\s*,\\s*seconds\\s*(\\d+)\\s*,\\s*new_action\\s*(alert|drop|pass|log|sdrop|reject)\\s*,\\s*timeout\\s*(\\d+)\\s*$"
+
+/*
+ * suppress has two form:
+ *  suppress gen_id 0, sig_id 0, track by_dst, ip 10.88.0.14
+ *  suppress gen_id 1, sig_id 2000328
+*/
+#define DETECT_SUPPRESS_REGEX "^,\\s*track\\s*(by_dst|by_src)\\s*,\\s*ip\\s*([\\d.:/]+)*\\s*$"
 
 /* Default path for the threshold.config file */
 #define THRESHOLD_CONF_DEF_CONF_FILEPATH "threshold.config"
 
-static pcre *regex = NULL;
-static pcre_extra *regex_study = NULL;
+static pcre *regex_base = NULL;
+static pcre_extra *regex_base_study = NULL;
 
-static pcre *rate_regex = NULL;
-static pcre_extra *rate_regex_study = NULL;
+static pcre *regex_threshold = NULL;
+static pcre_extra *regex_threshold_study = NULL;
+
+static pcre *regex_rate = NULL;
+static pcre_extra *regex_rate_study = NULL;
+
+static pcre *regex_suppress = NULL;
+static pcre_extra *regex_suppress_study = NULL;
 
 /**
  * \brief Returns the path for the Threshold Config file.  We check if we
@@ -103,30 +132,54 @@ int SCThresholdConfInitContext(DetectEngineCtx *de_ctx, FILE *utfd)
     if (fd == NULL) {
         filename = SCThresholdConfGetConfFilename();
         if ( (fd = fopen(filename, "r")) == NULL) {
-            SCLogError(SC_ERR_FOPEN, "Error opening file: \"%s\": %s", filename, strerror(errno));
+            SCLogWarning(SC_ERR_FOPEN, "Error opening file: \"%s\": %s", filename, strerror(errno));
             goto error;
         }
     }
 
-    regex = pcre_compile(DETECT_THRESHOLD_REGEX, opts, &eb, &eo, NULL);
-    if (regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",DETECT_THRESHOLD_REGEX, eo, eb);
+    regex_base = pcre_compile(DETECT_BASE_REGEX, opts, &eb, &eo, NULL);
+    if (regex_base == NULL) {
+        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",DETECT_BASE_REGEX, eo, eb);
         goto error;
     }
 
-    regex_study = pcre_study(regex, 0, &eb);
+    regex_base_study = pcre_study(regex_base, 0, &eb);
     if (eb != NULL) {
         SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
     }
 
-    rate_regex = pcre_compile(DETECT_RATE_REGEX, opts, &eb, &eo, NULL);
-    if (regex == NULL) {
+    regex_threshold = pcre_compile(DETECT_THRESHOLD_REGEX, opts, &eb, &eo, NULL);
+    if (regex_threshold == NULL) {
+        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",DETECT_THRESHOLD_REGEX, eo, eb);
+        goto error;
+    }
+
+    regex_threshold_study = pcre_study(regex_threshold, 0, &eb);
+    if (eb != NULL) {
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
+        goto error;
+    }
+
+    regex_rate = pcre_compile(DETECT_RATE_REGEX, opts, &eb, &eo, NULL);
+    if (regex_rate == NULL) {
         SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",DETECT_RATE_REGEX, eo, eb);
         goto error;
     }
 
-    rate_regex_study = pcre_study(rate_regex, 0, &eb);
+    regex_rate_study = pcre_study(regex_rate, 0, &eb);
+    if (eb != NULL) {
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
+        goto error;
+    }
+
+    regex_suppress = pcre_compile(DETECT_SUPPRESS_REGEX, opts, &eb, &eo, NULL);
+    if (regex_suppress == NULL) {
+        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",DETECT_SUPPRESS_REGEX, eo, eb);
+        goto error;
+    }
+
+    regex_suppress_study = pcre_study(regex_suppress, 0, &eb);
     if (eb != NULL) {
         SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
         goto error;
@@ -168,6 +221,7 @@ void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
  */
 int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
 {
+    const char *th_rule_type = NULL;
     const char *th_gid = NULL;
     const char *th_sid = NULL;
     const char *th_type = NULL;
@@ -176,6 +230,8 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
     const char *th_seconds = NULL;
     const char *th_new_action= NULL;
     const char *th_timeout = NULL;
+    const char *th_ip = NULL;
+    const char *rule_extend = NULL;
 
     uint8_t parsed_type = 0;
     uint8_t parsed_track = 0;
@@ -193,152 +249,254 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
     int ret = 0;
     int ov[MAX_SUBSTRINGS];
     uint32_t id = 0, gid = 0;
+    ThresholdRuleType rule_type;
+    int fret = -1;
 
     if (de_ctx == NULL)
         return -1;
 
-    ret = pcre_exec(regex, regex_study, rawstr, strlen(rawstr), 0, 0, ov, 30);
-
-    if (ret < 8) {
-        /* Its not threshold/event_filter, so try rate_filter regexp */
-        ret = pcre_exec(rate_regex, rate_regex_study, rawstr, strlen(rawstr), 0, 0, ov, 30);
-        if (ret < 9) {
-            SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, rawstr);
-            goto error;
-        } else {
-        /* Start rate_filter parsing */
-            /* retrieve the classtype name */
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 2, &th_gid);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 3, &th_sid);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 4, &th_track);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 5, &th_count);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 6, &th_seconds);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 7, &th_new_action);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            ret = pcre_get_substring((char *)rawstr, ov, 30, 8, &th_timeout);
-            if (ret < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-
-            /* TODO: implement option "apply_to" */
-
-            if (ByteExtractStringUint32(&parsed_timeout, 10, strlen(th_timeout), th_timeout) <= 0) {
-                goto error;
-            }
-
-            /* Get the new action to take */
-            if (strcasecmp(th_new_action, "alert") == 0)
-                parsed_new_action = TH_ACTION_ALERT;
-            if (strcasecmp(th_new_action, "drop") == 0)
-                parsed_new_action = TH_ACTION_DROP;
-            if (strcasecmp(th_new_action, "pass") == 0)
-                parsed_new_action = TH_ACTION_PASS;
-            if (strcasecmp(th_new_action, "reject") == 0)
-                parsed_new_action = TH_ACTION_REJECT;
-            if (strcasecmp(th_new_action, "log") == 0) {
-                SCLogInfo("log action for rate_filter not supported yet");
-                parsed_new_action = TH_ACTION_LOG;
-            }
-            if (strcasecmp(th_new_action, "sdrop") == 0) {
-                SCLogInfo("sdrop action for rate_filter not supported yet");
-                parsed_new_action = TH_ACTION_SDROP;
-            }
-
-            parsed_type = TYPE_RATE;
-
-        } /* End rate_filter parsing */
-    } else {
-        /* Its a threshold/event_filter rule, Parse it */
-
-        /* retrieve the classtype name */
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 2, &th_gid);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 3, &th_sid);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 4, &th_type);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 5, &th_track);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 6, &th_count);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        ret = pcre_get_substring((char *)rawstr, ov, 30, 7, &th_seconds);
-        if (ret < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-
-        if (strcasecmp(th_type,"limit") == 0)
-            parsed_type = TYPE_LIMIT;
-        else if (strcasecmp(th_type,"both") == 0)
-            parsed_type = TYPE_BOTH;
-        else if (strcasecmp(th_type,"threshold") == 0)
-            parsed_type = TYPE_THRESHOLD;
-    } /* End of threshold/event_filter parsing */
-
-    /* This part is common to threshold/event_filter/rate_filter */
-    if (strcasecmp(th_track,"by_dst") == 0)
-        parsed_track = TRACK_DST;
-    else if (strcasecmp(th_track,"by_src") == 0)
-        parsed_track = TRACK_SRC;
-    else if (strcasecmp(th_track,"by_rule") == 0)
-        parsed_track = TRACK_RULE;
-
-    if (ByteExtractStringUint32(&parsed_count, 10, strlen(th_count), th_count) <= 0) {
+    ret = pcre_exec(regex_base, regex_base_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
+    if (ret < 4) {
+        SCLogError(SC_ERR_PCRE_MATCH, "pcre_exec parse error, ret %" PRId32 ", string %s", ret, rawstr);
         goto error;
     }
 
-    if (ByteExtractStringUint32(&parsed_seconds, 10, strlen(th_seconds), th_seconds) <= 0) {
+    /* retrieve the classtype name */
+    ret = pcre_get_substring((char *)rawstr, ov, 30, 1, &th_rule_type);
+    if (ret < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
+    }
+
+    /* retrieve the classtype name */
+    ret = pcre_get_substring((char *)rawstr, ov, 30, 2, &th_gid);
+    if (ret < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
+    }
+
+    ret = pcre_get_substring((char *)rawstr, ov, 30, 3, &th_sid);
+    if (ret < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
+    }
+
+    ret = pcre_get_substring((char *)rawstr, ov, 30, 4, &rule_extend);
+    if (ret < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
+    }
+
+    /* get type of rule */
+    if (strncasecmp(th_rule_type,"event_filter",strlen("event_filter")) == 0) {
+        rule_type = THRESHOLD_TYPE_EVENT_FILTER;
+    } else if (strncasecmp(th_rule_type,"threshold",strlen("threshold")) == 0) {
+        rule_type = THRESHOLD_TYPE_THRESHOLD;
+    } else if (strncasecmp(th_rule_type,"rate",strlen("rate")) == 0) {
+        rule_type = THRESHOLD_TYPE_RATE;
+    } else if (strncasecmp(th_rule_type,"suppress",strlen("suppress")) == 0) {
+        rule_type = THRESHOLD_TYPE_SUPPRESS;
+    } else {
+        SCLogError(SC_ERR_INVALID_VALUE, "rule type %s is unknown", th_rule_type);
+        goto error;
+    }
+
+    /* get end of rule */
+    switch(rule_type) {
+        case THRESHOLD_TYPE_EVENT_FILTER:
+        case THRESHOLD_TYPE_THRESHOLD:
+            if (strlen(rule_extend) > 0) {
+                ret = pcre_exec(regex_threshold, regex_threshold_study,
+                        rule_extend, strlen(rule_extend),
+                        0, 0, ov, MAX_SUBSTRINGS);
+                if (ret < 4) {
+                    SCLogError(SC_ERR_PCRE_MATCH,
+                            "pcre_exec parse error, ret %" PRId32 ", string %s",
+                            ret, rule_extend);
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 1, &th_type);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 2, &th_track);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 3, &th_count);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 4, &th_seconds);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                if (strcasecmp(th_type,"limit") == 0)
+                    parsed_type = TYPE_LIMIT;
+                else if (strcasecmp(th_type,"both") == 0)
+                    parsed_type = TYPE_BOTH;
+                else if (strcasecmp(th_type,"threshold") == 0)
+                    parsed_type = TYPE_THRESHOLD;
+                else {
+                    SCLogError(SC_ERR_INVALID_ARGUMENTS, "limit type not supported: %s", th_type);
+                    goto error;
+                }
+            } else {
+                SCLogError(SC_ERR_INVALID_ARGUMENTS, "rule invalid: %s", rawstr);
+                goto error;
+            }
+            break;
+        case THRESHOLD_TYPE_SUPPRESS:
+            if (strlen(rule_extend) > 0) {
+                ret = pcre_exec(regex_suppress, regex_suppress_study,
+                        rule_extend, strlen(rule_extend),
+                        0, 0, ov, MAX_SUBSTRINGS);
+                if (ret < 2) {
+                    SCLogError(SC_ERR_PCRE_MATCH,
+                            "pcre_exec parse error, ret %" PRId32 ", string %s",
+                            ret, rule_extend);
+                    goto error;
+                }
+                /* retrieve the track mode */
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 1, &th_track);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+                /* retrieve the IP */
+                ret = pcre_get_substring((char *)rule_extend, ov, 30, 2, &th_ip);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+            } else {
+                parsed_track = TRACK_RULE;
+            }
+            parsed_type = TYPE_SUPPRESS;
+            break;
+        case THRESHOLD_TYPE_RATE:
+            if (strlen(rule_extend) > 0) {
+                ret = pcre_exec(regex_rate, regex_rate_study,
+                        rule_extend, strlen(rule_extend),
+                        0, 0, ov, MAX_SUBSTRINGS);
+                if (ret < 5) {
+                    SCLogError(SC_ERR_PCRE_MATCH,
+                            "pcre_exec parse error, ret %" PRId32 ", string %s",
+                            ret, rule_extend);
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, MAX_SUBSTRINGS, 1, &th_track);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, MAX_SUBSTRINGS, 2, &th_count);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, MAX_SUBSTRINGS, 3, &th_seconds);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, MAX_SUBSTRINGS, 4, &th_new_action);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                ret = pcre_get_substring((char *)rule_extend, ov, MAX_SUBSTRINGS, 5, &th_timeout);
+                if (ret < 0) {
+                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+                    goto error;
+                }
+
+                /* TODO: implement option "apply_to" */
+
+                if (ByteExtractStringUint32(&parsed_timeout, 10, strlen(th_timeout), th_timeout) <= 0) {
+                    goto error;
+                }
+
+                /* Get the new action to take */
+                if (strcasecmp(th_new_action, "alert") == 0)
+                    parsed_new_action = TH_ACTION_ALERT;
+                if (strcasecmp(th_new_action, "drop") == 0)
+                    parsed_new_action = TH_ACTION_DROP;
+                if (strcasecmp(th_new_action, "pass") == 0)
+                    parsed_new_action = TH_ACTION_PASS;
+                if (strcasecmp(th_new_action, "reject") == 0)
+                    parsed_new_action = TH_ACTION_REJECT;
+                if (strcasecmp(th_new_action, "log") == 0) {
+                    SCLogInfo("log action for rate_filter not supported yet");
+                    parsed_new_action = TH_ACTION_LOG;
+                }
+                if (strcasecmp(th_new_action, "sdrop") == 0) {
+                    SCLogInfo("sdrop action for rate_filter not supported yet");
+                    parsed_new_action = TH_ACTION_SDROP;
+                }
+                parsed_type = TYPE_RATE;
+            } else {
+                SCLogError(SC_ERR_INVALID_ARGUMENTS, "rule invalid: %s", rawstr);
+                goto error;
+            }
+            break;
+        default:
+            SCLogError(SC_ERR_PCRE_MATCH, "unable to find rule type for string %s", rawstr);
+            goto error;
+    }
+
+    switch (rule_type) {
+        /* This part is common to threshold/event_filter/rate_filter */
+        case THRESHOLD_TYPE_EVENT_FILTER:
+        case THRESHOLD_TYPE_THRESHOLD:
+        case THRESHOLD_TYPE_RATE:
+            if (strcasecmp(th_track,"by_dst") == 0)
+                parsed_track = TRACK_DST;
+            else if (strcasecmp(th_track,"by_src") == 0)
+                parsed_track = TRACK_SRC;
+            else if (strcasecmp(th_track,"by_rule") == 0)
+                parsed_track = TRACK_RULE;
+            else {
+                SCLogError(SC_ERR_INVALID_VALUE, "Invalid track parameter %s in %s", th_track, rawstr);
+                goto error;
+            }
+
+            if (ByteExtractStringUint32(&parsed_count, 10, strlen(th_count), th_count) <= 0) {
+                goto error;
+            }
+
+            if (ByteExtractStringUint32(&parsed_seconds, 10, strlen(th_seconds), th_seconds) <= 0) {
+                goto error;
+            }
+
+           break;
+        case THRESHOLD_TYPE_SUPPRESS:
+            /* need to get IP if extension is provided */
+            if (th_track != NULL) {
+                if (strcasecmp(th_track,"by_dst") == 0)
+                    parsed_track = TRACK_DST;
+                else if (strcasecmp(th_track,"by_src") == 0)
+                    parsed_track = TRACK_SRC;
+                else {
+                    SCLogError(SC_ERR_INVALID_VALUE, "Invalid track parameter %s in %s", th_track, rule_extend);
+                    goto error;
+                }
+            }
+            break;
     }
 
     if (ByteExtractStringUint32(&id, 10, strlen(th_sid), th_sid) <= 0) {
@@ -349,20 +507,18 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
         goto error;
     }
 
-
     /* Install it */
     if (id == 0 && gid == 0) {
-
         for (s = de_ctx->sig_list; s != NULL;) {
 
             ns = s->next;
 
-            m = SigMatchGetLastSM(s->match, DETECT_THRESHOLD);
+            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
             if(m != NULL)
                 goto end;
 
-            m = SigMatchGetLastSM(s->match, DETECT_DETECTION_FILTER);
+            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
 
             if(m != NULL)
                 goto end;
@@ -379,6 +535,19 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
             de->seconds = parsed_seconds;
             de->new_action = parsed_new_action;
             de->timeout = parsed_timeout;
+            de->addr = NULL;
+
+            if ((parsed_type == TYPE_SUPPRESS) && (parsed_track != TRACK_RULE)) {
+                de->addr = DetectAddressInit();
+                if (de->addr == NULL) {
+                    SCLogError(SC_ERR_MEM_ALLOC, "Can't init DetectAddress");
+                    goto error;
+                }
+                if (DetectAddressParseString(de->addr, (char *)th_ip) < 0) {
+                    SCLogError(SC_ERR_INVALID_IP_NETBLOCK, "Can't add %s to address group", th_ip);
+                    goto error;
+                }
+            }
 
             sm = SigMatchAlloc();
             if (sm == NULL) {
@@ -407,19 +576,18 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
         }
 
     } else if (id == 0 && gid > 0)    {
-
         for (s = de_ctx->sig_list; s != NULL;) {
 
             ns = s->next;
 
             if(s->gid == gid)   {
 
-                m = SigMatchGetLastSM(s->match, DETECT_THRESHOLD);
+                m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
                 if(m != NULL)
                     goto end;
 
-                m = SigMatchGetLastSM(s->match, DETECT_DETECTION_FILTER);
+                m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
 
                 if(m != NULL)
                     goto end;
@@ -436,6 +604,19 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
                 de->seconds = parsed_seconds;
                 de->new_action = parsed_new_action;
                 de->timeout = parsed_timeout;
+                de->addr = NULL;
+
+                if ((parsed_type == TYPE_SUPPRESS) && (parsed_track != TRACK_RULE)) {
+                    de->addr = DetectAddressInit();
+                    if (de->addr == NULL) {
+                        SCLogError(SC_ERR_MEM_ALLOC, "Can't init DetectAddress");
+                        goto error;
+                    }
+                    if (DetectAddressParseString(de->addr, (char *)th_ip) < 0) {
+                        SCLogError(SC_ERR_INVALID_IP_NETBLOCK, "Can't add %s to address group", th_ip);
+                        goto error;
+                    }
+                }
 
                 sm = SigMatchAlloc();
                 if (sm == NULL) {
@@ -467,13 +648,17 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
         sig = SigFindSignatureBySidGid(de_ctx,id,gid);
 
         if(sig != NULL) {
+            if ((parsed_type == TYPE_SUPPRESS) && (parsed_track == TRACK_RULE)) {
+                sig->flags |= SIG_FLAG_NOALERT;
+                goto end;
+            }
 
-            m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+            m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
             if(m != NULL)
                 goto end;
 
-            m = SigMatchGetLastSM(sig->match, DETECT_DETECTION_FILTER);
+            m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
 
             if(m != NULL)
                 goto end;
@@ -490,6 +675,19 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
             de->seconds = parsed_seconds;
             de->new_action = parsed_new_action;
             de->timeout = parsed_timeout;
+            de->addr = NULL;
+
+            if ((parsed_type == TYPE_SUPPRESS) && (parsed_track != TRACK_RULE)) {
+                de->addr = DetectAddressInit();
+                if (de->addr == NULL) {
+                    SCLogError(SC_ERR_MEM_ALLOC, "Can't init DetectAddress");
+                    goto error;
+                }
+                if (DetectAddressParseString(de->addr, (char *)th_ip) < 0) {
+                    SCLogError(SC_ERR_INVALID_IP_NETBLOCK, "Can't add %s to address group", th_ip);
+                    goto error;
+                }
+            }
 
             sm = SigMatchAlloc();
             if (sm == NULL) {
@@ -520,24 +718,24 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
     }
 
 end:
-    if(th_sid != NULL) SCFree((char *)th_sid);
-    if(th_gid != NULL) SCFree((char *)th_gid);
-    if(th_track != NULL) SCFree((char *)th_track);
-    if(th_count != NULL) SCFree((char *)th_count);
-    if(th_seconds != NULL) SCFree((char *)th_seconds);
-    if(th_type != NULL) SCFree((char *)th_type);
-
-    return 0;
-
+    fret = 0;
 error:
-    if(de != NULL) SCFree(de);
+    if (fret == -1) {
+        if (de != NULL) {
+            if (de->addr != NULL) DetectAddressFree(de->addr);
+            SCFree(de);
+        }
+    }
+    if(th_rule_type != NULL) SCFree((char *)th_rule_type);
     if(th_sid != NULL) SCFree((char *)th_sid);
     if(th_gid != NULL) SCFree((char *)th_gid);
     if(th_track != NULL) SCFree((char *)th_track);
     if(th_count != NULL) SCFree((char *)th_count);
     if(th_seconds != NULL) SCFree((char *)th_seconds);
     if(th_type != NULL) SCFree((char *)th_type);
-    return -1;
+    if(th_ip != NULL) SCFree((char *)th_ip);
+    if(rule_extend != NULL) SCFree((char *)rule_extend);
+    return fret;
 }
 
 /**
@@ -608,7 +806,7 @@ int SCThresholdConfLineIsMultiline(char *line)
 int SCThresholdConfLineLength(FILE *fd) {
     long pos = ftell(fd);
     int len = 0;
-    int c;
+    char c;
 
     while ( (c = fgetc(fd)) && c != '\n' && !feof(fd))
         len++;
@@ -630,7 +828,6 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
 {
     char *line = NULL;
     int len = 0;
-    int c;
     int rule_num = 0;
 
     /* position of "\", on multiline rules */
@@ -657,7 +854,7 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
                 break;
 
             /* Skip EOL to inspect the next line (or read EOF) */
-            c = fgetc(fd);
+            (void)fgetc(fd);
 
             if (SCThresholdConfIsLineBlankOrComment(line)) {
                 continue;
@@ -671,11 +868,13 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
             }
         } else {
             /* Skip EOL to inspect the next line (or read EOF) */
-            c = fgetc(fd);
+            (void)fgetc(fd);
             if (feof(fd))
                 break;
         }
     }
+
+    SCLogInfo("Threshold config parsed: %d rule(s) found", rule_num);
 
     /* Free the last line */
     SCFree(line);
@@ -887,6 +1086,25 @@ FILE *SCThresholdConfGenerateValidDummyFD10()
 }
 
 /**
+ * \brief Creates a dummy threshold file, with all valid options, for testing purposes.
+ *
+ * \retval fd Pointer to file descriptor.
+ */
+FILE *SCThresholdConfGenerateValidDummyFD11()
+{
+    FILE *fd = NULL;
+    const char *buffer =
+        "suppress gen_id 1, sig_id 10000\n"
+        "suppress gen_id 1, sig_id 1000, track by_src, ip 192.168.1.1\n";
+
+    fd = SCFmemopen((void *)buffer, strlen(buffer), "r");
+    if (fd == NULL)
+        SCLogDebug("Error with SCFmemopen() called by Threshold Config test code");
+
+    return fd;
+}
+
+/**
  * \test Check if the threshold file is loaded and well parsed
  *
  *  \retval 1 on succces
@@ -914,7 +1132,7 @@ int SCThresholdConfTest01(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -958,7 +1176,7 @@ int SCThresholdConfTest02(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1001,7 +1219,7 @@ int SCThresholdConfTest03(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1044,7 +1262,7 @@ int SCThresholdConfTest04(void)
     fd = SCThresholdConfGenerateInValidDummyFD02();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1105,7 +1323,7 @@ int SCThresholdConfTest05(void)
 
         if(s->id == 1 || s->id == 10 || s->id == 100) {
 
-            m = SigMatchGetLastSM(s->match, DETECT_THRESHOLD);
+            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
             if(m == NULL)   {
                 goto end;
@@ -1158,7 +1376,7 @@ int SCThresholdConfTest06(void)
     fd = SCThresholdConfGenerateValidDummyFD04();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_THRESHOLD);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1202,7 +1420,7 @@ int SCThresholdConfTest07(void)
     fd = SCThresholdConfGenerateValidDummyFD05();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_DETECTION_FILTER);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1247,7 +1465,7 @@ int SCThresholdConfTest08(void)
     fd = SCThresholdConfGenerateValidDummyFD06();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->match, DETECT_DETECTION_FILTER);
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1684,6 +1902,112 @@ end:
     return result;
 }
 
+/**
+ * \test Check if the threshold file is loaded and well parsed
+ *
+ *  \retval 1 on succces
+ *  \retval 0 on failure
+ */
+int SCThresholdConfTest13(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    DetectThresholdData *de = NULL;
+    Signature *sig = NULL;
+    SigMatch *m = NULL;
+    int result = 0;
+    FILE *fd = NULL;
+
+    if (de_ctx == NULL)
+        return result;
+
+    de_ctx->flags |= DE_QUIET;
+
+    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
+    if (sig == NULL) {
+        goto end;
+    }
+
+    fd = SCThresholdConfGenerateValidDummyFD11();
+    SCThresholdConfInitContext(de_ctx,fd);
+
+    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+
+    if(m != NULL)   {
+        de = (DetectThresholdData *)m->ctx;
+        if(de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC))
+            result = 1;
+
+    }
+end:
+    SigGroupBuild(de_ctx);
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test Check if the suppress rules work
+ *
+ *  \retval 1 on succces
+ *  \retval 0 on failure
+ */
+int SCThresholdConfTest14(void)
+{
+    Signature *sig = NULL;
+    int result = 0;
+    FILE *fd = NULL;
+
+    Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
+                                    "192.168.0.100", 1234, 24);
+    Packet *p1 = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.1.1",
+                                    "192.168.0.100", 1234, 24);
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+
+    struct timeval ts;
+
+    memset (&ts, 0, sizeof(struct timeval));
+    TimeGet(&ts);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL || p == NULL)
+        return result;
+
+    de_ctx->flags |= DE_QUIET;
+
+    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test\"; gid:1; sid:10000;)");
+    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test 2\"; gid:1; sid:10;)");
+    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test 3\"; gid:1; sid:1000;)");
+    if (sig == NULL) {
+        goto end;
+    }
+
+    fd = SCThresholdConfGenerateValidDummyFD11();
+    SCThresholdConfInitContext(de_ctx,fd);
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    if ((PacketAlertCheck(p, 10000) == 0) && (PacketAlertCheck(p, 10) == 1) &&
+        (PacketAlertCheck(p, 1000) == 1) && (PacketAlertCheck(p1, 1000) == 0))
+        result = 1;
+
+end:
+    UTHFreePacket(p);
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 /**
@@ -1704,6 +2028,11 @@ void SCThresholdConfRegisterTests(void)
     UtRegisterTest("SCThresholdConfTest10 - rate_filter", SCThresholdConfTest10, 1);
     UtRegisterTest("SCThresholdConfTest11 - event_filter", SCThresholdConfTest11, 1);
     UtRegisterTest("SCThresholdConfTest12 - event_filter", SCThresholdConfTest12, 1);
+    UtRegisterTest("SCThresholdConfTest13", SCThresholdConfTest13, 1);
+    UtRegisterTest("SCThresholdConfTest14 - suppress", SCThresholdConfTest14, 1);
 #endif /* UNITTESTS */
 }
 
+/**
+ * @}
+ */
