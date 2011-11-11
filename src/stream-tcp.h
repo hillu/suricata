@@ -41,15 +41,55 @@
 
 /*global flow data*/
 typedef struct TcpStreamCnf_ {
-    uint32_t memcap; /** max stream mem usage */
+    /** stream tracking
+     *
+     * max stream mem usage
+     */
+    uint64_t memcap;
+    uint64_t reassembly_memcap; /**< max memory usage for stream reassembly */
+
     uint32_t max_sessions;
     uint32_t prealloc_sessions;
     int midstream;
     int async_oneside;
-    uint32_t reassembly_memcap; /**< max memory usage for stream reassembly */
     uint32_t reassembly_depth;  /**< Depth until when we reassemble the stream */
+
+    uint16_t reassembly_toserver_chunk_size;
+    uint16_t reassembly_toclient_chunk_size;
+
+    /** reassembly -- inline mode
+     *
+     *  sliding window size for raw stream reassembly
+     */
+    uint32_t reassembly_inline_window;
     uint8_t flags;
 } TcpStreamCnf;
+
+typedef struct StreamTcpThread_ {
+    uint64_t pkts;
+
+    /** queue for pseudo packet(s) that were created in the stream
+     *  process and need further handling. Currently only used when
+     *  receiving (valid) RST packets */
+    PacketQueue pseudo_queue;
+
+    uint16_t counter_tcp_sessions;
+    /** sessions not picked up because memcap was reached */
+    uint16_t counter_tcp_ssn_memcap;
+    /** pseudo packets processed */
+    uint16_t counter_tcp_pseudo;
+    /** packets rejected because their csum is invalid */
+    uint16_t counter_tcp_invalid_checksum;
+    /** TCP packets with no associated flow */
+    uint16_t counter_tcp_no_flow;
+    /** sessions reused */
+    uint16_t counter_tcp_reused_ssn;
+    /** sessions reused */
+    uint16_t counter_tcp_memuse;
+
+    /** tcp reassembly thread data */
+    TcpReassemblyThreadCtx *ra_ctx;
+} StreamTcpThread;
 
 TcpStreamCnf stream_config;
 void TmModuleStreamTcpRegister (void);
@@ -59,10 +99,18 @@ void StreamTcpRegisterTests (void);
 
 void StreamTcpSessionPktFree (Packet *);
 
-void StreamTcpIncrMemuse(uint32_t);
-void StreamTcpDecrMemuse(uint32_t);
-int StreamTcpCheckMemcap(uint32_t);
+void StreamTcpIncrMemuse(uint64_t);
+void StreamTcpDecrMemuse(uint64_t);
+int StreamTcpCheckMemcap(uint64_t);
 
+void StreamTcpPseudoPacketSetupHeader(Packet *, Packet *);
+Packet *StreamTcpPseudoSetup(Packet *, uint8_t *, uint32_t);
+
+void StreamTcpSetEvent(Packet *p, uint8_t e);
+
+int StreamTcpSegmentForEach(Packet *p, uint8_t flag,
+                        StreamSegmentCallback CallbackFunc,
+                        void *data);
 
 /** ------- Inline functions: ------ */
 
@@ -109,6 +157,21 @@ static inline void StreamTcpPacketSwitchDir(TcpSession *ssn, Packet *p)
     }
 }
 
+static inline int StreamHasUnprocessedSegments(TcpSession *ssn, int direction)
+{
+    /* server tcp state */
+    if (direction) {
+        return (ssn->server.seg_list == NULL ||
+                (ssn->server.seg_list_tail->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
+                 ssn->server.seg_list_tail->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED &&
+                 ssn->toclient_smsg_head == NULL)) ? 0 : 1;
+    } else {
+        return (ssn->client.seg_list == NULL ||
+                (ssn->client.seg_list_tail->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
+                 ssn->client.seg_list_tail->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED &&
+                 ssn->toserver_smsg_head == NULL)) ? 0 : 1;
+    }
+}
 
 #endif /* __STREAM_TCP_H__ */
 

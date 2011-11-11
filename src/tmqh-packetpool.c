@@ -37,6 +37,8 @@
 #include "threadvars.h"
 #include "flow.h"
 
+#include "stream.h"
+
 #include "tm-queuehandlers.h"
 
 #include "pkt-var.h"
@@ -46,6 +48,7 @@
 #include "util-ringbuffer.h"
 #include "util-debug.h"
 #include "util-error.h"
+#include "util-profiling.h"
 
 static RingBuffer16 *ringbuffer = NULL;
 /**
@@ -61,6 +64,12 @@ void TmqhPacketpoolRegister (void) {
     if (ringbuffer == NULL) {
         SCLogError(SC_ERR_FATAL, "Error registering Packet pool handler (at ring buffer init)");
         exit(EXIT_FAILURE);
+    }
+}
+
+void TmqhPacketpoolDestroy (void) {
+    if (ringbuffer != NULL) {
+       RingBufferDestroy(ringbuffer);
     }
 }
 
@@ -115,36 +124,47 @@ Packet *TmqhInputPacketpool(ThreadVars *t)
 
 void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 {
-    SCEnter();
+    int proot = 0;
 
+    SCEnter();
     SCLogDebug("Packet %p, p->root %p, alloced %s", p, p->root, p->flags & PKT_ALLOC ? "true" : "false");
 
-    char proot = 0;
+    /* final alerts cleanup... return smsgs to pool if needed */
+    if (p->alerts.alert_msgs != NULL) {
+        StreamMsgReturnListToPool(p->alerts.alert_msgs);
+        p->alerts.alert_msgs = NULL;
+    }
 
     if (IS_TUNNEL_PKT(p)) {
         SCLogDebug("Packet %p is a tunnel packet: %s",
             p,p->root ? "upper layer" : "tunnel root");
 
-        /* get a lock */
-        SCMutex *m = p->root ? &p->root->mutex_rtv_cnt : &p->mutex_rtv_cnt;
+        /* get a lock to access root packet fields */
+        SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
         SCMutexLock(m);
 
         if (IS_TUNNEL_ROOT_PKT(p)) {
             SCLogDebug("IS_TUNNEL_ROOT_PKT == TRUE");
             if (TUNNEL_PKT_TPR(p) == 0) {
-                SCLogDebug("TUNNEL_PKT_TPR(p) == 0, no more tunnel packet depending on this root");
+                SCLogDebug("TUNNEL_PKT_TPR(p) == 0, no more tunnel packet "
+                        "depending on this root");
                 /* if this packet is the root and there are no
-                 * more tunnel packets, enqueue it */
+                 * more tunnel packets, return it to the pool */
 
                 /* fall through */
             } else {
-                SCLogDebug("tunnel root Packet %p: TUNNEL_PKT_TPR(p) > 0, packets are still depending on this root, setting p->tunnel_verdicted == 1", p);
+                SCLogDebug("tunnel root Packet %p: TUNNEL_PKT_TPR(p) > 0, so "
+                        "packets are still depending on this root, setting "
+                        "p->tunnel_verdicted == 1", p);
                 /* if this is the root and there are more tunnel
-                 * packets, don't add this. It's still referenced
-                 * by the tunnel packets, and we will enqueue it
+                 * packets, return this to the pool. It's still referenced
+                 * by the tunnel packets, and we will return it
                  * when we handle them */
-                p->tunnel_verdicted = 1;
+                SET_TUNNEL_PKT_VERDICTED(p);
+
                 SCMutexUnlock(m);
+
+                PACKET_PROFILING_END(p);
                 SCReturn;
             }
         } else {
@@ -155,7 +175,7 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
              * p->root == NULL. So when we are here p->root can only be
              * non-NULL, right? CLANG thinks differently. May be a FP, but
              * better safe than sorry. VJ */
-            if (p->root != NULL && p->root->tunnel_verdicted == 1 &&
+            if (p->root != NULL && IS_TUNNEL_PKT_VERDICTED(p->root) &&
                     TUNNEL_PKT_TPR(p) == 1)
             {
                 SCLogDebug("p->root->tunnel_verdicted == 1 && TUNNEL_PKT_TPR(p) == 1");
@@ -164,20 +184,24 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
                 TUNNEL_DECR_PKT_TPR_NOLOCK(p);
 
                 /* handle the root */
-                SCLogDebug("calling PacketEnqueue for root pkt, p->root %p (tunnel packet %p)", p->root, p);
+                SCLogDebug("setting proot = 1 for root pkt, p->root %p "
+                        "(tunnel packet %p)", p->root, p);
                 proot = 1;
 
                 /* fall through */
             } else {
                 /* root not ready yet, so get rid of the tunnel pkt only */
 
-                SCLogDebug("NOT p->root->tunnel_verdicted == 1 && TUNNEL_PKT_TPR(p) == 1 (%" PRIu32 ")", TUNNEL_PKT_TPR(p));
+                SCLogDebug("NOT p->root->tunnel_verdicted == 1 && "
+                        "TUNNEL_PKT_TPR(p) == 1 (%" PRIu32 ")", TUNNEL_PKT_TPR(p));
+
                 TUNNEL_DECR_PKT_TPR_NOLOCK(p);
 
                  /* fall through */
             }
         }
         SCMutexUnlock(m);
+
         SCLogDebug("tunnel stuff done, move on (proot %d)", proot);
     }
 
@@ -186,6 +210,13 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
     /* we're done with the tunnel root now as well */
     if (proot == 1) {
         SCLogDebug("getting rid of root pkt... alloc'd %s", p->root->flags & PKT_ALLOC ? "true" : "false");
+
+        FlowDecrUsecnt(p->root->flow);
+        /* if p->root uses extended data, free them */
+        if (p->root->ext_pkt) {
+            SCFree(p->root->ext_pkt);
+            p->root->ext_pkt = NULL;
+        }
         if (p->root->flags & PKT_ALLOC) {
             PACKET_CLEANUP(p->root);
             SCFree(p->root);
@@ -195,6 +226,14 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
             RingBufferMrMwPut(ringbuffer, (void *)p->root);
         }
     }
+
+    /* if p uses extended data, free them */
+    if (p->ext_pkt) {
+        SCFree(p->ext_pkt);
+        p->ext_pkt = NULL;
+    }
+
+    PACKET_PROFILING_END(p);
 
     SCLogDebug("getting rid of tunnel pkt... alloc'd %s (root %p)", p->flags & PKT_ALLOC ? "true" : "false", p->root);
     if (p->flags & PKT_ALLOC) {

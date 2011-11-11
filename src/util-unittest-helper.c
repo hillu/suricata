@@ -42,6 +42,19 @@
 #include "util-unittest-helper.h"
 
 /**
+ *  \brief return the uint32_t for a ipv4 address string
+ *
+ *  \param str Valid ipaddress in string form (e.g. 1.2.3.4)
+ *
+ *  \retval uint the uin32_t representation
+ */
+uint32_t UTHSetIPv4Address(char *str) {
+    struct in_addr in;
+    inet_pton(AF_INET, str, &in);
+    return (uint32_t)in.s_addr;
+}
+
+/**
  * \brief UTHBuildPacketReal is a function that create tcp/udp packets for unittests
  * specifying ip and port sources and destinations (IPV6)
  *
@@ -60,10 +73,11 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
                            uint16_t sport, uint16_t dport) {
     uint32_t in[4];
 
-    Packet *p = SCMalloc(sizeof(Packet));
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (p == NULL)
         return NULL;
-    memset(p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
 
     TimeSet(&p->ts);
 
@@ -73,6 +87,13 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
     p->payload_len = payload_len;
     p->proto = ipproto;
 
+    p->ip6h = SCMalloc(sizeof(IPV6Hdr));
+    if (p->ip6h == NULL)
+        goto error;
+    memset(p->ip6h, 0, sizeof(IPV6Hdr));
+    p->ip6h->s_ip6_nxt = ipproto;
+    p->ip6h->s_ip6_plen = htons(payload_len + sizeof(TCPHdr));
+
     if (inet_pton(AF_INET6, src, &in) <= 0)
         goto error;
     p->src.addr_data32[0] = in[0];
@@ -80,6 +101,10 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
     p->src.addr_data32[2] = in[2];
     p->src.addr_data32[3] = in[3];
     p->sp = sport;
+    p->ip6h->ip6_src[0] = in[0];
+    p->ip6h->ip6_src[1] = in[1];
+    p->ip6h->ip6_src[2] = in[2];
+    p->ip6h->ip6_src[3] = in[3];
 
     if (inet_pton(AF_INET6, dst, &in) <= 0)
         goto error;
@@ -88,21 +113,19 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
     p->dst.addr_data32[2] = in[2];
     p->dst.addr_data32[3] = in[3];
     p->dp = dport;
-
-    p->ip6h = SCMalloc(sizeof(IPV6Hdr));
-    if (p->ip6h == NULL)
-        goto error;
-    memset(p->ip6h, 0, sizeof(IPV6Hdr));
-    p->ip6h->s_ip6_nxt = ipproto;
+    p->ip6h->ip6_dst[0] = in[0];
+    p->ip6h->ip6_dst[1] = in[1];
+    p->ip6h->ip6_dst[2] = in[2];
+    p->ip6h->ip6_dst[3] = in[3];
 
     p->tcph = SCMalloc(sizeof(TCPHdr));
     if (p->tcph == NULL)
         goto error;
     memset(p->tcph, 0, sizeof(TCPHdr));
-    p->tcph->th_sport = sport;
-    p->tcph->th_dport = dport;
+    p->tcph->th_sport = htons(sport);
+    p->tcph->th_dport = htons(dport);
 
-    p->pktlen = sizeof(IPV6Hdr) + sizeof(TCPHdr) + payload_len;
+    SET_PKT_LEN(p, sizeof(IPV6Hdr) + sizeof(TCPHdr) + payload_len);
     return p;
 
 error:
@@ -113,7 +136,6 @@ error:
         if (p->tcph != NULL) {
             SCFree(p->tcph);
         }
-
         SCFree(p);
     }
     return NULL;
@@ -138,10 +160,11 @@ Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
                            uint16_t sport, uint16_t dport) {
     struct in_addr in;
 
-    Packet *p = SCMalloc(sizeof(Packet));
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (p == NULL)
         return NULL;
-    memset(p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = ((uint8_t *)p) + sizeof(*p);
 
     struct timeval tv;
     TimeGet(&tv);
@@ -163,65 +186,56 @@ Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
     p->dst.addr_data32[0] = in.s_addr;
     p->dp = dport;
 
-    p->ip4h = SCMalloc(sizeof(IPV4Hdr));
+    p->ip4h = (IPV4Hdr *)GET_PKT_DATA(p);
     if (p->ip4h == NULL)
         goto error;
-    memset(p->ip4h, 0, sizeof(IPV4Hdr));
 
     p->ip4h->ip_src.s_addr = p->src.addr_data32[0];
     p->ip4h->ip_dst.s_addr = p->dst.addr_data32[0];
     p->ip4h->ip_proto = ipproto;
+    p->ip4h->ip_verhl = sizeof(IPV4Hdr);
     p->proto = ipproto;
 
+    int hdr_offset = sizeof(IPV4Hdr);
     switch (ipproto) {
         case IPPROTO_UDP:
-            p->udph = SCMalloc(sizeof(UDPHdr));
+            p->udph = (UDPHdr *)(GET_PKT_DATA(p) + sizeof(IPV4Hdr));
             if (p->udph == NULL)
                 goto error;
-            memset(p->udph, 0, sizeof(UDPHdr));
+
             p->udph->uh_sport = sport;
             p->udph->uh_dport = dport;
-            p->pktlen = sizeof(IPV4Hdr) + sizeof(UDPHdr) + payload_len;
+            hdr_offset += sizeof(UDPHdr);
             break;
         case IPPROTO_TCP:
-            p->tcph = SCMalloc(sizeof(TCPHdr));
+            p->tcph = (TCPHdr *)(GET_PKT_DATA(p) + sizeof(IPV4Hdr));
             if (p->tcph == NULL)
                 goto error;
-            memset(p->tcph, 0, sizeof(TCPHdr));
-            p->tcph->th_sport = sport;
-            p->tcph->th_dport = dport;
-            p->pktlen = sizeof(IPV4Hdr) + sizeof(TCPHdr) + payload_len;
+
+            p->tcph->th_sport = htons(sport);
+            p->tcph->th_dport = htons(dport);
+            hdr_offset += sizeof(TCPHdr);
             break;
         case IPPROTO_ICMP:
-            p->icmpv4h = SCMalloc(sizeof(ICMPV4Hdr));
+            p->icmpv4h = (ICMPV4Hdr *)(GET_PKT_DATA(p) + sizeof(IPV4Hdr));
             if (p->icmpv4h == NULL)
                 goto error;
-            memset(p->icmpv4h, 0, sizeof(ICMPV4Hdr));
-            p->pktlen = sizeof(IPV4Hdr) + sizeof(ICMPV4Hdr) + payload_len;
+
+            hdr_offset += sizeof(ICMPV4Hdr);
             break;
         default:
             break;
         /* TODO: Add more protocols */
     }
+
+    PacketCopyDataOffset(p, hdr_offset, payload, payload_len);
+    SET_PKT_LEN(p, hdr_offset + payload_len);
+    p->payload = GET_PKT_DATA(p)+hdr_offset;
+
     return p;
 
 error:
-    if (p != NULL) {
-        if (p->ip4h != NULL) {
-            SCFree(p->ip4h);
-        }
-        if (p->tcph != NULL) {
-            SCFree(p->tcph);
-        }
-        if (p->udph != NULL) {
-            SCFree(p->udph);
-        }
-        if (p->icmpv4h != NULL) {
-            SCFree(p->icmpv4h);
-        }
-
-        SCFree(p);
-    }
+    SCFree(p);
     return NULL;
 }
 
@@ -271,12 +285,13 @@ Packet **UTHBuildPacketArrayFromEth(uint8_t *raw_eth[], int *pktsize, int numpkt
 
     int i = 0;
     for (; i < numpkts; i++) {
-        p[i] = SCMalloc(sizeof(Packet));
+        p[i] = SCMalloc(SIZE_OF_PACKET);
         if (p[i] == NULL) {
             SCFree(p);
             return NULL;
         }
-        memset(p[i], 0, sizeof(Packet));
+        memset(p[i], 0, SIZE_OF_PACKET);
+        p[i]->pkt = (uint8_t *)(p[i] + 1);
         DecodeEthernet(&th_v, &dtv, p[i], raw_eth[i], pktsize[i], NULL);
     }
     return p;
@@ -294,10 +309,11 @@ Packet **UTHBuildPacketArrayFromEth(uint8_t *raw_eth[], int *pktsize, int numpkt
 Packet *UTHBuildPacketFromEth(uint8_t *raw_eth, uint16_t pktsize) {
     DecodeThreadVars dtv;
     ThreadVars th_v;
-    Packet *p = SCMalloc(sizeof(Packet));
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (p == NULL)
         return NULL;
-    memset(p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(th_v));
 
@@ -381,7 +397,7 @@ void UTHFreePackets(Packet **p, int numpkts) {
 void UTHFreePacket(Packet *p) {
     if (p == NULL)
         return;
-
+#if 0 // VJ we now use one buffer
     switch (p->proto) {
         case IPPROTO_UDP:
             if (p->udph != NULL)
@@ -401,6 +417,7 @@ void UTHFreePacket(Packet *p) {
         break;
         /* TODO: Add more protocols */
     }
+#endif
     SCFree(p);
 }
 
@@ -430,14 +447,12 @@ void UTHFreePacket(Packet *p) {
 int UTHGenericTest(Packet **pkt, int numpkts, char *sigs[], uint32_t sids[], uint32_t *results, int numsigs) {
 
     int result = 0;
-    DetectEngineCtx *de_ctx = NULL;
-
     if (pkt == NULL || sigs == NULL || numpkts == 0
         || sids == NULL || results == NULL || numsigs == 0) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "Arguments invalid, that the pointer/arrays are not NULL, and the number of signatures and packets is > 0");
         goto end;
     }
-    de_ctx = DetectEngineCtxInit();
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -471,17 +486,22 @@ end:
  * \retval int 1 if the match of all the sids is the specified has the
  *             specified results; 0 if not
  */
-int UTHCheckPacketMatchResults(Packet *p, uint32_t sids[], uint32_t results[], int numsids) {
+int UTHCheckPacketMatchResults(Packet *p, uint32_t sids[],
+        uint32_t results[], int numsids)
+{
     if (p == NULL || sids == NULL) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT, "Arguments invalid, check if the packet is NULL, and if the array contain sids is set");
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "Arguments invalid, check if the "
+                "packet is NULL, and if the array contain sids is set");
         return 0;
     }
+
     int i = 0;
     int res = 1;
     for (; i < numsids; i++) {
         uint16_t r = PacketAlertCheck(p, sids[i]);
         if (r != results[i]) {
-            SCLogInfo("Sid %"PRIu32" matched %"PRIu16" times, and not %"PRIu16" as expected", sids[i], r, results[i]);
+            SCLogInfo("Sid %"PRIu32" matched %"PRIu16" times, and not %"PRIu16
+                    " as expected", sids[i], r, results[i]);
             res = 0;
         } else {
             SCLogInfo("Sid %"PRIu32" matched %"PRIu16" times, as expected", sids[i], r);
@@ -540,10 +560,6 @@ int UTHAppendSigs(DetectEngineCtx *de_ctx, char *sigs[], int numsigs) {
  */
 int UTHMatchPacketsWithResults(DetectEngineCtx *de_ctx, Packet **p, int num_packets, uint32_t sids[], uint32_t *results, int numsigs) {
     int result = 0;
-    int i = 0;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    DecodeThreadVars dtv;
-    ThreadVars th_v;
 
     if (de_ctx == NULL || p == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "packet or de_ctx was null");
@@ -551,6 +567,9 @@ int UTHMatchPacketsWithResults(DetectEngineCtx *de_ctx, Packet **p, int num_pack
         goto end;
     }
 
+    DecodeThreadVars dtv;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(th_v));
 
@@ -559,6 +578,7 @@ int UTHMatchPacketsWithResults(DetectEngineCtx *de_ctx, Packet **p, int num_pack
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
+    int i = 0;
     for (; i < num_packets; i++) {
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p[i]);
         if (UTHCheckPacketMatchResults(p[i], sids, &results[(i * numsigs)], numsigs) == 0)
@@ -589,10 +609,6 @@ end:
  */
 int UTHMatchPackets(DetectEngineCtx *de_ctx, Packet **p, int num_packets) {
     int result = 1;
-    int i = 0;
-    DecodeThreadVars dtv;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
 
     if (de_ctx == NULL || p == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "packet or de_ctx was null");
@@ -600,6 +616,9 @@ int UTHMatchPackets(DetectEngineCtx *de_ctx, Packet **p, int num_packets) {
         goto end;
     }
 
+    DecodeThreadVars dtv;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(th_v));
 
@@ -608,6 +627,7 @@ int UTHMatchPackets(DetectEngineCtx *de_ctx, Packet **p, int num_packets) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
+    int i = 0;
     for (; i < num_packets; i++)
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p[i]);
 
@@ -805,9 +825,9 @@ int CheckUTHTestPacket(Packet *p, uint16_t ipproto) {
         case IPPROTO_TCP:
             if (p->tcph == NULL)
                 return 0;
-            if (p->tcph->th_sport != sport)
+            if (ntohs(p->tcph->th_sport) != sport)
                 return 0;
-            if (p->tcph->th_dport != dport)
+            if (ntohs(p->tcph->th_dport) != dport)
                 return 0;
         break;
     }

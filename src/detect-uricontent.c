@@ -90,19 +90,19 @@ uint32_t DetectUricontentMaxId(DetectEngineCtx *de_ctx)
 }
 
 /**
- * \brief this function will Free memory associated with DetectUricontentData
+ * \brief this function will Free memory associated with DetectContentData
  *
  * \param cd pointer to DetectUricotentData
  */
 void DetectUricontentFree(void *ptr) {
     SCEnter();
-    DetectUricontentData *cd = (DetectUricontentData *)ptr;
+    DetectContentData *cd = (DetectContentData *)ptr;
 
     if (cd == NULL)
         SCReturn;
 
-    if (cd->uricontent != NULL)
-        SCFree(cd->uricontent);
+    if (cd->content != NULL)
+        SCFree(cd->content);
 
     BoyerMooreCtxDeInit(cd->bm_ctx);
 
@@ -113,21 +113,21 @@ void DetectUricontentFree(void *ptr) {
 /**
  * \brief Helper function to print a DetectContentData
  */
-void DetectUricontentPrint(DetectUricontentData *cd)
+void DetectUricontentPrint(DetectContentData *cd)
 {
     int i = 0;
     if (cd == NULL) {
         SCLogDebug("Detect UricontentData \"cd\" is NULL");
         return;
     }
-    char *tmpstr = SCMalloc(sizeof(char) * cd->uricontent_len + 1);
+    char *tmpstr = SCMalloc(sizeof(char) * cd->content_len + 1);
     if (tmpstr == NULL)
         return;
 
     if (tmpstr != NULL) {
-        for (i = 0; i < cd->uricontent_len; i++) {
-            if (isprint(cd->uricontent[i]))
-                tmpstr[i] = cd->uricontent[i];
+        for (i = 0; i < cd->content_len; i++) {
+            if (isprint(cd->content[i]))
+                tmpstr[i] = cd->content[i];
             else
                 tmpstr[i] = '.';
         }
@@ -136,21 +136,21 @@ void DetectUricontentPrint(DetectUricontentData *cd)
         SCFree(tmpstr);
     } else {
         SCLogDebug("Uricontent: ");
-        for (i = 0; i < cd->uricontent_len; i++)
-            SCLogDebug("%c", cd->uricontent[i]);
+        for (i = 0; i < cd->content_len; i++)
+            SCLogDebug("%c", cd->content[i]);
     }
 
     SCLogDebug("Uricontent_id: %"PRIu32, cd->id);
-    SCLogDebug("Uricontent_len: %"PRIu16, cd->uricontent_len);
+    SCLogDebug("Uricontent_len: %"PRIu16, cd->content_len);
     SCLogDebug("Depth: %"PRIu16, cd->depth);
     SCLogDebug("Offset: %"PRIu16, cd->offset);
     SCLogDebug("Within: %"PRIi32, cd->within);
     SCLogDebug("Distance: %"PRIi32, cd->distance);
     SCLogDebug("flags: %u ", cd->flags);
     SCLogDebug("negated: %s ",
-            cd->flags & DETECT_URICONTENT_NEGATED ? "true" : "false");
+            cd->flags & DETECT_CONTENT_NEGATED ? "true" : "false");
     SCLogDebug("relative match next: %s ",
-            cd->flags & DETECT_URICONTENT_RELATIVE_NEXT ? "true" : "false");
+            cd->flags & DETECT_CONTENT_RELATIVE_NEXT ? "true" : "false");
     SCLogDebug("-----------");
 }
 
@@ -173,7 +173,7 @@ SigMatch *DetectUricontentGetLastPattern(SigMatch *sm)
     if (sm == NULL)
         return NULL;
 
-    DetectUricontentData *cd = (DetectUricontentData*) sm->ctx;
+    DetectContentData *cd = (DetectContentData*) sm->ctx;
     if (cd == NULL)
         return NULL;
 
@@ -185,15 +185,14 @@ SigMatch *DetectUricontentGetLastPattern(SigMatch *sm)
  *          the rule set.
  * \param   contentstr  Pointer to the string which has been defined in the rule
  */
-DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
+DetectContentData *DoDetectUricontentSetup (char * contentstr)
 {
-    DetectUricontentData *cd = NULL;
+    DetectContentData *cd = NULL;
     char *temp = NULL;
     char *str = NULL;
     uint16_t len = 0;
     uint16_t pos = 0;
     uint16_t slen = 0;
-    char converted = 0;
 
     if ((temp = SCStrdup(contentstr)) == NULL)
         goto error;
@@ -203,10 +202,10 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
         return NULL;
     }
 
-    cd = SCMalloc(sizeof(DetectUricontentData));
+    cd = SCMalloc(sizeof(DetectContentData));
     if (cd == NULL)
         goto error;
-    memset(cd,0,sizeof(DetectUricontentData));
+    memset(cd,0,sizeof(DetectContentData));
 
     /* skip the first spaces */
     slen = strlen(temp);
@@ -215,32 +214,46 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
     };
 
     if (temp[pos] == '!') {
-        cd->flags |= DETECT_URICONTENT_NEGATED;
+        cd->flags |= DETECT_CONTENT_NEGATED;
         pos++;
     }
 
-    if (temp[pos] == '\"' && temp[strlen(temp)-1] == '\"') {
+    if (temp[pos] == '\"' && strlen(temp + pos) == 1)
+        goto error;
+
+    if (temp[pos] == '\"' && temp[pos + strlen(temp + pos) - 1] == '\"') {
         if ((str = SCStrdup(temp + pos + 1)) == NULL)
             goto error;
         str[strlen(temp) - pos - 2] = '\0';
     } else {
-        if ((str = SCStrdup(temp + pos)) == NULL)
-            goto error;
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "uricontent keywords's argument "
+                   "should be always enclosed in double quotes.  Invalid "
+                   "content keyword passed in this rule - \"%s\"",
+                   contentstr);
+        goto error;
     }
+    str[strlen(temp) - pos - 2] = '\0';
 
     SCFree(temp);
     temp = NULL;
+
     len = strlen(str);
+    if (len == 0)
+        goto error;
 
     SCLogDebug("\"%s\", len %" PRIu32 "", str, len);
+    char converted = 0;
 
     {
         uint8_t escape = 0;
         uint16_t i, x;
         uint8_t bin = 0, binstr[3] = "", binpos = 0;
+        uint16_t bin_count = 0;
+
         for (i = 0, x = 0; i < len; i++) {
             SCLogDebug("str[%02u]: %c", i, str[i]);
             if (str[i] == '|') {
+                bin_count++;
                 if (bin) {
                     bin = 0;
                 } else {
@@ -293,6 +306,13 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
                 }
             }
         }
+
+        if (bin_count % 2 != 0) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid hex code assembly in "
+                       "content - %s.  Invalidating signature", str);
+            goto error;
+        }
+
 #ifdef DEBUG
         if (SCLogDebugEnabled()) {
             for (i = 0; i < x; i++) {
@@ -309,22 +329,22 @@ DetectUricontentData *DoDetectUricontentSetup (char * contentstr)
 
     SCLogDebug("len %" PRIu32 "", len);
 
-    cd->uricontent = SCMalloc(len);
-    if (cd->uricontent == NULL) {
+    cd->content = SCMalloc(len);
+    if (cd->content == NULL) {
         SCFree(cd);
         SCFree(str);
         return NULL;;
     }
 
-    memcpy(cd->uricontent, str, len);
-    cd->uricontent_len = len;
+    memcpy(cd->content, str, len);
+    cd->content_len = len;
     cd->depth = 0;
     cd->offset = 0;
     cd->within = 0;
     cd->distance = 0;
 
     /* Prepare Boyer Moore context for searching faster */
-    cd->bm_ctx = BoyerMooreCtxInit(cd->uricontent, cd->uricontent_len);
+    cd->bm_ctx = BoyerMooreCtxInit(cd->content, cd->content_len);
 
     SCFree(str);
     return cd;
@@ -350,7 +370,7 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
 {
     SCEnter();
 
-    DetectUricontentData *cd = NULL;
+    DetectContentData *cd = NULL;
     SigMatch *sm = NULL;
 
     if (s->alproto == ALPROTO_DCERPC) {
@@ -454,8 +474,12 @@ uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, Htp
     size_t idx = 0;
     htp_tx_t *tx = NULL;
 
+    /* locking the flow, we will inspect the htp state */
+    SCMutexLock(&f->m);
+
     if (htp_state == NULL || htp_state->connp == NULL) {
         SCLogDebug("no HTTP state / no connp");
+        SCMutexUnlock(&f->m);
         SCReturnUInt(0U);
     }
 
@@ -471,6 +495,7 @@ uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, Htp
                 bstr_len(tx->request_uri_normalized));
     }
 
+    SCMutexUnlock(&f->m);
     SCReturnUInt(cnt);
 }
 
@@ -485,7 +510,7 @@ uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, Htp
 /** \test Test case where path traversal has been sent as a path string in the
  *        HTTP URL and normalized path string is checked */
 static int HTTPUriTest01(void) {
-    int result = 1;
+    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "GET /../../images.gif HTTP/1.1\r\nHost: www.ExA"
                          "mPlE.cOM\r\n\r\n";
@@ -505,10 +530,14 @@ static int HTTPUriTest01(void) {
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("AppLayerParse failed: r(%d) != 0: ", r);
+        goto end;
+    }
+
     HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
-        result = 0;
         goto end;
     }
 
@@ -520,7 +549,6 @@ static int HTTPUriTest01(void) {
         printf("expected method GET and got %s: , expected protocol "
                 "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
                 bstr_tocstr(tx->request_protocol));
-        result = 0;
         goto end;
     }
 
@@ -529,7 +557,6 @@ static int HTTPUriTest01(void) {
     {
         printf("expected www.example.com as hostname, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->hostname));
-        result = 0;
         goto end;
     }
 
@@ -538,10 +565,10 @@ static int HTTPUriTest01(void) {
     {
         printf("expected /images.gif as path, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->path));
-        result = 0;
         goto end;
     }
 
+    result = 1;
 end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
@@ -552,7 +579,7 @@ end:
 /** \test Test case where path traversal has been sent in special characters in
  *        HEX encoding in the HTTP URL and normalized path string is checked */
 static int HTTPUriTest02(void) {
-    int result = 1;
+    int result = 0;
     Flow f;
     HtpState *htp_state = NULL;
     uint8_t httpbuf1[] = "GET /%2e%2e/images.gif HTTP/1.1\r\nHost: www.ExA"
@@ -573,11 +600,14 @@ static int HTTPUriTest02(void) {
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("AppLayerParse failed: r(%d) != 0: ", r);
+        goto end;
+    }
 
     htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
-        result = 0;
         goto end;
     }
 
@@ -589,7 +619,6 @@ static int HTTPUriTest02(void) {
         printf("expected method GET and got %s: , expected protocol "
                 "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
                 bstr_tocstr(tx->request_protocol));
-        result = 0;
         goto end;
     }
 
@@ -598,7 +627,6 @@ static int HTTPUriTest02(void) {
     {
         printf("expected www.example.com as hostname, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->hostname));
-        result = 0;
         goto end;
     }
 
@@ -607,15 +635,15 @@ static int HTTPUriTest02(void) {
     {
         printf("expected /images.gif as path, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->path));
-        result = 0;
         goto end;
     }
 
-
+    result = 1;
 end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL) HTPStateFree(htp_state);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     FLOW_DESTROY(&f);
     return result;
 }
@@ -623,8 +651,9 @@ end:
 /** \test Test case where NULL character has been sent in HEX encoding in the
  *        HTTP URL and normalized path string is checked */
 static int HTTPUriTest03(void) {
-    int result = 1;
+    int result = 0;
     Flow f;
+    HtpState *htp_state = NULL;
     uint8_t httpbuf1[] = "GET%00 /images.gif HTTP/1.1\r\nHost: www.ExA"
                          "mPlE.cOM\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
@@ -643,11 +672,14 @@ static int HTTPUriTest03(void) {
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("AppLayerParse failed: r(%d) != 0: ", r);
+        goto end;
+    }
 
-    HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
-        result = 0;
         goto end;
     }
 
@@ -659,7 +691,6 @@ static int HTTPUriTest03(void) {
         printf("expected method GET and got %s: , expected protocol "
                 "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
                 bstr_tocstr(tx->request_protocol));
-        result = 0;
         goto end;
     }
 
@@ -668,7 +699,6 @@ static int HTTPUriTest03(void) {
     {
         printf("expected www.example.com as hostname, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->hostname));
-        result = 0;
         goto end;
     }
 
@@ -677,14 +707,15 @@ static int HTTPUriTest03(void) {
     {
         printf("expected /images.gif as path, but got: %s \n",
                 bstr_tocstr(tx->parsed_uri->path));
-        result = 0;
         goto end;
     }
 
+    result = 1;
 end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL) HTPStateFree(htp_state);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     FLOW_DESTROY(&f);
     return result;
 }
@@ -693,8 +724,9 @@ end:
 /** \test Test case where self referencing directories request has been sent
  *        in the HTTP URL and normalized path string is checked */
 static int HTTPUriTest04(void) {
-    int result = 1;
+    int result = 0;
     Flow f;
+    HtpState *htp_state = NULL;
     uint8_t httpbuf1[] = "GET /./././images.gif HTTP/1.1\r\nHost: www.ExA"
                          "mPlE.cOM\r\n\r\n";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
@@ -713,8 +745,12 @@ static int HTTPUriTest04(void) {
 
     r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|
                           STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("AppLayerParse failed: r(%d) != 0: ", r);
+        goto end;
+    }
 
-    HtpState *htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    htp_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
     if (htp_state == NULL) {
         printf("no http state: ");
         result = 0;
@@ -751,11 +787,12 @@ static int HTTPUriTest04(void) {
         goto end;
     }
 
-
+    result = 1;
 end:
     FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL) HTPStateFree(htp_state);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     FLOW_DESTROY(&f);
     return result;
 }
@@ -789,9 +826,9 @@ int DetectUriSigTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    BUG_ON(de_ctx->sig_list == NULL);
+    BUG_ON(de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL);
 
-    sm = de_ctx->sig_list->umatch;
+    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
     if (sm->type == DETECT_URICONTENT) {
         result = 1;
     } else {
@@ -834,6 +871,7 @@ static int DetectUriSigTest02(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -944,6 +982,7 @@ static int DetectUriSigTest03(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1056,9 +1095,9 @@ static int DetectUriSigTest04(void) {
                                    "\" Test uricontent\"; "
                                    "uricontent:\"foo\"; sid:1;)");
     if (s == NULL ||
-        s->umatch == NULL ||
-        s->pmatch != NULL ||
-        s->match != NULL)
+        s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+        s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL ||
+        s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 1 failed to parse: ");
         goto end;
@@ -1068,9 +1107,9 @@ static int DetectUriSigTest04(void) {
                                    "\" Test uricontent and content\"; "
                                    "uricontent:\"foo\"; content:\"bar\";sid:1;)");
     if (s == NULL ||
-        s->umatch == NULL ||
-        s->pmatch == NULL ||
-        s->match != NULL)
+        s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+        s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+        s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 2 failed to parse: ");
         goto end;
@@ -1081,11 +1120,11 @@ static int DetectUriSigTest04(void) {
                                    "uricontent:\"foo\"; content:\"bar\";"
                                    " depth:10; offset: 5; sid:1;)");
     if (s == NULL ||
-        s->umatch == NULL ||
-        s->pmatch == NULL ||
-        ((DetectContentData *)s->pmatch->ctx)->depth != 15 ||
-        ((DetectContentData *)s->pmatch->ctx)->offset != 5 ||
-        s->match != NULL)
+        s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+        s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+        ((DetectContentData *)s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+        ((DetectContentData *)s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+        s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 3 failed to parse: ");
         goto end;
@@ -1096,11 +1135,11 @@ static int DetectUriSigTest04(void) {
                                    "content:\"foo\"; uricontent:\"bar\";"
                                    " depth:10; offset: 5; sid:1;)");
     if (s == NULL ||
-        s->umatch == NULL ||
-        s->pmatch == NULL ||
-        ((DetectUricontentData *)s->umatch->ctx)->depth != 15 ||
-        ((DetectUricontentData *)s->umatch->ctx)->offset != 5 ||
-        s->match != NULL)
+        s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+        s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+        ((DetectContentData *)s->sm_lists[DETECT_SM_LIST_UMATCH]->ctx)->depth != 15 ||
+        ((DetectContentData *)s->sm_lists[DETECT_SM_LIST_UMATCH]->ctx)->offset != 5 ||
+        s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 4 failed to parse: ");
         goto end;
@@ -1131,15 +1170,15 @@ static int DetectUriSigTest04(void) {
                                    "\"two_contents\"; within:30; sid:1;)");
     if (s == NULL) {
         goto end;
-    } else if (s->umatch == NULL ||
-            s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
-            ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectContentData*) s->pmatch_tail->ctx)->within != 30 ||
-            s->match != NULL)
+    } else if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+            s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx)->within != 30 ||
+            s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 7 failed to parse: ");
-        DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
+        DetectContentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx);
         goto end;
     }
 
@@ -1150,15 +1189,15 @@ static int DetectUriSigTest04(void) {
                                    "\"two_uricontents\"; within:30; sid:1;)");
     if (s == NULL) {
         goto end;
-    } else if (s->umatch == NULL ||
-            s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
-            ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectUricontentData*) s->umatch_tail->ctx)->within != 30 ||
-            s->match != NULL)
+    } else if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+            s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx)->within != 30 ||
+            s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 8 failed to parse: ");
-        DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
+        DetectUricontentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx);
         goto end;
     }
 
@@ -1170,15 +1209,15 @@ static int DetectUriSigTest04(void) {
     if (s == NULL) {
         goto end;
     } else if (
-            s->umatch == NULL ||
-            s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
-            ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectContentData*) s->pmatch_tail->ctx)->distance != 30 ||
-            s->match != NULL)
+            s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+            s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx)->distance != 30 ||
+            s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 9 failed to parse: ");
-        DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
+        DetectContentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx);
         goto end;
     }
 
@@ -1190,15 +1229,15 @@ static int DetectUriSigTest04(void) {
     if (s == NULL) {
         goto end;
     } else if (
-            s->umatch == NULL ||
-            s->pmatch == NULL ||
-            ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
-            ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectContentData*) s->umatch_tail->ctx)->distance != 30 ||
-            s->match != NULL)
+            s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL ||
+            s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx)->distance != 30 ||
+            s->sm_lists[DETECT_SM_LIST_MATCH] != NULL)
     {
         printf("sig 10 failed to parse: ");
-        DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
+        DetectUricontentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx);
         goto end;
     }
 
@@ -1214,22 +1253,22 @@ static int DetectUriSigTest04(void) {
         goto end;
     }
 
-    if (s->umatch == NULL || s->pmatch == NULL) {
-        printf("umatch %p or pmatch %p: ", s->umatch, s->pmatch);
+    if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL || s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("umatch %p or pmatch %p: ", s->sm_lists[DETECT_SM_LIST_UMATCH], s->sm_lists[DETECT_SM_LIST_PMATCH]);
         goto end;
     }
 
-    if (    ((DetectContentData*) s->pmatch->ctx)->depth != 15 ||
-            ((DetectContentData*) s->pmatch->ctx)->offset != 5 ||
-            ((DetectUricontentData*) s->umatch_tail->ctx)->distance != 30 ||
-            ((DetectUricontentData*) s->umatch_tail->ctx)->within != 60 ||
-            ((DetectContentData*) s->pmatch_tail->ctx)->distance != 45 ||
-            ((DetectContentData*) s->pmatch_tail->ctx)->within != 70 ||
-            s->match != NULL) {
+    if (    ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->depth != 15 ||
+            ((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx)->offset != 5 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx)->distance != 30 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx)->within != 60 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx)->distance != 45 ||
+            ((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx)->within != 70 ||
+            s->sm_lists[DETECT_SM_LIST_MATCH] != NULL) {
         printf("sig 10 failed to parse, content not setup properly: ");
-        DetectContentPrint((DetectContentData*) s->pmatch->ctx);
-        DetectUricontentPrint((DetectUricontentData*) s->umatch_tail->ctx);
-        DetectContentPrint((DetectContentData*) s->pmatch_tail->ctx);
+        DetectContentPrint((DetectContentData*) s->sm_lists[DETECT_SM_LIST_PMATCH]->ctx);
+        DetectUricontentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx);
+        DetectContentPrint((DetectContentData*) s->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx);
         goto end;
     }
 
@@ -1273,6 +1312,7 @@ static int DetectUriSigTest05(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
     f.proto = p->proto;
 
@@ -1396,6 +1436,7 @@ static int DetectUriSigTest06(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
     f.proto = p->proto;
 
@@ -1527,6 +1568,7 @@ static int DetectUriSigTest07(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -1614,6 +1656,698 @@ end:
     UTHFreePackets(&p, 1);
     return result;
 }
+
+/**
+ * \test Test content for dce sig.
+ */
+int DetectUriSigTest08(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"\"; sid:238012;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DetectUriSigTest09(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"; sid:238012;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DetectUriSigTest10(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"boo; sid:238012;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Test content for dce sig.
+ */
+int DetectUriSigTest11(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:boo\"; sid:238012;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriSigTest12(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    DetectContentData *ud = 0;
+    Signature *s = NULL;
+    int result = 0;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    s = de_ctx->sig_list = SigInit(de_ctx,
+                                   "alert udp any any -> any any "
+                                   "(msg:\"test\"; uricontent:    !\"boo\"; sid:238012;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL: ");
+        goto end;
+    }
+
+    if (s->sm_lists_tail[DETECT_SM_LIST_UMATCH] == NULL || s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx == NULL) {
+        printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
+        goto end;
+    }
+
+    ud = (DetectContentData *)s->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    result = (strncmp("boo", (char *)ud->content, ud->content_len) == 0);
+
+end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest13(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest14(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest15(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"af|\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest16(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af|\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest17(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"aast|\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest18(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"aast|af\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest19(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"aast|af|\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest20(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af|asdf\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest21(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af|af|\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest22(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af|af|af\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest23(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert udp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"|af|af|af|\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+int DetectUricontentSigTest08(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+                               "(content:\"one\"; content:\"one\"; http_uri; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
+    DetectContentData *ud = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (cd->id == ud->id)
+        goto end;
+
+    result = 1;
+
+ end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+int DetectUricontentSigTest09(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+                               "(uricontent:\"one\"; content:\"one\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
+    DetectContentData *ud = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (cd->id == ud->id)
+        goto end;
+
+    result = 1;
+
+ end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+int DetectUricontentSigTest10(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+                               "(uricontent:\"one\"; content:\"one\"; content:\"one\"; http_uri; "
+                               "content:\"two\"; content:\"one\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->prev->ctx;
+    DetectContentData *cd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
+    DetectContentData *cd3 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
+    DetectContentData *ud1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (cd1->id != 1 || cd2->id != 2 || cd3->id != 1 || ud1->id != 0 || ud2->id != 0)
+        goto end;
+
+    result = 1;
+
+ end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+int DetectUricontentSigTest11(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+                               "(content:\"one\"; http_uri; content:\"one\"; uricontent:\"one\"; "
+                               "content:\"two\"; content:\"one\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->prev->ctx;
+    DetectContentData *cd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
+    DetectContentData *cd3 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
+    DetectContentData *ud1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (cd1->id != 1 || cd2->id != 2 || cd3->id != 1 || ud1->id != 0 || ud2->id != 0)
+        goto end;
+
+    result = 1;
+
+ end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+int DetectUricontentSigTest12(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+                               "(content:\"one\"; http_uri; content:\"one\"; uricontent:\"one\"; "
+                               "content:\"two\"; content:\"one\"; http_uri; content:\"one\"; "
+                               "uricontent:\"one\"; uricontent: \"two\"; "
+                               "content:\"one\"; content:\"three\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->prev->prev->prev->ctx;
+    DetectContentData *cd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->prev->prev->ctx;
+    DetectContentData *cd3 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->prev->ctx;
+    DetectContentData *cd4 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
+    DetectContentData *cd5 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
+    DetectContentData *ud1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->prev->prev->prev->ctx;
+    DetectContentData *ud2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->prev->prev->ctx;
+    DetectContentData *ud3 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->prev->ctx;
+    DetectContentData *ud4 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud5 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (cd1->id != 1 || cd2->id != 2 || cd3->id != 1 || cd4->id != 1 || cd5->id != 4 ||
+        ud1->id != 0 || ud2->id != 0 || ud3->id != 0 || ud4->id != 0 || ud5->id != 3) {
+        goto end;
+    }
+
+    result = 1;
+
+ end:
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void HttpUriRegisterTests(void) {
@@ -1622,6 +2356,7 @@ void HttpUriRegisterTests(void) {
     UtRegisterTest("HTTPUriTest02", HTTPUriTest02, 1);
     UtRegisterTest("HTTPUriTest03", HTTPUriTest03, 1);
     UtRegisterTest("HTTPUriTest04", HTTPUriTest04, 1);
+
     UtRegisterTest("DetectUriSigTest01", DetectUriSigTest01, 1);
     UtRegisterTest("DetectUriSigTest02", DetectUriSigTest02, 1);
     UtRegisterTest("DetectUriSigTest03", DetectUriSigTest03, 1);
@@ -1629,5 +2364,27 @@ void HttpUriRegisterTests(void) {
     UtRegisterTest("DetectUriSigTest05 - Inspection", DetectUriSigTest05, 1);
     UtRegisterTest("DetectUriSigTest06 - Inspection", DetectUriSigTest06, 1);
     UtRegisterTest("DetectUriSigTest07 - Inspection", DetectUriSigTest07, 1);
+    UtRegisterTest("DetectUriSigTest08", DetectUriSigTest08, 1);
+    UtRegisterTest("DetectUriSigTest09", DetectUriSigTest09, 1);
+    UtRegisterTest("DetectUriSigTest10", DetectUriSigTest10, 1);
+    UtRegisterTest("DetectUriSigTest11", DetectUriSigTest11, 1);
+    UtRegisterTest("DetectUriSigTest12", DetectUriSigTest12, 1);
+
+    UtRegisterTest("DetectUriContentParseTest13", DetectUriContentParseTest13, 1);
+    UtRegisterTest("DetectUriContentParseTest14", DetectUriContentParseTest14, 1);
+    UtRegisterTest("DetectUriContentParseTest15", DetectUriContentParseTest15, 1);
+    UtRegisterTest("DetectUriContentParseTest16", DetectUriContentParseTest16, 1);
+    UtRegisterTest("DetectUriContentParseTest17", DetectUriContentParseTest17, 1);
+    UtRegisterTest("DetectUriContentParseTest18", DetectUriContentParseTest18, 1);
+    UtRegisterTest("DetectUriContentParseTest19", DetectUriContentParseTest19, 1);
+    UtRegisterTest("DetectUriContentParseTest20", DetectUriContentParseTest20, 1);
+    UtRegisterTest("DetectUriContentParseTest21", DetectUriContentParseTest21, 1);
+    UtRegisterTest("DetectUriContentParseTest22", DetectUriContentParseTest22, 1);
+    UtRegisterTest("DetectUriContentParseTest23", DetectUriContentParseTest23, 1);
+    UtRegisterTest("DetectUricontentSigTest08", DetectUricontentSigTest08, 1);
+    UtRegisterTest("DetectUricontentSigTest09", DetectUricontentSigTest09, 1);
+    UtRegisterTest("DetectUricontentSigTest10", DetectUricontentSigTest10, 1);
+    UtRegisterTest("DetectUricontentSigTest11", DetectUricontentSigTest11, 1);
+    UtRegisterTest("DetectUricontentSigTest12", DetectUricontentSigTest12, 1);
 #endif /* UNITTESTS */
 }

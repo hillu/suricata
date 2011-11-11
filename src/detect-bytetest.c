@@ -34,6 +34,7 @@
 #include "detect-uricontent.h"
 #include "detect-bytetest.h"
 #include "detect-bytejump.h"
+#include "detect-byte-extract.h"
 #include "app-layer.h"
 
 #include "util-byte.h"
@@ -109,7 +110,8 @@ error:
  *  \retval 1 match
  *  \retval 0 no match
  */
-int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *m, uint8_t *payload, uint32_t payload_len) {
+int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *m, uint8_t *payload, uint32_t payload_len,
+                          uint8_t flags, int32_t offset, uint64_t value) {
     SCEnter();
 
     DetectBytetestData *data = (DetectBytetestData *)m->ctx;
@@ -127,7 +129,7 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
     /* Calculate the ptr value for the bytetest and length remaining in
      * the packet from that point.
      */
-    if (data->flags & DETECT_BYTETEST_RELATIVE) {
+    if (flags & DETECT_BYTETEST_RELATIVE) {
         SCLogDebug("relative, working with det_ctx->payload_offset %"PRIu32", "
                    "data->offset %"PRIu32"", det_ctx->payload_offset, data->offset);
 
@@ -139,16 +141,16 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
             SCReturnInt(0);
         }
 
-        ptr += data->offset;
-        len -= data->offset;
+        ptr += offset;
+        len -= offset;
 
         //PrintRawDataFp(stdout,ptr,len);
     }
     else {
         SCLogDebug("absolute, data->offset %"PRIu32"", data->offset);
 
-        ptr = payload + data->offset;
-        len = payload_len - data->offset;
+        ptr = payload + offset;
+        len = payload_len - offset;
     }
 
     /* Validate that the to-be-extracted is within the packet
@@ -160,10 +162,10 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
         SCReturnInt(0);
     }
 
-    neg = data->flags & DETECT_BYTETEST_NEGOP;
+    neg = flags & DETECT_BYTETEST_NEGOP;
 
     /* Extract the byte data */
-    if (data->flags & DETECT_BYTETEST_STRING) {
+    if (flags & DETECT_BYTETEST_STRING) {
         extbytes = ByteExtractStringUint64(&val, data->base,
                                            data->nbytes, (const char *)ptr);
         if (extbytes <= 0) {
@@ -182,7 +184,7 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
                data->base, val, (neg ? "!" : ""), data->op, data->value);
     }
     else {
-        int endianness = (data->flags & DETECT_BYTETEST_LITTLE) ?
+        int endianness = (flags & DETECT_BYTETEST_LITTLE) ?
                           BYTE_LITTLE_ENDIAN : BYTE_BIG_ENDIAN;
         extbytes = ByteExtractUint64(&val, endianness, data->nbytes, ptr);
         if (extbytes != data->nbytes) {
@@ -195,35 +197,44 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
                val, (neg ? "!" : ""), data->op, data->value);
     }
 
-
     /* Compare using the configured operator */
     match = 0;
     switch (data->op) {
         case DETECT_BYTETEST_OP_EQ:
-            if (val == data->value) {
+            if (val == value) {
                 match = 1;
             }
             break;
         case DETECT_BYTETEST_OP_LT:
-            if (val < data->value) {
+            if (val < value) {
                 match = 1;
             }
             break;
         case DETECT_BYTETEST_OP_GT:
-            if (val > data->value) {
+            if (val > value) {
                 match = 1;
             }
             break;
         case DETECT_BYTETEST_OP_AND:
-            if (val & data->value) {
+            if (val & value) {
                 match = 1;
             }
             break;
         case DETECT_BYTETEST_OP_OR:
-            if (val ^ data->value) {
+            if (val ^ value) {
                 match = 1;
             }
             break;
+        case DETECT_BYTETEST_OP_GE:
+        if (val >= value) {
+            match = 1;
+        }
+        break;
+        case DETECT_BYTETEST_OP_LE:
+        if (val <= value) {
+            match = 1;
+        }
+        break;
         default:
             /* Should never get here as we handle this in parsing. */
             SCReturnInt(-1);
@@ -243,7 +254,8 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch
 int DetectBytetestMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
                         Packet *p, Signature *s, SigMatch *m)
 {
-    return DetectBytetestDoMatch(det_ctx, s, m, p->payload, p->payload_len);
+    return DetectBytetestDoMatch(det_ctx, s, m, p->payload, p->payload_len,
+                                 ((DetectBytetestData *)m->ctx)->flags, 0, 0);
 #if 0
     DetectBytetestData *data = (DetectBytetestData *)m->ctx;
     uint8_t *ptr = NULL;
@@ -262,7 +274,7 @@ int DetectBytetestMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
      */
     if (data->flags & DETECT_BYTETEST_RELATIVE) {
         ptr = det_ctx->pkt_ptr;
-        len = p->pktlen - det_ctx->pkt_off;
+        len = GET_PKT_LEN(p) - det_ctx->pkt_off;
 
         /* No match if there is no relative base */
         if (ptr == NULL || len == 0) {
@@ -280,9 +292,9 @@ int DetectBytetestMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     /* Validate that the to-be-extracted is within the packet
      * \todo Should this validate it is in the *payload*?
      */
-    if (ptr < p->pkt || data->nbytes > len) {
+    if (ptr < GET_PKT_DATA(p) || data->nbytes > len) {
         SCLogDebug("Data not within packet pkt=%p, ptr=%p, len=%d, nbytes=%d",
-                    p->pkt, ptr, len, data->nbytes);
+                    GET_PKT_DATA(p), ptr, len, data->nbytes);
         return 0;
     }
 
@@ -366,7 +378,7 @@ int DetectBytetestMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 #endif
 }
 
-DetectBytetestData *DetectBytetestParse(char *optstr)
+DetectBytetestData *DetectBytetestParse(char *optstr, char **value, char **offset)
 {
     DetectBytetestData *data = NULL;
     char *args[9] = {
@@ -436,6 +448,10 @@ DetectBytetestData *DetectBytetestParse(char *optstr)
             data->op |= DETECT_BYTETEST_OP_AND;
         } else if (strcmp("^", args[2]) == 0) {
             data->op |= DETECT_BYTETEST_OP_OR;
+        } else if (strcmp(">=", args[2]) == 0) {
+            data->op |= DETECT_BYTETEST_OP_GE;
+        } else if (strcmp("<=", args[2]) == 0) {
+            data->op |= DETECT_BYTETEST_OP_LE;
         } else {
             SCLogError(SC_ERR_INVALID_OPERATOR, "Invalid operator");
             goto error;
@@ -443,17 +459,40 @@ DetectBytetestData *DetectBytetestParse(char *optstr)
     }
 
     /* Value */
-    if (ByteExtractStringUint64(&data->value, 0, 0, args[3]) <= 0) {
-        SCLogError(SC_ERR_INVALID_VALUE, "Malformed value: %s", str_ptr);
-        goto error;
+    if (args[3][0] != '-' && isalpha(args[3][0])) {
+        if (value == NULL) {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "byte_test supplied with "
+                       "var name for value.  \"value\" argument supplied to "
+                       "this function has to be non-NULL");
+            goto error;
+        }
+        *value = SCStrdup(args[3]);
+        if (*value == NULL)
+            goto error;
+    } else {
+        if (ByteExtractStringUint64(&data->value, 0, 0, args[3]) <= 0) {
+            SCLogError(SC_ERR_INVALID_VALUE, "Malformed value: %s", str_ptr);
+            goto error;
+        }
     }
 
     /* Offset */
-    if (ByteExtractStringInt32(&data->offset, 0, 0, args[4]) <= 0) {
-        SCLogError(SC_ERR_INVALID_VALUE, " Malformed offset: %s", str_ptr);
-        goto error;
+    if (args[4][0] != '-' && isalpha(args[4][0])) {
+        if (offset == NULL) {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "byte_test supplied with "
+                       "var name for offset.  \"offset\" argument supplied to "
+                       "this function has to be non-NULL");
+            goto error;
+        }
+        *offset = SCStrdup(args[4]);
+        if (*offset == NULL)
+            goto error;
+    } else {
+        if (ByteExtractStringInt32(&data->offset, 0, 0, args[4]) <= 0) {
+            SCLogError(SC_ERR_INVALID_VALUE, " Malformed offset: %s", str_ptr);
+            goto error;
+        }
     }
-
 
     /* The remaining options are flags. */
     /** \todo Error on dups? */
@@ -531,12 +570,10 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
 {
     DetectBytetestData *data = NULL;
     SigMatch *sm = NULL;
-    SigMatch *prev_sm = NULL;
-    DetectContentData *cd = NULL;
-    DetectUricontentData *ud = NULL;
-    DetectPcreData *pe = NULL;
+    char *value = NULL;
+    char *offset = NULL;
 
-    data = DetectBytetestParse(optstr);
+    data = DetectBytetestParse(optstr, &value, &offset);
     if (data == NULL)
         goto error;
 
@@ -573,13 +610,13 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
         SigMatch *dm = NULL;
 
         pm = SigMatchGetLastSMFromLists(s, 6,
-                                        DETECT_CONTENT, s->pmatch_tail,
-                                        DETECT_PCRE, s->pmatch_tail,
-                                        DETECT_BYTEJUMP, s->pmatch_tail);
+                                        DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                        DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                        DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
         dm = SigMatchGetLastSMFromLists(s, 6,
-                                        DETECT_CONTENT, s->dmatch_tail,
-                                        DETECT_PCRE, s->dmatch_tail,
-                                        DETECT_BYTEJUMP, s->dmatch_tail);
+                                        DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
+                                        DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
+                                        DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_DMATCH]);
 
         if (pm == NULL) {
             SigMatchAppendDcePayload(s, sm);
@@ -594,10 +631,41 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
         SigMatchAppendPayload(s, sm);
     }
 
+    if (value != NULL) {
+        SigMatch *bed_sm =
+            DetectByteExtractRetrieveSMVar(value, s,
+                                           SigMatchListSMBelongsTo(s, sm));
+        if (bed_sm == NULL) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
+                       "seen in byte_test - %s\n", value);
+            goto error;
+        }
+        DetectBytetestData *btd = sm->ctx;
+        btd->value = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
+        btd->flags |= DETECT_BYTETEST_VALUE_BE;
+        SCFree(value);
+    }
+
+    if (offset != NULL) {
+        SigMatch *bed_sm =
+            DetectByteExtractRetrieveSMVar(offset, s,
+                                           SigMatchListSMBelongsTo(s, sm));
+        if (bed_sm == NULL) {
+            SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
+                       "seen in byte_test - %s\n", offset);
+            goto error;
+        }
+        DetectBytetestData *btd = sm->ctx;
+        btd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
+        btd->flags |= DETECT_BYTETEST_OFFSET_BE;
+        SCFree(offset);
+    }
+
     if ( !(data->flags & DETECT_BYTETEST_RELATIVE)) {
         return 0;
     }
 
+    SigMatch *prev_sm = NULL;
     prev_sm = SigMatchGetLastSMFromLists(s, 8,
                                          DETECT_CONTENT, sm->prev,
                                          DETECT_URICONTENT, sm->prev,
@@ -615,6 +683,10 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
         }
     }
 
+    DetectContentData *cd = NULL;
+    DetectContentData *ud = NULL;
+    DetectPcreData *pe = NULL;
+
     switch (prev_sm->type) {
         case DETECT_CONTENT:
             /* Set the relative next flag on the prev sigmatch */
@@ -630,13 +702,13 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
 
         case DETECT_URICONTENT:
             /* Set the relative next flag on the prev sigmatch */
-            ud = (DetectUricontentData *)prev_sm->ctx;
+            ud = (DetectContentData *)prev_sm->ctx;
             if (ud == NULL) {
                 SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
                            "previous keyword!");
                 return -1;
             }
-            ud->flags |= DETECT_URICONTENT_RELATIVE_NEXT;
+            ud->flags |= DETECT_CONTENT_RELATIVE_NEXT;
 
             break;
 
@@ -667,10 +739,10 @@ int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     return 0;
 
 error:
-    if (data != NULL)
-        DetectBytetestFree(data);
-    if (sm != NULL)
-        SCFree(sm);
+    //if (data != NULL)
+    //    DetectBytetestFree(data);
+    //if (sm != NULL)
+    //    SCFree(sm);
     return -1;
 }
 
@@ -696,7 +768,7 @@ void DetectBytetestFree(void *ptr)
 int DetectBytetestTestParse01(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, =, 1 , 0");
+    data = DetectBytetestParse("4, =, 1 , 0", NULL, NULL);
     if (data != NULL) {
         DetectBytetestFree(data);
         result = 1;
@@ -711,7 +783,7 @@ int DetectBytetestTestParse01(void) {
 int DetectBytetestTestParse02(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, !=, 1, 0");
+    data = DetectBytetestParse("4, !=, 1, 0", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 4)
@@ -734,7 +806,7 @@ int DetectBytetestTestParse02(void) {
 int DetectBytetestTestParse03(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, !=, 1, 0, relative");
+    data = DetectBytetestParse("4, !=, 1, 0, relative", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 4)
@@ -758,7 +830,7 @@ int DetectBytetestTestParse03(void) {
 int DetectBytetestTestParse04(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, !=, 1, 0, string, oct");
+    data = DetectBytetestParse("4, !=, 1, 0, string, oct", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 4)
@@ -782,7 +854,7 @@ int DetectBytetestTestParse04(void) {
 int DetectBytetestTestParse05(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, =, 1, 0, string, dec");
+    data = DetectBytetestParse("4, =, 1, 0, string, dec", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 4)
@@ -805,7 +877,7 @@ int DetectBytetestTestParse05(void) {
 int DetectBytetestTestParse06(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, >, 1, 0, string, hex");
+    data = DetectBytetestParse("4, >, 1, 0, string, hex", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_GT)
             && (data->nbytes == 4)
@@ -828,7 +900,7 @@ int DetectBytetestTestParse06(void) {
 int DetectBytetestTestParse07(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, <, 5, 0, big");
+    data = DetectBytetestParse("4, <, 5, 0, big", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_LT)
             && (data->nbytes == 4)
@@ -851,7 +923,7 @@ int DetectBytetestTestParse07(void) {
 int DetectBytetestTestParse08(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, <, 5, 0, little");
+    data = DetectBytetestParse("4, <, 5, 0, little", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_LT)
             && (data->nbytes == 4)
@@ -874,7 +946,7 @@ int DetectBytetestTestParse08(void) {
 int DetectBytetestTestParse09(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, !, 5, 0");
+    data = DetectBytetestParse("4, !, 5, 0", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 4)
@@ -897,7 +969,7 @@ int DetectBytetestTestParse09(void) {
 int DetectBytetestTestParse10(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("	4 , ! &, 5	, 0 , little ");
+    data = DetectBytetestParse("	4 , ! &, 5	, 0 , little ", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_AND)
             && (data->nbytes == 4)
@@ -920,7 +992,7 @@ int DetectBytetestTestParse10(void) {
 int DetectBytetestTestParse11(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4,!^,5,0,little,string,relative,hex");
+    data = DetectBytetestParse("4,!^,5,0,little,string,relative,hex", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_OR)
             && (data->nbytes == 4)
@@ -946,7 +1018,7 @@ int DetectBytetestTestParse11(void) {
 int DetectBytetestTestParse12(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, =, 1, 0, hex");
+    data = DetectBytetestParse("4, =, 1, 0, hex", NULL, NULL);
     if (data == NULL) {
         result = 1;
     }
@@ -960,7 +1032,7 @@ int DetectBytetestTestParse12(void) {
 int DetectBytetestTestParse13(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("9, =, 1, 0");
+    data = DetectBytetestParse("9, =, 1, 0", NULL, NULL);
     if (data == NULL) {
         result = 1;
     }
@@ -974,7 +1046,7 @@ int DetectBytetestTestParse13(void) {
 int DetectBytetestTestParse14(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("23,=,0xffffffffffffffffULL,0,string,oct");
+    data = DetectBytetestParse("23,=,0xffffffffffffffffULL,0,string,oct", NULL, NULL);
     if (data != NULL) {
         if (   (data->op == DETECT_BYTETEST_OP_EQ)
             && (data->nbytes == 23)
@@ -997,7 +1069,7 @@ int DetectBytetestTestParse14(void) {
 int DetectBytetestTestParse15(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("24, =, 0xffffffffffffffffULL, 0, string");
+    data = DetectBytetestParse("24, =, 0xffffffffffffffffULL, 0, string", NULL, NULL);
     if (data == NULL) {
         result = 1;
     }
@@ -1011,7 +1083,7 @@ int DetectBytetestTestParse15(void) {
 int DetectBytetestTestParse16(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4,=,0,0xffffffffffffffffULL");
+    data = DetectBytetestParse("4,=,0,0xffffffffffffffffULL", NULL, NULL);
     if (data == NULL) {
         result = 1;
     }
@@ -1025,7 +1097,7 @@ int DetectBytetestTestParse16(void) {
 int DetectBytetestTestParse17(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, <, 5, 0, dce");
+    data = DetectBytetestParse("4, <, 5, 0, dce", NULL, NULL);
     if (data != NULL) {
         if ( (data->op == DETECT_BYTETEST_OP_LT) &&
              (data->nbytes == 4) &&
@@ -1046,7 +1118,7 @@ int DetectBytetestTestParse17(void) {
 int DetectBytetestTestParse18(void) {
     int result = 0;
     DetectBytetestData *data = NULL;
-    data = DetectBytetestParse("4, <, 5, 0");
+    data = DetectBytetestParse("4, <, 5, 0", NULL, NULL);
     if (data != NULL) {
         if ( (data->op == DETECT_BYTETEST_OP_LT) &&
              (data->nbytes == 4) &&
@@ -1101,19 +1173,19 @@ int DetectBytetestTestParse20(void)
                                "(msg:\"Testing bytetest_body\"; "
                                "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                                "dce_stub_data; "
-                               "content:one; distance:0; "
+                               "content:\"one\"; distance:0; "
                                "byte_test:1,=,1,6,relative,dce; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
         goto end;
     }
     s = de_ctx->sig_list;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_BYTETEST);
-    bd = (DetectBytetestData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_BYTETEST);
+    bd = (DetectBytetestData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if (!(bd->flags & DETECT_BYTETEST_DCE) &&
         !(bd->flags & DETECT_BYTETEST_RELATIVE) &&
         (bd->flags & DETECT_BYTETEST_STRING) &&
@@ -1128,19 +1200,19 @@ int DetectBytetestTestParse20(void)
                       "(msg:\"Testing bytetest_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                       "dce_stub_data; "
-                      "content:one; distance:0; "
+                      "content:\"one\"; distance:0; "
                       "byte_test:1,=,1,6,relative,dce; sid:1;)");
     if (s->next == NULL) {
         result = 0;
         goto end;
     }
     s = s->next;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_BYTETEST);
-    bd = (DetectBytetestData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_BYTETEST);
+    bd = (DetectBytetestData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if (!(bd->flags & DETECT_BYTETEST_DCE) &&
         !(bd->flags & DETECT_BYTETEST_RELATIVE) &&
         (bd->flags & DETECT_BYTETEST_STRING) &&
@@ -1155,19 +1227,19 @@ int DetectBytetestTestParse20(void)
                       "(msg:\"Testing bytetest_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                       "dce_stub_data; "
-                      "content:one; distance:0; "
+                      "content:\"one\"; distance:0; "
                       "byte_test:1,=,1,6,relative; sid:1;)");
     if (s->next == NULL) {
         result = 0;
         goto end;
     }
     s = s->next;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_BYTETEST);
-    bd = (DetectBytetestData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_BYTETEST);
+    bd = (DetectBytetestData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if ((bd->flags & DETECT_BYTETEST_DCE) &&
         !(bd->flags & DETECT_BYTETEST_RELATIVE) &&
         (bd->flags & DETECT_BYTETEST_STRING) &&
@@ -1203,7 +1275,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,string,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,string,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1212,7 +1284,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,big,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,big,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1221,7 +1293,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,little,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,little,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1230,7 +1302,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,hex,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,hex,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1239,7 +1311,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,dec,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,dec,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1248,7 +1320,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,oct,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,oct,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1257,7 +1329,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,string,hex,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,string,hex,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1266,7 +1338,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,big,string,hex,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,big,string,hex,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1275,7 +1347,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,big,string,oct,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,big,string,oct,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1284,7 +1356,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,little,string,hex,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,little,string,hex,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1293,7 +1365,7 @@ int DetectBytetestTestParse21(void)
     s = SigInit(de_ctx, "alert tcp any any -> any any "
                 "(msg:\"Testing bytetest_body\"; "
                 "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
-                "content:one; byte_test:1,=,1,6,big,string,dec,dce; sid:1;)");
+                "content:\"one\"; byte_test:1,=,1,6,big,string,dec,dce; sid:1;)");
     if (s != NULL) {
         result = 0;
         goto end;
@@ -1374,7 +1446,7 @@ int DetectByteTestTestPacket03(void)
     int result = 0;
     uint8_t *buf = NULL;
     uint16_t buflen = 0;
-    buf = malloc(4);
+    buf = SCMalloc(4);
     if (buf == NULL) {
         printf("malloc failed\n");
         exit(EXIT_FAILURE);
@@ -1392,6 +1464,66 @@ int DetectByteTestTestPacket03(void)
         "byte_test:1,=,65,214748364; sid:1; rev:1;)";
 
     result = !UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+
+end:
+    return result;
+}
+
+/** \test Test the byte_test signature matching with operator <= */
+int DetectByteTestTestPacket04(void)
+{
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"content + byte_test +"
+                    "relative\"; content:\"GET \"; depth:4; content:\"HTTP/1.\"; "
+    "byte_test:1,<=,0,0,relative,string,dec; sid:124; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
+
+    UTHFreePacket(p);
+
+end:
+    return result;
+}
+
+/** \test Test the byte_test signature matching with operator >= */
+int DetectByteTestTestPacket05(void)
+{
+    int result = 0;
+    uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
+                    "User-Agent: Wget/1.11.4"
+                    "Accept: */*"
+                    "Host: www.google.com"
+                    "Connection: Keep-Alive"
+                    "Date: Mon, 04 Jan 2010 17:29:39 GMT";
+    uint16_t buflen = strlen((char *)buf);
+
+    Packet *p;
+    p = UTHBuildPacket((uint8_t *)buf, buflen, IPPROTO_TCP);
+
+    if (p == NULL)
+        goto end;
+
+    char sig[] = "alert tcp any any -> any any (msg:\"content + byte_test +"
+                    "relative\"; content:\"GET \"; depth:4; content:\"HTTP/1.\"; "
+    "byte_test:1,>=,0,0,relative,string,dec; sid:125; rev:1;)";
+
+    result = UTHPacketMatchSig(p, sig);
 
     UTHFreePacket(p);
 
@@ -1430,6 +1562,8 @@ void DetectBytetestRegisterTests(void) {
     UtRegisterTest("DetectByteTestTestPacket01", DetectByteTestTestPacket01, 1);
     UtRegisterTest("DetectByteTestTestPacket02", DetectByteTestTestPacket02, 1);
     UtRegisterTest("DetectByteTestTestPacket03", DetectByteTestTestPacket03, 1);
+    UtRegisterTest("DetectByteTestTestPacket04", DetectByteTestTestPacket04, 1);
+    UtRegisterTest("DetectByteTestTestPacket05", DetectByteTestTestPacket05, 1);
 #endif /* UNITTESTS */
 }
 

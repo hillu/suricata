@@ -107,7 +107,7 @@ int DetectIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
     /**
      * To match a ipv4 packet with a "id" rule
      */
-    if (!PKT_IS_IPV4(p)) {
+    if (!PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p)) {
         return 0;
     }
 
@@ -233,6 +233,7 @@ int DetectIdSetup (DetectEngineCtx *de_ctx, Signature *s, char *idstr)
     sm->ctx = (void *)id_d;
 
     SigMatchAppendPacket(s, sm);
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
 

@@ -37,10 +37,10 @@
 
 #include "tm-queuehandlers.h"
 #include "tm-queues.h"
-#include "tm-modules.h"
 #include "tm-threads.h"
 
 #include "util-unittest.h"
+#include "util-syslog.h"
 
 #include "conf.h"
 
@@ -65,32 +65,6 @@ SCEnumCharMap sc_log_op_iface_map[ ] = {
     { "File",           SC_LOG_OP_IFACE_FILE },
     { "Syslog",         SC_LOG_OP_IFACE_SYSLOG },
     { NULL,             -1 }
-};
-
-/* holds the string-enum mapping for the syslog facility in SCLogOPIfaceCtx */
-SCEnumCharMap sc_syslog_facility_map[] = {
-    { "auth",           LOG_AUTH },
-    { "authpriv",       LOG_AUTHPRIV },
-    { "cron",           LOG_CRON },
-    { "daemon",         LOG_DAEMON },
-    { "ftp",            LOG_FTP },
-    { "kern",           LOG_KERN },
-    { "lpr",            LOG_LPR },
-    { "mail",           LOG_MAIL },
-    { "news",           LOG_NEWS },
-    { "security",       LOG_AUTH },
-    { "syslog",         LOG_SYSLOG },
-    { "user",           LOG_USER },
-    { "uucp",           LOG_UUCP },
-    { "local0",         LOG_LOCAL0 },
-    { "local1",         LOG_LOCAL1 },
-    { "local2",         LOG_LOCAL2 },
-    { "local3",         LOG_LOCAL3 },
-    { "local4",         LOG_LOCAL4 },
-    { "local5",         LOG_LOCAL5 },
-    { "local6",         LOG_LOCAL6 },
-    { "local7",         LOG_LOCAL7 },
-    { NULL,             -1         }
 };
 
 #if defined (OS_WIN32)
@@ -295,7 +269,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 {
     char *temp = *msg;
     const char *s = NULL;
-    ThreadVars *tv = NULL;
+
     struct timeval tval;
     struct tm *tms = NULL;
 
@@ -337,7 +311,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
                    SC_LOG_MAX_LOG_MSG_LEN);
             *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
             if (temp_fmt_h != NULL)
-                free(temp_fmt_h);
+                SCFree(temp_fmt_h);
             return SC_OK;
         }
         switch(temp_fmt[1]) {
@@ -387,7 +361,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
 
             case SC_LOG_FMT_TM:
                 temp_fmt[0] = '\0';
-                tv = TmThreadsGetCallingThread();
+                ThreadVars *tv = TmThreadsGetCallingThread();
                 cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
                               "%s%s", substr, ((tv != NULL)? tv->name: "UNKNOWN TM"));
                 if (cw < 0)
@@ -459,7 +433,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
                SC_LOG_MAX_LOG_MSG_LEN);
         *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
         if (temp_fmt_h != NULL)
-            free(temp_fmt_h);
+            SCFree(temp_fmt_h);
         return SC_OK;
     }
     cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg), "%s", substr);
@@ -471,19 +445,19 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
                SC_LOG_MAX_LOG_MSG_LEN);
         *msg = *msg + SC_LOG_MAX_LOG_MSG_LEN;
         if (temp_fmt_h != NULL)
-            free(temp_fmt_h);
+            SCFree(temp_fmt_h);
         return SC_OK;
     }
 
     *msg = temp;
 
-    free(temp_fmt_h);
+    SCFree(temp_fmt_h);
 
     return SC_OK;
 
  error:
     if (temp_fmt != NULL)
-        free(temp_fmt_h);
+        SCFree(temp_fmt_h);
     return SC_ERR_SPRINTF;
 }
 
@@ -518,7 +492,7 @@ SCLogOPBuffer *SCLogAllocLogOPBuffer(void)
     SCLogOPIfaceCtx *op_iface_ctx = NULL;
     int i = 0;
 
-    if ( (buffer = malloc(sc_log_config->op_ifaces_cnt *
+    if ( (buffer = SCMalloc(sc_log_config->op_ifaces_cnt *
                           sizeof(SCLogOPBuffer))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogAllocLogOPBuffer. Exiting...");
         exit(EXIT_FAILURE);
@@ -547,7 +521,7 @@ static inline SCLogOPIfaceCtx *SCLogAllocLogOPIfaceCtx()
 {
     SCLogOPIfaceCtx *iface_ctx = NULL;
 
-    if ( (iface_ctx = malloc(sizeof(SCLogOPIfaceCtx))) == NULL) {
+    if ( (iface_ctx = SCMalloc(sizeof(SCLogOPIfaceCtx))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogallocLogOPIfaceCtx. Exiting...");
         exit(EXIT_FAILURE);
     }
@@ -602,20 +576,17 @@ static inline SCLogOPIfaceCtx *SCLogInitFileOPIface(const char *file,
     return iface_ctx;
 
 error:
-    if (iface_ctx != NULL) {
-        if (iface_ctx->file != NULL) {
-            SCFree((char *)iface_ctx->file);
-            iface_ctx->file = NULL;
-        }
-        if (iface_ctx->log_format != NULL) {
-            SCFree((char *)iface_ctx->log_format);
-            iface_ctx->log_format = NULL;
-        }
-        if (iface_ctx->file_d != NULL) {
-            fclose(iface_ctx->file_d);
-            iface_ctx->file_d = NULL;
-        }
-        SCFree(iface_ctx);
+    if (iface_ctx->file != NULL) {
+        SCFree((char *)iface_ctx->file);
+        iface_ctx->file = NULL;
+    }
+    if (iface_ctx->log_format != NULL) {
+        SCFree((char *)iface_ctx->log_format);
+        iface_ctx->log_format = NULL;
+    }
+    if (iface_ctx->file_d != NULL) {
+        fclose(iface_ctx->file_d);
+        iface_ctx->file_d = NULL;
     }
     return NULL;
 }
@@ -653,7 +624,7 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
     }
 
     if (tmp_log_format != NULL &&
-        (iface_ctx->log_format = strdup(tmp_log_format)) == NULL) {
+        (iface_ctx->log_format = SCStrdup(tmp_log_format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -702,7 +673,7 @@ static inline SCLogOPIfaceCtx *SCLogInitSyslogOPIface(int facility,
     iface_ctx->facility = facility;
 
     if (log_format != NULL &&
-        (iface_ctx->log_format = strdup(log_format)) == NULL) {
+        (iface_ctx->log_format = SCStrdup(log_format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -730,10 +701,10 @@ static inline void SCLogFreeLogOPIfaceCtx(SCLogOPIfaceCtx *iface_ctx)
             fclose(iface_ctx->file_d);
 
         if (iface_ctx->file != NULL)
-            free((void *)iface_ctx->file);
+            SCFree((void *)iface_ctx->file);
 
         if (iface_ctx->log_format != NULL)
-            free((void *)iface_ctx->log_format);
+            SCFree((void *)iface_ctx->log_format);
 
         if (iface_ctx->iface == SC_LOG_OP_IFACE_SYSLOG) {
             closelog();
@@ -741,7 +712,7 @@ static inline void SCLogFreeLogOPIfaceCtx(SCLogOPIfaceCtx *iface_ctx)
 
         iface_ctx = iface_ctx->next;
 
-        free(temp);
+        SCFree(temp);
     }
 
     return;
@@ -823,7 +794,7 @@ static inline void SCLogSetLogFormat(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
 #endif
     }
 
-    if (format != NULL && (sc_lc->log_format = strdup(format)) == NULL) {
+    if (format != NULL && (sc_lc->log_format = SCStrdup(format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -893,7 +864,9 @@ static inline void SCLogSetOPIface(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
                 if (s == NULL)
                     s = SC_LOG_DEF_SYSLOG_FACILITY_STR;
 
-                op_ifaces_ctx = SCLogInitSyslogOPIface(SCMapEnumNameToValue(s, sc_syslog_facility_map), NULL, -1);
+                op_ifaces_ctx = SCLogInitSyslogOPIface(SCMapEnumNameToValue(s, SCSyslogGetFacilityMap()), NULL, -1);
+                break;
+            default:
                 break;
         }
         sc_lc->op_ifaces = op_ifaces_ctx;
@@ -962,7 +935,7 @@ SCLogInitData *SCLogAllocLogInitData(void)
     SCLogInitData *sc_lid = NULL;
 
     /* not using SCMalloc here because if it fails we can't log */
-    if ( (sc_lid = malloc(sizeof(SCLogInitData))) == NULL)
+    if ( (sc_lid = SCMalloc(sizeof(SCLogInitData))) == NULL)
         return NULL;
 
     memset(sc_lid, 0, sizeof(SCLogInitData));
@@ -979,11 +952,11 @@ void SCLogFreeLogInitData(SCLogInitData *sc_lid)
 {
     if (sc_lid != NULL) {
         if (sc_lid->startup_message != NULL)
-            free(sc_lid->startup_message);
+            SCFree(sc_lid->startup_message);
         if (sc_lid->global_log_format != NULL)
-            free(sc_lid->global_log_format);
+            SCFree(sc_lid->global_log_format);
         if (sc_lid->op_filter != NULL)
-            free(sc_lid->op_filter);
+            SCFree(sc_lid->op_filter);
 
         SCLogFreeLogOPIfaceCtx(sc_lid->op_ifaces);
     }
@@ -998,12 +971,12 @@ static inline void SCLogFreeLogConfig(SCLogConfig *sc_lc)
 {
     if (sc_lc != NULL) {
         if (sc_lc->startup_message != NULL)
-            free(sc_lc->startup_message);
+            SCFree(sc_lc->startup_message);
         if (sc_lc->log_format != NULL)
-            free(sc_lc->log_format);
+            SCFree(sc_lc->log_format);
 
         SCLogFreeLogOPIfaceCtx(sc_lc->op_ifaces);
-        free(sc_lc);
+        SCFree(sc_lc);
     }
 
     return;
@@ -1081,7 +1054,7 @@ SCLogOPIfaceCtx *SCLogInitOPIfaceCtx(const char *iface_name,
         case SC_LOG_OP_IFACE_FILE:
             return SCLogInitFileOPIface(arg, log_format, log_level);
         case SC_LOG_OP_IFACE_SYSLOG:
-            return SCLogInitSyslogOPIface(SCMapEnumNameToValue(arg, sc_syslog_facility_map), log_format, log_level);
+            return SCLogInitSyslogOPIface(SCMapEnumNameToValue(arg, SCSyslogGetFacilityMap()), log_format, log_level);
         default:
 #ifdef DEBUG
             printf("Output Interface \"%s\" not supported by the logging module",
@@ -1113,7 +1086,7 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
 #endif /* OS_WIN32 */
 
     /* sc_log_config is a global variable */
-    if ( (sc_log_config = malloc(sizeof(SCLogConfig))) == NULL) {
+    if ( (sc_log_config = SCMalloc(sizeof(SCLogConfig))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCLogInitLogModule. Exiting...");
         exit(EXIT_FAILURE);
     }
@@ -1168,6 +1141,8 @@ void SCLogLoadConfig(void)
     if (ConfGet("logging.default-log-format", &sc_lid->global_log_format) != 1)
         sc_lid->global_log_format = SC_LOG_DEF_LOG_FORMAT;
 
+    ConfGet("logging.default-output-filter", &sc_lid->op_filter);
+
     ConfNode *seq_node, *output;
     TAILQ_FOREACH(seq_node, &outputs->head, next) {
         SCLogLevel level = sc_lid->global_log_level;
@@ -1181,10 +1156,15 @@ void SCLogLoadConfig(void)
 
         /* By default an output is enabled. */
         const char *enabled = ConfNodeLookupChildValue(output, "enabled");
-        if (enabled != NULL && strcmp(enabled, "no") == 0)
+        if (enabled != NULL && ConfValIsFalse(enabled))
             continue;
 
+        /* if available use the log format setting for this output,
+         * otherwise fall back to the global setting. */
         format = ConfNodeLookupChildValue(output, "format");
+        if (format == NULL)
+            format = sc_lid->global_log_format;
+
         level_s = ConfNodeLookupChildValue(output, "level");
         if (level_s != NULL) {
             level = SCMapEnumNameToValue(level_s, sc_log_level_map);
@@ -1212,12 +1192,12 @@ void SCLogLoadConfig(void)
             const char *facility_s = ConfNodeLookupChildValue(output,
                 "facility");
             if (facility_s != NULL) {
-                facility = SCMapEnumNameToValue(facility_s,
-                    sc_syslog_facility_map);
+                facility = SCMapEnumNameToValue(facility_s, SCSyslogGetFacilityMap());
                 if (facility == -1) {
-                    SCLogError(SC_ERR_INVALID_ARGUMENT,
-                        "Invalid syslog facility: %s", facility_s);
-                    exit(EXIT_FAILURE);
+                    SCLogWarning(SC_ERR_INVALID_ARGUMENT, "Invalid syslog "
+                            "facility: \"%s\", now using \"%s\" as syslog "
+                            "facility", facility_s, SC_LOG_DEF_SYSLOG_FACILITY_STR);
+                    facility = SC_LOG_DEF_SYSLOG_FACILITY;
                 }
             }
             printf("Initialization syslog logging with format \"%s\".\n",
@@ -1237,7 +1217,7 @@ void SCLogLoadConfig(void)
     //exit(1);
     /* \todo Can we free sc_lid now? */
     if (sc_lid != NULL)
-        free(sc_lid);
+        SCFree(sc_lid);
 }
 
 /**
@@ -1259,7 +1239,7 @@ void SCLogInitLogModuleIfEnvSet(void)
     SCLogLevel log_level = SC_LOG_NOTSET;
 
     /* sc_log_config is a global variable */
-    if ( (sc_log_config = malloc(sizeof(SCLogConfig))) == NULL)
+    if ( (sc_log_config = SCMalloc(sizeof(SCLogConfig))) == NULL)
         return;
     memset(sc_log_config, 0, sizeof(SCLogConfig));
     sc_lc = sc_log_config;
@@ -1299,7 +1279,9 @@ void SCLogInitLogModuleIfEnvSet(void)
             if (s == NULL)
                 s = SC_LOG_DEF_SYSLOG_FACILITY_STR;
 
-            op_ifaces_ctx = SCLogInitSyslogOPIface(SCMapEnumNameToValue(s, sc_syslog_facility_map), NULL, -1);
+            op_ifaces_ctx = SCLogInitSyslogOPIface(SCMapEnumNameToValue(s, SCSyslogGetFacilityMap()), NULL, -1);
+            break;
+        default:
             break;
     }
     sc_lc->op_ifaces = op_ifaces_ctx;
@@ -1336,7 +1318,7 @@ void SCLogInitLogModuleIfEnvSet(void)
     }
 
     if (format != NULL &&
-        (sc_lc->log_format = strdup(format)) == NULL) {
+        (sc_lc->log_format = SCStrdup(format)) == NULL) {
         printf("Error allocating memory\n");
         exit(EXIT_FAILURE);
     }
@@ -1383,7 +1365,7 @@ static char *SCLogGetLogFilename(char *filearg)
     if (ConfGet("default-log-dir", &log_dir) != 1)
         log_dir = DEFAULT_LOG_DIR;
 
-    log_filename = malloc(PATH_MAX);
+    log_filename = SCMalloc(PATH_MAX);
     if (log_filename == NULL)
         return NULL;
     snprintf(log_filename, PATH_MAX, "%s/%s", log_dir, filearg);

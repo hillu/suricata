@@ -67,7 +67,8 @@
 #define DEFAULT_MATCH_LIMIT 10000000
 #define DEFAULT_MATCH_LIMIT_RECURSION 10000000
 
-#define MATCH_LIMIT_DEFAULT 1500
+#define SC_MATCH_LIMIT_DEFAULT 1500
+#define SC_MATCH_LIMIT_RECURSION_DEFAULT 1500
 
 static int pcre_match_limit = 0;
 static int pcre_match_limit_recursion = 0;
@@ -78,9 +79,7 @@ static pcre *parse_capture_regex;
 static pcre_extra *parse_capture_regex_study;
 
 int DetectPcreMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectPcreALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
 int DetectPcreALMatchCookie(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
-int DetectPcreALMatchHeader(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
 int DetectPcreALMatchMethod(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
 static int DetectPcreSetup (DetectEngineCtx *, Signature *, char *);
 void DetectPcreFree(void *);
@@ -97,19 +96,6 @@ void DetectPcreRegister (void) {
 
     sigmatch_table[DETECT_PCRE].flags |= SIGMATCH_PAYLOAD;
 
-    /* register a separate sm type for the httpbody stuff
-     * because then we don't need to figure out if we need
-     * the match or AppLayerMatch function in Detect */
-    sigmatch_table[DETECT_PCRE_HTTPBODY].name = "__pcre_http_body__"; /* not a real keyword */
-    sigmatch_table[DETECT_PCRE_HTTPBODY].Match = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].AppLayerMatch = DetectPcreALMatch;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].alproto = ALPROTO_HTTP;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].Setup = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].Free  = DetectPcreFree;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].RegisterTests  = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPBODY].flags |= SIGMATCH_PAYLOAD;
-
-    /* The same for Cookie, Method and Header */
     sigmatch_table[DETECT_PCRE_HTTPCOOKIE].name = "__pcre_http_cookie__"; /* not a real keyword */
     sigmatch_table[DETECT_PCRE_HTTPCOOKIE].Match = NULL;
     sigmatch_table[DETECT_PCRE_HTTPCOOKIE].AppLayerMatch = DetectPcreALMatchCookie;
@@ -128,36 +114,28 @@ void DetectPcreRegister (void) {
     sigmatch_table[DETECT_PCRE_HTTPMETHOD].RegisterTests  = NULL;
     sigmatch_table[DETECT_PCRE_HTTPMETHOD].flags |= SIGMATCH_PAYLOAD;
 
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].name = "__pcre_http_header__"; /* not a real keyword */
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].Match = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].AppLayerMatch = DetectPcreALMatchHeader;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].alproto = ALPROTO_HTTP;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].Setup = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].Free  = DetectPcreFree;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].RegisterTests  = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPHEADER].flags |= SIGMATCH_PAYLOAD;
-
-
     const char *eb;
     int eo;
     int opts = 0;
     intmax_t val = 0;
 
     if (!ConfGetInt("pcre.match-limit", &val)) {
-        pcre_match_limit = DEFAULT_MATCH_LIMIT;
+        pcre_match_limit = SC_MATCH_LIMIT_DEFAULT;
     }
     else    {
         pcre_match_limit = val;
     }
+    SCLogInfo("Using PCRE match-limit setting of: %i", pcre_match_limit);
 
     val = 0;
 
     if (!ConfGetInt("pcre.match-limit-recursion", &val)) {
-        pcre_match_limit_recursion = DEFAULT_MATCH_LIMIT_RECURSION;
+        pcre_match_limit_recursion = SC_MATCH_LIMIT_RECURSION_DEFAULT;
     }
     else    {
         pcre_match_limit_recursion = val;
     }
+    SCLogInfo("Using PCRE match-limit-recursion setting of: %i", pcre_match_limit_recursion);
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if(parse_regex == NULL)
@@ -215,7 +193,7 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
     int ret = 0;
     int toret = 0;
     size_t idx;
-    htp_tx_t *tx = NULL;
+
 #define MAX_SUBSTRINGS 30
     int ov[MAX_SUBSTRINGS];
     uint8_t *ptr = NULL;
@@ -246,6 +224,8 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
         SCLogDebug("HTTP connection structure is NULL");
         goto end;
     }
+
+    htp_tx_t *tx = NULL;
 
     for (idx = 0;//htp_state->new_in_tx_index;
          idx < list_size(htp_state->connp->conn->transactions); idx++)
@@ -264,10 +244,10 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
 
         /* run the actual pcre detection */
         ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-        SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
+        SCLogDebug("ret %d (negating %s)", ret, (pe->flags & DETECT_PCRE_NEGATE) ? "set" : "not set");
 
         if (ret == PCRE_ERROR_NOMATCH) {
-            if (pe->negate == 1) {
+            if (pe->flags & DETECT_PCRE_NEGATE) {
                 /* regex didn't match with negate option means we
                  * consider it a match */
                 ret = 1;
@@ -278,122 +258,10 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
             toret |= ret;
         } else if (ret >= 0) {
-            if (pe->negate == 1) {
+            if (pe->flags & DETECT_PCRE_NEGATE) {
                 /* regex matched but we're negated, so not
                  * considering it a match */
-            } else {
-                /* regex matched and we're not negated,
-                 * considering it a match */
-                ret = 1;
-                toret |= ret;
-                break;
-            }
-        } else {
-            SCLogDebug("pcre had matching error");
-        }
-    }
-
-end:
-    SCMutexUnlock(&f->m);
-    SCLogDebug("released lock %p", &f->m);
-
-    SCReturnInt(toret);
-}
-
-/**
- * \brief Match a regex on data sent at an http header (needs the l7 parser).
- *
- * \param det_ctx  Thread detection ctx.
- * \param s        Signature.
- * \param sm       SigMatch to match against.
- * \param data     Data to match against.
- * \param data_len Data length.
- *
- * \retval 1: match
- * \retval 0: no match
- */
-int DetectPcreALDoMatchHeader(DetectEngineThreadCtx *det_ctx, Signature *s,
-                              SigMatch *m, Flow *f, uint8_t flags,
-                              void *state)
-{
-    SCEnter();
-
-    int ret = 0;
-    int toret = 0;
-    size_t idx;
-    htp_tx_t *tx = NULL;
-    bstr *headers = NULL;
-#define MAX_SUBSTRINGS 30
-    int ov[MAX_SUBSTRINGS];
-    uint8_t *ptr = NULL;
-    uint16_t len = 0;
-
-    DetectPcreData *pe = (DetectPcreData *)m->ctx;
-
-    /* define ptr & len */
-    SCMutexLock(&f->m);
-    SCLogDebug("got lock %p", &f->m);
-
-    HtpState *htp_state = (HtpState *)state;
-    if (htp_state == NULL) {
-        SCLogDebug("no HTTP layer state has been received, so no match");
-        goto end;
-    }
-
-    if (!(htp_state->flags & HTP_FLAG_STATE_OPEN)) {
-        SCLogDebug("HTP state not yet properly setup, so no match");
-        goto end;
-    }
-
-    SCLogDebug("htp_state %p, flow %p", htp_state, f);
-    SCLogDebug("htp_state->connp %p", htp_state->connp);
-    SCLogDebug("htp_state->connp->conn %p", htp_state->connp->conn);
-
-    if (htp_state->connp == NULL || htp_state->connp->conn == NULL) {
-        SCLogDebug("HTTP connection structure is NULL");
-        goto end;
-    }
-
-    for (idx = 0;//htp_state->new_in_tx_index;
-         idx < list_size(htp_state->connp->conn->transactions); idx++)
-    {
-        tx = list_get(htp_state->connp->conn->transactions, idx);
-        if (tx == NULL)
-            continue;
-
-        SCLogDebug("inspecting tx %p", tx);
-
-        headers = htp_tx_get_request_headers_raw(tx);
-        if (headers == NULL)
-            continue;
-
-        ptr = (uint8_t *)bstr_ptr(headers);
-        len = bstr_len(headers);
-        if (ptr == NULL)
-            continue;
-
-        //printf("Matching Header");
-        //PrintRawUriFp(stdout, (uint8_t*)ptr, len);
-
-        /* run the actual pcre detection */
-        ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-        SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
-
-        if (ret == PCRE_ERROR_NOMATCH) {
-            if (pe->negate == 1) {
-                /* regex didn't match with negate option means we
-                 * consider it a match */
-                ret = 1;
-                toret |= ret;
-                break;
-            } else {
                 ret = 0;
-            }
-            toret |= ret;
-        } else if (ret >= 0) {
-            if (pe->negate == 1) {
-                /* regex matched but we're negated, so not
-                 * considering it a match */
             } else {
                 /* regex matched and we're not negated,
                  * considering it a match */
@@ -403,6 +271,7 @@ int DetectPcreALDoMatchHeader(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
         } else {
             SCLogDebug("pcre had matching error");
+            ret = 0;
         }
     }
 
@@ -434,7 +303,7 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
     int ret = 0;
     int toret = 0;
     size_t idx;
-    htp_tx_t *tx = NULL;
+
 #define MAX_SUBSTRINGS 30
     int ov[MAX_SUBSTRINGS];
     uint8_t *ptr = NULL;
@@ -466,6 +335,8 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
         goto end;
     }
 
+    htp_tx_t *tx = NULL;
+
     for (idx = 0;//htp_state->new_in_tx_index;
          idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
@@ -492,10 +363,10 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
 
         /* run the actual pcre detection */
         ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-        SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
+        SCLogDebug("ret %d (negating %s)", ret, (pe->flags & DETECT_PCRE_NEGATE) ? "set" : "not set");
 
         if (ret == PCRE_ERROR_NOMATCH) {
-            if (pe->negate == 1) {
+            if (pe->flags & DETECT_PCRE_NEGATE) {
                 /* regex didn't match with negate option means we
                  * consider it a match */
                 ret = 1;
@@ -506,9 +377,10 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
             toret |= ret;
         } else if (ret >= 0) {
-            if (pe->negate == 1) {
+            if (pe->flags & DETECT_PCRE_NEGATE) {
                 /* regex matched but we're negated, so not
                  * considering it a match */
+                ret = 0;
             } else {
                 /* regex matched and we're not negated,
                  * considering it a match */
@@ -518,7 +390,7 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
         } else {
             SCLogDebug("pcre had matching error");
-            if (pe->negate == 1) {
+            if (pe->flags & DETECT_PCRE_NEGATE) {
                 ret = 1;
                 toret |= ret;
                 break;
@@ -534,138 +406,6 @@ end:
     SCLogDebug("released lock %p", &f->m);
 
     SCReturnInt(toret);
-}
-
-int DetectPcreALDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *m, Flow *f, uint8_t flags, void *state) {
-#define MAX_SUBSTRINGS 30
-    SCEnter();
-    int ret = 0;
-    int pcreret = 0;
-    int ov[MAX_SUBSTRINGS];
-    htp_tx_t *tx = NULL;
-    size_t idx = 0;
-
-    DetectPcreData *pe = (DetectPcreData *)m->ctx;
-    if ( !(pe->flags & DETECT_PCRE_HTTP_BODY_AL))
-        SCReturnInt(0);
-
-    SCMutexLock(&f->m);
-
-    /** If enabled http body inspection
-      * TODO: Add more HTTP options here if needed
-      */
-    HtpState *htp_state = (HtpState *)state;
-    if (htp_state == NULL) {
-        SCLogDebug("No htp state, no match at http body data");
-        goto unlock;
-    }
-
-    for (idx = 0;//hs->new_in_tx_index;
-         idx < list_size(htp_state->connp->conn->transactions); idx++)
-    {
-        tx = list_get(htp_state->connp->conn->transactions, idx);
-        if (tx == NULL)
-            continue;
-
-        SCHtpTxUserData *htud = (SCHtpTxUserData *) htp_tx_get_user_data(tx);
-        if (htud == NULL)
-            continue;
-
-        HtpBodyChunk *cur = htud->body.first;
-        if (htud->body.nchunks == 0) {
-            SCLogDebug("No body data to inspect");
-            goto unlock;
-        } else {
-            int wspace[255];
-            int pcre_flags = PCRE_PARTIAL;
-
-            if (cur == NULL) {
-                SCLogDebug("No body chunks to inspect");
-                goto unlock;
-            }
-            htud->body.pcre_flags |= HTP_PCRE_DONE;
-
-            while (cur != NULL) {
-                if (SCLogDebugEnabled()) {
-                    printf("\n");
-                    PrintRawUriFp(stdout, (uint8_t*)cur->data, cur->len);
-                    printf("\n");
-                }
-                pcreret = pcre_dfa_exec(pe->re, NULL, (char*)cur->data, cur->len, 0,
-                                        pcre_flags|PCRE_DFA_SHORTEST, ov, MAX_SUBSTRINGS,
-                                        wspace, MAX_SUBSTRINGS);
-                cur = cur->next;
-
-                SCLogDebug("Pcre Ret %d", pcreret);
-                switch (pcreret) {
-                    case PCRE_ERROR_PARTIAL:
-                        /* make pcre to use the working space of the last partial
-                         * match, (match over multiple chunks)
-                         */
-                        SCLogDebug("partial match");
-                        pcre_flags |= PCRE_DFA_RESTART;
-                        htud->body.pcre_flags |= HTP_PCRE_HAS_MATCH;
-                    break;
-                    case PCRE_ERROR_NOMATCH:
-                        SCLogDebug("no match");
-                        pcre_flags = PCRE_PARTIAL;
-                    break;
-                    case 0:
-                        SCLogDebug("Perfect Match!");
-                        ret = 1;
-                        goto unlock;
-                    break;
-                    default:
-                        if (pcreret > 0) {
-                            SCLogDebug("Match with captured data");
-                            ret = 1;
-                        } else {
-                            SCLogDebug("No match, pcre failed");
-                            ret = 0;
-                        }
-                        goto unlock;
-                }
-            }
-        }
-    }
-
-unlock:
-    SCMutexUnlock(&f->m);
-    SCReturnInt(ret ^ pe->negate);
-}
-
-/**
- * \brief match the specified pcre at http body, requesting it from htp/L7
- *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectPcreData
- *
- * \retval int 0 no match; 1 match
- */
-int DetectPcreALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                      uint8_t flags, void *state, Signature *s, SigMatch *m)
-{
-    int r = DetectPcreALDoMatch(det_ctx, s, m, f, flags, state);
-    SCReturnInt(r);
-}
-
-/**
- * \brief match the specified pcre at http header, requesting it from htp/L7
- *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectPcreData
- *
- * \retval int 0 no match; 1 match
- */
-int DetectPcreALMatchHeader(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                      uint8_t flags, void *state, Signature *s, SigMatch *m)
-{
-    int r = DetectPcreALDoMatchHeader(det_ctx, s, m, f, flags, state);
-    SCReturnInt(r);
 }
 
 /**
@@ -730,8 +470,8 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
     DetectPcreData *pe = (DetectPcreData *)sm->ctx;
 
     /* If we want to inspect the http body, we will use HTP L7 parser */
-    if (pe->flags & DETECT_PCRE_HTTP_BODY_AL)
-        SCReturnInt(0);
+    //if (pe->flags & DETECT_PCRE_HTTP_BODY_AL)
+    //    SCReturnInt(0);
 
     if (s->flags & SIG_FLAG_RECURSIVE) {
         ptr = payload + det_ctx->payload_offset;
@@ -751,10 +491,10 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
 
     /* run the actual pcre detection */
     ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-    SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
+    SCLogDebug("ret %d (negating %s)", ret, (pe->flags & DETECT_PCRE_NEGATE) ? "set" : "not set");
 
     if (ret == PCRE_ERROR_NOMATCH) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex didn't match with negate option means we
              * consider it a match */
             ret = 1;
@@ -762,7 +502,7 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
             ret = 0;
         }
     } else if (ret >= 0) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex matched but we're negated, so not
              * considering it a match */
             ret = 0;
@@ -845,10 +585,10 @@ int DetectPcrePacketPayloadMatch(DetectEngineThreadCtx *det_ctx, Packet *p, Sign
 
     /* run the actual pcre detection */
     ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-    SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
+    SCLogDebug("ret %d (negating %s)", ret, (pe->flags & DETECT_PCRE_NEGATE) ? "set" : "not set");
 
     if (ret == PCRE_ERROR_NOMATCH) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex didn't match with negate option means we
              * consider it a match */
             ret = 1;
@@ -856,7 +596,7 @@ int DetectPcrePacketPayloadMatch(DetectEngineThreadCtx *det_ctx, Packet *p, Sign
             ret = 0;
         }
     } else if (ret >= 0) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex matched but we're negated, so not
              * considering it a match */
             ret = 0;
@@ -938,10 +678,10 @@ int DetectPcrePayloadDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
 
     /* run the actual pcre detection */
     ret = pcre_exec(pe->re, pe->sd, (char *)ptr, len, 0, 0, ov, MAX_SUBSTRINGS);
-    SCLogDebug("ret %d (negating %s)", ret, pe->negate ? "set" : "not set");
+    SCLogDebug("ret %d (negating %s)", ret, (pe->flags & DETECT_PCRE_NEGATE) ? "set" : "not set");
 
     if (ret == PCRE_ERROR_NOMATCH) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex didn't match with negate option means we
              * consider it a match */
             ret = 1;
@@ -949,7 +689,7 @@ int DetectPcrePayloadDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
             ret = 0;
         }
     } else if (ret >= 0) {
-        if (pe->negate == 1) {
+        if (pe->flags & DETECT_PCRE_NEGATE) {
             /* regex matched but we're negated, so not
              * considering it a match */
             ret = 0;
@@ -1006,6 +746,7 @@ int DetectPcreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
 
 DetectPcreData *DetectPcreParse (char *regexstr)
 {
+    int ec;
     const char *eb;
     int eo;
     int opts = 0;
@@ -1063,7 +804,7 @@ DetectPcreData *DetectPcreParse (char *regexstr)
     memset(pd, 0, sizeof(DetectPcreData));
 
     if (negate)
-        pd->negate = 1;
+        pd->flags |= DETECT_PCRE_NEGATE;
 
     if (op != NULL) {
         while (*op) {
@@ -1105,6 +846,12 @@ DetectPcreData *DetectPcreParse (char *regexstr)
                 case 'H': /* snort's option */
                     pd->flags |= DETECT_PCRE_HEADER;
                     break;
+                case 'I': /* snort's option */
+                    pd->flags |= DETECT_PCRE_HTTP_RAW_URI;
+                    break;
+                case 'D': /* snort's option */
+                    pd->flags |= DETECT_PCRE_RAW_HEADER;
+                    break;
                 case 'M': /* snort's option */
                     pd->flags |= DETECT_PCRE_METHOD;
                     break;
@@ -1128,17 +875,39 @@ DetectPcreData *DetectPcreParse (char *regexstr)
 
     //printf("DetectPcreParse: \"%s\"\n", re);
 
-    pd->re = pcre_compile(re, opts, &eb, &eo, NULL);
+    /* Try to compile as if all (...) groups had been meant as (?:...),
+     * which is the common case in most rules.
+     * If we fail because a capture group is later referenced (e.g., \1),
+     * PCRE will let us know.
+     */
+    pd->re = pcre_compile2(re, opts | PCRE_NO_AUTO_CAPTURE, &ec, &eb, &eo, NULL);
+    if (pd->re == NULL && ec == 15) { // reference to non-existent subpattern
+      pd->re = pcre_compile(re, opts, &eb, &eo, NULL);
+    }
+
     if(pd->re == NULL)  {
         SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
         goto error;
     }
+#ifdef PCRE_HAVE_JIT
+    pd->sd = pcre_study(pd->re, PCRE_STUDY_JIT_COMPILE, &eb);
+    if(eb != NULL)  {
+        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed : %s", eb);
+        goto error;
+    }
 
+    int jit = 0;
+    ret = pcre_fullinfo(pd->re, pd->sd, PCRE_INFO_JIT, &jit);
+    if (ret != 0 || jit != 1) {
+        SCLogWarning(SC_ERR_PCRE_STUDY, "PCRE JIT compiler does not support: %s", regexstr);
+    }
+#else
     pd->sd = pcre_study(pd->re, 0, &eb);
     if(eb != NULL)  {
         SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed : %s", eb);
         goto error;
     }
+#endif /*PCRE_HAVE_SLJIT*/
 
     if(pd->sd == NULL)
         pd->sd = (pcre_extra *) SCCalloc(1,sizeof(pcre_extra));
@@ -1160,10 +929,10 @@ DetectPcreData *DetectPcreParse (char *regexstr)
         }
         else    {
 
-            pd->sd->match_limit = MATCH_LIMIT_DEFAULT;
+            pd->sd->match_limit = SC_MATCH_LIMIT_DEFAULT;
             pd->sd->flags |= PCRE_EXTRA_MATCH_LIMIT;
 #ifndef NO_PCRE_MATCH_RLIMIT
-            pd->sd->match_limit_recursion = MATCH_LIMIT_DEFAULT;
+            pd->sd->match_limit_recursion = SC_MATCH_LIMIT_RECURSION_DEFAULT;
             pd->sd->flags |= PCRE_EXTRA_MATCH_LIMIT_RECURSION;
 #endif /* NO_PCRE_MATCH_RLIMIT */
         }
@@ -1250,9 +1019,6 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     DetectPcreData *pd = NULL;
     SigMatch *sm = NULL;
     SigMatch *prev_sm = NULL;
-    DetectContentData *cd = NULL;
-    DetectUricontentData *ud = NULL;
-    DetectPcreData *pe = NULL;
 
     pd = DetectPcreParse(regexstr);
     if (pd == NULL)
@@ -1265,8 +1031,10 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
             if ( (pd->flags & DETECT_PCRE_URI) ||
                  (pd->flags & DETECT_PCRE_METHOD) ||
                  (pd->flags & DETECT_PCRE_HEADER) ||
+                 (pd->flags & DETECT_PCRE_RAW_HEADER) ||
                  (pd->flags & DETECT_PCRE_COOKIE) ||
-                 (pd->flags & DETECT_PCRE_HTTP_BODY_AL) ) {
+                 (pd->flags & DETECT_PCRE_HTTP_BODY_AL) ||
+                 (pd->flags & DETECT_PCRE_HTTP_RAW_URI) ) {
                 SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "Invalid option. "
                            "DCERPC rule has pcre keyword with http related modifier.");
                 goto error;
@@ -1289,12 +1057,15 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     sm->ctx = (void *)pd;
 
     if (pd->flags & DETECT_PCRE_HEADER) {
-        sm->type = DETECT_PCRE_HTTPHEADER;
-
         SCLogDebug("Header inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
 
-        SigMatchAppendAppLayer(s, sm);
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HHDMATCH);
+    } else if (pd->flags & DETECT_PCRE_RAW_HEADER) {
+        SCLogDebug("Raw header inspection modifier set");
+        s->flags |= SIG_FLAG_APPLAYER;
+
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRHDMATCH);
     } else if (pd->flags & DETECT_PCRE_COOKIE) {
         sm->type = DETECT_PCRE_HTTPCOOKIE;
 
@@ -1310,13 +1081,11 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
         SigMatchAppendAppLayer(s, sm);
     } else if (pd->flags & DETECT_PCRE_HTTP_BODY_AL) {
-        sm->type = DETECT_PCRE_HTTPBODY;
-
         SCLogDebug("Body inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
         AppLayerHtpEnableRequestBodyCallback();
 
-        SigMatchAppendAppLayer(s, sm);
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HCBDMATCH);
     } else if (pd->flags & DETECT_PCRE_URI) {
         s->flags |= SIG_FLAG_APPLAYER;
 
@@ -1329,21 +1098,29 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         s->alproto = ALPROTO_HTTP;
 
         SigMatchAppendUricontent(s, sm);
+    } else if (pd->flags & DETECT_PCRE_HTTP_RAW_URI) {
+        s->flags |= SIG_FLAG_APPLAYER;
+        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                       " keywords.");
+            goto error;
+        }
+        s->alproto = ALPROTO_HTTP;
+
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRUDMATCH);
     } else {
-        if (s->alproto == ALPROTO_DCERPC &&
-            pd->flags & DETECT_PCRE_RELATIVE)
-        {
+        if (s->alproto == ALPROTO_DCERPC && pd->flags & DETECT_PCRE_RELATIVE) {
             SigMatch *pm = NULL;
             SigMatch *dm = NULL;
 
             pm = SigMatchGetLastSMFromLists(s, 6,
-                                            DETECT_CONTENT, s->pmatch_tail,
-                                            DETECT_PCRE, s->pmatch_tail,
-                                            DETECT_BYTEJUMP, s->pmatch_tail);
+                                            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
             dm = SigMatchGetLastSMFromLists(s, 6,
-                                            DETECT_CONTENT, s->pmatch_tail,
-                                            DETECT_PCRE, s->pmatch_tail,
-                                            DETECT_BYTEJUMP, s->pmatch_tail);
+                                            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
 
             if (pm == NULL) {
                 SigMatchAppendDcePayload(s, sm);
@@ -1363,10 +1140,13 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         SCReturnInt(0);
     }
 
-    prev_sm = SigMatchGetLastSMFromLists(s, 8,
+    prev_sm = SigMatchGetLastSMFromLists(s, 14,
                                          DETECT_CONTENT, sm->prev,
                                          DETECT_URICONTENT, sm->prev,
-                                         DETECT_BYTEJUMP, sm->prev,
+                                         DETECT_AL_HTTP_CLIENT_BODY, sm->prev,
+                                         DETECT_AL_HTTP_HEADER, sm->prev,
+                                         DETECT_AL_HTTP_RAW_HEADER, sm->prev,
+                                         DETECT_AL_HTTP_RAW_URI, sm->prev,
                                          DETECT_PCRE, sm->prev);
     if (prev_sm == NULL) {
         if (s->alproto == ALPROTO_DCERPC) {
@@ -1380,8 +1160,16 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         }
     }
 
+    DetectContentData *cd = NULL;
+    DetectPcreData *pe = NULL;
+
     switch (prev_sm->type) {
         case DETECT_CONTENT:
+        case DETECT_URICONTENT:
+        case DETECT_AL_HTTP_CLIENT_BODY:
+        case DETECT_AL_HTTP_HEADER:
+        case DETECT_AL_HTTP_RAW_HEADER:
+        case DETECT_AL_HTTP_RAW_URI:
             /* Set the relative next flag on the prev sigmatch */
             cd = (DetectContentData *)prev_sm->ctx;
             if (cd == NULL) {
@@ -1392,17 +1180,6 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
             break;
 
-        case DETECT_URICONTENT:
-            /* Set the relative next flag on the prev sigmatch */
-            ud = (DetectUricontentData *)prev_sm->ctx;
-            if (ud == NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "uricontent not setup properly");
-                SCReturnInt(-1);
-            }
-            ud->flags |= DETECT_URICONTENT_RELATIVE_NEXT;
-
-            break;
-
         case DETECT_PCRE:
             pe = (DetectPcreData *) prev_sm->ctx;
             if (pe == NULL) {
@@ -1410,12 +1187,6 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
                 SCReturnInt(-1);
             }
             pe->flags |= DETECT_PCRE_RELATIVE_NEXT;
-
-            break;
-
-        case DETECT_BYTEJUMP:
-            SCLogDebug("No setting relative_next for bytejump.  We "
-                       "have no use for it");
 
             break;
 
@@ -1630,14 +1401,14 @@ int DetectPcreParseTest10(void)
     s->alproto = ALPROTO_DCERPC;
 
     result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->dmatch == NULL && s->pmatch != NULL);
+    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
     SigFree(s);
 
     s = SigAlloc();
     /* failure since we have no preceding content/pcre/bytejump */
     result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->dmatch == NULL && s->pmatch != NULL);
+    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
  end:
     SigFree(s);
@@ -1671,12 +1442,12 @@ int DetectPcreParseTest11(void)
         goto end;
     }
     s = de_ctx->sig_list;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE) ||
         data->flags & DETECT_PCRE_URI) {
@@ -1694,12 +1465,12 @@ int DetectPcreParseTest11(void)
         goto end;
     }
     s = s->next;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE) ||
         data->flags & DETECT_PCRE_URI) {
@@ -1717,12 +1488,12 @@ int DetectPcreParseTest11(void)
         goto end;
     }
     s = s->next;
-    if (s->dmatch_tail == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
         result = 0;
         goto end;
     }
-    result &= (s->dmatch_tail->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->dmatch_tail->ctx;
+    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
     if (!(data->flags & DETECT_PCRE_RAWBYTES) ||
         !(data->flags & DETECT_PCRE_RELATIVE) ||
         data->flags & DETECT_PCRE_URI) {
@@ -1732,13 +1503,13 @@ int DetectPcreParseTest11(void)
 
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
-                      "content:one; pcre:/bamboo/; sid:1;)");
+                      "content:\"one\"; pcre:/bamboo/; sid:1;)");
     if (s->next == NULL) {
         result = 0;
         goto end;
     }
     s = s->next;
-    if (s->dmatch_tail != NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
         result = 0;
         goto end;
     }
@@ -1781,6 +1552,7 @@ static int DetectPcreTestSig01Real(int mpm_type) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
 
     StreamTcpInitConfig(TRUE);
     FlowL7DataPtrInit(&f);
@@ -1860,6 +1632,7 @@ static int DetectPcreTestSig02Real(int mpm_type) {
 
     p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
 
     pcre_match_limit = 100;
     pcre_match_limit_recursion = 100;
@@ -1996,11 +1769,10 @@ static int DetectPcreModifPTest04(void) {
         "Transfer-Encoding: chunked\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "\r\n"
-        "88b7\r\n"
+        "15"
         "\r\n"
-        "<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\r\n"
-        "\r\n"
-        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en-gb\" lang=\"en-gb\">\r\n\r\n";
+        "<!DOCTYPE html PUBLIC\r\n"
+        "0\r\n";
 
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     TcpSession ssn;
@@ -2024,6 +1796,7 @@ static int DetectPcreModifPTest04(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2118,13 +1891,11 @@ static int DetectPcreModifPTest05(void) {
         "Transfer-Encoding: chunked\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
         "\r\n"
-        "88b7\r\n"
+        "15"
         "\r\n"
         "<!DOC";
 
-    uint8_t httpbuf2[] = "TYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" \"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">\r\n"
-        "\r\n"
-        "<html xmlns=\"http://www.w3.org/1999/xhtml\" xml:lang=\"en-gb\" lang=\"en-gb\">\r\n\r\n";
+    uint8_t httpbuf2[] = "<!DOCTYPE html PUBLIC\r\n0\r\n";
 
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
     uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
@@ -2151,9 +1922,11 @@ static int DetectPcreModifPTest05(void) {
     p1->flow = &f;
     p1->flowflags |= FLOW_PKT_TOSERVER;
     p1->flowflags |= FLOW_PKT_ESTABLISHED;
+    p1->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p2->flow = &f;
     p2->flowflags |= FLOW_PKT_TOSERVER;
     p2->flowflags |= FLOW_PKT_ESTABLISHED;
+    p2->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2199,7 +1972,7 @@ static int DetectPcreModifPTest05(void) {
         goto end;
     }
 
-    if (!(PacketAlertCheck(p1, 1))) {
+    if (PacketAlertCheck(p1, 1)) {
         printf("sid 1 didn't match on p1 but should have: ");
         goto end;
     }
@@ -2220,7 +1993,7 @@ static int DetectPcreModifPTest05(void) {
     /* do detect for p2 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
 
-    if ((PacketAlertCheck(p2, 1))) {
+    if (!(PacketAlertCheck(p2, 1))) {
         printf("sid 1 did match on p2 but should have: ");
         goto end;
     }
@@ -2336,6 +2109,7 @@ static int DetectPcreTestSig09(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2426,6 +2200,7 @@ static int DetectPcreTestSig10(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2516,6 +2291,7 @@ static int DetectPcreTestSig11(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2606,6 +2382,7 @@ static int DetectPcreTestSig12(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2696,6 +2473,7 @@ static int DetectPcreTestSig13(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2786,6 +2564,7 @@ static int DetectPcreTestSig14(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -2881,6 +2660,7 @@ static int DetectPcreTxBodyChunksTest01(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -3030,6 +2810,7 @@ static int DetectPcreTxBodyChunksTest02(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
@@ -3255,6 +3036,7 @@ static int DetectPcreTxBodyChunksTest03(void) {
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);

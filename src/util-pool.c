@@ -28,35 +28,9 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 
-void PoolFree(Pool *p) {
-    if (p == NULL)
-        return;
-
-    while (p->alloc_list != NULL) {
-        PoolBucket *pb = p->alloc_list;
-        p->alloc_list = pb->next;
-        p->Free(pb->data);
-        pb->data = NULL;
-        SCFree(pb);
-    }
-
-    while (p->empty_list != NULL) {
-        PoolBucket *pb = p->empty_list;
-        p->empty_list = pb->next;
-	if (pb->data!= NULL) {
-            p->Free(pb->data);
-            pb->data = NULL;
-        }
-        SCFree(pb);
-    }
-
-    SCFree(p);
-}
-
 Pool *PoolInit(uint32_t size, uint32_t prealloc_size, void *(*Alloc)(void *), void *AllocData, void (*Free)(void *))
 {
     Pool *p = NULL;
-    uint32_t u32 = 0;
 
     if (Alloc == NULL) {
         //printf("ERROR: PoolInit no Hash function\n");
@@ -79,6 +53,7 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, void *(*Alloc)(void *), vo
     p->Free  = Free;
 
     /* alloc the buckets and place them in the empty list */
+    uint32_t u32 = 0;
     for (u32 = 0; u32 < size; u32++) {
         /* populate pool */
         PoolBucket *pb = SCMalloc(sizeof(PoolBucket));
@@ -130,6 +105,31 @@ error:
         PoolFree(p);
     }
     return NULL;
+}
+
+void PoolFree(Pool *p) {
+    if (p == NULL)
+        return;
+
+    while (p->alloc_list != NULL) {
+        PoolBucket *pb = p->alloc_list;
+        p->alloc_list = pb->next;
+        p->Free(pb->data);
+        pb->data = NULL;
+        SCFree(pb);
+    }
+
+    while (p->empty_list != NULL) {
+        PoolBucket *pb = p->empty_list;
+        p->empty_list = pb->next;
+	if (pb->data!= NULL) {
+            p->Free(pb->data);
+            pb->data = NULL;
+        }
+        SCFree(pb);
+    }
+
+    SCFree(p);
 }
 
 void PoolPrint(Pool *p) {
@@ -215,7 +215,8 @@ void PoolPrintSaturation(Pool *p) {
  */
 
 void *PoolTestAlloc(void *allocdata) {
-    return SCMalloc(10);
+    void *ptr = SCMalloc(10);
+    return ptr;
 }
 void *PoolTestAllocArg(void *allocdata) {
     size_t len = strlen((char *)allocdata) + 1;

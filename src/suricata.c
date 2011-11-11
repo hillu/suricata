@@ -22,6 +22,7 @@
  */
 
 #include "suricata-common.h"
+#include "config.h"
 
 #include <getopt.h>
 #include <signal.h>
@@ -45,6 +46,8 @@
 #include "util-cpu.h"
 #include "util-action.h"
 #include "util-pidfile.h"
+#include "util-ioctl.h"
+#include "util-device.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
@@ -53,12 +56,18 @@
 #include "detect-engine-payload.h"
 #include "detect-engine-dcepayload.h"
 #include "detect-engine-uri.h"
+#include "detect-engine-hcbd.h"
+#include "detect-engine-hhd.h"
+#include "detect-engine-hrhd.h"
+#include "detect-engine-hmd.h"
+#include "detect-engine-hcd.h"
+#include "detect-engine-hrud.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
+#include "detect-fast-pattern.h"
 
 #include "tm-queuehandlers.h"
 #include "tm-queues.h"
-#include "tm-modules.h"
 #include "tm-threads.h"
 
 #include "tmqh-flow.h"
@@ -67,13 +76,15 @@
 #include "conf-yaml-loader.h"
 
 #include "alert-fastlog.h"
-#include "alert-unified-log.h"
-#include "alert-unified-alert.h"
 #include "alert-unified2-alert.h"
 #include "alert-debuglog.h"
 #include "alert-prelude.h"
+#include "alert-syslog.h"
+#include "alert-pcapinfo.h"
+#include "log-droplog.h"
 
 #include "log-httplog.h"
+#include "log-pcap.h"
 
 #include "stream-tcp.h"
 
@@ -90,9 +101,13 @@
 #include "source-erf-file.h"
 #include "source-erf-dag.h"
 
+#include "source-af-packet.h"
+
 #include "respond-reject.h"
 
 #include "flow.h"
+#include "flow-timeout.h"
+#include "flow-manager.h"
 #include "flow-var.h"
 #include "flow-bit.h"
 #include "flow-alert-sid.h"
@@ -100,7 +115,6 @@
 
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
-#include "app-layer-tls.h"
 #include "app-layer-smb.h"
 #include "app-layer-dcerpc.h"
 #include "app-layer-dcerpc-udp.h"
@@ -108,6 +122,7 @@
 #include "app-layer-ftp.h"
 #include "app-layer-ssl.h"
 #include "app-layer-ssh.h"
+#include "app-layer-smtp.h"
 
 #include "util-radix-tree.h"
 #include "util-host-os-info.h"
@@ -118,6 +133,7 @@
 #include "util-rule-vars.h"
 #include "util-classification-config.h"
 #include "util-threshold-config.h"
+#include "util-reference-config.h"
 #include "util-profiling.h"
 
 #include "defrag.h"
@@ -144,6 +160,8 @@
 
 #include "util-ringbuffer.h"
 #include "util-mem.h"
+#include "util-memcmp.h"
+#include "util-proto-name.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -166,7 +184,11 @@ SC_ATOMIC_DECLARE(unsigned int, engine_stage);
 uint8_t suricata_ctl_flags = 0;
 
 /** Run mode selected */
-int run_mode = MODE_UNKNOWN;
+int run_mode = RUNMODE_UNKNOWN;
+
+/** engine_analysis.  disabled(0) by default, unless enabled by the user by
+  * running the engine with --engine-analysis */
+int engine_analysis = 0;
 
 /** Engine mode: inline (ENGINE_MODE_IPS) or just
   * detection mode (ENGINE_MODE_IDS by default) */
@@ -179,7 +201,7 @@ intmax_t max_pending_packets;
 int sc_set_caps;
 
 int RunmodeIsUnittests(void) {
-    if (run_mode == MODE_UNITTEST)
+    if (run_mode == RUNMODE_UNITTEST)
         return 1;
 
     return 0;
@@ -300,6 +322,76 @@ static void SetBpfString(int optind, char *argv[]) {
     }
     SCFree(bpf_filter);
 }
+static void SetBpfStringFromFile(char *filename) {
+    char *bpf_filter = NULL;
+    char *bpf_comment_tmp = NULL;
+    char *bpf_comment_start =  NULL;
+    uint32_t bpf_len = 0;
+#ifdef OS_WIN32
+    struct _stat st;
+#else
+    struct stat st;
+#endif /* OS_WIN32 */
+    FILE *fp = NULL;
+    size_t nm = 0;
+
+#ifdef OS_WIN32
+    if(_stat(filename, &st) != 0) {
+#else
+    if(stat(filename, &st) != 0) {
+#endif /* OS_WIN32 */
+        SCLogError(SC_ERR_FOPEN, "Failed to stat file %s", filename);
+        exit(EXIT_FAILURE);
+    }
+    bpf_len=st.st_size + 1;
+
+    bpf_filter = SCMalloc(bpf_len*sizeof(char));
+    if(bpf_filter == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+        "Failed to allocate buffer for bpf filter in file %s", filename);
+        exit(EXIT_FAILURE);
+    }
+    memset(bpf_filter, 0x00, bpf_len);
+
+    fp = fopen(filename,"r");
+    if(fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "Failed to open file %s", filename);
+        SCFree(bpf_filter);
+        exit(EXIT_FAILURE);
+    }else {
+        nm = fread(bpf_filter, bpf_len - 1, 1, fp);
+        if((ferror(fp) != 0)||( nm != 1)) {
+           *bpf_filter='\0';
+        }
+        fclose(fp);
+    }
+
+    if(strlen(bpf_filter) > 0) {
+        /*replace comments with space*/
+        bpf_comment_start = bpf_filter;
+        while((bpf_comment_tmp = strchr(bpf_comment_start, '#')) != NULL) {
+            while((*bpf_comment_tmp !='\0') &&
+                (*bpf_comment_tmp != '\r') && (*bpf_comment_tmp != '\n'))
+            {
+                *bpf_comment_tmp++ = ' ';
+            }
+            bpf_comment_start = bpf_comment_tmp;
+        }
+        /*remove remaining '\r' and '\n' */
+        while((bpf_comment_tmp = strchr(bpf_filter, '\r')) != NULL) {
+            *bpf_comment_tmp = ' ';
+        }
+        while((bpf_comment_tmp = strchr(bpf_filter, '\n')) != NULL) {
+            *bpf_comment_tmp = ' ';
+        }
+        if(ConfSet("bpf-filter", bpf_filter, 0) != 1) {
+            SCLogError(SC_ERR_FOPEN, "ERROR: Failed to set bpf filter!");
+            SCFree(bpf_filter);
+            exit(EXIT_FAILURE);
+        }
+    }
+    SCFree(bpf_filter);
+}
 
 void usage(const char *progname)
 {
@@ -311,6 +403,7 @@ void usage(const char *progname)
     printf("USAGE: %s\n\n", progname);
     printf("\t-c <path>                    : path to configuration file\n");
     printf("\t-i <dev or ip>               : run in pcap live mode\n");
+    printf("\t-F <bpf filter file>         : bpf filter file\n");
     printf("\t-r <path>                    : run in pcap file/offline mode\n");
 #ifdef NFQ
     printf("\t-q <qid>                     : run in inline nfqueue mode\n");
@@ -333,14 +426,29 @@ void usage(const char *progname)
     printf("\t--list-unittests             : list unit tests\n");
     printf("\t--fatal-unittests            : enable fatal failure on unittest error\n");
 #endif /* UNITTESTS */
+#ifdef __SC_CUDA_SUPPORT__
+    printf("\t--list-cuda-cards            : list cuda supported cards\n");
+#endif
+    printf("\t--list-runmodes              : list supported runmodes\n");
+    printf("\t--runmode <runmode_id>       : specific runmode modification the engine should run.  The argument\n"
+           "\t                               supplied should be the id for the runmode obtained by running\n"
+           "\t                               --list-runmodes\n");
+    printf("\t--engine-analysis            : print reports on analysis of different sections in the engine and exit.\n"
+           "\t                               Please have a look at the conf parameter engine-analysis on what reports\n"
+           "\t                               can be printed\n");
     printf("\t--pidfile <file>             : write pid to this file (only for daemon mode)\n");
     printf("\t--init-errors-fatal          : enable fatal failure on signature init error\n");
     printf("\t--dump-config                : show the running configuration\n");
+    printf("\t--pcap[=<dev>]               : run in pcap mode, no value select interfaces from suricata.yaml\n");
 #ifdef HAVE_PCAP_SET_BUFF
     printf("\t--pcap-buffer-size           : size of the pcap buffer value from 0 - %i\n",INT_MAX);
 #endif /* HAVE_SET_PCAP_BUFF */
+#ifdef HAVE_AF_PACKET
+    printf("\t--af-packet[=<dev>]          : run in af-packet mode, no value select interfaces from suricata.yaml\n");
+#endif
 #ifdef HAVE_PFRING
-    printf("\t--pfring-int <dev>           : run in pfring mode\n");
+    printf("\t--pfring[=<dev>]               : run in pfring mode, use interfaces from suricata.yaml\n");
+    printf("\t--pfring-int <dev>           : run in pfring mode, use interface <dev>\n");
     printf("\t--pfring-cluster-id <id>     : pfring cluster id \n");
     printf("\t--pfring-cluster-type <type> : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow\n");
 #endif /* HAVE_PFRING */
@@ -359,14 +467,115 @@ void usage(const char *progname)
             progname);
 }
 
+void SCPrintBuildInfo(void) {
+    char *bits = "<unknown>-bits";
+    char *endian = "<unknown>-endian";
+    char features[2048] = "";
+
+#ifdef DEBUG
+    strlcat(features, "DEBUG ", sizeof(features));
+#endif
+#ifdef DEBUG_VALIDATION
+    strlcat(features, "DEBUG_VALIDATION ", sizeof(features));
+#endif
+#ifdef UNITTESTS
+    strlcat(features, "UNITTESTS ", sizeof(features));
+#endif
+#ifdef NFQ
+    strlcat(features, "NFQ ", sizeof(features));
+#endif
+#ifdef IPFW
+    strlcat(features, "IPFW ", sizeof(features));
+#endif
+#ifdef HAVE_PCAP_SET_BUFF
+    strlcat(features, "PCAP_SET_BUFF ", sizeof(features));
+#endif
+#if LIBPCAP_VERSION_MAJOR == 1
+    strlcat(features, "LIBPCAP_VERSION_MAJOR=1 ", sizeof(features));
+#elif LIBPCAP_VERSION_MAJOR == 0
+    strlcat(features, "LIBPCAP_VERSION_MAJOR=0 ", sizeof(features));
+#endif
+#ifdef __SC_CUDA_SUPPORT__
+    strlcat(features, "CUDA ", sizeof(features));
+#endif
+#ifdef HAVE_PFRING
+    strlcat(features, "PF_RING ", sizeof(features));
+#endif
+#ifdef HAVE_AF_PACKET
+    strlcat(features, "AF_PACKET ", sizeof(features));
+#endif
+#ifdef HAVE_DAG
+    strlcat(features, "DAG ", sizeof(features));
+#endif
+#ifdef HAVE_LIBCAP_NG
+    strlcat(features, "LIBCAP_NG ", sizeof(features));
+#endif
+#ifdef HAVE_LIBNET11
+    strlcat(features, "LIBNET1.1 ", sizeof(features));
+#endif
+#ifdef HAVE_HTP_URI_NORMALIZE_HOOK
+    strlcat(features, "HAVE_HTP_URI_NORMALIZE_HOOK ", sizeof(features));
+#endif
+#ifdef PCRE_HAVE_JIT
+    strlcat(features, "PCRE_JIT ", sizeof(features));
+#endif
+    if (strlen(features) == 0) {
+        strlcat(features, "none", sizeof(features));
+    }
+
+    SCLogInfo("Features: %s", features);
+
+#if __WORDSIZE == 64
+    bits = "64-bits";
+#elif __WORDSIZE == 32
+    bits = "32-bits";
+#endif
+
+#if __BYTE_ORDER == __BIG_ENDIAN
+    endian = "Big-endian";
+#elif __BYTE_ORDER == __LITTLE_ENDIAN
+    endian = "Little-endian";
+#endif
+
+    SCLogInfo("%s, %s architecture", bits, endian);
+#ifdef __GNUC__
+    SCLogInfo("GCC version %s, C version %"PRIiMAX, __VERSION__, (intmax_t)__STDC_VERSION__);
+#else
+    SCLogInfo("C version %"PRIiMAX, (intmax_t)__STDC_VERSION__);
+#endif
+
+#ifdef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1
+    SCLogInfo("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1");
+#endif
+#ifdef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2
+    SCLogInfo("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
+#endif
+#ifdef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
+    SCLogInfo("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
+#endif
+#ifdef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
+    SCLogInfo("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+#endif
+#ifdef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_16
+    SCLogInfo("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_16");
+#endif
+
+#if __SSP__ == 1
+    SCLogInfo("compiled with -fstack-protector");
+#endif
+#if __SSP_ALL__ == 2
+    SCLogInfo("compiled with -fstack-protector-all");
+#endif
+#ifdef _FORTIFY_SOURCE
+    SCLogInfo("compiled with _FORTIFY_SOURCE=%d", _FORTIFY_SOURCE);
+#endif
+}
+
 int main(int argc, char **argv)
 {
     int opt;
-    char *pcap_file = NULL;
     char pcap_dev[128];
-    char *pfring_dev = NULL;
     char *sig_file = NULL;
-    char *nfq_id = NULL;
     char *conf_filename = NULL;
     char *pid_filename = NULL;
 #ifdef UNITTESTS
@@ -375,18 +584,25 @@ int main(int argc, char **argv)
     int dump_config = 0;
     int list_unittests = 0;
     int list_cuda_cards = 0;
+    int list_runmodes = 0;
+    const char *runmode_custom_mode = NULL;
     int daemon = 0;
+#ifndef OS_WIN32
     char *user_name = NULL;
     char *group_name = NULL;
     uint8_t do_setuid = FALSE;
     uint8_t do_setgid = FALSE;
     uint32_t userid = 0;
     uint32_t groupid = 0;
-    char *erf_file = NULL;
-    char *dag_input = NULL;
+#endif /* OS_WIN32 */
+    int build_info = 0;
 
     char *log_dir;
+#ifdef OS_WIN32
+    struct _stat buf;
+#else
     struct stat buf;
+#endif /* OS_WIN32 */
 
     sc_set_caps = FALSE;
 
@@ -395,9 +611,13 @@ int main(int argc, char **argv)
     /* initialize the logging subsys */
     SCLogInitLogModule(NULL);
 
+    RunModeRegisterRunModes();
+
     /* By default use IDS mode, but if nfq or ipfw
      * are specified, IPS mode will overwrite this */
     SET_ENGINE_MODE_IDS(engine_mode);
+
+    memset(pcap_dev, 0, sizeof(pcap_dev));
 
 #ifdef OS_WIN32
 	/* service initialization */
@@ -436,13 +656,19 @@ int main(int argc, char **argv)
 
     struct option long_opts[] = {
         {"dump-config", 0, &dump_config, 1},
-        {"pfring-int",  required_argument, 0, 0},
-        {"pfring-cluster-id",  required_argument, 0, 0},
-        {"pfring-cluster-type",  required_argument, 0, 0},
+        {"pfring", optional_argument, 0, 0},
+        {"pfring-int", required_argument, 0, 0},
+        {"pfring-cluster-id", required_argument, 0, 0},
+        {"pfring-cluster-type", required_argument, 0, 0},
+        {"af-packet", optional_argument, 0, 0},
+        {"pcap", optional_argument, 0, 0},
         {"pcap-buffer-size", required_argument, 0, 0},
         {"unittest-filter", required_argument, 0, 'U'},
         {"list-unittests", 0, &list_unittests, 1},
         {"list-cuda-cards", 0, &list_cuda_cards, 1},
+        {"list-runmodes", 0, &list_runmodes, 1},
+        {"runmode", required_argument, NULL, 0},
+        {"engine-analysis", 0, &engine_analysis, 1},
 #ifdef OS_WIN32
 		{"service-install", 0, 0, 0},
 		{"service-remove", 0, 0, 0},
@@ -455,52 +681,118 @@ int main(int argc, char **argv)
         {"group", required_argument, 0, 0},
         {"erf-in", required_argument, 0, 0},
         {"dag", required_argument, 0, 0},
+        {"build-info", 0, &build_info, 1},
         {NULL, 0, NULL, 0}
     };
 
     /* getopt_long stores the option index here. */
     int option_index = 0;
 
-    char short_opts[] = "c:Dhi:l:q:d:r:us:U:V";
+    char short_opts[] = "c:Dhi:l:q:d:r:us:U:VF:";
 
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, &option_index)) != -1) {
         switch (opt) {
         case 0:
-            if(strcmp((long_opts[option_index]).name , "pfring-int") == 0){
+            if (strcmp((long_opts[option_index]).name , "pfring") == 0 ||
+                strcmp((long_opts[option_index]).name , "pfring-int") == 0) {
 #ifdef HAVE_PFRING
-                run_mode = MODE_PFRING;
-                if (ConfSet("pfring.interface", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set pfring interface.\n");
-                    exit(EXIT_FAILURE);
+                run_mode = RUNMODE_PFRING;
+                if (optarg != NULL) {
+                    memset(pcap_dev, 0, sizeof(pcap_dev));
+                    strlcpy(pcap_dev, optarg,
+                            ((strlen(optarg) < sizeof(pcap_dev)) ?
+                             (strlen(optarg) + 1) : sizeof(pcap_dev)));
+                    LiveRegisterDevice(optarg);
                 }
 #else
-                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure "
+                        "to pass --enable-pfring to configure when building.");
                 exit(EXIT_FAILURE);
 #endif /* HAVE_PFRING */
             }
             else if(strcmp((long_opts[option_index]).name , "pfring-cluster-id") == 0){
 #ifdef HAVE_PFRING
                 if (ConfSet("pfring.cluster-id", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set pfring cluster-id.\n");
+                    fprintf(stderr, "ERROR: Failed to set pfring.cluster-id.\n");
                     exit(EXIT_FAILURE);
                 }
 #else
-                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure "
+                        "to pass --enable-pfring to configure when building.");
                 exit(EXIT_FAILURE);
 #endif /* HAVE_PFRING */
             }
             else if(strcmp((long_opts[option_index]).name , "pfring-cluster-type") == 0){
 #ifdef HAVE_PFRING
                 if (ConfSet("pfring.cluster-type", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set pfring cluster-type.\n");
+                    fprintf(stderr, "ERROR: Failed to set pfring.cluster-type.\n");
                     exit(EXIT_FAILURE);
                 }
 #else
-                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure to pass --enable-pfring to configure when building.");
+                SCLogError(SC_ERR_NO_PF_RING,"PF_RING not enabled. Make sure "
+                        "to pass --enable-pfring to configure when building.");
                 exit(EXIT_FAILURE);
 #endif /* HAVE_PFRING */
             }
-            else if(strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
+            else if (strcmp((long_opts[option_index]).name , "af-packet") == 0){
+#ifdef HAVE_AF_PACKET
+                if (run_mode == RUNMODE_UNKNOWN) {
+                    run_mode = RUNMODE_AFP_DEV;
+                    if (optarg) {
+                        LiveRegisterDevice(optarg);
+                        memset(pcap_dev, 0, sizeof(pcap_dev));
+                        strlcpy(pcap_dev, optarg,
+                                ((strlen(optarg) < sizeof(pcap_dev)) ?
+                                 (strlen(optarg) + 1) : sizeof(pcap_dev)));
+                    }
+                } else if (run_mode == RUNMODE_AFP_DEV) {
+                    SCLogWarning(SC_WARN_PCAP_MULTI_DEV_EXPERIMENTAL, "using "
+                            "multiple devices to get packets is experimental.");
+                    if (optarg) {
+                        LiveRegisterDevice(optarg);
+                    } else {
+                        SCLogInfo("Multiple af-packet option without interface on each is useless");
+                        break;
+                    }
+                } else {
+                    SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                            "has been specified");
+                    usage(argv[0]);
+                    exit(EXIT_FAILURE);
+                }
+#else
+                SCLogError(SC_ERR_NO_AF_PACKET,"AF_PACKET not enabled. On Linux "
+                        "host, make sure to pass --enable-af-packet to "
+                        "configure when building.");
+                exit(EXIT_FAILURE);
+#endif
+            } else if (strcmp((long_opts[option_index]).name , "pcap") == 0) {
+                if (run_mode == RUNMODE_UNKNOWN) {
+                    run_mode = RUNMODE_PCAP_DEV;
+                    if (optarg) {
+                        LiveRegisterDevice(optarg);
+                        memset(pcap_dev, 0, sizeof(pcap_dev));
+                        strlcpy(pcap_dev, optarg,
+                                ((strlen(optarg) < sizeof(pcap_dev)) ?
+                                 (strlen(optarg) + 1) : sizeof(pcap_dev)));
+                    }
+                } else if (run_mode == RUNMODE_PCAP_DEV) {
+#ifdef OS_WIN32
+                    SCLogError(SC_ERR_PCAP_MULTI_DEV_NO_SUPPORT, "pcap multi dev "
+                            "support is not (yet) supported on Windows.");
+                    exit(EXIT_FAILURE);
+#else
+                    SCLogWarning(SC_WARN_PCAP_MULTI_DEV_EXPERIMENTAL, "using "
+                            "multiple pcap devices to get packets is experimental.");
+                    LiveRegisterDevice(optarg);
+#endif
+                } else {
+                    SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                            "has been specified");
+                    usage(argv[0]);
+                    exit(EXIT_FAILURE);
+                }
+            } else if(strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
                 if (ConfSet("engine.init_failure_fatal", "1", 0) != 1) {
                     fprintf(stderr, "ERROR: Failed to set engine init_failure_fatal.\n");
                     exit(EXIT_FAILURE);
@@ -509,7 +801,7 @@ int main(int argc, char **argv)
             else if(strcmp((long_opts[option_index]).name, "list-unittests") == 0) {
 #ifdef UNITTESTS
                 /* Set run_mode to unit tests. */
-                run_mode = MODE_UNITTEST;
+                run_mode = RUNMODE_UNITTEST;
 #else
                 fprintf(stderr, "ERROR: Unit tests not enabled. Make sure to pass --enable-unittests to configure when building.\n");
                 exit(EXIT_FAILURE);
@@ -520,6 +812,13 @@ int main(int argc, char **argv)
                         "--enable-cuda to configure when building.\n");
                 exit(EXIT_FAILURE);
 #endif /* UNITTESTS */
+            } else if (strcmp((long_opts[option_index]).name, "list-runmodes") == 0) {
+                RunModeListRunmodes();
+                exit(EXIT_SUCCESS);
+            } else if (strcmp((long_opts[option_index]).name, "runmode") == 0) {
+                runmode_custom_mode = optarg;
+            } else if(strcmp((long_opts[option_index]).name, "engine-analysis") == 0) {
+                // do nothing for now
             }
 #ifdef OS_WIN32
             else if(strcmp((long_opts[option_index]).name, "service-install") == 0) {
@@ -579,13 +878,19 @@ int main(int argc, char **argv)
 #endif /* HAVE_LIBCAP_NG */
             }
             else if (strcmp((long_opts[option_index]).name, "erf-in") == 0) {
-                run_mode = MODE_ERF_FILE;
-                erf_file = optarg;
+                run_mode = RUNMODE_ERF_FILE;
+                if (ConfSet("erf_file.file", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set erf_file.file\n");
+                    exit(EXIT_FAILURE);
+                }
             }
 			else if (strcmp((long_opts[option_index]).name, "dag") == 0) {
 #ifdef HAVE_DAG
-				run_mode = MODE_DAG;
-				dag_input = optarg;
+				run_mode = RUNMODE_DAG;
+                if (ConfSet("erf_dag.iface", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set erf_dag.iface\n");
+                    exit(EXIT_FAILURE);
+                }
 #else
 				SCLogError(SC_ERR_DAG_REQUIRED, "libdag and a DAG card are required"
 						" to receieve packets using --dag.");
@@ -603,6 +908,10 @@ int main(int argc, char **argv)
                         " doesn't support setting buffer size.");
 #endif /* HAVE_PCAP_SET_BUFF */
             }
+            else if(strcmp((long_opts[option_index]).name, "build-info") == 0) {
+                SCPrintBuildInfo();
+                exit(EXIT_SUCCESS);
+            }
             break;
         case 'c':
             conf_filename = optarg;
@@ -617,16 +926,27 @@ int main(int argc, char **argv)
             exit(EXIT_SUCCESS);
             break;
         case 'i':
-            if (run_mode == MODE_UNKNOWN) {
-                run_mode = MODE_PCAP_DEV;
+            if (run_mode == RUNMODE_UNKNOWN) {
+                run_mode = RUNMODE_PCAP_DEV;
+                LiveRegisterDevice(optarg);
+            } else if (run_mode == RUNMODE_PCAP_DEV) {
+#ifdef OS_WIN32
+                SCLogError(SC_ERR_PCAP_MULTI_DEV_NO_SUPPORT, "pcap multi dev "
+                        "support is not (yet) supported on Windows.");
+                exit(EXIT_FAILURE);
+#else
+                SCLogWarning(SC_WARN_PCAP_MULTI_DEV_EXPERIMENTAL, "using "
+                        "multiple pcap devices to get packets is experimental.");
+                LiveRegisterDevice(optarg);
+#endif
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
                 usage(argv[0]);
                 exit(EXIT_FAILURE);
             }
-			memset(pcap_dev, 0, sizeof(pcap_dev));
-			      strncpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)) : (sizeof(pcap_dev)-1)));
+            memset(pcap_dev, 0, sizeof(pcap_dev));
+            strlcpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)+1) : (sizeof(pcap_dev))));
             break;
         case 'l':
             if (ConfSet("default-log-dir", optarg, 0) != 1) {
@@ -634,24 +954,28 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
             if (stat(optarg, &buf) != 0) {
-                SCLogError(SC_ERR_LOGDIR_CMDLINE, "The logging directory \"%s\" "
-                        "upplied at the commandline (-l %s) doesn't "
+                SCLogError(SC_ERR_LOGDIR_CMDLINE, "The logging directory \"%s\""
+                        " supplied at the commandline (-l %s) doesn't "
                         "exist. Shutting down the engine.", optarg, optarg);
                 exit(EXIT_FAILURE);
             }
             break;
         case 'q':
 #ifdef NFQ
-            if (run_mode == MODE_UNKNOWN) {
-                run_mode = MODE_NFQ;
+            if (run_mode == RUNMODE_UNKNOWN) {
+                run_mode = RUNMODE_NFQ;
                 SET_ENGINE_MODE_IPS(engine_mode);
+                if (NFQRegisterQueue(optarg) == -1)
+                    exit(EXIT_FAILURE);
+            } else if (run_mode == RUNMODE_NFQ) {
+                if (NFQRegisterQueue(optarg) == -1)
+                    exit(EXIT_FAILURE);
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
                 usage(argv[0]);
-                exit(EXIT_SUCCESS);
+                exit(EXIT_FAILURE);
             }
-            nfq_id = optarg;
 #else
             SCLogError(SC_ERR_NFQ_NOSUPPORT,"NFQUEUE not enabled. Make sure to pass --enable-nfqueue to configure when building.");
             exit(EXIT_FAILURE);
@@ -659,8 +983,8 @@ int main(int argc, char **argv)
             break;
         case 'd':
 #ifdef IPFW
-            if (run_mode == MODE_UNKNOWN) {
-                run_mode = MODE_IPFW;
+            if (run_mode == RUNMODE_UNKNOWN) {
+                run_mode = RUNMODE_IPFW;
                 SET_ENGINE_MODE_IPS(engine_mode);
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
@@ -668,7 +992,7 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 exit(EXIT_SUCCESS);
             }
-            if (ConfSet("ipfw-divert-port", optarg, 0) != 1) {
+            if (ConfSet("ipfw.ipfw_divert_port", optarg, 0) != 1) {
                 fprintf(stderr, "ERROR: Failed to set ipfw_divert_port\n");
                 exit(EXIT_FAILURE);
             }
@@ -678,23 +1002,26 @@ int main(int argc, char **argv)
 #endif /* IPFW */
             break;
         case 'r':
-            if (run_mode == MODE_UNKNOWN) {
-                run_mode = MODE_PCAP_FILE;
+            if (run_mode == RUNMODE_UNKNOWN) {
+                run_mode = RUNMODE_PCAP_FILE;
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
                 usage(argv[0]);
                 exit(EXIT_SUCCESS);
             }
-            pcap_file = optarg;
+            if (ConfSet("pcap_file.file", optarg, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set pcap_file.file\n");
+                exit(EXIT_FAILURE);
+            }
             break;
         case 's':
             sig_file = optarg;
             break;
         case 'u':
 #ifdef UNITTESTS
-            if (run_mode == MODE_UNKNOWN) {
-                run_mode = MODE_UNITTEST;
+            if (run_mode == RUNMODE_UNKNOWN) {
+                run_mode = RUNMODE_UNITTEST;
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode has"
                                                      " been specified");
@@ -721,6 +1048,9 @@ int main(int argc, char **argv)
             printf("\nThis is %s version %s\n\n", PROG_NAME, PROG_VER);
 #endif
             exit(EXIT_SUCCESS);
+        case 'F':
+            SetBpfStringFromFile(optarg);
+            break;
         default:
             usage(argv[0]);
             exit(EXIT_FAILURE);
@@ -746,6 +1076,7 @@ int main(int argc, char **argv)
     /* Initializations for global vars, queues, etc (memsets, mutex init..) */
     GlobalInits();
     TimeInit();
+    SupportFastPatternForSigMatchTypes();
 
     /* Load yaml configuration file if provided. */
     if (conf_filename != NULL) {
@@ -753,7 +1084,7 @@ int main(int argc, char **argv)
             /* Error already displayed. */
             exit(EXIT_FAILURE);
         }
-    } else if (run_mode != MODE_UNITTEST){
+    } else if (run_mode != RUNMODE_UNITTEST){
         SCLogError(SC_ERR_OPENING_FILE, "Configuration file has not been provided");
         usage(argv[0]);
         exit(EXIT_FAILURE);
@@ -766,9 +1097,21 @@ int main(int argc, char **argv)
 
     /* Check for the existance of the default logging directory which we pick
      * from suricata.yaml.  If not found, shut the engine down */
-    if (ConfGet("default-log-dir", &log_dir) != 1)
+    if (ConfGet("default-log-dir", &log_dir) != 1) {
+#ifdef OS_WIN32
+        log_dir = _getcwd(NULL, 0);
+        if (log_dir == NULL) {
+            log_dir = DEFAULT_LOG_DIR;
+        }
+#else
         log_dir = DEFAULT_LOG_DIR;
+#endif /* OS_WIN32 */
+    }
+#ifdef OS_WIN32
+    if (_stat(log_dir, &buf) != 0) {
+#else
     if (stat(log_dir, &buf) != 0) {
+#endif /* OS_WIN32 */
         SCLogError(SC_ERR_LOGDIR_CONFIG, "The logging directory \"%s\" "
                     "supplied by %s (default-log-dir) doesn't exist. "
                     "Shutting down the engine", log_dir, conf_filename);
@@ -781,27 +1124,71 @@ int main(int argc, char **argv)
         max_pending_packets = DEFAULT_MAX_PENDING_PACKETS;
     SCLogDebug("Max pending packets set to %"PRIiMAX, max_pending_packets);
 
+    /* Pull the default packet size from the config, if not found fall
+     * back on a sane default. */
+    if (ConfGetInt("default-packet-size", &default_packet_size) != 1) {
+        switch (run_mode) {
+            case RUNMODE_PCAP_DEV:
+            case RUNMODE_AFP_DEV:
+            case RUNMODE_PFRING:
+                /* FIXME this don't work effficiently in multiinterface */
+                /* find payload for interface and use it */
+                default_packet_size = GetIfaceMaxPayloadSize(pcap_dev);
+                if (default_packet_size)
+                    break;
+            default:
+                default_packet_size = DEFAULT_PACKET_SIZE;
+        }
+    }
+    SCLogDebug("Default packet size set to %"PRIiMAX, default_packet_size);
+
+#ifdef NFQ
+    if (run_mode == RUNMODE_NFQ)
+        NFQInitConfig(FALSE);
+#endif
+
     /* Since our config is now loaded we can finish configurating the
      * logging module. */
     SCLogLoadConfig();
+
+#ifdef __SC_CUDA_SUPPORT__
+    /* load the cuda configuration */
+    SCCudaHlGetYamlConf();
+#endif /* __SC_CUDA_SUPPORT__ */
 
     /* Load the Host-OS lookup. */
     SCHInfoLoadFromConfig();
     DefragInit();
 
-    if (run_mode == MODE_UNKNOWN) {
-        usage(argv[0]);
-        exit(EXIT_FAILURE);
+    if (run_mode == RUNMODE_UNKNOWN) {
+        if (!engine_analysis) {
+            usage(argv[0]);
+            exit(EXIT_FAILURE);
+        }
     }
 
-    /* create table for O(1) lowercase conversion lookup */
-    uint8_t c = 0;
-    for ( ; c < 255; c++) {
-       if (c >= 'A' && c <= 'Z')
-           g_u8_lowercasetable[c] = (c + ('a' - 'A'));
-       else
-           g_u8_lowercasetable[c] = c;
+    if (engine_analysis) {
+        SCLogInfo("== Carrying out Engine Analysis ==");
+        char *temp = NULL;
+        if (ConfGet("engine-analysis", &temp) == 0) {
+            SCLogInfo("no engine-analysis parameter(s) defined in conf file.  "
+                      "Please define/enable them in the conf to use this "
+                      "feature.");
+            exit(EXIT_FAILURE);
+        }
     }
+
+    /* create table for O(1) lowercase conversion lookup.  It was removed, but
+     * we still need it for cuda.  So resintalling it back into the codebase */
+    uint8_t c = 0;
+    memset(g_u8_lowercasetable, 0x00, sizeof(g_u8_lowercasetable));
+    for ( ; c < 255; c++) {
+        if (c >= 'A' && c <= 'Z')
+            g_u8_lowercasetable[c] = (c + ('a' - 'A'));
+        else
+            g_u8_lowercasetable[c] = c;
+    }
+
     /* hardcoded initialization code */
     MpmTableSetup(); /* load the pattern matchers */
     SigTableSetup(); /* load the rule keywords */
@@ -815,6 +1202,7 @@ int main(int argc, char **argv)
     SCProfilingInit();
 #endif /* PROFILING */
     SCReputationInitCtx();
+    SCProtoNameInit();
 
     TagInitCtx();
 
@@ -826,6 +1214,8 @@ int main(int argc, char **argv)
     TmModuleDecodeIPFWRegister();
     TmModuleReceivePcapRegister();
     TmModuleDecodePcapRegister();
+    TmModuleReceiveAFPRegister();
+    TmModuleDecodeAFPRegister();
     TmModuleReceivePfringRegister();
     TmModuleDecodePfringRegister();
     TmModuleReceivePcapFileRegister();
@@ -837,13 +1227,17 @@ int main(int argc, char **argv)
     TmModuleRespondRejectRegister();
     TmModuleAlertFastLogIPv4Register();
     TmModuleAlertFastLogIPv6Register();
-    TmModuleAlertUnifiedLogRegister();
-    TmModuleAlertUnifiedAlertRegister();
+    TmModuleAlertSyslogIPv4Register();
+    TmModuleAlertSyslogIPv6Register();
     TmModuleUnified2AlertRegister();
+    TmModuleAlertSyslogRegister();
+    TmModuleAlertPcapInfoRegister();
+    TmModuleLogDropLogRegister();
     TmModuleStreamTcpRegister();
     TmModuleLogHttpLogRegister();
     TmModuleLogHttpLogIPv4Register();
     TmModuleLogHttpLogIPv6Register();
+    TmModulePcapLogRegister();
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
     TmModuleCudaPacketBatcherRegister();
@@ -856,20 +1250,11 @@ int main(int argc, char **argv)
 
     /** \todo we need an api for these */
     AppLayerDetectProtoThreadInit();
-    RegisterAppLayerParsers();
-    RegisterHTPParsers();
-    RegisterTLSParsers();
-    RegisterSMBParsers();
-    RegisterDCERPCParsers();
-    RegisterDCERPCUDPParsers();
-    RegisterFTPParsers();
-    RegisterSSLParsers();
-    RegisterSSHParsers();
     AppLayerParsersInitPostProcess();
 
 #ifdef UNITTESTS
 
-    if (run_mode == MODE_UNITTEST) {
+    if (run_mode == RUNMODE_UNITTEST) {
 #ifdef DBG_MEM_ALLOC
     SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
 #endif
@@ -900,7 +1285,7 @@ int main(int argc, char **argv)
         DecodePPPRegisterTests();
         DecodeVLANRegisterTests();
         HTPParserRegisterTests();
-        TLSParserRegisterTests();
+        SSLParserRegisterTests();
         SSHParserRegisterTests();
         SMBParserRegisterTests();
         DCERPCParserRegisterTests();
@@ -921,7 +1306,6 @@ int main(int argc, char **argv)
         TmqhFlowRegisterTests();
         FlowRegisterTests();
         SCSigRegisterSignatureOrderingTests();
-        SCLogRegisterTests();
         SCRadixRegisterTests();
         DefragRegisterTests();
         SigGroupHeadRegisterTests();
@@ -933,7 +1317,7 @@ int main(int argc, char **argv)
         UtilActionRegisterTests();
         SCClassConfRegisterTests();
         SCThresholdConfRegisterTests();
-        SSLParserRegisterTests();
+        SCRConfRegisterTests();
 #ifdef __SC_CUDA_SUPPORT__
         SCCudaRegisterTests();
 #endif
@@ -945,6 +1329,16 @@ int main(int argc, char **argv)
 #endif
         DeStateRegisterTests();
         DetectRingBufferRegisterTests();
+        MemcmpRegisterTests();
+        DetectEngineHttpClientBodyRegisterTests();
+        DetectEngineHttpHeaderRegisterTests();
+        DetectEngineHttpRawHeaderRegisterTests();
+        DetectEngineHttpMethodRegisterTests();
+        DetectEngineHttpCookieRegisterTests();
+        DetectEngineHttpRawUriRegisterTests();
+        DetectEngineRegisterTests();
+        SCLogRegisterTests();
+        SMTPParserRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
@@ -1018,11 +1412,11 @@ int main(int argc, char **argv)
 #endif /* OS_WIN32 */
 
     /* pre allocate packets */
-    SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)sizeof(Packet));
+    SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)SIZE_OF_PACKET);
     int i = 0;
     for (i = 0; i < max_pending_packets; i++) {
         /* XXX pkt alloc function */
-        Packet *p = SCMalloc(sizeof(Packet));
+        Packet *p = SCMalloc(SIZE_OF_PACKET);
         if (p == NULL) {
             SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
             exit(EXIT_FAILURE);
@@ -1032,7 +1426,7 @@ int main(int argc, char **argv)
         PacketPoolStorePacket(p);
     }
     SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
-        max_pending_packets, (uintmax_t)(max_pending_packets*sizeof(Packet)));
+        max_pending_packets, (uintmax_t)(max_pending_packets*SIZE_OF_PACKET));
 
     FlowInitConfig(FLOW_VERBOSE);
 
@@ -1044,6 +1438,7 @@ int main(int argc, char **argv)
     }
 
     SCClassConfLoadClassficationConfigFile(de_ctx);
+    SCRConfLoadReferenceConfigFile(de_ctx);
 
     ActionInitConfig();
 
@@ -1057,6 +1452,9 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
     }
 
+    if (engine_analysis) {
+        exit(EXIT_SUCCESS);
+    }
 
 #ifdef PROFILING
     SCProfilingInitRuleCounters(de_ctx);
@@ -1079,45 +1477,51 @@ int main(int argc, char **argv)
     RunModeInitializeOutputs();
 
     /* run the selected runmode */
-    if (run_mode == MODE_PCAP_DEV) {
-        //RunModeIdsPcap3(de_ctx, pcap_dev);
-        //RunModeIdsPcap2(de_ctx, pcap_dev);
-        //RunModeIdsPcap(de_ctx, pcap_dev);
-        PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
-        RunModeIdsPcapAuto(de_ctx, pcap_dev);
+    if (run_mode == RUNMODE_PCAP_DEV) {
+        if (strlen(pcap_dev)) {
+            PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
+            if (ConfSet("pcap.single_pcap_dev", pcap_dev, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set pcap.single_pcap_dev\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            int ret = LiveBuildIfaceList("pcap");
+            if (ret == 0) {
+                fprintf(stderr, "ERROR: No interface found in config for pcap\n");
+                exit(EXIT_FAILURE);
+            }
+        }
+#ifdef HAVE_PFRING
+    } else if (run_mode == RUNMODE_PFRING) {
+        /* FIXME add backward compat support */
+        /* iface has been set on command line */
+        if (strlen(pcap_dev)) {
+            if (ConfSet("pfring.live-interface", pcap_dev, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set pfring.live-interface\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            /* not an error condition if we have a 1.0 config */
+            LiveBuildIfaceList("pfring");
+        }
+#endif /* HAVE_PFRING */
+    } else if (run_mode == RUNMODE_AFP_DEV) {
+        /* iface has been set on command line */
+        if (strlen(pcap_dev)) {
+            if (ConfSet("af-packet.live-interface", pcap_dev, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set af-packet.live-interface\n");
+                exit(EXIT_FAILURE);
+            }
+        } else {
+            int ret = LiveBuildIfaceList("af-packet");
+            if (ret == 0) {
+                fprintf(stderr, "ERROR: No interface found in config for af-packet\n");
+                exit(EXIT_FAILURE);
+            }
+        }
     }
-    else if (run_mode == MODE_PCAP_FILE) {
-        //RunModeFilePcap(de_ctx, pcap_file);
-        //RunModeFilePcap2(de_ctx, pcap_file);
-        RunModeFilePcapAuto(de_ctx, pcap_file);
-        //RunModeFilePcapAutoFp(de_ctx, pcap_file);
-        //RunModeFilePcapAuto2(de_ctx, pcap_file);
-    }
-    else if (run_mode == MODE_PFRING) {
-        //RunModeIdsPfring3(de_ctx, pfring_dev);
-        //RunModeIdsPfring2(de_ctx, pfring_dev);
-        //RunModeIdsPfring(de_ctx, pfring_dev);
-        //RunModeIdsPfring4(de_ctx, pfring_dev);
-        RunModeIdsPfringAuto(de_ctx, pfring_dev);
-    }
-    else if (run_mode == MODE_NFQ) {
-        //RunModeIpsNFQ(de_ctx, nfq_id);
-        RunModeIpsNFQAuto(de_ctx, nfq_id);
-    }
-    else if (run_mode == MODE_IPFW) {
-        //RunModeIpsIPFW(de_ctx);
-        RunModeIpsIPFWAuto(de_ctx);
-    }
-    else if (run_mode == MODE_ERF_FILE) {
-        RunModeErfFileAuto(de_ctx, erf_file);
-    }
-    else if (run_mode == MODE_DAG) {
-        RunModeErfDagAuto(de_ctx, dag_input);
-    }
-    else {
-        SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
-        exit(EXIT_FAILURE);
-    }
+
+    RunModeDispatch(run_mode, runmode_custom_mode, de_ctx);
 
 #ifdef __SC_CUDA_SUPPORT__
     if (PatternMatchDefaultMatcher() == MPM_B2G_CUDA) {
@@ -1160,11 +1564,18 @@ int main(int argc, char **argv)
 #endif
 #endif
 
+    int engine_retval = EXIT_SUCCESS;
     while(1) {
         if (suricata_ctl_flags != 0) {
             SCLogInfo("signal received");
 
             if (suricata_ctl_flags & SURICATA_STOP)  {
+                struct timeval ts_start;
+                struct timeval ts_cur;
+
+                memset(&ts_start, 0x00, sizeof(ts_start));
+                gettimeofday(&ts_start, NULL);
+
                 SCLogInfo("EngineStop received");
 
                 /* Stop the engine so it quits after processing the pcap file
@@ -1181,6 +1592,21 @@ int main(int argc, char **argv)
                         done = 1;
 
                     if (done == 0) {
+                        memset(&ts_cur, 0x00, sizeof(ts_cur));
+                        gettimeofday(&ts_cur, NULL);
+
+                        if (ts_cur.tv_sec - ts_start.tv_sec >= 120) {
+                            SCLogError(SC_ERR_SHUTDOWN, "shutdown taking too "
+                                    "long, likely a bug! (%"PRIuMAX
+                                    " != %"PRIuMAX").", (uintmax_t)PacketPoolSize(),
+                                    (uintmax_t)max_pending_packets);
+#ifdef DEBUG
+                            BUG_ON(1);
+#endif
+                            engine_retval = EXIT_FAILURE;
+                            break;
+                        }
+
                         usleep(100);
                     }
                 } while (done == 0);
@@ -1188,30 +1614,34 @@ int main(int argc, char **argv)
                 SCLogInfo("all packets processed by threads, stopping engine");
             }
 
-            struct timeval end_time;
-            memset(&end_time, 0, sizeof(end_time));
-            gettimeofday(&end_time, NULL);
-
-            SCLogInfo("time elapsed %" PRIuMAX "s", (uintmax_t)(end_time.tv_sec - start_time.tv_sec));
-
-#ifdef __SC_CUDA_SUPPORT__
-            SCCudaPBKillBatchingPackets();
-#endif
-
-            TmThreadKillThreads();
-            SCPerfReleaseResources();
             break;
         }
 
         TmThreadCheckThreadState();
 
-        usleep(100);
+        usleep(10* 1000);
     }
 
     /* Update the engine stage/status flag */
     SC_ATOMIC_CAS(&engine_stage, SURICATA_RUNTIME, SURICATA_DEINIT);
 
 
+#ifdef __SC_CUDA_SUPPORT__
+    SCCudaPBKillBatchingPackets();
+#endif
+
+    /* Disable packet acquire thread first */
+    TmThreadDisableReceiveThreads();
+
+    FlowForceReassembly();
+
+    struct timeval end_time;
+    memset(&end_time, 0, sizeof(end_time));
+    gettimeofday(&end_time, NULL);
+    SCLogInfo("time elapsed %" PRIuMAX "s", (uintmax_t)(end_time.tv_sec - start_time.tv_sec));
+
+    TmThreadKillThreads();
+    SCPerfReleaseResources();
     FlowShutdown();
     FlowPrintQueueInfo();
     StreamTcpFreeConfig(STREAM_VERBOSE);
@@ -1252,7 +1682,12 @@ int main(int argc, char **argv)
     }
 #endif
 
+    AppLayerHtpPrintStats();
+
     SigCleanSignatures(de_ctx);
+    if (de_ctx->sgh_mpm_context == ENGINE_SGH_MPM_FACTORY_CONTEXT_SINGLE) {
+        MpmFactoryDeRegisterAllMpmCtxProfiles();
+    }
     DetectEngineCtxFree(de_ctx);
     AlpProtoDestroy();
 
@@ -1261,10 +1696,13 @@ int main(int argc, char **argv)
     RunModeShutDown();
     OutputDeregisterAll();
     TimeDeinit();
+    SCProtoNameDeInit();
+    DefragDestroy();
+    TmqhPacketpoolDestroy();
 
 #ifdef PROFILING
     if (profiling_rules_enabled)
-        SCProfilingDump(stdout);
+        SCProfilingDump();
     SCProfilingDestroy();
 #endif
 
@@ -1282,5 +1720,5 @@ int main(int argc, char **argv)
 #endif /* OS_WIN32 */
 
     SC_ATOMIC_DESTROY(engine_stage);
-    exit(EXIT_SUCCESS);
+    exit(engine_retval);
 }

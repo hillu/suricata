@@ -20,17 +20,18 @@
  *
  * \author Victor Julien <victor@inliniac.net>
  * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Eric Leblond <eleblond@edenwall.com>
  *
- * Thread management functions
+ * Thread management functions.
  */
 
 #include "suricata-common.h"
 #include "suricata.h"
 #include "stream.h"
+#include "runmodes.h"
 #include "threadvars.h"
 #include "tm-queues.h"
 #include "tm-queuehandlers.h"
-#include "tm-modules.h"
 #include "tm-threads.h"
 #include "tmqh-packetpool.h"
 #include "threads.h"
@@ -38,6 +39,9 @@
 #include <pthread.h>
 #include <unistd.h>
 #include "util-privs.h"
+#include "util-cpu.h"
+#include "util-optimize.h"
+#include "util-profiling.h"
 
 #ifdef OS_FREEBSD
 #include <sched.h>
@@ -51,8 +55,9 @@
 #include <mach/mach_init.h>
 #include <mach/thread_policy.h>
 #define cpu_set_t thread_affinity_policy_data_t
-#define CPU_SET(cpu_id, new_mask) (*(new_mask)).affinity_tag = (cpu_id + 1)
-#define CPU_ZERO(new_mask) (*(new_mask)).affinity_tag = THREAD_AFFINITY_TAG_NULL
+#define CPU_SET(cpu_id, new_mask) ((*(new_mask)).affinity_tag = ((cpu_id) + 1))
+#define CPU_ISSET(cpu_id, new_mask) (((*(new_mask)).affinity_tag == ((cpu_id) + 1)))
+#define CPU_ZERO(new_mask) ((*(new_mask)).affinity_tag = THREAD_AFFINITY_TAG_NULL)
 #endif /* OS_FREEBSD */
 
 /* prototypes */
@@ -65,136 +70,41 @@ ThreadVars *tv_root[TVT_MAX] = { NULL };
 SCMutex tv_root_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* Action On Failure(AOF).  Determines how the engine should behave when a
-   thread encounters a failure.  Defaults to restart the failed thread */
+ * thread encounters a failure.  Defaults to restart the failed thread */
 uint8_t tv_aof = THV_RESTART_THREAD;
 
 /**
- *  \brief Check if a thread flag is set
+ * \brief Check if a thread flag is set.
  *
- *  \retval 1 flag is set
- *  \retval 0 flag is not set
+ * \retval 1 flag is set.
+ * \retval 0 flag is not set.
  */
-int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag) {
-    int r;
-    if (SCSpinLock(&(tv)->flags_spinlock) != 0) {
-        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
-        return 0;
-    }
-    r = (tv->flags & flag);
-    SCSpinUnlock(&tv->flags_spinlock);
-    return r;
+int TmThreadsCheckFlag(ThreadVars *tv, uint8_t flag)
+{
+    return (SC_ATOMIC_GET(tv->flags) & flag) ? 1 : 0;
 }
 
 /**
- *  \brief Set a thread flag
+ * \brief Set a thread flag.
  */
-void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag) {
-    if (SCSpinLock(&tv->flags_spinlock) != 0) {
-        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
-        return;
-    }
-
-    tv->flags |= flag;
-    SCSpinUnlock(&tv->flags_spinlock);
+void TmThreadsSetFlag(ThreadVars *tv, uint8_t flag)
+{
+    SC_ATOMIC_OR(tv->flags, flag);
 }
 
 /**
- *  \brief Unset a thread flag
+ * \brief Unset a thread flag.
  */
-void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag) {
-    if (SCSpinLock(&tv->flags_spinlock) != 0) {
-        SCLogError(SC_ERR_SPINLOCK,"spin lock errno=%d",errno);
-        return;
-    }
-
-    tv->flags &= ~flag;
-    SCSpinUnlock(&tv->flags_spinlock);
+void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag)
+{
+    SC_ATOMIC_AND(tv->flags, ~flag);
 }
 
 /* 1 slot functions */
-
-void *TmThreadsSlot1NoIn(void *td) {
+void *TmThreadsSlot1NoIn(void *td)
+{
     ThreadVars *tv = (ThreadVars *)td;
-    Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
-    char run = 1;
-    TmEcode r = TM_ECODE_OK;
-
-    /* Set the thread name */
-    SCSetThreadName(tv->name);
-
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
-    if (tv->thread_setup_flags != 0)
-        TmThreadSetupOptions(tv);
-
-    if (s->s.SlotThreadInit != NULL) {
-        r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
-        if (r != TM_ECODE_OK) {
-            EngineKill();
-
-            TmThreadsSetFlag(tv, THV_CLOSED);
-            pthread_exit((void *) -1);
-        }
-    }
-    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
-    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
-
-    TmThreadsSetFlag(tv, THV_INIT_DONE);
-
-    while(run) {
-        TmThreadTestThreadUnPaused(tv);
-
-        r = s->s.SlotFunc(tv, NULL, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
-        /* handle error */
-        if (r == TM_ECODE_FAILED) {
-            TmqhReleasePacketsToPacketPool(&s->s.slot_pre_pq);
-            TmqhReleasePacketsToPacketPool(&s->s.slot_post_pq);
-            TmThreadsSetFlag(tv, THV_FAILED);
-            break;
-        }
-
-        /* handle pre queue */
-        while (s->s.slot_pre_pq.top != NULL) {
-            Packet *extra_p = PacketDequeue(&s->s.slot_pre_pq);
-            if (extra_p != NULL) {
-                tv->tmqh_out(tv, extra_p);
-            }
-        }
-
-        /* handle post queue */
-        while (s->s.slot_post_pq.top != NULL) {
-            Packet *extra_p = PacketDequeue(&s->s.slot_post_pq);
-            if (extra_p != NULL) {
-                tv->tmqh_out(tv, extra_p);
-            }
-        }
-
-        if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
-            run = 0;
-        }
-    }
-
-    if (s->s.SlotThreadExitPrintStats != NULL) {
-        s->s.SlotThreadExitPrintStats(tv, s->s.slot_data);
-    }
-
-    if (s->s.SlotThreadDeinit != NULL) {
-        r = s->s.SlotThreadDeinit(tv, s->s.slot_data);
-        if (r != TM_ECODE_OK) {
-            TmThreadsSetFlag(tv, THV_CLOSED);
-            pthread_exit((void *) -1);
-        }
-    }
-
-    TmThreadsSetFlag(tv, THV_CLOSED);
-    pthread_exit((void *) 0);
-}
-
-void *TmThreadsSlot1NoOut(void *td) {
-    ThreadVars *tv = (ThreadVars *)td;
-    Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
     Packet *p = NULL;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
@@ -208,8 +118,8 @@ void *TmThreadsSlot1NoOut(void *td) {
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
 
-    if (s->s.SlotThreadInit != NULL) {
-        r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
+    if (s->SlotThreadInit != NULL) {
+        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
         if (r != TM_ECODE_OK) {
             EngineKill();
 
@@ -217,17 +127,115 @@ void *TmThreadsSlot1NoOut(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
-    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
-    while(run) {
+    while (run) {
+        TmThreadTestThreadUnPaused(tv);
+
+        PACKET_PROFILING_TMM_START(p, s->tm_id);
+        r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq, &s->slot_post_pq);
+        PACKET_PROFILING_TMM_END(p, s->tm_id);
+
+        /* handle error */
+        if (r == TM_ECODE_FAILED) {
+            TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
+            TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
+            if (p != NULL)
+                TmqhOutputPacketpool(tv, p);
+            TmThreadsSetFlag(tv, THV_FAILED);
+            break;
+        }
+
+        /* handle pre queue */
+        while (s->slot_pre_pq.top != NULL) {
+            Packet *extra_p = PacketDequeue(&s->slot_pre_pq);
+            if (extra_p != NULL)
+                tv->tmqh_out(tv, extra_p);
+        }
+
+        tv->tmqh_out(tv, p);
+        if (p != NULL)
+            tv->tmqh_out(tv, p);
+
+        /* handle post queue */
+        if (s->slot_post_pq.top != NULL) {
+            SCMutexLock(&s->slot_post_pq.mutex_q);
+            while (s->slot_post_pq.top != NULL) {
+                Packet *extra_p = PacketDequeue(&s->slot_post_pq);
+                if (extra_p != NULL)
+                    tv->tmqh_out(tv, extra_p);
+            }
+            SCMutexUnlock(&s->slot_post_pq.mutex_q);
+        }
+
+        if (TmThreadsCheckFlag(tv, THV_KILL)) {
+            SCPerfSyncCounters(tv, 0);
+            run = 0;
+        }
+    } /* while (run) */
+
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    if (s->SlotThreadExitPrintStats != NULL) {
+        s->SlotThreadExitPrintStats(tv, s->slot_data);
+    }
+
+    if (s->SlotThreadDeinit != NULL) {
+        r = s->SlotThreadDeinit(tv, s->slot_data);
+        if (r != TM_ECODE_OK) {
+            TmThreadsSetFlag(tv, THV_CLOSED);
+            pthread_exit((void *) -1);
+        }
+    }
+
+    TmThreadsSetFlag(tv, THV_CLOSED);
+    pthread_exit((void *) 0);
+}
+
+void *TmThreadsSlot1NoOut(void *td)
+{
+    ThreadVars *tv = (ThreadVars *)td;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
+    Packet *p = NULL;
+    char run = 1;
+    TmEcode r = TM_ECODE_OK;
+
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
+
+    if (s->SlotThreadInit != NULL) {
+        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
+        if (r != TM_ECODE_OK) {
+            EngineKill();
+
+            TmThreadsSetFlag(tv, THV_CLOSED);
+            pthread_exit((void *) -1);
+        }
+    }
+    memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
+
+    TmThreadsSetFlag(tv, THV_INIT_DONE);
+
+    while (run) {
         TmThreadTestThreadUnPaused(tv);
 
         p = tv->tmqh_in(tv);
 
-        r = s->s.SlotFunc(tv, p, s->s.slot_data, /* no outqh no pq */NULL, /* no outqh no pq */NULL);
+        PACKET_PROFILING_TMM_START(p, s->tm_id);
+        r = s->SlotFunc(tv, p, s->slot_data, /* no outqh no pq */ NULL,
+                        /* no outqh no pq */ NULL);
+        PACKET_PROFILING_TMM_END(p, s->tm_id);
+
         /* handle error */
         if (r == TM_ECODE_FAILED) {
             TmqhOutputPacketpool(tv, p);
@@ -236,17 +244,19 @@ void *TmThreadsSlot1NoOut(void *td) {
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+            SCPerfSyncCounters(tv, 0);
             run = 0;
         }
+    } /* while (run) */
+
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    if (s->SlotThreadExitPrintStats != NULL) {
+        s->SlotThreadExitPrintStats(tv, s->slot_data);
     }
 
-    if (s->s.SlotThreadExitPrintStats != NULL) {
-        s->s.SlotThreadExitPrintStats(tv, s->s.slot_data);
-    }
-
-    if (s->s.SlotThreadDeinit != NULL) {
-        r = s->s.SlotThreadDeinit(tv, s->s.slot_data);
+    if (s->SlotThreadDeinit != NULL) {
+        r = s->SlotThreadDeinit(tv, s->slot_data);
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
@@ -257,9 +267,10 @@ void *TmThreadsSlot1NoOut(void *td) {
     pthread_exit((void *) 0);
 }
 
-void *TmThreadsSlot1NoInOut(void *td) {
+void *TmThreadsSlot1NoInOut(void *td)
+{
     ThreadVars *tv = (ThreadVars *)td;
-    Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
 
@@ -274,8 +285,8 @@ void *TmThreadsSlot1NoInOut(void *td) {
 
     SCLogDebug("%s starting", tv->name);
 
-    if (s->s.SlotThreadInit != NULL) {
-        r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
+    if (s->SlotThreadInit != NULL) {
+        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
         if (r != TM_ECODE_OK) {
             EngineKill();
 
@@ -283,16 +294,15 @@ void *TmThreadsSlot1NoInOut(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
-    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
-    while(run) {
+    while (run) {
         TmThreadTestThreadUnPaused(tv);
 
-        r = s->s.SlotFunc(tv, NULL, s->s.slot_data, /* no outqh, no pq */NULL, NULL);
-        //printf("%s: TmThreadsSlot1NoInNoOut: r %" PRId32 "\n", tv->name, r);
+        r = s->SlotFunc(tv, NULL, s->slot_data, /* no outqh, no pq */NULL, NULL);
 
         /* handle error */
         if (r == TM_ECODE_FAILED) {
@@ -301,32 +311,33 @@ void *TmThreadsSlot1NoInOut(void *td) {
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            //printf("%s: TmThreadsSlot1NoInOut: KILL is set\n", tv->name);
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+            SCPerfSyncCounters(tv, 0);
             run = 0;
         }
+    } /* while (run) */
+
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    if (s->SlotThreadExitPrintStats != NULL) {
+        s->SlotThreadExitPrintStats(tv, s->slot_data);
     }
 
-    if (s->s.SlotThreadExitPrintStats != NULL) {
-        s->s.SlotThreadExitPrintStats(tv, s->s.slot_data);
-    }
-
-    if (s->s.SlotThreadDeinit != NULL) {
-        r = s->s.SlotThreadDeinit(tv, s->s.slot_data);
+    if (s->SlotThreadDeinit != NULL) {
+        r = s->SlotThreadDeinit(tv, s->slot_data);
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
         }
     }
 
-    //printf("TmThreadsSlot1NoInOut: %s ending\n", tv->name);
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
 }
 
-void *TmThreadsSlot1(void *td) {
+void *TmThreadsSlot1(void *td)
+{
     ThreadVars *tv = (ThreadVars *)td;
-    Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
     Packet *p = NULL;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
@@ -342,8 +353,8 @@ void *TmThreadsSlot1(void *td) {
 
     SCLogDebug("%s starting", tv->name);
 
-    if (s->s.SlotThreadInit != NULL) {
-        r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
+    if (s->SlotThreadInit != NULL) {
+        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
         if (r != TM_ECODE_OK) {
             EngineKill();
 
@@ -351,32 +362,36 @@ void *TmThreadsSlot1(void *td) {
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
-    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+    SCMutexInit(&s->slot_pre_pq.mutex_q, NULL);
+    memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
+    SCMutexInit(&s->slot_post_pq.mutex_q, NULL);
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
-    while(run) {
+    while (run) {
         TmThreadTestThreadUnPaused(tv);
 
         /* input a packet */
         p = tv->tmqh_in(tv);
 
-        if (p == NULL) {
-            //printf("%s: TmThreadsSlot1: p == NULL\n", tv->name);
-        } else {
-            r = s->s.SlotFunc(tv, p, s->s.slot_data, &s->s.slot_pre_pq, &s->s.slot_post_pq);
+        if (p != NULL) {
+            PACKET_PROFILING_TMM_START(p, s->tm_id);
+            r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq,
+                            &s->slot_post_pq);
+            PACKET_PROFILING_TMM_END(p, s->tm_id);
+
             /* handle error */
             if (r == TM_ECODE_FAILED) {
-                TmqhReleasePacketsToPacketPool(&s->s.slot_pre_pq);
-                TmqhReleasePacketsToPacketPool(&s->s.slot_post_pq);
+                TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
+                TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
                 TmqhOutputPacketpool(tv, p);
                 TmThreadsSetFlag(tv, THV_FAILED);
                 break;
             }
 
-            while (s->s.slot_pre_pq.top != NULL) {
+            while (s->slot_pre_pq.top != NULL) {
                 /* handle new packets from this func */
-                Packet *extra_p = PacketDequeue(&s->s.slot_pre_pq);
+                Packet *extra_p = PacketDequeue(&s->slot_pre_pq);
                 if (extra_p != NULL) {
                     tv->tmqh_out(tv, extra_p);
                 }
@@ -384,29 +399,33 @@ void *TmThreadsSlot1(void *td) {
 
             /* output the packet */
             tv->tmqh_out(tv, p);
-
-            while (s->s.slot_post_pq.top != NULL) {
+        }
+        if (s->slot_post_pq.top != NULL) {
+            SCMutexLock(&s->slot_post_pq.mutex_q);
+            while (s->slot_post_pq.top != NULL) {
                 /* handle new packets from this func */
-                Packet *extra_p = PacketDequeue(&s->s.slot_post_pq);
+                Packet *extra_p = PacketDequeue(&s->slot_post_pq);
                 if (extra_p != NULL) {
                     tv->tmqh_out(tv, extra_p);
                 }
             }
+            SCMutexUnlock(&s->slot_post_pq.mutex_q);
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            //printf("%s: TmThreadsSlot1: KILL is set\n", tv->name);
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+            SCPerfSyncCounters(tv, 0);
             run = 0;
         }
+    } /* while (run) */
+
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    if (s->SlotThreadExitPrintStats != NULL) {
+        s->SlotThreadExitPrintStats(tv, s->slot_data);
     }
 
-    if (s->s.SlotThreadExitPrintStats != NULL) {
-        s->s.SlotThreadExitPrintStats(tv, s->s.slot_data);
-    }
-
-    if (s->s.SlotThreadDeinit != NULL) {
-        r = s->s.SlotThreadDeinit(tv, s->s.slot_data);
+    if (s->SlotThreadDeinit != NULL) {
+        r = s->SlotThreadDeinit(tv, s->slot_data);
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
@@ -418,22 +437,31 @@ void *TmThreadsSlot1(void *td) {
     pthread_exit((void *) 0);
 }
 
-/** \brief separate run function so we can call it recursively
+/**
+ * \brief Separate run function so we can call it recursively.
  *
- *  \todo deal with post_pq for slots beyond the first
+ * \todo Deal with post_pq for slots beyond the first.
  */
-static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *slot) {
-    TmEcode r = TM_ECODE_OK;
-    TmSlot *s = NULL;
+TmEcode TmThreadsSlotVarRun(ThreadVars *tv, Packet *p,
+                                          TmSlot *slot)
+{
+    TmEcode r;
+    TmSlot *s;
+    Packet *extra_p;
 
     for (s = slot; s != NULL; s = s->slot_next) {
-        if (s->id == 0) {
+        PACKET_PROFILING_TMM_START(p, s->tm_id);
+
+        if (unlikely(s->id == 0)) {
             r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq, &s->slot_post_pq);
         } else {
             r = s->SlotFunc(tv, p, s->slot_data, &s->slot_pre_pq, NULL);
         }
+
+        PACKET_PROFILING_TMM_END(p, s->tm_id);
+
         /* handle error */
-        if (r == TM_ECODE_FAILED) {
+        if (unlikely(r == TM_ECODE_FAILED)) {
             /* Encountered error.  Return packets to packetpool and return */
             TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
             TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
@@ -443,16 +471,14 @@ static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *sl
 
         /* handle new packets */
         while (s->slot_pre_pq.top != NULL) {
-            Packet *extra_p = PacketDequeue(&s->slot_pre_pq);
-            if (extra_p == NULL)
+            extra_p = PacketDequeue(&s->slot_pre_pq);
+            if (unlikely(extra_p == NULL))
                 continue;
 
             /* see if we need to process the packet */
             if (s->slot_next != NULL) {
                 r = TmThreadsSlotVarRun(tv, extra_p, s->slot_next);
-                /* XXX handle error */
-                if (r == TM_ECODE_FAILED) {
-                    //printf("TmThreadsSlotVarRun: recursive TmThreadsSlotVarRun returned 1\n");
+                if (unlikely(r == TM_ECODE_FAILED)) {
                     TmqhReleasePacketsToPacketPool(&s->slot_pre_pq);
                     TmqhReleasePacketsToPacketPool(&s->slot_post_pq);
                     TmqhOutputPacketpool(tv, extra_p);
@@ -462,21 +488,41 @@ static inline TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *sl
             }
             tv->tmqh_out(tv, extra_p);
         }
-
-        /** \todo post pq */
     }
 
     return TM_ECODE_OK;
 }
 
-/**
- *  \todo only the first "slot" currently makes the "post_pq" available
- *        to the thread module.
+/*
+
+    pcap/nfq
+
+    pkt read
+        callback
+            process_pkt
+
+    pfring
+
+    pkt read
+        process_pkt
+
+    slot:
+        setup
+
+        pkt_ack_loop(tv, slot_data)
+
+        deinit
+
+    process_pkt:
+        while(s)
+            run s;
+        queue;
+
  */
-void *TmThreadsSlotVar(void *td) {
+
+void *TmThreadsSlotPktAcqLoop(void *td) {
     ThreadVars *tv = (ThreadVars *)td;
-    TmVarSlot *s = (TmVarSlot *)tv->tm_slots;
-    Packet *p = NULL;
+    TmSlot *s = tv->tm_slots;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
     TmSlot *slot = NULL;
@@ -491,14 +537,14 @@ void *TmThreadsSlotVar(void *td) {
         TmThreadSetupOptions(tv);
 
     /* check if we are setup properly */
-    if (s == NULL || s->s == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
+    if (s == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
         EngineKill();
 
         TmThreadsSetFlag(tv, THV_CLOSED);
         pthread_exit((void *) -1);
     }
 
-    for (slot = s->s; slot != NULL; slot = slot->slot_next) {
+    for (slot = s; slot != NULL; slot = slot->slot_next) {
         if (slot->SlotThreadInit != NULL) {
             r = slot->SlotThreadInit(tv, slot->slot_initdata, &slot->slot_data);
             if (r != TM_ECODE_OK) {
@@ -509,7 +555,9 @@ void *TmThreadsSlotVar(void *td) {
             }
         }
         memset(&slot->slot_pre_pq, 0, sizeof(PacketQueue));
+        SCMutexInit(&slot->slot_pre_pq.mutex_q, NULL);
         memset(&slot->slot_post_pq, 0, sizeof(PacketQueue));
+        SCMutexInit(&slot->slot_post_pq.mutex_q, NULL);
     }
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
@@ -517,48 +565,17 @@ void *TmThreadsSlotVar(void *td) {
     while(run) {
         TmThreadTestThreadUnPaused(tv);
 
-        /* input a packet */
-        p = tv->tmqh_in(tv);
+        r = s->PktAcqLoop(tv, s->slot_data, s);
 
-        if (p != NULL) {
-            /* run the thread module(s) */
-            r = TmThreadsSlotVarRun(tv, p, s->s);
-            if (r == TM_ECODE_FAILED) {
-                TmqhOutputPacketpool(tv, p);
-                TmThreadsSetFlag(tv, THV_FAILED);
-                break;
-            }
-
-            /* output the packet */
-            tv->tmqh_out(tv, p);
-
-            /* now handle the post_pq packets */
-            while (s->s->slot_post_pq.top != NULL) {
-                Packet *extra_p = PacketDequeue(&s->s->slot_post_pq);
-                if (extra_p == NULL)
-                    continue;
-
-                if (s->s->slot_next != NULL) {
-                    r = TmThreadsSlotVarRun(tv, extra_p, s->s->slot_next);
-                    if (r == TM_ECODE_FAILED) {
-                        TmqhOutputPacketpool(tv, extra_p);
-                        TmThreadsSetFlag(tv, THV_FAILED);
-                        break;
-                    }
-                }
-
-                /* output the packet */
-                tv->tmqh_out(tv, extra_p);
-            }
-        }
-
-        if (TmThreadsCheckFlag(tv, THV_KILL)) {
+        if (r == TM_ECODE_FAILED || TmThreadsCheckFlag(tv, THV_KILL)) {
             run = 0;
         }
     }
-    SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+    SCPerfSyncCounters(tv, 0);
 
-    for (slot = s->s; slot != NULL; slot = slot->slot_next) {
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    for (slot = s; slot != NULL; slot = slot->slot_next) {
         if (slot->SlotThreadExitPrintStats != NULL) {
             slot->SlotThreadExitPrintStats(tv, slot->slot_data);
         }
@@ -577,91 +594,240 @@ void *TmThreadsSlotVar(void *td) {
     pthread_exit((void *) 0);
 }
 
-TmEcode TmThreadSetSlots(ThreadVars *tv, char *name, void *(*fn_p)(void *)) {
-    uint16_t size = 0;
 
+/**
+ * \todo Only the first "slot" currently makes the "post_pq" available
+ *       to the thread module.
+ */
+void *TmThreadsSlotVar(void *td)
+{
+    ThreadVars *tv = (ThreadVars *)td;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
+    Packet *p = NULL;
+    char run = 1;
+    TmEcode r = TM_ECODE_OK;
+
+    /* Set the thread name */
+    SCSetThreadName(tv->name);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
+
+    if (tv->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv);
+
+    /* check if we are setup properly */
+    if (s == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
+        EngineKill();
+
+        TmThreadsSetFlag(tv, THV_CLOSED);
+        pthread_exit((void *) -1);
+    }
+
+    for (; s != NULL; s = s->slot_next) {
+        if (s->SlotThreadInit != NULL) {
+            r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
+            if (r != TM_ECODE_OK) {
+                EngineKill();
+
+                TmThreadsSetFlag(tv, THV_CLOSED);
+                pthread_exit((void *) -1);
+            }
+        }
+        memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+        SCMutexInit(&s->slot_pre_pq.mutex_q, NULL);
+        memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
+        SCMutexInit(&s->slot_post_pq.mutex_q, NULL);
+    }
+
+    TmThreadsSetFlag(tv, THV_INIT_DONE);
+
+    s = (TmSlot *)tv->tm_slots;
+
+    while (run) {
+        TmThreadTestThreadUnPaused(tv);
+
+        /* input a packet */
+        p = tv->tmqh_in(tv);
+
+        if (p != NULL) {
+            /* run the thread module(s) */
+            r = TmThreadsSlotVarRun(tv, p, s);
+            if (r == TM_ECODE_FAILED) {
+                TmqhOutputPacketpool(tv, p);
+                TmThreadsSetFlag(tv, THV_FAILED);
+                break;
+            }
+
+            /* output the packet */
+            tv->tmqh_out(tv, p);
+
+        } /* if (p != NULL) */
+        /* now handle the post_pq packets */
+        TmSlot *slot;
+        for (slot = s; slot != NULL; slot = slot->slot_next) {
+            if (slot->slot_post_pq.top != NULL) {
+                SCMutexLock(&slot->slot_post_pq.mutex_q);
+                while (slot->slot_post_pq.top != NULL) {
+                    Packet *extra_p = PacketDequeue(&slot->slot_post_pq);
+                    if (extra_p == NULL)
+                        break;
+
+                    if (slot->slot_next != NULL) {
+                        r = TmThreadsSlotVarRun(tv, extra_p, slot->slot_next);
+                        if (r == TM_ECODE_FAILED) {
+                            TmqhReleasePacketsToPacketPool(&slot->slot_post_pq);
+                            TmqhOutputPacketpool(tv, extra_p);
+                            TmThreadsSetFlag(tv, THV_FAILED);
+                            break;
+                        }
+                    }
+                    /* output the packet */
+                    tv->tmqh_out(tv, extra_p);
+                } /* while */
+                SCMutexUnlock(&slot->slot_post_pq.mutex_q);
+            } /* if */
+        } /* for */
+
+        if (TmThreadsCheckFlag(tv, THV_KILL)) {
+            run = 0;
+        }
+    } /* while (run) */
+    SCPerfSyncCounters(tv, 0);
+
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    s = (TmSlot *)tv->tm_slots;
+
+    for ( ; s != NULL; s = s->slot_next) {
+        if (s->SlotThreadExitPrintStats != NULL) {
+            s->SlotThreadExitPrintStats(tv, s->slot_data);
+        }
+
+        if (s->SlotThreadDeinit != NULL) {
+            r = s->SlotThreadDeinit(tv, s->slot_data);
+            if (r != TM_ECODE_OK) {
+                TmThreadsSetFlag(tv, THV_CLOSED);
+                pthread_exit((void *) -1);
+            }
+        }
+    }
+
+    SCLogDebug("%s ending", tv->name);
+    TmThreadsSetFlag(tv, THV_CLOSED);
+    pthread_exit((void *) 0);
+}
+
+/**
+ * \brief We set the slot functions.
+ *
+ * \param tv   Pointer to the TV to set the slot function for.
+ * \param name Name of the slot variant.
+ * \param fn_p Pointer to a custom slot function.  Used only if slot variant
+ *             "name" is "custom".
+ *
+ * \retval TmEcode TM_ECODE_OK on success; TM_ECODE_FAILED on failure.
+ */
+TmEcode TmThreadSetSlots(ThreadVars *tv, char *name, void *(*fn_p)(void *))
+{
     if (name == NULL) {
         if (fn_p == NULL) {
             printf("Both slot name and function pointer can't be NULL inside "
                    "TmThreadSetSlots\n");
             goto error;
-        }
-        else
+        } else {
             name = "custom";
+        }
     }
 
     if (strcmp(name, "1slot") == 0) {
-        size = sizeof(Tm1Slot);
         tv->tm_func = TmThreadsSlot1;
     } else if (strcmp(name, "1slot_noout") == 0) {
-        size = sizeof(Tm1Slot);
         tv->tm_func = TmThreadsSlot1NoOut;
     } else if (strcmp(name, "1slot_noin") == 0) {
-        size = sizeof(Tm1Slot);
         tv->tm_func = TmThreadsSlot1NoIn;
     } else if (strcmp(name, "1slot_noinout") == 0) {
-        size = sizeof(Tm1Slot);
         tv->tm_func = TmThreadsSlot1NoInOut;
     } else if (strcmp(name, "varslot") == 0) {
-        size = sizeof(TmVarSlot);
         tv->tm_func = TmThreadsSlotVar;
+    } else if (strcmp(name, "pktacqloop") == 0) {
+        tv->tm_func = TmThreadsSlotPktAcqLoop;
     } else if (strcmp(name, "custom") == 0) {
-        /* \todo this needs to be changed to support slots of any size */
-        size = sizeof(Tm1Slot);
         if (fn_p == NULL)
             goto error;
-
         tv->tm_func = fn_p;
     } else {
         printf("Error: Slot \"%s\" not supported\n", name);
         goto error;
     }
 
-    tv->tm_slots = SCMalloc(size);
-    if (tv->tm_slots == NULL)
-        goto error;
-    memset(tv->tm_slots, 0, size);
-
     return TM_ECODE_OK;
+
 error:
     return TM_ECODE_FAILED;
 }
 
-void Tm1SlotSetFunc(ThreadVars *tv, TmModule *tm, void *data) {
-    Tm1Slot *s1 = (Tm1Slot *)tv->tm_slots;
+ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *tm_slot)
+{
+    ThreadVars *tv;
+    int i;
 
-    if (s1->s.SlotFunc != NULL)
-        printf("Warning: slot 1 is already set tp %p, "
-               "overwriting with %p\n", s1->s.SlotFunc, tm->Func);
+    SCMutexLock(&tv_root_lock);
 
-    s1->s.SlotThreadInit = tm->ThreadInit;
-    s1->s.slot_initdata = data;
-    s1->s.SlotFunc = tm->Func;
-    s1->s.SlotThreadExitPrintStats = tm->ThreadExitPrintStats;
-    s1->s.SlotThreadDeinit = tm->ThreadDeinit;
-    tv->cap_flags |= tm->cap_flags;
+    for (i = 0; i < TVT_MAX; i++) {
+        tv = tv_root[i];
+
+        while (tv) {
+            TmSlot *slots = tv->tm_slots;
+            while (slots != NULL) {
+                if (slots == tm_slot) {
+                    SCMutexUnlock(&tv_root_lock);
+                    return tv;
+                }
+                slots = slots->slot_next;
+            }
+            tv = tv->next;
+        }
+    }
+
+    SCMutexUnlock(&tv_root_lock);
+
+    return NULL;
 }
 
-void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
-    TmVarSlot *s = (TmVarSlot *)tv->tm_slots;
+/**
+ * \brief Appends a new entry to the slots.
+ *
+ * \param tv   TV the slot is attached to.
+ * \param tm   TM to append.
+ * \param data Data to be passed on to the slot init function.
+ */
+void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
+{
+    TmSlot *s = (TmSlot *)tv->tm_slots;
+
     TmSlot *slot = SCMalloc(sizeof(TmSlot));
     if (slot == NULL)
         return;
-
     memset(slot, 0, sizeof(TmSlot));
-
+    slot->tv = tv;
     slot->SlotThreadInit = tm->ThreadInit;
     slot->slot_initdata = data;
     slot->SlotFunc = tm->Func;
+    slot->PktAcqLoop = tm->PktAcqLoop;
     slot->SlotThreadExitPrintStats = tm->ThreadExitPrintStats;
     slot->SlotThreadDeinit = tm->ThreadDeinit;
+    /* we don't have to check for the return value "-1".  We wouldn't have
+     * received a TM as arg, if it didn't exist */
+    slot->tm_id = TmModuleGetIDForTM(tm);
+
     tv->cap_flags |= tm->cap_flags;
 
-    if (s->s == NULL) {
-        s->s = slot;
+    if (s == NULL) {
+        tv->tm_slots = slot;
         slot->id = 0;
     } else {
-        TmSlot *a = s->s, *b = NULL;
+        TmSlot *a = s, *b = NULL;
 
         /* get the last slot */
         for ( ; a != NULL; a = a->slot_next) {
@@ -673,104 +839,244 @@ void TmVarSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data) {
             slot->id = b->id + 1;
         }
     }
+
+    return;
 }
 
 /**
- * \brief Set the thread affinity on the calling thread
- * \param cpuid id of the core/cpu to setup the affinity
- * \retval 0 if all goes well; -1 if something is wrong
+ * \brief Returns the slot holding a TM with the particular tm_id.
+ *
+ * \param tm_id TM id of the TM whose slot has to be returned.
+ *
+ * \retval slots Pointer to the slot.
  */
-static int SetCPUAffinity(uint16_t cpuid) {
+TmSlot *TmSlotGetSlotForTM(int tm_id)
+{
+    ThreadVars *tv = NULL;
+    TmSlot *slots;
+    int i;
 
+    SCMutexLock(&tv_root_lock);
+
+    for (i = 0; i < TVT_MAX; i++) {
+        tv = tv_root[i];
+        while (tv) {
+            slots = tv->tm_slots;
+            while (slots != NULL) {
+                if (slots->tm_id == tm_id) {
+                    SCMutexUnlock(&tv_root_lock);
+                    return slots;
+                }
+                slots = slots->slot_next;
+            }
+            tv = tv->next;
+        }
+    }
+
+    SCMutexUnlock(&tv_root_lock);
+
+    return NULL;
+}
+
+#if !defined __CYGWIN__ && !defined OS_WIN32 && !defined __OpenBSD__
+static int SetCPUAffinitySet(cpu_set_t *cs) {
+#if defined OS_FREEBSD
+    int r = cpuset_setaffinity(CPU_LEVEL_WHICH, CPU_WHICH_TID,
+                               SCGetThreadIdLong(), sizeof(cpu_set_t),cs);
+#elif OS_DARWIN
+    int r = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY,
+                              (void*)cs, THREAD_AFFINITY_POLICY_COUNT);
+#else
+    pid_t tid = syscall(SYS_gettid);
+    int r = sched_setaffinity(tid, sizeof(cpu_set_t), cs);
+#endif /* OS_FREEBSD */
+
+    if (r != 0) {
+        printf("Warning: sched_setaffinity failed (%" PRId32 "): %s\n", r,
+               strerror(errno));
+        return -1;
+    }
+
+    return 0;
+}
+#endif
+
+
+/**
+ * \brief Set the thread affinity on the calling thread.
+ *
+ * \param cpuid Id of the core/cpu to setup the affinity.
+ *
+ * \retval 0 If all goes well; -1 if something is wrong.
+ */
+static int SetCPUAffinity(uint16_t cpuid)
+{
+#ifndef __CYGWIN__
+#if !defined __OpenBSD__
     int cpu = (int)cpuid;
+#endif
 
 #ifdef OS_WIN32
 	DWORD cs = 1 << cpu;
+#elif defined __OpenBSD__
+    return 0;
 #else
     cpu_set_t cs;
 
     CPU_ZERO(&cs);
-    CPU_SET(cpu,&cs);
+    CPU_SET(cpu, &cs);
 #endif /* OS_WIN32 */
 
-#ifdef OS_FREEBSD
-    int r = cpuset_setaffinity(CPU_LEVEL_WHICH,CPU_WHICH_TID,SCGetThreadIdLong(),sizeof(cpu_set_t),&cs);
-#elif OS_DARWIN
-    int r = thread_policy_set(mach_thread_self(), THREAD_AFFINITY_POLICY, (void*)&cs, THREAD_AFFINITY_POLICY_COUNT);
-#elif OS_WIN32
-	int r = (0 == SetThreadAffinityMask(GetCurrentThread(), cs));
-#else
-    pid_t tid = syscall(SYS_gettid);
-    int r = sched_setaffinity(tid,sizeof(cpu_set_t),&cs);
-#endif /* OS_FREEBSD */
-
+#ifdef OS_WIN32
+    int r = (0 == SetThreadAffinityMask(GetCurrentThread(), cs));
     if (r != 0) {
-        printf("Warning: sched_setaffinity failed (%" PRId32 "): %s\n", r, strerror(errno));
+        printf("Warning: sched_setaffinity failed (%" PRId32 "): %s\n", r,
+               strerror(errno));
         return -1;
     }
-    SCLogDebug("CPU Affinity for thread %lu set to CPU %" PRId32, SCGetThreadIdLong(), cpu);
+    SCLogDebug("CPU Affinity for thread %lu set to CPU %" PRId32,
+               SCGetThreadIdLong(), cpu);
 
     return 0;
+#elif !defined __OpenBSD__
+    return SetCPUAffinitySet(&cs);
+#endif /* OS_WIN32 */
+#endif
 }
 
 
 /**
- * \brief Set the thread options (thread priority)
- * \param tv pointer to the ThreadVars to setup the thread priority
- * \retval TM_ECOE_OK
+ * \brief Set the thread options (thread priority).
+ *
+ * \param tv Pointer to the ThreadVars to setup the thread priority.
+ *
+ * \retval TM_ECODE_OK.
  */
-TmEcode TmThreadSetThreadPriority(ThreadVars *tv, int prio) {
+TmEcode TmThreadSetThreadPriority(ThreadVars *tv, int prio)
+{
     tv->thread_setup_flags |= THREAD_SET_PRIORITY;
     tv->thread_priority = prio;
+
     return TM_ECODE_OK;
 }
 
 /**
- * \brief Adjusting nice value for threads
+ * \brief Adjusting nice value for threads.
  */
 void TmThreadSetPrio(ThreadVars *tv)
 {
     SCEnter();
+#ifndef __CYGWIN__
 #ifdef OS_WIN32
 	if (0 == SetThreadPriority(GetCurrentThread(), tv->thread_priority)) {
-        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting priority for thread %s: %s", tv->name, strerror(errno));
+        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting priority for "
+                   "thread %s: %s", tv->name, strerror(errno));
     } else {
-        SCLogDebug("Priority set to %"PRId32" for thread %s", tv->thread_priority, tv->name);
+        SCLogDebug("Priority set to %"PRId32" for thread %s",
+                   tv->thread_priority, tv->name);
     }
 #else
     int ret = nice(tv->thread_priority);
     if (ret == -1) {
-        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting nice value for thread %s: %s", tv->name, strerror(errno));
+        SCLogError(SC_ERR_THREAD_NICE_PRIO, "Error setting nice value "
+                   "for thread %s: %s", tv->name, strerror(errno));
     } else {
-        SCLogDebug("Nice value set to %"PRId32" for thread %s", tv->thread_priority, tv->name);
+        SCLogDebug("Nice value set to %"PRId32" for thread %s",
+                   tv->thread_priority, tv->name);
     }
 #endif /* OS_WIN32 */
+#endif
     SCReturn;
 }
 
 
 /**
- * \brief Set the thread options (cpu affinity)
- * \param tv pointer to the ThreadVars to setup the affinity
- * \retval TM_ECOE_OK
+ * \brief Set the thread options (cpu affinity).
+ *
+ * \param tv pointer to the ThreadVars to setup the affinity.
+ * \param cpu cpu on which affinity is set.
+ *
+ * \retval TM_ECODE_OK
  */
-TmEcode TmThreadSetCPUAffinity(ThreadVars *tv, uint16_t cpu) {
+TmEcode TmThreadSetCPUAffinity(ThreadVars *tv, uint16_t cpu)
+{
     tv->thread_setup_flags |= THREAD_SET_AFFINITY;
     tv->cpu_affinity = cpu;
+
     return TM_ECODE_OK;
 }
 
+
+TmEcode TmThreadSetCPU(ThreadVars *tv, uint8_t type)
+{
+    if (!threading_set_cpu_affinity)
+        return TM_ECODE_OK;
+
+    if (type > MAX_CPU_SET) {
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid cpu type family");
+        return TM_ECODE_FAILED;
+    }
+
+    tv->thread_setup_flags |= THREAD_SET_AFFTYPE;
+    tv->cpu_affinity = type;
+
+    return TM_ECODE_OK;
+}
+
+int TmThreadGetNbThreads(uint8_t type)
+{
+    if (type > MAX_CPU_SET) {
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid cpu type family");
+        return 0;
+    }
+
+    return thread_affinity[type].nb_threads;
+}
+
 /**
- * \brief Set the thread options (cpu affinitythread)
- *        Priority should be already set by pthread_create
- * \param tv pointer to the ThreadVars of the calling thread
+ * \brief Set the thread options (cpu affinitythread).
+ *        Priority should be already set by pthread_create.
+ *
+ * \param tv pointer to the ThreadVars of the calling thread.
  */
-TmEcode TmThreadSetupOptions(ThreadVars *tv) {
+TmEcode TmThreadSetupOptions(ThreadVars *tv)
+{
     if (tv->thread_setup_flags & THREAD_SET_AFFINITY) {
-        SCLogInfo("Setting affinity for \"%s\" Module to cpu/core %"PRIu16", thread id %lu", tv->name, tv->cpu_affinity, SCGetThreadIdLong());
+        SCLogInfo("Setting affinity for \"%s\" Module to cpu/core "
+                  "%"PRIu16", thread id %lu", tv->name, tv->cpu_affinity,
+                  SCGetThreadIdLong());
         SetCPUAffinity(tv->cpu_affinity);
     }
-    TmThreadSetPrio(tv);
+
+#if !defined __CYGWIN__ && !defined OS_WIN32 && !defined __OpenBSD__
+    if (tv->thread_setup_flags & THREAD_SET_PRIORITY)
+        TmThreadSetPrio(tv);
+    if (tv->thread_setup_flags & THREAD_SET_AFFTYPE) {
+        ThreadsAffinityType *taf = &thread_affinity[tv->cpu_affinity];
+        if (taf->mode_flag == EXCLUSIVE_AFFINITY) {
+            int cpu = AffinityGetNextCPU(taf);
+            SetCPUAffinity(cpu);
+            /* If CPU is in a set overwrite the default thread prio */
+            if (CPU_ISSET(cpu, &taf->lowprio_cpu)) {
+                tv->thread_priority = PRIO_LOW;
+            } else if (CPU_ISSET(cpu, &taf->medprio_cpu)) {
+                tv->thread_priority = PRIO_MEDIUM;
+            } else if (CPU_ISSET(cpu, &taf->hiprio_cpu)) {
+                tv->thread_priority = PRIO_HIGH;
+            } else {
+                tv->thread_priority = taf->prio;
+            }
+            SCLogInfo("Setting prio %d for \"%s\" Module to cpu/core "
+                      "%"PRIu16", thread id %lu", tv->thread_priority,
+                      tv->name, cpu, SCGetThreadIdLong());
+        } else {
+            SetCPUAffinitySet(&taf->cpu_set);
+            tv->thread_priority = taf->prio;
+        }
+        TmThreadSetPrio(tv);
+    }
+#endif
+
     return TM_ECODE_OK;
 }
 
@@ -805,7 +1111,7 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
         goto error;
     memset(tv, 0, sizeof(ThreadVars));
 
-    SCSpinInit(&tv->flags_spinlock, PTHREAD_PROCESS_PRIVATE);
+    SC_ATOMIC_INIT(tv->flags);
     SCMutexInit(&tv->sc_perf_pctx.m, NULL);
 
     tv->name = name;
@@ -816,7 +1122,7 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
     tv->aof = THV_RESTART_THREAD;
 
     /* set the incoming queue */
-    if (inq_name != NULL && strcmp(inq_name,"packetpool") != 0) {
+    if (inq_name != NULL && strcmp(inq_name, "packetpool") != 0) {
         SCLogDebug("inq_name \"%s\"", inq_name);
 
         tmq = TmqGetQueueByName(inq_name);
@@ -853,7 +1159,7 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
 
         tv->tmqh_out = tmqh->OutHandler;
 
-        if (outq_name != NULL && strcmp(outq_name,"packetpool") != 0) {
+        if (outq_name != NULL && strcmp(outq_name, "packetpool") != 0) {
             SCLogDebug("outq_name \"%s\"", outq_name);
 
             if (tmqh->OutHandlerCtxSetup != NULL) {
@@ -883,12 +1189,9 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
         TmThreadInitMC(tv);
 
     return tv;
+
 error:
     printf("ERROR: failed to setup a thread.\n");
-
-    if (tv != NULL) {
-        SCFree(tv);
-    }
     return NULL;
 }
 
@@ -942,6 +1245,8 @@ ThreadVars *TmThreadCreateMgmtThread(char *name, void *(fn_p)(void *),
 
     tv = TmThreadCreate(name, NULL, NULL, NULL, NULL, "custom", fn_p, mucond);
 
+    TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
+
     if (tv != NULL)
         tv->type = TVT_MGMT;
 
@@ -962,8 +1267,8 @@ void TmThreadAppend(ThreadVars *tv, int type)
         tv->next = NULL;
         tv->prev = NULL;
 
-        //printf("TmThreadAppend: thread \'%s\' is the first thread in the list.\n", tv->name);
         SCMutexUnlock(&tv_root_lock);
+
         return;
     }
 
@@ -981,7 +1286,8 @@ void TmThreadAppend(ThreadVars *tv, int type)
     }
 
     SCMutexUnlock(&tv_root_lock);
-    //printf("TmThreadAppend: thread \'%s\' is added to the list.\n", tv->name);
+
+    return;
 }
 
 /**
@@ -996,6 +1302,7 @@ void TmThreadRemove(ThreadVars *tv, int type)
 
     if (tv_root[type] == NULL) {
         SCMutexUnlock(&tv_root_lock);
+
         return;
     }
 
@@ -1032,130 +1339,166 @@ void TmThreadKillThread(ThreadVars *tv)
     if (tv == NULL)
         return;
 
+    if (tv->inq != NULL) {
+        /* we wait till we dry out all the inq packets, before we
+         * kill this thread.  Do note that you should have disabled
+         * packet acquire by now using TmThreadDisableReceiveThreads()*/
+        if (!(strlen(tv->inq->name) == strlen("packetpool") &&
+              strcasecmp(tv->inq->name, "packetpool") == 0)) {
+            PacketQueue *q = &trans_q[tv->inq->id];
+            while (q->len != 0) {
+                usleep(1000);
+            }
+        }
+    }
+
     /* set the thread flag informing the thread that it needs to be
      * terminated */
     TmThreadsSetFlag(tv, THV_KILL);
+    TmThreadsSetFlag(tv, THV_DEINIT);
 
     if (tv->inq != NULL) {
         /* signal the queue for the number of users */
-                if (tv->InShutdownHandler != NULL) {
-                    tv->InShutdownHandler(tv);
-                }
-        for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
-            SCCondSignal(&trans_q[tv->inq->id].cond_q);
+        if (tv->InShutdownHandler != NULL) {
+            tv->InShutdownHandler(tv);
+        }
+        for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++) {
+            if (tv->inq->q_type == 0)
+                SCCondSignal(&trans_q[tv->inq->id].cond_q);
+            else
+                SCCondSignal(&data_queues[tv->inq->id].cond_q);
+        }
 
         /* to be sure, signal more */
+        int cnt = 0;
         while (1) {
             if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                SCLogDebug("signalled the thread %" PRId32 " times", cnt);
                 break;
             }
 
-                if (tv->InShutdownHandler != NULL) {
-                    tv->InShutdownHandler(tv);
-                }
-            for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++)
-                SCCondSignal(&trans_q[tv->inq->id].cond_q);
+            cnt++;
 
+            if (tv->InShutdownHandler != NULL) {
+                tv->InShutdownHandler(tv);
+            }
+            for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++) {
+                if (tv->inq->q_type == 0)
+                    SCCondSignal(&trans_q[tv->inq->id].cond_q);
+                else
+                    SCCondSignal(&data_queues[tv->inq->id].cond_q);
+            }
             usleep(100);
         }
+        SCLogDebug("signalled tv->inq->id %" PRIu32 "", tv->inq->id);
     }
 
     if (tv->cond != NULL ) {
+        int cnt = 0;
         while (1) {
             if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                SCLogDebug("signalled the thread %" PRId32 " times", cnt);
                 break;
             }
 
+            cnt++;
             pthread_cond_broadcast(tv->cond);
-
             usleep(100);
         }
     }
+
+    /* join it */
+    pthread_join(tv->t, NULL);
+    SCLogDebug("thread %s stopped", tv->name);
 
     return;
 }
 
-void TmThreadKillThreads(void) {
+/**
+ * \brief Disable receive threads.
+ */
+void TmThreadDisableReceiveThreads(void)
+{
+    ThreadVars *tv = NULL;
+
+    SCMutexLock(&tv_root_lock);
+
+    /* all receive threads are part of packet processing threads */
+    tv = tv_root[TVT_PPT];
+
+    /* we do have to keep in mind that TVs are arranged in the order
+     * right from receive to log.  The moment we fail to find a
+     * receive TM amongst the slots in a tv, it indicates we are done
+     * with all receive threads */
+    while (tv) {
+        /* obtain the slots for this TV */
+        TmSlot *slots = tv->tm_slots;
+        TmModule *tm = TmModuleGetById(slots->tm_id);
+
+        if (!tm->flags & TM_FLAG_RECEIVE_TM) {
+            tv = tv->next;
+            continue;
+        }
+
+        /* we found our receive TV.  Send it a KILL signal.  This is all
+         * we need to do to kill receive threads */
+        TmThreadsSetFlag(tv, THV_KILL);
+
+        tv = tv->next;
+    }
+
+    SCMutexUnlock(&tv_root_lock);
+
+    return;
+}
+
+TmSlot *TmThreadGetFirstTmSlotForPartialPattern(const char *tm_name)
+{
+    ThreadVars *tv = NULL;
+    TmSlot *slots = NULL;
+
+    SCMutexLock(&tv_root_lock);
+
+    /* all receive threads are part of packet processing threads */
+    tv = tv_root[TVT_PPT];
+
+    while (tv) {
+        slots = tv->tm_slots;
+
+        while (slots != NULL) {
+            TmModule *tm = TmModuleGetById(slots->tm_id);
+
+            char *found = strstr(tm->name, tm_name);
+            if (found != NULL)
+                goto end;
+
+            slots = slots->slot_next;
+        }
+
+        tv = tv->next;
+    }
+
+ end:
+    SCMutexUnlock(&tv_root_lock);
+    return slots;
+}
+
+void TmThreadKillThreads(void)
+{
     ThreadVars *tv = NULL;
     int i = 0;
 
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
 
-
         while (tv) {
-            TmThreadsSetFlag(tv, THV_KILL);
-            SCLogDebug("told thread %s to stop", tv->name);
-
-            if (tv->inq != NULL) {
-                int i;
-
-                //printf("TmThreadKillThreads: (t->inq->reader_cnt + t->inq->writer_cnt) %" PRIu32 "\n", (t->inq->reader_cnt + t->inq->writer_cnt));
-
-                /* make sure our packet pending counter doesn't block */
-                //SCCondSignal(&cond_pending);
-
-                /* signal the queue for the number of users */
-
-                if (tv->InShutdownHandler != NULL) {
-                    tv->InShutdownHandler(tv);
-                }
-                for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++) {
-                    if (tv->inq->q_type == 0)
-                        SCCondSignal(&trans_q[tv->inq->id].cond_q);
-                    else
-                        SCCondSignal(&data_queues[tv->inq->id].cond_q);
-                }
-
-                /* to be sure, signal more */
-                int cnt = 0;
-                while (1) {
-                    if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
-                        SCLogDebug("signalled the thread %" PRId32 " times", cnt);
-                        break;
-                    }
-
-                    cnt++;
-
-                    if (tv->InShutdownHandler != NULL) {
-                        tv->InShutdownHandler(tv);
-                    }
-
-                    for (i = 0; i < (tv->inq->reader_cnt + tv->inq->writer_cnt); i++) {
-                        if (tv->inq->q_type == 0)
-                            SCCondSignal(&trans_q[tv->inq->id].cond_q);
-                        else
-                            SCCondSignal(&data_queues[tv->inq->id].cond_q);
-                    }
-                    usleep(100);
-                }
-
-                SCLogDebug("signalled tv->inq->id %" PRIu32 "", tv->inq->id);
-            }
-
-            if (tv->cond != NULL ) {
-                int cnt = 0;
-                while (1) {
-                    if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
-                        SCLogDebug("signalled the thread %" PRId32 " times", cnt);
-                        break;
-                    }
-
-                    cnt++;
-
-                    pthread_cond_broadcast(tv->cond);
-
-                    usleep(100);
-                }
-            }
-
-            /* join it */
-            pthread_join(tv->t, NULL);
-            SCLogDebug("thread %s stopped", tv->name);
+            TmThreadKillThread(tv);
 
             tv = tv->next;
         }
     }
+
+    return;
 }
 
 /**
@@ -1224,7 +1567,8 @@ void TmThreadSetAOF(ThreadVars *tv, uint8_t aof)
 void TmThreadInitMC(ThreadVars *tv)
 {
     if ( (tv->m = SCMalloc(sizeof(SCMutex))) == NULL) {
-        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC. Exiting...");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC.  "
+                   "Exiting...");
         exit(EXIT_FAILURE);
     }
 
@@ -1234,14 +1578,18 @@ void TmThreadInitMC(ThreadVars *tv)
     }
 
     if ( (tv->cond = SCMalloc(sizeof(SCCondT))) == NULL) {
-        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC. Exiting...");
+        SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC.  "
+                   "Exiting...");
         exit(0);
     }
 
     if (SCCondInit(tv->cond, NULL) != 0) {
-        printf("Error initializing the tv->cond condition variable\n");
+        SCLogError(SC_ERR_FATAL, "Error initializing the tv->cond condition "
+                   "variable");
         exit(0);
     }
+
+    return;
 }
 
 /**
@@ -1265,6 +1613,21 @@ void TmThreadTestThreadUnPaused(ThreadVars *tv)
 }
 
 /**
+ * \brief Waits till the specified flag(s) is(are) set.  We don't bother if
+ *        the kill flag has been set or not on the thread.
+ *
+ * \param tv Pointer to the TV instance.
+ */
+void TmThreadWaitForFlag(ThreadVars *tv, uint8_t flags)
+{
+    while (!TmThreadsCheckFlag(tv, flags)) {
+        usleep(100);
+    }
+
+    return;
+}
+
+/**
  * \brief Unpauses a thread
  *
  * \param tv Pointer to a TV instance that has to be unpaused
@@ -1272,6 +1635,7 @@ void TmThreadTestThreadUnPaused(ThreadVars *tv)
 void TmThreadContinue(ThreadVars *tv)
 {
     TmThreadsUnsetFlag(tv, THV_PAUSE);
+
     return;
 }
 
@@ -1302,6 +1666,7 @@ void TmThreadContinueThreads()
 void TmThreadPause(ThreadVars *tv)
 {
     TmThreadsSetFlag(tv, THV_PAUSE);
+
     return;
 }
 
@@ -1332,11 +1697,9 @@ void TmThreadPauseThreads()
 static void TmThreadRestartThread(ThreadVars *tv)
 {
     if (tv->restarted >= THV_MAX_RESTARTS) {
-        printf("Warning: thread restarts exceeded threshhold limit for thread"
-               "\"%s\"\n", tv->name);
-        /* makes sense to reset the tv_aof to engine_exit?! */
-        // tv->aof = THV_ENGINE_EXIT;
-        return;
+        SCLogError(SC_ERR_TM_THREADS_ERROR,"thread restarts exceeded "
+                "threshold limit for thread \"%s\"", tv->name);
+        exit(EXIT_FAILURE);
     }
 
     TmThreadsUnsetFlag(tv, THV_CLOSED);
@@ -1348,7 +1711,7 @@ static void TmThreadRestartThread(ThreadVars *tv)
     }
 
     tv->restarted++;
-    SCLogInfo("thread \"%s\" restarted\n", tv->name);
+    SCLogInfo("thread \"%s\" restarted", tv->name);
 
     return;
 }
@@ -1370,13 +1733,19 @@ void TmThreadCheckThreadState(void)
 
         while (tv) {
             if (TmThreadsCheckFlag(tv, THV_FAILED)) {
+                TmThreadsSetFlag(tv, THV_DEINIT);
                 pthread_join(tv->t, NULL);
-                if ( !(tv_aof & THV_ENGINE_EXIT) &&
-                     (tv->aof & THV_RESTART_THREAD) ) {
-                    TmThreadRestartThread(tv);
-                } else {
-                    TmThreadsSetFlag(tv, THV_CLOSED);
+                if (tv_aof & THV_ENGINE_EXIT || tv->aof & THV_ENGINE_EXIT) {
                     EngineKill();
+                    return;
+                } else {
+                    /* if the engine kill-stop has been received by now, chuck
+                     * restarting and return to kill the engine */
+                    if (suricata_ctl_flags & SURICATA_KILL ||
+                        suricata_ctl_flags & SURICATA_STOP) {
+                        return;
+                    }
+                    TmThreadRestartThread(tv);
                 }
             }
             tv = tv->next;
@@ -1408,6 +1777,10 @@ TmEcode TmThreadWaitOnThreadInit(void)
             while (started == FALSE) {
                 if (TmThreadsCheckFlag(tv, THV_INIT_DONE)) {
                     started = TRUE;
+                } else {
+                    /* sleep a little to give the thread some
+                     * time to finish initialization */
+                    usleep(100);
                 }
 
                 if (TmThreadsCheckFlag(tv, THV_FAILED)) {
@@ -1430,7 +1803,8 @@ TmEcode TmThreadWaitOnThreadInit(void)
     }
 
     SCLogInfo("all %"PRIu16" packet processing threads, %"PRIu16" management "
-           "threads initialized, engine started.", ppt_num, mgt_num);
+              "threads initialized, engine started.", ppt_num, mgt_num);
+
     return TM_ECODE_OK;
 }
 

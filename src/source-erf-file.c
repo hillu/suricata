@@ -27,7 +27,7 @@
 
 #include "suricata-common.h"
 #include "suricata.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 #define DAG_TYPE_ETH 2
 
@@ -81,6 +81,7 @@ TmModuleReceiveErfFileRegister(void)
     tmm_modules[TMM_RECEIVEERFFILE].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEERFFILE].RegisterTests = NULL;
     tmm_modules[TMM_RECEIVEERFFILE].cap_flags = 0;
+    tmm_modules[TMM_RECEIVEERFFILE].flags = TM_FLAG_RECEIVE_TM;
 }
 
 /**
@@ -120,7 +121,7 @@ ReceiveErfFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQue
     }
     int rlen = ntohs(dr.rlen);
     int wlen = ntohs(dr.wlen);
-    r = fread(p->pkt, rlen - sizeof(DagRecord), 1, etv->erf);
+    r = fread(GET_PKT_DATA(p), rlen - sizeof(DagRecord), 1, etv->erf);
     if (r < 1) {
         SCLogInfo("End of ERF file reached or an error occurred.");
         EngineStop();
@@ -134,7 +135,7 @@ ReceiveErfFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQue
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    p->pktlen = wlen - 4; /* Trim the FCS... */
+    GET_PKT_LEN(p) = wlen - 4; /* Trim the FCS... */
     p->datalink = LINKTYPE_ETHERNET;
 
     /* Convert ERF time to timeval - from libpcap. */
@@ -227,15 +228,17 @@ DecodeErfFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueu
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
     SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
 
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, p->pktlen);
+    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
+#if 0
+    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (p->pktlen * 8)/1000000.0 );
+                           (GET_PKT_LEN(p) * 8)/1000000.0 );
+#endif
 
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, p->pktlen);
+    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
 
-    DecodeEthernet(tv, dtv, p, p->pkt, p->pktlen, pq);
+    DecodeEthernet(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
 
     SCReturnInt(TM_ECODE_OK);
 }

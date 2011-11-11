@@ -16,6 +16,17 @@
  */
 
 /**
+ * \defgroup threshold Thresholding
+ *
+ * This feature is used to reduce the number of logged alerts for noisy rules.
+ * This can be tuned to significantly reduce false alarms, and it can also be
+ * used to write a newer breed of rules. Thresholding commands limit the number
+ * of times a particular event is logged during a specified time interval.
+ *
+ * @{
+ */
+
+/**
  * \file
  *
  *  \author Breno Silva <breno.silva@gmail.com>
@@ -50,7 +61,50 @@
 #include "util-debug.h"
 
 #include "util-var-name.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
+
+/**
+ * \brief Return next DetectThresholdData for signature
+ *
+ * \param sig Signature pointer
+ * \param p Packet structure
+ * \param sm Pointer to a Signature Match pointer
+ *
+ * \retval tsh Return the threshold data from signature or NULL if not found
+ *
+ *
+ */
+DetectThresholdData *SigGetThresholdTypeIter(Signature *sig, Packet *p, SigMatch **psm)
+{
+    SigMatch *sm = NULL;
+    DetectThresholdData *tsh = NULL;
+
+    if (sig == NULL)
+        return NULL;
+
+    if (*psm == NULL) {
+        sm = sig->sm_lists_tail[DETECT_SM_LIST_MATCH];
+    } else {
+        /* Iteration in progress, using provided value */
+        sm = *psm;
+    }
+
+    if (p == NULL)
+        return NULL;
+
+    while (sm != NULL) {
+        if (sm->type == DETECT_THRESHOLD || sm->type == DETECT_DETECTION_FILTER) {
+            tsh = (DetectThresholdData *)sm->ctx;
+            *psm = sm->prev;
+            return tsh;
+        }
+
+        sm = sm->prev;
+    }
+    *psm = NULL;
+
+    return NULL;
+}
 
 /**
  * \brief Check if a certain signature has threshold option
@@ -62,22 +116,8 @@
  */
 DetectThresholdData *SigGetThresholdType(Signature *sig, Packet *p)
 {
-    SigMatch *sm = sig->match_tail;
-    DetectThresholdData *tsh = NULL;
-
-    if (p == NULL)
-        return NULL;
-
-    while (sm != NULL) {
-        if (sm->type == DETECT_THRESHOLD || sm->type == DETECT_DETECTION_FILTER) {
-            tsh = (DetectThresholdData *)sm->ctx;
-            return tsh;
-        }
-
-        sm = sm->prev;
-    }
-
-    return NULL;
+    SigMatch *psm = NULL;
+    return SigGetThresholdTypeIter(sig, p, &psm);
 }
 
 /**
@@ -449,20 +489,20 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                     /* Take the action to perform */
                     switch (td->new_action) {
                         case TH_ACTION_ALERT:
-                            p->action |= ACTION_ALERT;
-                        break;
+                            ALERT_PACKET(p);
+                            break;
                         case TH_ACTION_DROP:
-                            p->action |= ACTION_DROP;
-                        break;
+                            DROP_PACKET(p);
+                            break;
                         case TH_ACTION_REJECT:
-                            p->action |= ACTION_REJECT;
-                        break;
+                            REJECT_PACKET(p);
+                            break;
                         case TH_ACTION_PASS:
-                            p->action |= ACTION_PASS;
-                        break;
+                            PASS_PACKET(p);
+                            break;
                         default:
                             /* Weird, leave the default action */
-                        break;
+                            break;
                     }
                     ret = 1;
                 }
@@ -477,20 +517,20 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                     /* Take the action to perform */
                     switch (td->new_action) {
                         case TH_ACTION_ALERT:
-                            p->action |= ACTION_ALERT;
-                        break;
+                            ALERT_PACKET(p);
+                            break;
                         case TH_ACTION_DROP:
-                            p->action |= ACTION_DROP;
-                        break;
+                            DROP_PACKET(p);
+                            break;
                         case TH_ACTION_REJECT:
-                            p->action |= ACTION_REJECT;
-                        break;
+                            REJECT_PACKET(p);
+                            break;
                         case TH_ACTION_PASS:
-                            p->action |= ACTION_PASS;
-                        break;
+                            PASS_PACKET(p);
+                            break;
                         default:
                             /* Weird, leave the default action */
-                        break;
+                            break;
                     }
                         ret = 1;
                     }
@@ -521,6 +561,28 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
             }
             break;
         }
+        case TYPE_SUPPRESS:
+        {
+            int res = 0;
+            switch (td->track) {
+                case TRACK_DST:
+                    res = DetectAddressMatch(td->addr, &p->dst);
+                    break;
+                case TRACK_SRC:
+                    res = DetectAddressMatch(td->addr, &p->src);
+                    break;
+                case TRACK_RULE:
+                default:
+                    SCLogError(SC_ERR_INVALID_VALUE,
+                               "track mode %d is not supported", td->track);
+                    break;
+            }
+            if (res == 0)
+                ret = 1;
+            break;
+        }
+        default:
+            SCLogError(SC_ERR_INVALID_VALUE, "type %d is not supported", td->type);
     }
 
     /* handle timing out entries */
@@ -658,3 +720,6 @@ void ThresholdContextDestroy(DetectEngineCtx *de_ctx)
         SCFree(de_ctx->ths_ctx.th_entry);
 }
 
+/**
+ * @}
+ */

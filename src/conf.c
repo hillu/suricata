@@ -121,18 +121,29 @@ ConfNode *
 ConfGetNode(char *key)
 {
     ConfNode *node = root;
+#if !defined(__WIN32) && !defined(_WIN32)
     char *saveptr = NULL;
+#endif /* __WIN32 */
     char *token;
 
     /* Need to dup the key for tokenization... */
     char *tokstr = SCStrdup(key);
 
+#if defined(__WIN32) || defined(_WIN32)
+    token = strtok(tokstr, ".");
+#else
     token = strtok_r(tokstr, ".", &saveptr);
+#endif /* __WIN32 */
     for (;;) {
         node = ConfNodeLookupChild(node, token);
         if (node == NULL)
             break;
+
+#if defined(__WIN32) || defined(_WIN32)
+        token = strtok(NULL, ".");
+#else
         token = strtok_r(NULL, ".", &saveptr);
+#endif /* __WIN32 */
         if (token == NULL)
             break;
     }
@@ -164,8 +175,9 @@ ConfSet(char *name, char *val, int allow_override)
     ConfNode *parent = root;
     ConfNode *node;
     char *token;
+#if !defined(__WIN32) && !defined(_WIN32)
     char *saveptr = NULL;
-
+#endif /* __WIN32 */
     /* First check if the node already exists. */
     node = ConfGetNode(name);
     if (node != NULL) {
@@ -182,7 +194,11 @@ ConfSet(char *name, char *val, int allow_override)
     }
     else {
         char *tokstr = SCStrdup(name);
+#if defined(__WIN32) || defined(_WIN32)
+        token = strtok(tokstr, ".");
+#else
         token = strtok_r(tokstr, ".", &saveptr);
+#endif /* __WIN32 */
         node = ConfNodeLookupChild(parent, token);
         for (;;) {
             if (node == NULL) {
@@ -195,7 +211,11 @@ ConfSet(char *name, char *val, int allow_override)
             else {
                 parent = node;
             }
+#if defined(__WIN32) || defined(_WIN32)
+            token = strtok(NULL, ".");
+#else
             token = strtok_r(NULL, ".", &saveptr);
+#endif /* __WIN32 */
             if (token == NULL) {
                 if (!node->allow_override)
                     break;
@@ -247,6 +267,20 @@ ConfGet(char *name, char **vptr)
     }
 }
 
+int ConfGetChildValue(ConfNode *base, char *name, char **vptr)
+{
+    ConfNode *node = ConfNodeLookupChild(base, name);
+
+    if (node == NULL) {
+        SCLogDebug("failed to lookup configuration parameter '%s'", name);
+        return 0;
+    }
+    else {
+        *vptr = node->val;
+        return 1;
+    }
+}
+
 /**
  * \brief Retrieve a configuration value as an integer.
  *
@@ -278,6 +312,28 @@ ConfGetInt(char *name, intmax_t *val)
     return 1;
 }
 
+int ConfGetChildValueInt(ConfNode *base, char *name, intmax_t *val)
+{
+    char *strval;
+    intmax_t tmpint;
+    char *endptr;
+
+    if (ConfGetChildValue(base, name, &strval) == 0)
+        return 0;
+    errno = 0;
+    tmpint = strtoimax(strval, &endptr, 0);
+    if (strval[0] == '\0' || *endptr != '\0')
+        return 0;
+    if (errno == ERANGE && (tmpint == INTMAX_MAX || tmpint == INTMAX_MIN))
+        return 0;
+
+    *val = tmpint;
+    return 1;
+
+}
+
+
+
 /**
  * \brief Retrieve a configuration value as an boolen.
  *
@@ -292,21 +348,83 @@ int
 ConfGetBool(char *name, int *val)
 {
     char *strval;
-    char *trues[] = {"1", "yes", "true", "on"};
-    size_t u;
 
     *val = 0;
     if (ConfGet(name, &strval) != 1)
         return 0;
 
+    *val = ConfValIsTrue(strval);
+
+    return 1;
+}
+
+int ConfGetChildValueBool(ConfNode *base, char *name, int *val)
+{
+    char *strval;
+
+    *val = 0;
+    if (ConfGetChildValue(base, name, &strval) == 0)
+        return 0;
+
+    *val = ConfValIsTrue(strval);
+
+
+
+    *val = ConfValIsTrue(strval);
+
+    return 1;
+}
+
+/**
+ * \brief Check if a value is true.
+ *
+ * The value is considered true if it is a string with the value of 1,
+ * yes, true or on.  The test is not case sensitive, any other value
+ * is false.
+ *
+ * \param val The string to test for a true value.
+ *
+ * \retval 1 If the value is true, 0 if not.
+ */
+int
+ConfValIsTrue(const char *val)
+{
+    char *trues[] = {"1", "yes", "true", "on"};
+    size_t u;
+
     for (u = 0; u < sizeof(trues) / sizeof(trues[0]); u++) {
-        if (strcasecmp(strval, trues[u]) == 0) {
-            *val = 1;
-            break;
+        if (strcasecmp(val, trues[u]) == 0) {
+            return 1;
         }
     }
 
-    return 1;
+    return 0;
+}
+
+/**
+ * \brief Check if a value is false.
+ *
+ * The value is considered false if it is a string with the value of 0,
+ * no, false or off.  The test is not case sensitive, any other value
+ * is not false.
+ *
+ * \param val The string to test for a false value.
+ *
+ * \retval 1 If the value is false, 0 if not.
+ */
+int
+ConfValIsFalse(const char *val)
+{
+    char *falses[] = {"0", "no", "false", "off"};
+    size_t u;
+
+    for (u = 0; u < sizeof(falses) / sizeof(falses[0]); u++) {
+        if (strcasecmp(val, falses[u]) == 0) {
+            return 1;
+        }
+    }
+
+    return 0;
 }
 
 /**
@@ -542,6 +660,30 @@ ConfNodeLookupChildValue(ConfNode *node, const char *name)
 }
 
 /**
+ * \brief Lookup for a key value under a specific node
+ *
+ * \return the ConfNode matching or NULL
+ */
+
+ConfNode *ConfNodeLookupKeyValue(ConfNode *base, const char *key, const char *value)
+{
+    ConfNode *child;
+
+    TAILQ_FOREACH(child, &base->head, next) {
+        if (!strncmp(child->val, key, sizeof(child->val))) {
+            ConfNode *subchild;
+            TAILQ_FOREACH(subchild, &child->head, next) {
+                if ((!strcmp(subchild->name, key)) && (!strcmp(subchild->val, value))) {
+                    return child;
+                }
+            }
+        }
+    }
+
+    return NULL;
+}
+
+/**
  * \brief Test if a configuration node has a true value.
  *
  * \param node The parent configuration node.
@@ -556,11 +698,8 @@ ConfNodeChildValueIsTrue(ConfNode *node, const char *key)
     const char *val;
 
     val = ConfNodeLookupChildValue(node, key);
-    if (val != NULL) {
-        if ((strcasecmp(val, "yes") == 0) || (strcasecmp(val, "true") == 0))
-            return 1;
-    }
-    return 0;
+
+    return val != NULL ? ConfValIsTrue(val) : 0;
 }
 
 #ifdef UNITTESTS

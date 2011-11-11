@@ -47,6 +47,17 @@ typedef struct SCCudaHlModuleDevicePointer_ {
     struct SCCudaHlModuleDevicePointer_ *next;
 } SCCudaHlModuleDevicePointer;
 
+typedef struct SCCudaHlModuleCUmodule_ {
+    /* Handle for this CUmodule.  This has to be first obtained from the
+     * call to SCCudaHlGetCudaModule() or SCCudaHlGetCudaModuleFromFile() */
+    int cuda_module_handle;
+
+    CUmodule cuda_module;
+    SCCudaHlModuleDevicePointer *device_ptrs;
+
+    struct SCCudaHlModuleCUmodule_ *next;
+} SCCudaHlModuleCUmodule;
+
 typedef struct SCCudaHlModuleData_ {
     /* The unique module handle.  This has to be first obtained from the
      * call to SCCudaHlGetUniqueHandle() */
@@ -54,18 +65,35 @@ typedef struct SCCudaHlModuleData_ {
     int handle;
 
     CUcontext cuda_context;
-    CUmodule cuda_module;
+    SCCudaHlModuleCUmodule *cuda_modules;
     void *(*SCCudaHlDispFunc)(void *);
-    SCCudaHlModuleDevicePointer *device_ptrs;
 
     struct SCCudaHlModuleData_ *next;
 } SCCudaHlModuleData;
 
-int SCCudaHlGetCudaContext(CUcontext *, int);
+/**
+ * \brief Used to hold the cuda configuration from our conf yaml file
+ */
+typedef struct SCCudaHlCudaProfile_ {
+    /* profile name.  Should be unique */
+    char *name;
+    /* the data associated with this profile */
+    void *data;
+
+    struct SCCudaHlCudaProfile_ *next;
+} SCCudaHlCudaProfile;
+
+void SCCudaHlGetYamlConf(void);
+void *SCCudaHlGetProfile(char *);
+void SCCudaHlCleanProfiles(void);
+void SCCudaHlBackupRegisteredProfiles(void);
+void SCCudaHlRestoreBackupRegisteredProfiles(void);
+
+int SCCudaHlGetCudaContext(CUcontext *, char *, int);
 int SCCudaHlGetCudaModule(CUmodule *, const char *, int);
 int SCCudaHlGetCudaModuleFromFile(CUmodule *, const char *, int);
-int SCCudaHlGetCudaDevicePtr(CUdeviceptr *, const char *, size_t, void *, int);
-int SCCudaHlFreeCudaDevicePtr(const char *, int);
+int SCCudaHlGetCudaDevicePtr(CUdeviceptr *, const char *, size_t, void *, int, int);
+int SCCudaHlFreeCudaDevicePtr(const char *, int, int);
 int SCCudaHlRegisterDispatcherFunc(void *(*SCCudaHlDispFunc)(void *), int);
 
 SCCudaHlModuleData *SCCudaHlGetModuleData(uint8_t);

@@ -24,7 +24,7 @@
 #ifndef __DETECT_ENGINE_MPM_H__
 #define __DETECT_ENGINE_MPM_H__
 
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 #include "detect-content.h"
 #include "detect-uricontent.h"
@@ -33,9 +33,17 @@
 
 uint16_t PatternMatchDefaultMatcher(void);
 
-uint32_t PacketPatternSearch(ThreadVars *, DetectEngineThreadCtx *, Packet *);
+uint32_t PatternStrength(uint8_t *, uint16_t);
+uint32_t PacketPatternSearchWithStreamCtx(DetectEngineThreadCtx *, Packet *);
+uint32_t PacketPatternSearch(DetectEngineThreadCtx *, Packet *);
 uint32_t UriPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint16_t);
-uint32_t StreamPatternSearch(ThreadVars *, DetectEngineThreadCtx *, Packet *, StreamMsg *, uint8_t);
+uint32_t StreamPatternSearch(DetectEngineThreadCtx *, Packet *, StreamMsg *, uint8_t);
+uint32_t HttpClientBodyPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
+uint32_t HttpHeaderPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
+uint32_t HttpRawHeaderPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
+uint32_t HttpMethodPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
+uint32_t HttpCookiePatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
+uint32_t HttpRawUriPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t);
 
 void PacketPatternCleanup(ThreadVars *, DetectEngineThreadCtx *);
 void StreamPatternCleanup(ThreadVars *t, DetectEngineThreadCtx *det_ctx, StreamMsg *smsg);
@@ -60,7 +68,11 @@ MpmPatternIdStore *MpmPatternIdTableInitHash(void);
 void MpmPatternIdTableFreeHash(MpmPatternIdStore *);
 uint32_t MpmPatternIdStoreGetMaxId(MpmPatternIdStore *);
 uint32_t DetectContentGetId(MpmPatternIdStore *, DetectContentData *);
-uint32_t DetectUricontentGetId(MpmPatternIdStore *, DetectUricontentData *);
+uint32_t DetectUricontentGetId(MpmPatternIdStore *, DetectContentData *);
+uint32_t DetectPatternGetId(MpmPatternIdStore *, void *, uint8_t);
+
+int SignatureHasPacketContent(Signature *);
+int SignatureHasStreamContent(Signature *);
 
 #endif /* __DETECT_ENGINE_MPM_H__ */
 

@@ -24,13 +24,11 @@
 #ifndef __TM_MODULES_H__
 #define __TM_MODULES_H__
 
+#include "tm-threads-common.h"
 #include "threadvars.h"
 
-/*Error codes for the thread modules*/
-typedef enum {
-    TM_ECODE_OK = 0,    /**< Thread module exits OK*/
-    TM_ECODE_FAILED,    /**< Thread module exits due to failure*/
-}TmEcode;
+/* thread flags */
+#define TM_FLAG_RECEIVE_TM      0x01
 
 typedef struct TmModule_ {
     char *name;
@@ -43,49 +41,15 @@ typedef struct TmModule_ {
     /** the packet processing function */
     TmEcode (*Func)(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
+    TmEcode (*PktAcqLoop)(ThreadVars *, void *, void *);
+
     void (*RegisterTests)(void);
 
     uint8_t cap_flags;   /**< Flags to indicate the capability requierment of
                              the given TmModule */
+    /* Other flags used by the module */
+    uint8_t flags;
 } TmModule;
-
-enum {
-    TMM_DECODENFQ,
-    TMM_VERDICTNFQ,
-    TMM_RECEIVENFQ,
-    TMM_RECEIVEPCAP,
-    TMM_RECEIVEPCAPFILE,
-    TMM_DECODEPCAP,
-    TMM_DECODEPCAPFILE,
-    TMM_RECEIVEPFRING,
-    TMM_DECODEPFRING,
-    TMM_DETECT,
-    TMM_ALERTFASTLOG,
-    TMM_ALERTFASTLOG4,
-    TMM_ALERTFASTLOG6,
-    TMM_ALERTUNIFIEDLOG,
-    TMM_ALERTUNIFIEDALERT,
-    TMM_ALERTUNIFIED2ALERT,
-    TMM_ALERTPRELUDE,
-    TMM_ALERTDEBUGLOG,
-    TMM_RESPONDREJECT,
-    TMM_LOGHTTPLOG,
-    TMM_LOGHTTPLOG4,
-    TMM_LOGHTTPLOG6,
-    TMM_STREAMTCP,
-    TMM_DECODEIPFW,
-    TMM_VERDICTIPFW,
-    TMM_RECEIVEIPFW,
-#ifdef __SC_CUDA_SUPPORT__
-    TMM_CUDA_MPM_B2G,
-    TMM_CUDA_PACKET_BATCHER,
-#endif
-    TMM_RECEIVEERFFILE,
-    TMM_DECODEERFFILE,
-    TMM_RECEIVEERFDAG,
-    TMM_DECODEERFDAG,
-    TMM_SIZE,
-};
 
 TmModule tmm_modules[TMM_SIZE];
 
@@ -105,8 +69,8 @@ typedef struct LogFileCtx_ {
 
     /** Generic size_limit and size_current
      * They must be common to the threads accesing the same file */
-    uint32_t size_limit;    /**< file size limit */
-    uint32_t size_current;  /**< file current size */
+    uint64_t size_limit;    /**< file size limit */
+    uint64_t size_current;  /**< file current size */
 
     /* Alerts on the module (not on the file) */
     uint64_t alerts;
@@ -134,9 +98,12 @@ LogFileCtx *LogFileNewCtx();
 int LogFileFreeCtx(LogFileCtx *);
 
 TmModule *TmModuleGetByName(char *name);
+TmModule *TmModuleGetById(int id);
+int TmModuleGetIDForTM(TmModule *tm);
 TmEcode TmModuleRegister(char *name, int (*module_func)(ThreadVars *, Packet *, void *));
 void TmModuleDebugList(void);
 void TmModuleRegisterTests(void);
+const char * TmModuleTmmIdToString(TmmId id);
 
 #endif /* __TM_MODULES_H__ */
 

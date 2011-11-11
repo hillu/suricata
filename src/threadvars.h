@@ -25,9 +25,12 @@
 #define __THREADVARS_H__
 
 #include "util-mpm.h"
+#include "util-affinity.h"
 #include "tm-queues.h"
 #include "counters.h"
 #include "threads.h"
+
+struct TmSlot_;
 
 /** Thread flags set and read by threads to control the threads */
 #define THV_USE       0x01 /** thread is in use */
@@ -36,9 +39,12 @@
 #define THV_KILL      0x08 /** thread has been asked to cleanup and exit */
 #define THV_FAILED    0x10 /** thread has encountered an error and failed */
 #define THV_CLOSED    0x20 /** thread done, should be joinable */
+/* used to indicate the thread is going through de-init.  Introduced as more
+ * of a hack for solving stream-timeout-shutdown.  Is set by the main thread. */
+#define THV_DEINIT    0x40
 
 /** Thread flags set and read by threads, to control the threads, when they
-    encounter certain conditions like failure */
+ *  encounter certain conditions like failure */
 #define THV_RESTART_THREAD 0x01 /** restart the thread */
 #define THV_ENGINE_EXIT 0x02 /** shut the engine down gracefully */
 
@@ -51,8 +57,7 @@ typedef struct ThreadVars_ {
     char *name;
     char *thread_group_name;
 
-    uint8_t flags;
-    SCSpinlock flags_spinlock;
+    SC_ATOMIC_DECLARE(unsigned char, flags);
 
     /** aof(action on failure) determines what should be done with the thread
         when it encounters certain conditions like failures */
@@ -76,7 +81,7 @@ typedef struct ThreadVars_ {
 
     /** slot functions */
     void *(*tm_func)(void *);
-    void *tm_slots;
+    struct TmSlot_ *tm_slots;
 
     uint8_t thread_setup_flags;
     uint16_t cpu_affinity; /** cpu or core number to set affinity to */
@@ -98,6 +103,7 @@ typedef struct ThreadVars_ {
 /** Thread setup flags: */
 #define THREAD_SET_AFFINITY     0x01 /** CPU/Core affinity */
 #define THREAD_SET_PRIORITY     0x02 /** Real time priority */
+#define THREAD_SET_AFFTYPE      0x04 /** Priority and affinity */
 
 #endif /* __THREADVARS_H__ */
 

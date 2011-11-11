@@ -249,7 +249,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
     return rd;
 
 error:
-    for (i = 0; i < (ret - 1) && i < 3; i++){
+    for (i = 0; i < (ret -1) && i < 3; i++){
         if (args[i] != NULL)
             SCFree(args[i]);
     }
@@ -286,6 +286,7 @@ int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, char *rpcstr)
     sm->ctx = (void *)rd;
 
     SigMatchAppendPacket(s, sm);
+    s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
 

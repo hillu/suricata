@@ -227,11 +227,11 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
         goto error;
 
     if (prev_dor == NULL) {
-        //prev_dor = dor;
+        prev_dor = dor;
         dod->range = dor;
     } else {
         prev_dor->next = dor;
-        //prev_dor = dor;
+        prev_dor = dor;
     }
 
     if (dup_str_head != NULL)
@@ -263,27 +263,32 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
 int DetectDceOpnumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
                         uint8_t flags, void *state, Signature *s, SigMatch *m)
 {
+    SCEnter();
+
     DetectDceOpnumData *dce_data = (DetectDceOpnumData *)m->ctx;
     DetectDceOpnumRange *dor = dce_data->range;
+
     DCERPCState *dcerpc_state = (DCERPCState *)state;
     if (dcerpc_state == NULL) {
         SCLogDebug("No DCERPCState for the flow");
-        return 0;
+        SCReturnInt(0);
     }
 
     for ( ; dor != NULL; dor = dor->next) {
         if (dor->range2 == DCE_OPNUM_RANGE_UNINITIALIZED) {
-            if (dor->range1 == dcerpc_state->dcerpc.dcerpcrequest.opnum)
-                return 1;
+            if (dor->range1 == dcerpc_state->dcerpc.dcerpcrequest.opnum) {
+                SCReturnInt(1);
+            }
         } else {
             if (dor->range1 <= dcerpc_state->dcerpc.dcerpcrequest.opnum &&
-                dor->range2 >= dcerpc_state->dcerpc.dcerpcrequest.opnum) {
-                return 1;
+                dor->range2 >= dcerpc_state->dcerpc.dcerpcrequest.opnum)
+            {
+                SCReturnInt(1);
             }
         }
     }
 
-    return 0;
+    SCReturnInt(0);
 }
 
 /**
@@ -325,6 +330,8 @@ static int DetectDceOpnumSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     }
 
     s->alproto = ALPROTO_DCERPC;
+    /* Flagged the signature as to inspect the app layer data */
+    s->flags |= SIG_FLAG_APPLAYER;
     return 0;
 
  error:
@@ -342,6 +349,7 @@ void DetectDceOpnumFree(void *ptr)
 
     if (dod != NULL) {
         dor = dod->range;
+        dor_temp = dod->range;
         while (dor != NULL) {
             dor_temp = dor;
             dor = dor->next;
@@ -372,7 +380,7 @@ static int DetectDceOpnumTestParse01(void)
     result &= (DetectDceOpnumSetup(NULL, s, "12,26,62,61,6513--") == -1);
     result &= (DetectDceOpnumSetup(NULL, s, "12-14,12,121,62-8") == -1);
 
-    if (s->match != NULL) {
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         SigFree(s);
         result &= 1;
     }
@@ -392,14 +400,16 @@ static int DetectDceOpnumTestParse02(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "12") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
         result &= (dor->range1 == 12 && dor->range2 == DCE_OPNUM_RANGE_UNINITIALIZED);
         result &= (dor->next == NULL);
+    } else {
+        result = 0;
     }
 
  end:
@@ -419,14 +429,16 @@ static int DetectDceOpnumTestParse03(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "12-24") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
         result &= (dor->range1 == 12 && dor->range2 == 24);
         result &= (dor->next == NULL);
+    } else {
+        result = 0;
     }
 
  end:
@@ -446,8 +458,8 @@ static int DetectDceOpnumTestParse04(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "12-24,24,62-72,623-635,62,25,213-235") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
@@ -491,6 +503,8 @@ static int DetectDceOpnumTestParse04(void)
         result &= (dor->range1 == 213 && dor->range2 == 235);
         if (result == 0)
             goto end;
+    } else {
+        result = 0;
     }
 
  end:
@@ -510,8 +524,8 @@ static int DetectDceOpnumTestParse05(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "1,2,3,4,5,6,7") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
@@ -555,6 +569,8 @@ static int DetectDceOpnumTestParse05(void)
         result &= (dor->range1 == 7 && dor->range2 == DCE_OPNUM_RANGE_UNINITIALIZED);
         if (result == 0)
             goto end;
+    } else {
+        result = 0;
     }
 
  end:
@@ -574,8 +590,8 @@ static int DetectDceOpnumTestParse06(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "1-2,3-4,5-6,7-8") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
@@ -601,7 +617,8 @@ static int DetectDceOpnumTestParse06(void)
         result &= (dor->range1 == 7 && dor->range2 == 8);
         if (result == 0)
             goto end;
-
+    } else {
+        result = 0;
     }
 
  end:
@@ -621,8 +638,8 @@ static int DetectDceOpnumTestParse07(void)
 
     result = (DetectDceOpnumSetup(NULL, s, "1-2,3-4,5-6,7-8,9") == 0);
 
-    if (s->match != NULL) {
-        temp = s->match;
+    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
         dod = temp->ctx;
         if (dod == NULL)
             goto end;
@@ -653,6 +670,8 @@ static int DetectDceOpnumTestParse07(void)
         result &= (dor->range1 == 9 && dor->range2 == DCE_OPNUM_RANGE_UNINITIALIZED);
         if (result == 0)
             goto end;
+    } else {
+        result = 0;
     }
 
  end:
@@ -1134,6 +1153,7 @@ static int DetectDceOpnumTestParse08(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -1660,6 +1680,7 @@ static int DetectDceOpnumTestParse09(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -1857,6 +1878,7 @@ static int DetectDceOpnumTestParse10(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -2149,6 +2171,7 @@ static int DetectDceOpnumTestParse11(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -2424,6 +2447,7 @@ static int DetectDceOpnumTestParse12(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -2708,6 +2732,7 @@ static int DetectDceOpnumTestParse13(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);

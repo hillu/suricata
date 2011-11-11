@@ -37,6 +37,7 @@
 #include "detect-isdataat.h"
 #include "detect-bytetest.h"
 #include "detect-bytejump.h"
+#include "detect-byte-extract.h"
 
 #include "flow-util.h"
 #include "util-spm.h"
@@ -81,6 +82,13 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
 {
     SCEnter();
 
+    det_ctx->inspection_recursion_counter++;
+
+    if (det_ctx->inspection_recursion_counter == de_ctx->inspection_recursion_limit) {
+        det_ctx->discontinue_matching = 1;
+        SCReturnInt(0);
+    }
+
     if (sm == NULL) {
         SCReturnInt(0);
     }
@@ -90,12 +98,17 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
             SCReturnInt(0);
         }
 
-        DetectUricontentData *ud = NULL;
-        ud = (DetectUricontentData *)sm->ctx;
+        DetectContentData *ud = NULL;
+        ud = (DetectContentData *)sm->ctx;
         SCLogDebug("inspecting content %"PRIu32" payload_len %"PRIu32, ud->id, payload_len);
 
+        //if (ud->flags & DETECT_CONTENT_URI_MPM && !(ud->flags & DETECT_CONTENT_NEGATED))
+        //    goto match;
+
         /* rule parsers should take care of this */
+#ifdef DEBUG
         BUG_ON(ud->depth != 0 && ud->depth <= ud->offset);
+#endif
 
         /* search for our pattern, checking the matches recursively.
          * if we match we look for the next SigMatch as well */
@@ -106,52 +119,80 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
         uint32_t prev_payload_offset = det_ctx->payload_offset;
 
         do {
-            if (ud->flags & DETECT_URICONTENT_DISTANCE ||
-                ud->flags & DETECT_URICONTENT_WITHIN) {
+            if (ud->flags & DETECT_CONTENT_DISTANCE ||
+                ud->flags & DETECT_CONTENT_WITHIN) {
                 SCLogDebug("prev_payload_offset %"PRIu32, prev_payload_offset);
 
                 offset = prev_payload_offset;
                 depth = payload_len;
 
-                if (ud->flags & DETECT_URICONTENT_DISTANCE) {
-                    if (ud->distance < 0 && (uint32_t)(abs(ud->distance)) > offset)
+                int distance = ud->distance;
+                if (ud->flags & DETECT_CONTENT_DISTANCE) {
+                    if (ud->flags & DETECT_CONTENT_DISTANCE_BE) {
+                        distance = det_ctx->bj_values[ud->distance];
+                    }
+
+                    if (distance < 0 && (uint32_t)(abs(distance)) > offset)
                         offset = 0;
                     else
-                        offset += ud->distance;
+                        offset += distance;
 
                     SCLogDebug("ud->distance %"PRIi32", offset %"PRIu32", depth %"PRIu32,
-                        ud->distance, offset, depth);
+                               distance, offset, depth);
                 }
 
-                if (ud->flags & DETECT_URICONTENT_WITHIN) {
-                    if ((int32_t)depth > (int32_t)(prev_payload_offset + ud->within)) {
-                        depth = prev_payload_offset + ud->within;
+                if (ud->flags & DETECT_CONTENT_WITHIN) {
+                    if (ud->flags & DETECT_CONTENT_WITHIN_BE) {
+                        if ((int32_t)depth > (int32_t)(prev_payload_offset + det_ctx->bj_values[ud->within] + distance)) {
+                            depth = prev_payload_offset + det_ctx->bj_values[ud->within] + distance;
+                        }
+                    } else {
+                        if ((int32_t)depth > (int32_t)(prev_payload_offset + ud->within + distance)) {
+                            depth = prev_payload_offset + ud->within + distance;
+                        }
+                        SCLogDebug("ud->within %"PRIi32", prev_payload_offset %"PRIu32", depth %"PRIu32,
+                                   ud->within, prev_payload_offset, depth);
                     }
-
-                    SCLogDebug("ud->within %"PRIi32", prev_payload_offset %"PRIu32", depth %"PRIu32,
-                        ud->within, prev_payload_offset, depth);
                 }
 
-                if (ud->depth != 0) {
-                    if ((ud->depth + prev_payload_offset) < depth) {
-                        depth = prev_payload_offset + ud->depth;
+                if (ud->flags & DETECT_CONTENT_DEPTH_BE) {
+                    if ((det_ctx->bj_values[ud->depth] + prev_payload_offset) < depth) {
+                        depth = prev_payload_offset + det_ctx->bj_values[ud->depth];
                     }
+                } else {
+                    if (ud->depth != 0) {
+                        if ((ud->depth + prev_payload_offset) < depth) {
+                            depth = prev_payload_offset + ud->depth;
+                        }
 
-                    SCLogDebug("ud->depth %"PRIu32", depth %"PRIu32, ud->depth, depth);
+                        SCLogDebug("ud->depth %"PRIu32", depth %"PRIu32, ud->depth, depth);
+                    }
                 }
 
-                if (ud->offset > offset) {
-                    offset = ud->offset;
-                    SCLogDebug("setting offset %"PRIu32, offset);
+                if (ud->flags & DETECT_CONTENT_OFFSET_BE) {
+                    if (det_ctx->bj_values[ud->offset] > offset)
+                        offset = det_ctx->bj_values[ud->offset];
+                } else {
+                    if (ud->offset > offset) {
+                        offset = ud->offset;
+                        SCLogDebug("setting offset %"PRIu32, offset);
+                    }
                 }
             } else { /* implied no relative matches */
                 /* set depth */
-                if (ud->depth != 0) {
-                    depth = ud->depth;
+                if (ud->flags & DETECT_CONTENT_DEPTH_BE) {
+                    depth = det_ctx->bj_values[ud->depth];
+                } else {
+                    if (ud->depth != 0) {
+                        depth = ud->depth;
+                    }
                 }
 
                 /* set offset */
-                offset = ud->offset;
+                if (ud->flags & DETECT_CONTENT_OFFSET_BE)
+                    offset = det_ctx->bj_values[ud->offset];
+                else
+                    offset = ud->offset;
                 prev_payload_offset = 0;
             }
 
@@ -169,7 +210,7 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
             /* if offset is bigger than depth we can never match on a pattern.
              * We can however, "match" on a negated pattern. */
             if (offset > depth || depth == 0) {
-                if (ud->flags & DETECT_URICONTENT_NEGATED) {
+                if (ud->flags & DETECT_CONTENT_NEGATED) {
                     goto match;
                 } else {
                     SCReturnInt(0);
@@ -180,39 +221,41 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
             uint32_t spayload_len = depth - offset;
             uint32_t match_offset = 0;
             SCLogDebug("spayload_len %"PRIu32, spayload_len);
+#ifdef DEBUG
             BUG_ON(spayload_len > payload_len);
+#endif
 
-            //PrintawDataFp(stdout,ud->uricontent,ud->uricontent_len);
+            //PrintRawDataFp(stdout,ud->content,ud->content_len);
 
             /* If we got no matches from the mpm, avoid searching (just check if negated) */
-            if (det_ctx->de_have_httpuri == TRUE) {
+            //if (det_ctx->de_have_httpuri == TRUE) {
                 /* do the actual search with boyer moore precooked ctx */
-                if (ud->flags & DETECT_URICONTENT_NOCASE)
-                    found = BoyerMooreNocase(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
+                if (ud->flags & DETECT_CONTENT_NOCASE)
+                    found = BoyerMooreNocase(ud->content, ud->content_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
                 else
-                    found = BoyerMoore(ud->uricontent, ud->uricontent_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
-            } else {
-                found = NULL;
-            }
+                    found = BoyerMoore(ud->content, ud->content_len, spayload, spayload_len, ud->bm_ctx->bmGs, ud->bm_ctx->bmBc);
+            //} else {
+            //    found = NULL;
+            //}
 
             /* next we evaluate the result in combination with the
              * negation flag. */
-            SCLogDebug("found %p ud negated %s", found, ud->flags & DETECT_URICONTENT_NEGATED ? "true" : "false");
+            SCLogDebug("found %p ud negated %s", found, ud->flags & DETECT_CONTENT_NEGATED ? "true" : "false");
 
-            if (found == NULL && !(ud->flags & DETECT_URICONTENT_NEGATED)) {
+            if (found == NULL && !(ud->flags & DETECT_CONTENT_NEGATED)) {
                 SCReturnInt(0);
-            } else if (found == NULL && ud->flags & DETECT_URICONTENT_NEGATED) {
+            } else if (found == NULL && ud->flags & DETECT_CONTENT_NEGATED) {
                 goto match;
-            } else if (found != NULL && ud->flags & DETECT_URICONTENT_NEGATED) {
+            } else if (found != NULL && ud->flags & DETECT_CONTENT_NEGATED) {
                 SCLogDebug("uricontent %"PRIu32" matched at offset %"PRIu32", but negated so no match", ud->id, match_offset);
                 det_ctx->discontinue_matching = 1;
                 SCReturnInt(0);
             } else {
-                match_offset = (uint32_t)((found - payload) + ud->uricontent_len);
+                match_offset = (uint32_t)((found - payload) + ud->content_len);
                 SCLogDebug("uricontent %"PRIu32" matched at offset %"PRIu32"", ud->id, match_offset);
                 det_ctx->payload_offset = match_offset;
 
-                if (!(ud->flags & DETECT_URICONTENT_RELATIVE_NEXT)) {
+                if (!(ud->flags & DETECT_CONTENT_RELATIVE_NEXT)) {
                     SCLogDebug("no relative match coming up, so this is a match");
                     goto match;
                 }
@@ -238,7 +281,7 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
                     SCReturnInt(0);
 
                 /* set the previous match offset to the start of this match + 1 */
-                prev_offset = (match_offset - (ud->uricontent_len - 1));
+                prev_offset = (match_offset - (ud->content_len - 1));
                 SCLogDebug("trying to see if there is another match after prev_offset %"PRIu32, prev_offset);
             }
 
@@ -282,6 +325,35 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
             det_ctx->payload_offset = prev_payload_offset;
             det_ctx->pcre_match_start_offset = prev_offset;
         } while (1);
+    } else if (sm->type == DETECT_ISDATAAT) {
+        SCLogDebug("inspecting isdataat");
+
+        DetectIsdataatData *id = (DetectIsdataatData *)sm->ctx;
+        if (id->flags & ISDATAAT_RELATIVE) {
+            if (det_ctx->payload_offset + id->dataat > payload_len) {
+                SCLogDebug("det_ctx->payload_offset + id->dataat %"PRIu32" > %"PRIu32, det_ctx->payload_offset + id->dataat, payload_len);
+                if (id->flags & ISDATAAT_NEGATED)
+                    goto match;
+                SCReturnInt(0);
+            } else {
+                SCLogDebug("relative isdataat match");
+                if (id->flags & ISDATAAT_NEGATED)
+                    SCReturnInt(0);
+                goto match;
+            }
+        } else {
+            if (id->dataat < payload_len) {
+                SCLogDebug("absolute isdataat match");
+                if (id->flags & ISDATAAT_NEGATED)
+                    SCReturnInt(0);
+                goto match;
+            } else {
+                SCLogDebug("absolute isdataat mismatch, id->isdataat %"PRIu32", payload_len %"PRIu32"", id->dataat,payload_len);
+                if (id->flags & ISDATAAT_NEGATED)
+                    goto match;
+                SCReturnInt(0);
+            }
+        }
     } else if (sm->type == DETECT_AL_URILEN) {
         SCLogDebug("inspecting uri len");
 
@@ -313,9 +385,22 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
         }
 
         SCReturnInt(0);
+    } else if (sm->type == DETECT_BYTE_EXTRACT) {
+        DetectByteExtractData *bed = (DetectByteExtractData *)sm->ctx;
+        if (DetectByteExtractDoMatch(det_ctx, sm, s, payload,
+                                     payload_len,
+                                     &det_ctx->bj_values[bed->local_id],
+                                     bed->endian) != 1) {
+            SCReturnInt(0);
+        }
+
+        goto match;
     } else {
         /* we should never get here, but bail out just in case */
+        SCLogDebug("sm->type %u", sm->type);
+#ifdef DEBUG
         BUG_ON(1);
+#endif
     }
     SCReturnInt(0);
 
@@ -351,8 +436,6 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     SCEnter();
     int r = 0;
     HtpState *htp_state = NULL;
-    htp_tx_t *tx = NULL;
-    size_t idx = 0;
 
     htp_state = (HtpState *)alstate;
     if (htp_state == NULL) {
@@ -363,62 +446,20 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     /* locking the flow, we will inspect the htp state */
     SCMutexLock(&f->m);
 
-    if (htp_state->connp == NULL) {
-        SCLogDebug("HTP state has no connp");
+    if (htp_state->connp == NULL || htp_state->connp->conn == NULL) {
+        SCLogDebug("HTP state has no conn(p)");
         goto end;
-    }
-
-    det_ctx->de_have_httpuri = TRUE;
-    /* If we have the uricontent multi pattern matcher signatures in
-       signature list, then search the received HTTP uri(s) in the htp
-       state against those patterns */
-    if (s->flags & SIG_FLAG_MPM_URI) {
-        if (det_ctx->de_mpm_scanned_uri == FALSE) {
-            uint32_t cnt = DetectUricontentInspectMpm(det_ctx, f, htp_state);
-
-            /* only consider uri sigs if we've seen at least one match */
-            /** \warning when we start supporting negated uri content matches
-             * we need to update this check as well */
-            if (cnt <= 0) {
-                det_ctx->de_have_httpuri = FALSE;
-            }
-
-            SCLogDebug("uricontent cnt %"PRIu32"", cnt);
-
-            /* make sure we don't inspect this mpm again */
-            det_ctx->de_mpm_scanned_uri = TRUE;
-
-        }
-    }
-
-    /* if we don't have a uri, don't bother inspecting */
-    if (det_ctx->de_have_httpuri == FALSE && !(s->flags & SIG_FLAG_MPM_URI_NEG)) {
-        SCLogDebug("We don't have uri");
-        goto end;
-    }
-
-    if ((s->flags & SIG_FLAG_MPM_URI) && (det_ctx->de_mpm_scanned_uri == TRUE)) {
-        if (det_ctx->pmq.pattern_id_bitarray != NULL) {
-            /* filter out sigs that want pattern matches, but
-             * have no matches */
-            if (!(det_ctx->pmq.pattern_id_bitarray[(s->mpm_uripattern_id / 8)] & (1<<(s->mpm_uripattern_id % 8))) &&
-                    (s->flags & SIG_FLAG_MPM_URI) && !(s->flags & SIG_FLAG_MPM_URI_NEG)) {
-                SCLogDebug("mpm sig without matches (pat id %"PRIu32
-                        " check in uri).", s->mpm_uripattern_id);
-                goto end;
-            }
-        }
     }
 
 #ifdef DEBUG
-    SigMatch *sm = s->umatch;
-    if (sm != NULL) {
-        DetectUricontentData *co = (DetectUricontentData *)sm->ctx;
-        SCLogDebug("co->id %"PRIu32, co->id);
-    }
+    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    DetectContentData *co = (DetectContentData *)sm->ctx;
+    SCLogDebug("co->id %"PRIu32, co->id);
 #endif
 
-    idx = AppLayerTransactionGetInspectId(f);
+    size_t idx = AppLayerTransactionGetInspectId(f);
+    htp_tx_t *tx = NULL;
+
     for ( ; idx < list_size(htp_state->connp->conn->transactions); idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
@@ -427,10 +468,14 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
 
         det_ctx->discontinue_matching = 0;
         det_ctx->payload_offset = 0;
+        det_ctx->inspection_recursion_counter = 0;
+
+        //PrintRawDataFp(stdout, (uint8_t *)bstr_ptr(tx->request_uri_normalized),
+        //        bstr_len(tx->request_uri_normalized));
 
         /* Inspect all the uricontents fetched on each
          * transaction at the app layer */
-        r = DoInspectPacketUri(de_ctx, det_ctx, s, s->umatch,
+        r = DoInspectPacketUri(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_UMATCH],
                 (uint8_t *) bstr_ptr(tx->request_uri_normalized),
                 bstr_len(tx->request_uri_normalized));
 
@@ -482,6 +527,7 @@ static int UriTestSig01(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -498,7 +544,7 @@ static int UriTestSig01(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test uricontent option\"; "
-                                   "uricontent:one; sid:1;)");
+                                   "uricontent:\"one\"; sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -596,6 +642,7 @@ static int UriTestSig02(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -710,6 +757,7 @@ static int UriTestSig03(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -824,6 +872,7 @@ static int UriTestSig04(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -938,6 +987,7 @@ static int UriTestSig05(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1052,6 +1102,7 @@ static int UriTestSig06(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1166,6 +1217,7 @@ static int UriTestSig07(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1280,6 +1332,7 @@ static int UriTestSig08(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1394,6 +1447,7 @@ static int UriTestSig09(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1508,6 +1562,7 @@ static int UriTestSig10(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1524,7 +1579,7 @@ static int UriTestSig10(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test uricontent with urilen option\"; "
-                                   "uricontent:one; urilen:<2; sid:1;)");
+                                   "uricontent:\"one\"; urilen:<2; sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -1622,6 +1677,7 @@ static int UriTestSig11(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1638,7 +1694,7 @@ static int UriTestSig11(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test content, uricontent, pcre /U and urilen options\"; "
-                                   "content:one; uricontent:one; pcre:/(one){2,}(self)?/U;"
+                                   "content:\"one\"; uricontent:\"one\"; pcre:/(one){2,}(self)?/U;"
                                    "urilen:<2; sid:1;)");
     if (s == NULL) {
         goto end;
@@ -1737,6 +1793,7 @@ static int UriTestSig12(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1753,7 +1810,7 @@ static int UriTestSig12(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test pcre /U, uricontent and urilen option\"; "
-                                   "uricontent:one; "
+                                   "uricontent:\"one\"; "
                                    "pcre:/(one)+self/U; urilen:>2; sid:1;)");
     if (s == NULL) {
         goto end;
@@ -1852,6 +1909,7 @@ static int UriTestSig13(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1868,7 +1926,7 @@ static int UriTestSig13(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test urilen option\"; "
-                                   "urilen:>2; uricontent:one; sid:1;)");
+                                   "urilen:>2; uricontent:\"one\"; sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -1967,6 +2025,7 @@ static int UriTestSig14(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -1983,7 +2042,7 @@ static int UriTestSig14(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test uricontent option\"; "
-                                   "uricontent:one; pcre:/one(self)?/U;sid:1;)");
+                                   "uricontent:\"one\"; pcre:/one(self)?/U;sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -2082,6 +2141,7 @@ static int UriTestSig15(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2098,7 +2158,7 @@ static int UriTestSig15(void)
 
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Test uricontent option\"; "
-                                   "uricontent:one; pcre:/^\\/one(self)?$/U;sid:1;)");
+                                   "uricontent:\"one\"; pcre:/^\\/one(self)?$/U;sid:1;)");
     if (s == NULL) {
         goto end;
     }
@@ -2197,6 +2257,7 @@ static int UriTestSig16(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2211,7 +2272,7 @@ static int UriTestSig16(void)
     de_ctx->mpm_matcher = MPM_B2G;
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx, "drop tcp any any -> any any (msg:\"ET TROJAN Downadup/Conficker A or B Worm reporting\"; flow:to_server,established; uricontent:\"/search?q=\"; pcre:\"/^\\/search\\?q=[0-9]{1,3}(&aq=7(\\?[0-9a-f]{8})?)?/U\"; pcre:\"/\\x0d\\x0aHost\\: \\d+\\.\\d+\\.\\d+\\.\\d+\\x0d\\x0a/\"; reference:url,www.f-secure.com/weblog/archives/00001584.html; reference:url,doc.emergingthreats.net/bin/view/Main/2009024; reference:url,www.emergingthreats.net/cgi-bin/cvsweb.cgi/sigs/VIRUS/TROJAN_Conficker; sid:2009024; rev:9;)");
+    s = de_ctx->sig_list = SigInit(de_ctx, "drop tcp any any -> any any (msg:\"ET TROJAN Downadup/Conficker A or B Worm reporting\"; flow:to_server,established; uricontent:\"/search?q=\"; pcre:\"/^\\/search\\?q=[0-9]{1,3}(&aq=7(\\?[0-9a-f]{8})?)?/U\"; pcre:\"/\\x0d\\x0aHost\\: \\d+\\.\\d+\\.\\d+\\.\\d+\\x0d\\x0a/\"; sid:2009024; rev:9;)");
     if (s == NULL) {
         goto end;
     }
@@ -2308,6 +2369,7 @@ static int UriTestSig17(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2324,9 +2386,9 @@ static int UriTestSig17(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "uricontent:this; uricontent:is; within:6; "
-                               "uricontent:big; within:8; "
-                               "uricontent:string; within:8; sid:1;)");
+                               "uricontent:\"this\"; uricontent:\"is\"; within:6; "
+                               "uricontent:\"big\"; within:8; "
+                               "uricontent:\"string\"; within:8; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
     }
@@ -2398,6 +2460,7 @@ static int UriTestSig18(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2414,9 +2477,9 @@ static int UriTestSig18(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "uricontent:this; uricontent:is; within:9; "
-                               "uricontent:big; within:12; "
-                               "uricontent:string; within:8; sid:1;)");
+                               "uricontent:\"this\"; uricontent:\"is\"; within:9; "
+                               "uricontent:\"big\"; within:12; "
+                               "uricontent:\"string\"; within:8; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
     }
@@ -2488,6 +2551,7 @@ static int UriTestSig19(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2504,10 +2568,10 @@ static int UriTestSig19(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "uricontent:now; uricontent:this; "
-                               "uricontent:is; within:12; "
-                               "uricontent:big; within:8; "
-                               "uricontent:string; within:8; sid:1;)");
+                               "uricontent:\"now\"; uricontent:\"this\"; "
+                               "uricontent:\"is\"; within:12; "
+                               "uricontent:\"big\"; within:8; "
+                               "uricontent:\"string\"; within:8; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
     }
@@ -2579,6 +2643,7 @@ static int UriTestSig20(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2595,9 +2660,9 @@ static int UriTestSig20(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "uricontent:thus; offset:8; "
-                               "uricontent:is; within:6; "
-                               "uricontent:big; within:8; sid:1;)");
+                               "uricontent:\"thus\"; offset:8; "
+                               "uricontent:\"is\"; within:6; "
+                               "uricontent:\"big\"; within:8; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
     }
@@ -2669,6 +2734,7 @@ static int UriTestSig21(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2685,7 +2751,7 @@ static int UriTestSig21(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "uricontent:fix; uricontent:this; within:6; "
+                               "uricontent:\"fix\"; uricontent:\"this\"; within:6; "
                                "uricontent:!\"and\"; distance:0; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
@@ -2759,6 +2825,7 @@ static int UriTestSig22(void)
     f.dst.family = AF_INET;
 
     p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     f.alproto = ALPROTO_HTTP;
@@ -2775,7 +2842,7 @@ static int UriTestSig22(void)
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"test multiple relative uricontents\"; "
-                               "pcre:/super/U; uricontent:nova; within:7; sid:1;)");
+                               "pcre:/super/U; uricontent:\"nova\"; within:7; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         goto end;
     }
@@ -2800,6 +2867,926 @@ static int UriTestSig22(void)
 
     if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test multiple relative contents with a negated content.
+ */
+static int UriTestSig23(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /we_need_to_fix_this_and_yes_fix_this_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "uricontent:!\"fix_this_now\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it should not: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test multiple relative contents with a negated content.
+ */
+static int UriTestSig24(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /we_need_to_fix_this_and_yes_fix_this_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "uricontent:\"we_need_to\"; uricontent:!\"fix_this_now\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it should not: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test normalized uricontents.
+ */
+static int UriTestSig25(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "pcre:/normalized/U; uricontent:\"normalized uri\"; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test multiple relative contents with a negated content.
+ */
+static int UriTestSig26(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /we_need_to_fix_this_and_yes_fix_this_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "uricontent:\"fix_this\"; isdataat:4,relative; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+/**
+ * \test Test multiple relative contents with a negated content.
+ */
+static int UriTestSig27(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /we_need_to_fix_this_and_yes_fix_this_now HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "uricontent:\"fix_this\"; isdataat:!10,relative; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+static int UriTestSig28(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_b5ig_string_now_in_http HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any (msg:\"dummy\"; "
+                               "uricontent:\"this\"; "
+                               "byte_extract:1,2,one,string,dec,relative; "
+                               "uricontent:\"ring\"; distance:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig29(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_b5ig_string_now_in_http HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any (msg:\"dummy\"; "
+                               "uricontent:\"this\"; "
+                               "byte_extract:1,2,one,string,dec,relative; "
+                               "uricontent:\"ring\"; distance:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig30(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_b5ig_string_now_in_http HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any (msg:\"dummy\"; "
+                               "uricontent:\"this\"; "
+                               "byte_extract:1,2,one,string,dec,relative; "
+                               "uricontent:\"_b5ig\"; offset:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig31(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_b5ig_string_now_in_http HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any (msg:\"dummy\"; "
+                               "uricontent:\"this\"; "
+                               "byte_extract:1,2,one,string,dec,relative; "
+                               "uricontent:\"his\"; depth:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig32(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /this_b5ig_string_now_in_http HTTP/1.0\r\n"
+        "User-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.src.family = AF_INET;
+    f.dst.family = AF_INET;
+
+    p->flow = &f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any (msg:\"dummy\"; "
+                               "uricontent:\"this\"; "
+                               "byte_extract:1,2,one,string,dec,relative; "
+                               "uricontent:\"g_st\"; within:one; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but should have: ");
         goto end;
     }
 
@@ -2847,6 +3834,17 @@ void UriRegisterTests(void)
     UtRegisterTest("UriTestSig20", UriTestSig20, 1);
     UtRegisterTest("UriTestSig21", UriTestSig21, 1);
     UtRegisterTest("UriTestSig22", UriTestSig22, 1);
+    UtRegisterTest("UriTestSig23", UriTestSig23, 1);
+    UtRegisterTest("UriTestSig24", UriTestSig24, 1);
+    UtRegisterTest("UriTestSig25", UriTestSig25, 1);
+    UtRegisterTest("UriTestSig26", UriTestSig26, 1);
+    UtRegisterTest("UriTestSig27", UriTestSig27, 1);
+
+    UtRegisterTest("UriTestSig28", UriTestSig28, 1);
+    UtRegisterTest("UriTestSig29", UriTestSig29, 1);
+    UtRegisterTest("UriTestSig30", UriTestSig30, 1);
+    UtRegisterTest("UriTestSig31", UriTestSig31, 1);
+    UtRegisterTest("UriTestSig32", UriTestSig32, 1);
 #endif /* UNITTESTS */
 
     return;

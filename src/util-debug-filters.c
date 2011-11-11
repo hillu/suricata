@@ -486,14 +486,14 @@ int SCLogPrintFGFilters()
  */
 int SCLogMatchFDFilter(const char *function)
 {
-#ifndef DEBUG
-    return 1;
-#else
-
     SCLogFDFilterThreadList *thread_list = NULL;
 
 //    pid_t self = syscall(SYS_gettid);
     pthread_t self = pthread_self();
+
+#ifndef DEBUG
+    return 1;
+#endif
 
     if (sc_log_module_initialized != 1) {
         printf("Logging module not initialized.  Call SCLogInitLogModule() "
@@ -527,8 +527,6 @@ int SCLogMatchFDFilter(const char *function)
     SCMutexUnlock(&sc_log_fd_filters_tl_m);
 
     return 0;
-
-#endif /* #else - #ifndef DEBUG */
 }
 
 /**
@@ -577,7 +575,9 @@ int SCLogCheckFDFilterEntry(const char *function)
     SCMutexLock(&sc_log_fd_filters_tl_m);
 
     thread_list = sc_log_fd_filters_tl;
+    thread_list_temp = thread_list;
     while (thread_list != NULL) {
+        thread_list_temp = thread_list;
 
         if (pthread_equal(self, thread_list->t))
             break;
@@ -591,10 +591,8 @@ int SCLogCheckFDFilterEntry(const char *function)
         return 1;
     }
 
-    if ( (thread_list_temp = SCMalloc(sizeof(SCLogFDFilterThreadList))) == NULL) {
-        SCMutexUnlock(&sc_log_fd_filters_tl_m);
+    if ( (thread_list_temp = SCMalloc(sizeof(SCLogFDFilterThreadList))) == NULL)
         return 0;
-    }
     memset(thread_list_temp, 0, sizeof(SCLogFDFilterThreadList));
 
     thread_list_temp->t = self;
@@ -700,7 +698,6 @@ int SCLogAddFDFilter(const char *function)
         if (strcmp(function, curr->func) == 0) {
 
             SCMutexUnlock(&sc_log_fd_filters_m);
-
             return 0;
         }
 
@@ -708,13 +705,13 @@ int SCLogAddFDFilter(const char *function)
     }
 
     if ( (temp = SCMalloc(sizeof(SCLogFDFilter))) == NULL) {
-        SCMutexUnlock(&sc_log_fd_filters_m);
-        return -1;
+        printf("Error Allocating memory (SCMalloc)\n");
+        exit(EXIT_FAILURE);
     }
     memset(temp, 0, sizeof(SCLogFDFilter));
 
     if ( (temp->func = SCStrdup(function)) == NULL) {
-        printf("Error Allocating memory\n");
+        printf("Error Allocating memory (SCStrdup)\n");
         exit(EXIT_FAILURE);
     }
 
@@ -725,9 +722,6 @@ int SCLogAddFDFilter(const char *function)
      * Doing this "fix" to shut clang up. */
     else if (prev != NULL)
         prev->next = temp;
-    else {
-        sc_log_fd_filters = temp;
-    }
 
     SCMutexUnlock(&sc_log_fd_filters_m);
     sc_log_fd_filters_present = 1;

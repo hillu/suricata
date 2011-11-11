@@ -26,6 +26,7 @@
 #include "detect.h"
 #include "flow.h"
 #include "conf.h"
+#include "conf-yaml-loader.h"
 
 #include "detect-parse.h"
 #include "detect-engine-sigorder.h"
@@ -34,11 +35,13 @@
 #include "detect-engine-address.h"
 #include "detect-engine-port.h"
 #include "detect-engine-mpm.h"
+#include "detect-engine-hcbd.h"
 #include "detect-engine-iponly.h"
 #include "detect-engine-tag.h"
 
 #include "detect-engine.h"
 
+#include "detect-byte-extract.h"
 #include "detect-content.h"
 #include "detect-uricontent.h"
 #include "detect-engine-threshold.h"
@@ -48,13 +51,23 @@
 #include "util-hash.h"
 #include "util-byte.h"
 #include "util-debug.h"
+#include "util-unittest.h"
 
 #include "util-var-name.h"
-#include "tm-modules.h"
+
+#include "tm-threads.h"
+
+#define DETECT_ENGINE_DEFAULT_INSPECTION_RECURSION_LIMIT 3000
 
 static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *);
+
 DetectEngineCtx *DetectEngineCtxInit(void) {
     DetectEngineCtx *de_ctx;
+
+    ConfNode *seq_node = NULL;
+    ConfNode *insp_recursion_limit_node = NULL;
+    ConfNode *de_engine_node = NULL;
+    char *insp_recursion_limit = NULL;
 
     de_ctx = SCMalloc(sizeof(DetectEngineCtx));
     if (de_ctx == NULL)
@@ -65,6 +78,39 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     if (ConfGetBool("engine.init_failure_fatal", (int *)&(de_ctx->failure_fatal)) != 1) {
         SCLogDebug("ConfGetBool could not load the value.");
     }
+
+    de_engine_node = ConfGetNode("detect-engine");
+    if (de_engine_node != NULL) {
+        TAILQ_FOREACH(seq_node, &de_engine_node->head, next) {
+            if (strcmp(seq_node->val, "inspection-recursion-limit") != 0)
+                continue;
+
+            insp_recursion_limit_node = ConfNodeLookupChild(seq_node, seq_node->val);
+            if (insp_recursion_limit_node == NULL) {
+                SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Error retrieving conf "
+                           "entry for detect-engine:inspection-recursion-limit");
+                break;
+            }
+            insp_recursion_limit = insp_recursion_limit_node->val;
+            SCLogDebug("Found detect-engine:inspection-recursion-limit - %s:%s",
+                       insp_recursion_limit_node->name, insp_recursion_limit_node->val);
+
+            break;
+        }
+    }
+
+    if (insp_recursion_limit != NULL) {
+        de_ctx->inspection_recursion_limit = atoi(insp_recursion_limit);
+    } else {
+        de_ctx->inspection_recursion_limit =
+            DETECT_ENGINE_DEFAULT_INSPECTION_RECURSION_LIMIT;
+    }
+
+    if (de_ctx->inspection_recursion_limit == 0)
+        de_ctx->inspection_recursion_limit = -1;
+
+    SCLogDebug("de_ctx->inspection_recursion_limit: %d",
+               de_ctx->inspection_recursion_limit);
 
     de_ctx->mpm_matcher = PatternMatchDefaultMatcher();
     DetectEngineCtxLoadConf(de_ctx);
@@ -144,6 +190,8 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
     const char *max_uniq_toserver_sp_groups_str = NULL;
     const char *max_uniq_toserver_dp_groups_str = NULL;
 
+    char *sgh_mpm_context = NULL;
+
     ConfNode *de_ctx_custom = ConfGetNode("detect-engine");
     ConfNode *opt = NULL;
 
@@ -151,6 +199,8 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
         TAILQ_FOREACH(opt, &de_ctx_custom->head, next) {
             if (strncmp(opt->val, "profile", 3) == 0) {
                 de_ctx_profile = opt->head.tqh_first->val;
+            } else if (strcmp(opt->val, "sgh-mpm-context") == 0) {
+                sgh_mpm_context = opt->head.tqh_first->val;
             }
         }
     }
@@ -169,7 +219,27 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
         SCLogDebug("Profile for detection engine groups is \"%s\"", de_ctx_profile);
     } else {
         SCLogDebug("Profile for detection engine groups not provided "
-                "at suricata.yaml. Using default (\"medium\").");
+                   "at suricata.yaml. Using default (\"medium\").");
+    }
+
+    /* detect-engine.sgh-mpm-context option parsing */
+    if (sgh_mpm_context == NULL || strcmp(sgh_mpm_context, "auto") == 0) {
+        /* for now, since we still haven't implemented any intelligence into
+         * understanding the patterns and distributing mpm_ctx across sgh */
+        if (de_ctx->mpm_matcher == MPM_AC || de_ctx->mpm_matcher == MPM_AC_GFBS)
+            de_ctx->sgh_mpm_context = ENGINE_SGH_MPM_FACTORY_CONTEXT_SINGLE;
+        else
+            de_ctx->sgh_mpm_context = ENGINE_SGH_MPM_FACTORY_CONTEXT_FULL;
+    } else {
+        if (strcmp(sgh_mpm_context, "single") == 0) {
+            de_ctx->sgh_mpm_context = ENGINE_SGH_MPM_FACTORY_CONTEXT_SINGLE;
+        } else if (strcmp(sgh_mpm_context, "full") == 0) {
+            de_ctx->sgh_mpm_context = ENGINE_SGH_MPM_FACTORY_CONTEXT_FULL;
+        } else {
+           SCLogWarning(SC_ERR_INVALID_YAML_CONF_ENTRY, "You have supplied an "
+                        "invalid conf value for detect-engine.sgh-mpm-context-"
+                        "%s", sgh_mpm_context);
+        }
     }
 
     opt = NULL;
@@ -335,6 +405,7 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
      * table is always big enough
      */
     PatternMatchThreadPrepare(&det_ctx->mtc, de_ctx->mpm_matcher, DetectContentMaxId(de_ctx));
+    PatternMatchThreadPrepare(&det_ctx->mtcs, de_ctx->mpm_matcher, DetectContentMaxId(de_ctx));
     PatternMatchThreadPrepare(&det_ctx->mtcu, de_ctx->mpm_matcher, DetectUricontentMaxId(de_ctx));
 
     //PmqSetup(&det_ctx->pmq, DetectEngineGetMaxSigId(de_ctx), DetectContentMaxId(de_ctx));
@@ -352,16 +423,12 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
         det_ctx->de_state_sig_array_len = de_ctx->sig_array_len;
         det_ctx->de_state_sig_array = SCMalloc(det_ctx->de_state_sig_array_len * sizeof(uint8_t));
         if (det_ctx->de_state_sig_array == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "malloc of %"PRIuMAX" failed: %s",
-                    (uintmax_t)(det_ctx->de_state_sig_array_len * sizeof(uint8_t)), strerror(errno));
             return TM_ECODE_FAILED;
         }
 
         det_ctx->match_array_len = de_ctx->sig_array_len;
         det_ctx->match_array = SCMalloc(det_ctx->match_array_len * sizeof(Signature *));
         if (det_ctx->match_array == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "malloc of %"PRIuMAX" failed: %s",
-                    (uintmax_t)(det_ctx->match_array_len * sizeof(Signature *)), strerror(errno));
             return TM_ECODE_FAILED;
         }
     }
@@ -375,6 +442,11 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
 
     /* this detection engine context belongs to this thread instance */
     det_ctx->tv = tv;
+
+    det_ctx->bj_values = SCMalloc(sizeof(*det_ctx->bj_values) * byte_extract_max_local_id);
+    if (det_ctx->bj_values == NULL) {
+        return TM_ECODE_FAILED;
+    }
 
     *data = (void *)det_ctx;
 
@@ -396,9 +468,16 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
     PatternMatchThreadDestroy(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
 
     PmqFree(&det_ctx->pmq);
+    int i;
+    for (i = 0; i < 256; i++) {
+        PmqFree(&det_ctx->smsg_pmq[i]);
+    }
 
     if (det_ctx->de_state_sig_array != NULL)
         SCFree(det_ctx->de_state_sig_array);
+
+    if (det_ctx->bj_values != NULL)
+        SCFree(det_ctx->bj_values);
 
     SCFree(det_ctx);
 
@@ -411,3 +490,188 @@ void DetectEngineThreadCtxInfo(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
     PatternMatchThreadPrint(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
 }
 
+/*************************************Unittest*********************************/
+
+#ifdef UNITTESTS
+
+static int DetectEngineInitYamlConf(char *conf)
+{
+    ConfCreateContextBackup();
+    ConfInit();
+    return ConfYamlLoadString(conf, strlen(conf));
+}
+
+static void DetectEngineDeInitYamlConf(void)
+{
+    ConfDeInit();
+    ConfRestoreContextBackup();
+
+    return;
+}
+
+static int DetectEngineTest01(void)
+{
+    char *conf =
+        "%YAML 1.1\n"
+        "---\n"
+        "detect-engine:\n"
+        "  - profile: medium\n"
+        "  - custom-values:\n"
+        "      toclient_src_groups: 2\n"
+        "      toclient_dst_groups: 2\n"
+        "      toclient_sp_groups: 2\n"
+        "      toclient_dp_groups: 3\n"
+        "      toserver_src_groups: 2\n"
+        "      toserver_dst_groups: 4\n"
+        "      toserver_sp_groups: 2\n"
+        "      toserver_dp_groups: 25\n"
+        "  - inspection-recursion-limit: 0\n";
+
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if (DetectEngineInitYamlConf(conf) == -1)
+        return 0;
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    result = (de_ctx->inspection_recursion_limit == -1);
+
+ end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    DetectEngineDeInitYamlConf();
+
+    return result;
+}
+
+static int DetectEngineTest02(void)
+{
+    char *conf =
+        "%YAML 1.1\n"
+        "---\n"
+        "detect-engine:\n"
+        "  - profile: medium\n"
+        "  - custom-values:\n"
+        "      toclient_src_groups: 2\n"
+        "      toclient_dst_groups: 2\n"
+        "      toclient_sp_groups: 2\n"
+        "      toclient_dp_groups: 3\n"
+        "      toserver_src_groups: 2\n"
+        "      toserver_dst_groups: 4\n"
+        "      toserver_sp_groups: 2\n"
+        "      toserver_dp_groups: 25\n"
+        "  - inspection-recursion-limit:\n";
+
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if (DetectEngineInitYamlConf(conf) == -1)
+        return 0;
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    result = (de_ctx->inspection_recursion_limit == -1);
+
+ end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    DetectEngineDeInitYamlConf();
+
+    return result;
+}
+
+static int DetectEngineTest03(void)
+{
+    char *conf =
+        "%YAML 1.1\n"
+        "---\n"
+        "detect-engine:\n"
+        "  - profile: medium\n"
+        "  - custom-values:\n"
+        "      toclient_src_groups: 2\n"
+        "      toclient_dst_groups: 2\n"
+        "      toclient_sp_groups: 2\n"
+        "      toclient_dp_groups: 3\n"
+        "      toserver_src_groups: 2\n"
+        "      toserver_dst_groups: 4\n"
+        "      toserver_sp_groups: 2\n"
+        "      toserver_dp_groups: 25\n";
+
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if (DetectEngineInitYamlConf(conf) == -1)
+        return 0;
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    result = (de_ctx->inspection_recursion_limit ==
+              DETECT_ENGINE_DEFAULT_INSPECTION_RECURSION_LIMIT);
+
+ end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    DetectEngineDeInitYamlConf();
+
+    return result;
+}
+
+static int DetectEngineTest04(void)
+{
+    char *conf =
+        "%YAML 1.1\n"
+        "---\n"
+        "detect-engine:\n"
+        "  - profile: medium\n"
+        "  - custom-values:\n"
+        "      toclient_src_groups: 2\n"
+        "      toclient_dst_groups: 2\n"
+        "      toclient_sp_groups: 2\n"
+        "      toclient_dp_groups: 3\n"
+        "      toserver_src_groups: 2\n"
+        "      toserver_dst_groups: 4\n"
+        "      toserver_sp_groups: 2\n"
+        "      toserver_dp_groups: 25\n"
+        "  - inspection-recursion-limit: 10\n";
+
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if (DetectEngineInitYamlConf(conf) == -1)
+        return 0;
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    result = (de_ctx->inspection_recursion_limit == 10);
+
+ end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    DetectEngineDeInitYamlConf();
+
+    return result;
+}
+
+#endif
+
+void DetectEngineRegisterTests()
+{
+
+#ifdef UNITTESTS
+    UtRegisterTest("DetectEngineTest01", DetectEngineTest01, 1);
+    UtRegisterTest("DetectEngineTest02", DetectEngineTest02, 1);
+    UtRegisterTest("DetectEngineTest03", DetectEngineTest03, 1);
+    UtRegisterTest("DetectEngineTest04", DetectEngineTest04, 1);
+#endif
+
+    return;
+}

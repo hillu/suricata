@@ -24,18 +24,10 @@
 #ifndef __DETECT_HTTP_METHOD_H__
 #define __DETECT_HTTP_METHOD_H__
 
-#define DETECT_AL_HTTP_METHOD_NOCASE   0x01
-#define DETECT_AL_HTTP_METHOD_NEGATED  0x02
-
-typedef struct DetectHttpMethodData_ {
-    uint8_t *content;     /**< Raw HTTP method content to match */
-    size_t   content_len; /**< Raw HTTP method content length */
-    uint8_t flags;
-} DetectHttpMethodData;
-
 /* prototypes */
 void DetectHttpMethodRegister(void);
-int DetectHttpMethodDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *sm, Flow *f, uint8_t flags, void *state);
+int DetectHttpMethodDoMatch(DetectEngineThreadCtx *, Signature *, SigMatch *,
+                            Flow *, uint8_t, void *);
 
 #endif /* __DETECT_HTTP_METHOD_H__ */
 

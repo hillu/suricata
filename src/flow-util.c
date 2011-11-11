@@ -49,7 +49,7 @@ Flow *FlowAlloc(void)
 {
     Flow *f;
 
-    if (SC_ATOMIC_GET(flow_memuse) + sizeof(Flow) > flow_config.memcap) {
+    if ((SC_ATOMIC_GET(flow_memuse) + sizeof(Flow)) > flow_config.memcap) {
         return NULL;
     }
 
@@ -61,13 +61,7 @@ Flow *FlowAlloc(void)
         return NULL;
     }
 
-
     FLOW_INITIALIZE(f);
-
-    f->alproto = 0;
-    f->aldata = NULL;
-    f->alflags = FLOW_AL_PROTO_UNKNOWN;
-
     return f;
 }
 
@@ -100,6 +94,8 @@ uint8_t FlowGetProtoMapping(uint8_t proto) {
             return FLOW_PROTO_UDP;
         case IPPROTO_ICMP:
             return FLOW_PROTO_ICMP;
+	case IPPROTO_SCTP:
+            return FLOW_PROTO_SCTP;
         default:
             return FLOW_PROTO_DEFAULT;
     }
@@ -142,12 +138,14 @@ void FlowInit(Flow *f, Packet *p)
     } else if (p->icmpv6h != NULL) {
         f->type = p->type;
         f->code = p->code;
+    } else if (p->sctph != NULL) { /* XXX MACRO */
+        SET_SCTP_SRC_PORT(p,&f->sp);
+        SET_SCTP_DST_PORT(p,&f->dp);
     } /* XXX handle default */
     else {
         printf("FIXME: %s:%s:%" PRId32 "\n", __FILE__, __FUNCTION__, __LINE__);
     }
 
-    f->alflags = FLOW_AL_PROTO_UNKNOWN;
     FlowL7DataPtrInit(f);
     COPY_TIMESTAMP(&p->ts, &f->startts);
 

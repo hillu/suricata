@@ -29,8 +29,8 @@
 
 #include "suricata-common.h"
 #include "suricata.h"
-#include "util-debug.h"
 
+#include "util-debug.h"
 #include "util-spm-bs.h"
 
 
@@ -106,6 +106,7 @@ uint8_t *BasicSearchNocase(const uint8_t *haystack, uint32_t haystack_len, const
     if (needle_len == 0 || needle_len > haystack_len)
         return NULL;
 
+    n = needle;
     for (n = needle; nmax - n <= hmax - haystack; haystack++) {
         if (u8_tolower(*haystack) != u8_tolower(*n)) {
             continue;

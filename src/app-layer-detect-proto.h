@@ -26,7 +26,7 @@
 
 #include "stream.h"
 #include "detect-content.h"
-
+#include "app-layer-parser.h"
 
 /** \brief Signature for proto detection
  *  \todo we might just use SigMatch here
@@ -73,20 +73,38 @@ typedef struct AlpProtoDetectCtx_ {
     AlpProtoSignature **map;
 
     AlpProtoSignature *head;    /**< list of sigs */
+    AppLayerProbingParser *probing_parsers;
+    AppLayerProbingParserInfo *probing_parsers_info;
     uint16_t sigs;              /**< number of sigs */
 } AlpProtoDetectCtx;
 
+extern AlpProtoDetectCtx alp_proto_ctx;
+
+void AlpProtoInit(AlpProtoDetectCtx *);
 void *AppLayerDetectProtoThread(void *td);
 
 void AppLayerDetectProtoThreadInit(void);
 
-uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *, AlpProtoDetectThreadCtx *, uint8_t *, uint16_t, uint8_t, uint8_t);
+uint16_t AppLayerDetectGetProtoPMParser(AlpProtoDetectCtx *,
+                                        AlpProtoDetectThreadCtx *,
+                                        uint8_t *, uint16_t,
+                                        uint8_t, uint8_t);
+uint16_t AppLayerDetectGetProtoProbingParser(AlpProtoDetectCtx *, Flow *,
+                                             uint8_t *, uint32_t,
+                                             uint8_t, uint8_t);
+uint16_t AppLayerDetectGetProto(AlpProtoDetectCtx *, AlpProtoDetectThreadCtx *,
+                                Flow *, uint8_t *, uint32_t,
+                                uint8_t, uint8_t);
+void AlpProtoAdd(AlpProtoDetectCtx *, uint16_t, uint16_t, char *, uint16_t, uint16_t, uint8_t);
 
 void AppLayerDetectProtoThreadSpawn(void);
 void AlpDetectRegisterTests(void);
 
+void AlpProtoFinalizeGlobal(AlpProtoDetectCtx *);
+void AlpProtoFinalizeThread(AlpProtoDetectCtx *, AlpProtoDetectThreadCtx *);
 void AlpProtoFinalize2Thread(AlpProtoDetectThreadCtx *);
 void AlpProtoDeFinalize2Thread (AlpProtoDetectThreadCtx *);
+void AlpProtoTestDestroy(AlpProtoDetectCtx *);
 void AlpProtoDestroy(void);
 
 #endif /* __APP_LAYER_DETECT_PROTO_H__ */

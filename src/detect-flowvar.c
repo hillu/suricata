@@ -114,7 +114,6 @@ static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *raws
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
-    char converted = 0;
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 3) {
@@ -141,8 +140,9 @@ static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *raws
 
     if (varcontent[0] == '\"' && varcontent[strlen(varcontent)-1] == '\"') {
         str = SCStrdup(varcontent+1);
-        if (str == NULL)
-            goto error;
+        if (str == NULL) {
+            return -1;
+        }
         str[strlen(varcontent)-2] = '\0';
         dubbed = 1;
     }
@@ -156,6 +156,8 @@ static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *raws
     cd = SCMalloc(sizeof(DetectFlowvarData));
     if (cd == NULL)
         goto error;
+
+    char converted = 0;
 
     {
         uint16_t i, x;

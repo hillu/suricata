@@ -40,7 +40,7 @@
                                              pattern matcher algorithms */
 #define HASHSIZE_HIGH           16384   /**< High hash size for the multi
                                              pattern matcher algorithms */
-#define HASHSIZE_HIGHEST        32768   /**< Highest hash size for the multi
+#define HASHSIZE_HIGHER         32768   /**< Higher hash size for the multi
                                              pattern matcher algorithms */
 #define HASHSIZE_MAX            65536   /**< Max hash size for the multi
                                              pattern matcher algorithms */
@@ -50,16 +50,33 @@
                                              pattern matcher algorithms */
 #define BLOOMSIZE_HIGH          2048    /**< High bloomfilter size for the multi
                                              pattern matcher algorithms */
+
+#define MPM_PACKET_BUFFER_LIMIT 2400
+#define MPM_PACKET_SIZE_LIMIT   1500
+#define MPM_PACKET_BUFFERS      10
+#define MPM_BATCHING_TIMEOUT    1
+#define MPM_PAGE_LOCKED         1
+#define MPM_CUDA_STREAMS        2
+
 enum {
     MPM_NOTSET = 0,
 
+    /* wumanber as the name suggests */
     MPM_WUMANBER,
+    /* bndmq 2 gram */
     MPM_B2G,
 #ifdef __SC_CUDA_SUPPORT__
     MPM_B2G_CUDA,
 #endif
+    /* bndmq 3 gram */
     MPM_B3G,
+    MPM_B2GC,
+    MPM_B2GM,
 
+    /* aho-corasick */
+    MPM_AC,
+    /* aho-corasick-goto-failure state based */
+    MPM_AC_GFBS,
     /* table size */
     MPM_TABLE_SIZE,
 };
@@ -93,15 +110,32 @@ typedef struct MpmCtx_ {
     void *ctx;
     uint16_t mpm_type;
 
-    uint32_t memory_cnt;
-    uint32_t memory_size;
-
     uint32_t pattern_cnt;       /* unique patterns */
-    uint32_t total_pattern_cnt; /* total patterns added */
 
     uint16_t minlen;
     uint16_t maxlen;
+
+    uint32_t memory_cnt;
+    uint32_t memory_size;
 } MpmCtx;
+
+/* if we want to retrieve an unique mpm context from the mpm context factory
+ * we should supply this as the key */
+#define MPM_CTX_FACTORY_UNIQUE_CONTEXT -1
+
+#define MPM_CTX_FACTORY_FLAGS_PREPARE_WITH_SIG_GROUP_BUILD 0x01
+
+typedef struct MpmCtxFactoryItem_ {
+    char *name;
+    MpmCtx *mpm_ctx;
+    int32_t id;
+    uint8_t flags;
+} MpmCtxFactoryItem;
+
+typedef struct MpmCtxFactoryContainer_ {
+    MpmCtxFactoryItem *items;
+    int32_t no_of_items;
+} MpmCtxFactoryContainer;
 
 /** pattern is case insensitive */
 #define MPM_PATTERN_FLAG_NOCASE     0x01
@@ -146,11 +180,41 @@ typedef struct MpmTableElmt_ {
 
 MpmTableElmt mpm_table[MPM_TABLE_SIZE];
 
+int32_t MpmFactoryRegisterMpmCtxProfile(const char *, uint8_t);
+void MpmFactoryReClaimMpmCtx(MpmCtx *);
+MpmCtx *MpmFactoryGetMpmCtxForProfile(int32_t);
+void MpmFactoryDeRegisterAllMpmCtxProfiles(void);
+int32_t MpmFactoryIsMpmCtxAvailable(MpmCtx *);
+
+/* macros decides if cuda is enabled for the platform or not */
+#ifdef __SC_CUDA_SUPPORT__
+
+/**
+ * \brief Cuda configuration for "mpm" profile.  We can further extend this
+ *        to have conf for specific mpms.  For now its common for all mpms.
+ */
+typedef struct MpmCudaConf_ {
+    int32_t packet_buffer_limit;
+    int16_t packet_size_limit;
+    int8_t packet_buffers;
+    double batching_timeout;
+    int8_t page_locked;
+    int8_t device_id;
+    int8_t cuda_streams;
+} MpmCudaConf;
+
+#endif /* __SC_CUDA_SUPPORT__ */
+
 int PmqSetup(PatternMatcherQueue *, uint32_t, uint32_t);
 void PmqMerge(PatternMatcherQueue *src, PatternMatcherQueue *dst);
 void PmqReset(PatternMatcherQueue *);
 void PmqCleanup(PatternMatcherQueue *);
 void PmqFree(PatternMatcherQueue *);
+
+#ifdef __SC_CUDA_SUPPORT__
+MpmCudaConf *MpmCudaConfParse(void);
+void MpmCudaConfCleanup(MpmCudaConf *);
+#endif /* __SC_CUDA_SUPPORT */
 
 void MpmTableSetup(void);
 void MpmRegisterTests(void);
@@ -165,4 +229,3 @@ uint32_t MpmGetHashSize(const char *);
 uint32_t MpmGetBloomSize(const char *);
 
 #endif /* __UTIL_MPM_H__ */
-

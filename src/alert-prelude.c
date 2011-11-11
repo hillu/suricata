@@ -44,15 +44,19 @@
 
 #include "threads.h"
 #include "threadvars.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 #include "util-unittest.h"
 #include "util-time.h"
 #include "util-debug.h"
 #include "util-error.h"
+#include "util-print.h"
 
 #include "output.h"
 #include "util-privs.h"
+#include "util-optimize.h"
+
+#include "stream.h"
 
 #ifndef PRELUDE
 /** Handle the case where no PRELUDE support is compiled in.
@@ -144,6 +148,8 @@ void TmModuleAlertPreludeRegister (void) {
 typedef struct AlertPreludeCtx_ {
     /** The client (which has the send function) */
     prelude_client_t *client;
+    int log_packet_content;
+    int log_packet_header;
 } AlertPreludeCtx;
 
 /**
@@ -200,7 +206,7 @@ static int SetupAnalyzer(idmef_analyzer_t *analyzer)
  *
  * \return 0 if ok
  */
-static int EventToImpact(PacketAlert *pa, idmef_alert_t *alert)
+static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
 {
     int ret;
     prelude_string_t *str;
@@ -218,13 +224,13 @@ static int EventToImpact(PacketAlert *pa, idmef_alert_t *alert)
     if ( ret < 0 )
         SCReturnInt(ret);
 
-    if ( pa->prio < mid_priority )
+    if ( (unsigned int)pa->s->prio < mid_priority )
         severity = IDMEF_IMPACT_SEVERITY_HIGH;
 
-    else if ( pa->prio < low_priority )
+    else if ( (unsigned int)pa->s->prio < low_priority )
         severity = IDMEF_IMPACT_SEVERITY_MEDIUM;
 
-    else if ( pa->prio < info_priority )
+    else if ( (unsigned int)pa->s->prio < info_priority )
         severity = IDMEF_IMPACT_SEVERITY_LOW;
 
     else
@@ -232,11 +238,22 @@ static int EventToImpact(PacketAlert *pa, idmef_alert_t *alert)
 
     idmef_impact_set_severity(impact, severity);
 
+    if (p->action & ACTION_DROP) {
+        idmef_action_t *action;
+
+        ret = idmef_action_new(&action);
+        if ( ret < 0 )
+            SCReturnInt(ret);
+
+        idmef_action_set_category(action, IDMEF_ACTION_CATEGORY_BLOCK_INSTALLED);
+        idmef_assessment_set_action(assessment, action, 0);
+    }
+
     ret = idmef_impact_new_description(impact, &str);
     if ( ret < 0 )
         SCReturnInt(ret);
 
-    prelude_string_set_ref(str, pa->class_msg);
+    prelude_string_set_ref(str, pa->s->class_msg);
 
     SCReturnInt(0);
 }
@@ -272,13 +289,13 @@ static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
     if (PKT_IS_IPV4(p)) {
         ip_vers = 4;
         ip_proto = IPV4_GET_RAW_IPPROTO(p->ip4h);
-        inet_ntop(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), saddr, sizeof(saddr));
-        inet_ntop(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), daddr, sizeof(daddr));
+        PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), saddr, sizeof(saddr));
+        PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), daddr, sizeof(daddr));
     } else if (PKT_IS_IPV6(p)) {
         ip_vers = 6;
         ip_proto = IPV6_GET_L4PROTO(p);
-        inet_ntop(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), saddr, sizeof(saddr));
-        inet_ntop(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), daddr, sizeof(daddr));
+        PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), saddr, sizeof(saddr));
+        PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), daddr, sizeof(daddr));
     } else
         SCReturnInt(0);
 
@@ -469,49 +486,52 @@ static int PacketToDataV6(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
  *
  * \return 0 if ok
  */
-static int PacketToData(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
+static int PacketToData(Packet *p, PacketAlert *pa, idmef_alert_t *alert, AlertPreludeCtx *ctx)
 {
     SCEnter();
 
     if ( ! p )
         SCReturnInt(0);
 
-    AddIntData(alert, "snort_rule_sid", pa->sid);
-    AddIntData(alert, "snort_rule_rev", pa->rev);
+    AddIntData(alert, "snort_rule_sid", pa->s->id);
+    AddIntData(alert, "snort_rule_rev", pa->s->rev);
 
-    if ( PKT_IS_IPV4(p) )
-        PacketToDataV4(p, pa, alert);
+    if (ctx->log_packet_header) {
+        if ( PKT_IS_IPV4(p) )
+            PacketToDataV4(p, pa, alert);
 
-    else if ( PKT_IS_IPV6(p) )
-        PacketToDataV6(p, pa, alert);
+        else if ( PKT_IS_IPV6(p) )
+            PacketToDataV6(p, pa, alert);
 
-    if ( PKT_IS_TCP(p) ) {
-        AddIntData(alert, "tcp_seq", ntohl(p->tcph->th_seq));
-        AddIntData(alert, "tcp_ack", ntohl(p->tcph->th_ack));
+        if ( PKT_IS_TCP(p) ) {
+            AddIntData(alert, "tcp_seq", ntohl(p->tcph->th_seq));
+            AddIntData(alert, "tcp_ack", ntohl(p->tcph->th_ack));
 
-        AddIntData(alert, "tcp_off", TCP_GET_RAW_OFFSET(p->tcph));
-        AddIntData(alert, "tcp_res", TCP_GET_RAW_X2(p->tcph));
-        AddIntData(alert, "tcp_flags", p->tcph->th_flags);
+            AddIntData(alert, "tcp_off", TCP_GET_RAW_OFFSET(p->tcph));
+            AddIntData(alert, "tcp_res", TCP_GET_RAW_X2(p->tcph));
+            AddIntData(alert, "tcp_flags", p->tcph->th_flags);
 
-        AddIntData(alert, "tcp_win", ntohs(p->tcph->th_win));
-        AddIntData(alert, "tcp_sum", ntohs(p->tcph->th_sum));
-        AddIntData(alert, "tcp_urp", ntohs(p->tcph->th_urp));
+            AddIntData(alert, "tcp_win", ntohs(p->tcph->th_win));
+            AddIntData(alert, "tcp_sum", ntohs(p->tcph->th_sum));
+            AddIntData(alert, "tcp_urp", ntohs(p->tcph->th_urp));
 
+        }
+
+        else if ( PKT_IS_UDP(p) ) {
+            AddIntData(alert, "udp_len", ntohs(p->udph->uh_len));
+            AddIntData(alert, "udp_sum", ntohs(p->udph->uh_sum));
+        }
+
+        else if ( PKT_IS_ICMPV4(p) ) {
+            AddIntData(alert, "icmp_type", p->icmpv4h->type);
+            AddIntData(alert, "icmp_code", p->icmpv4h->code);
+            AddIntData(alert, "icmp_sum", ntohs(p->icmpv4h->checksum));
+
+        }
     }
 
-    else if ( PKT_IS_UDP(p) ) {
-        AddIntData(alert, "udp_len", ntohs(p->udph->uh_len));
-        AddIntData(alert, "udp_sum", ntohs(p->udph->uh_sum));
-    }
-
-    else if ( PKT_IS_ICMPV4(p) ) {
-        AddIntData(alert, "icmp_type", p->icmpv4h->type);
-        AddIntData(alert, "icmp_code", p->icmpv4h->code);
-        AddIntData(alert, "icmp_sum", ntohs(p->icmpv4h->checksum));
-
-    }
-
-    AddByteData(alert, "payload", p->payload, p->payload_len);
+    if (ctx->log_packet_content)
+        AddByteData(alert, "payload", p->payload, p->payload_len);
 
     SCReturnInt(0);
 }
@@ -590,18 +610,29 @@ static int EventToReference(PacketAlert *pa, Packet *p, idmef_classification_t *
     if ( ret < 0 )
         SCReturnInt(ret);
 
-    if ( pa->gid == 0 )
-        ret = prelude_string_sprintf(str, "%u", pa->sid);
+    if ( pa->s->gid == 0 )
+        ret = prelude_string_sprintf(str, "%u", pa->s->id);
     else
-        ret = prelude_string_sprintf(str, "%u:%u", pa->gid, pa->sid);
+        ret = prelude_string_sprintf(str, "%u:%u", pa->s->gid, pa->s->id);
     if ( ret < 0 )
         SCReturnInt(ret);
 
-    ret = AddSnortReference(class, pa->gid, pa->sid);
+    ret = AddSnortReference(class, pa->s->gid, pa->s->id);
     if ( ret < 0 )
         SCReturnInt(ret);
 
     SCReturnInt(0);
+}
+
+static int PreludePrintStreamSegmentCallback(Packet *p, void *data, uint8_t *buf, uint32_t buflen)
+{
+    int ret;
+
+    ret = AddByteData((idmef_alert_t *)data, "stream-segment", buf, buflen);
+    if (ret == 0)
+        return 1;
+    else
+        return -1;
 }
 
 
@@ -624,12 +655,11 @@ static int EventToReference(PacketAlert *pa, Packet *p, idmef_classification_t *
 TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     AlertPreludeThread *apn = (AlertPreludeThread *)data;
-    uint8_t ethh_offset = 0;
     int ret;
     idmef_time_t *time;
     idmef_alert_t *alert;
     prelude_string_t *str;
-    idmef_message_t *idmef;
+    idmef_message_t *idmef = NULL;
     idmef_classification_t *class;
     PacketAlert *pa;
 
@@ -645,15 +675,11 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     if ( !IPH_IS_VALID(p) )
         SCReturnInt(TM_ECODE_OK);
 
-    /* if we have no ethernet header (e.g. when using nfq), we have to create
-     * one ourselves. */
-    if (p->ethh == NULL) {
-        ethh_offset = sizeof(EthernetHdr);
-    }
-
     /* XXX which one to add to this alert? Lets see how Snort solves this.
      * For now just take last alert. */
     pa = &p->alerts.alerts[p->alerts.cnt-1];
+    if (pa->s == NULL)
+        goto err;
 
     ret = idmef_message_new(&idmef);
     if ( ret < 0 )
@@ -671,9 +697,9 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     if ( ret < 0 )
         goto err;
 
-    prelude_string_set_ref(str, pa->msg);
+    prelude_string_set_ref(str, pa->s->msg);
 
-    ret = EventToImpact(pa, alert);
+    ret = EventToImpact(pa, p, alert);
     if ( ret < 0 )
         goto err;
 
@@ -685,8 +711,22 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     if ( ret < 0 )
         goto err;
 
-    ret = PacketToData(p, pa, alert);
+    ret = PacketToData(p, pa, alert, apn->ctx);
     if ( ret < 0 )
+        goto err;
+
+    if (pa->flags & PACKET_ALERT_FLAG_STATE_MATCH) {
+        uint8_t flag;
+        if (p->flowflags & FLOW_PKT_TOSERVER) {
+            flag = FLOW_PKT_TOCLIENT;
+        } else {
+            flag = FLOW_PKT_TOSERVER;
+        }
+        ret = StreamSegmentForEach(p, flag,
+                                   PreludePrintStreamSegmentCallback,
+                                   (void *)alert);
+    }
+    if (ret < 0)
         goto err;
 
     ret = idmef_alert_new_detect_time(alert, &time);
@@ -708,7 +748,8 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     SCReturnInt(TM_ECODE_OK);
 
 err:
-    idmef_message_destroy(idmef);
+    if (idmef != NULL)
+        idmef_message_destroy(idmef);
     SCReturnInt(TM_ECODE_FAILED);
 }
 
@@ -781,6 +822,8 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
     prelude_client_t *client;
     AlertPreludeCtx *ctx;
     const char *prelude_profile_name;
+    const char *log_packet_content;
+    const char *log_packet_header;
     OutputCtx *output_ctx;
 
     SCEnter();
@@ -794,6 +837,9 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
     prelude_profile_name = ConfNodeLookupChildValue(conf, "profile");
     if (prelude_profile_name == NULL)
         prelude_profile_name = DEFAULT_PRELUDE_PROFILE;
+
+    log_packet_content = ConfNodeLookupChildValue(conf, "log_packet_content");
+    log_packet_header = ConfNodeLookupChildValue(conf, "log_packet_header");
 
     ret = prelude_client_new(&client, prelude_profile_name);
     if ( ret < 0 || ! client ) {
@@ -826,6 +872,12 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
     }
 
     ctx->client = client;
+    ctx->log_packet_content = 0;
+    ctx->log_packet_header = 1;
+    if (log_packet_content && ConfValIsTrue(log_packet_content))
+        ctx->log_packet_content = 1;
+    if (log_packet_header && ConfValIsFalse(log_packet_header))
+        ctx->log_packet_header = 0;
 
     output_ctx = SCMalloc(sizeof(OutputCtx));
     if (output_ctx == NULL) {
@@ -847,7 +899,7 @@ static void AlertPreludeDeinitCtx(OutputCtx *output_ctx)
     AlertPreludeCtx *ctx = (AlertPreludeCtx *)output_ctx->data;
 
     prelude_client_destroy(ctx->client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-    free(output_ctx);
+    SCFree(output_ctx);
 }
 
 void AlertPreludeRegisterTests (void) {

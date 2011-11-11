@@ -4,19 +4,37 @@
  * \author Anoop Saldanha <poonaatsoc@gmail.com>
  *
  * \todo
- *       - Make cuda paramters user configurable.
- *       - Implement a gpu version of aho-corasick.  That should get rid of a
+ *       1 Implement a gpu version of aho-corasick.  That should get rid of a
  *         lot of post processing and pattern_chopping, and we don't have to
- *         deal with one or two byte patterns.
- *       - Currently a lot of packets(~17k) are getting stuck on the detection
+ *         deal with one or two byte patterns. (currently in process)
+ *       2 Use texture/shared memory.  This should be handled along with 1 and 6.
+ *       3 Currently a lot of packets(~17k) are getting stuck on the detection
  *         thread, which is a major bottleneck.  Introduce bypass detection
  *         threads for these 15k non buffered packets and check how the alerts
  *         are affected by this(out of sequence handling by detection threads).
- *       - Use texture/shared memory.  This should be handled along with AC.
- *       - Test the use of host-alloced page locked memory.
- *       - Test other optimizations like using the sgh held in the flow(if
- *         present in the flow), instead of retrieving the sgh inside the batcher
- *         thread.
+ *       4 Test the use of mapped memory(if possible anywhere).
+ *       5 Check parallelising memcopies with kernel execution.
+ *       6 Test this feature - Rearrange the packet stream(either on cpu or gpu),
+ *         where each block in the gpu can access the packet with non-coalesced
+ *         reads.
+ *         2 packets p1 -> aabb ccdd
+ *                   p2 -> eeff gghh
+ *
+ *         stream -> aabbeeffccddgghh.
+ *
+ *         Modify the block size to 16 threads for CC < 2.0 devices and 32 for
+ *         for >= 2.0.
+ *
+ *         The rearrangement of packet stream can be done on the gpu, with no
+ *         perf degradation, using coalesced reads.  Padding packets need to
+ *         be addressed though.
+ *         (Need to give more thought to this task).
+ *
+ *         -- Feel free to pick any task from the agenda, but please
+ *         drop a mail to dev mailing list(or directly to the dev team).  Better
+ *         yet, open a feature request on our bug/feature tracker
+ *         (https://redmine.openinfosecfoundation.org/issues).  Will be a mess if
+ *         2 or more devs end up working on the same task or related tasks.
  */
 
 /* compile in, only if we have a CUDA enabled on this machine */
@@ -33,7 +51,7 @@
 #include "threads.h"
 #include "threadvars.h"
 #include "tm-queuehandlers.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 #include "cuda-packet-batcher.h"
 #include "conf.h"
@@ -43,12 +61,14 @@
 #include "util-unittest.h"
 
 #include "util-mpm-b2g-cuda.h"
+#include "util-cuda-handlers.h"
 #include "detect-engine-address.h"
 #include "detect-engine-port.h"
 #include "detect-engine.h"
 #include "detect-parse.h"
 #include "tm-threads.h"
 #include "tmqh-packetpool.h"
+#include "util-mpm.h"
 
 /* \todo Make this user configurable through our yaml file.  Also provide options
  * where this can be dynamically updated based on the traffic */
@@ -79,12 +99,18 @@ static int run_batcher = 1;
  * on the traffic
  * \todo make this user configurable, as well allow dynamic update of this
  * variable based on the traffic seen */
-static uint32_t buffer_packet_threshhold = 2400;
+static uint32_t buffer_packet_threshhold = 0;
+
+/* the profile used by the cuda batcher */
+static MpmCudaConf *profile = NULL;
 
 /* flag used by the SIG_ALRM handler to indicate that the batcher TM should queue
  * the buffer to be processed by the Cuda Mpm B2g Batcher Thread for further
  * processing on the GPU */
 static int queue_buffer = 0;
+
+/* struct to configure the SIG_ALRM frequency. */
+static struct itimerval itimer = {{0, 0}, {0, 0}};
 
 static int unittest_mode = 0;
 
@@ -101,9 +127,9 @@ static int unittest_mode = 0;
  */
 static void SCCudaPBSetQueueBufferFlag(int signum)
 {
-    SCLogDebug("Cuda Packet Batche alarm generated after %d seconds.  Set the"
+    SCLogDebug("Cuda Packet Batche alarm generated after %f seconds.  Set the"
                "queue_buffer flag and signal the cuda TM inq.",
-               SC_CUDA_PB_BATCHER_ALARM_TIME);
+               profile->batching_timeout);
     queue_buffer = 1;
     SCCondSignal(&((&trans_q[tmq_batcher_inq->id])->cond_q));
 
@@ -125,7 +151,27 @@ static void SCCudaPBSetBatcherAlarmTimeHandler()
     action.sa_flags = 0;
     sigaction(SIGALRM, &action, 0);
 
+    itimer.it_value.tv_sec = profile->batching_timeout;
+    itimer.it_value.tv_usec = (profile->batching_timeout
+                               - (int32_t) profile->batching_timeout) * 1000000;
+
     return;
+}
+
+/**
+ * \internal
+ * \brief Reset the batcher alarm.
+ */
+static inline void SCCudaPBResetBatcherAlarm()
+{
+    queue_buffer = 0;
+
+    /* if we are running unittests, don't set the alarm handler.  It will only
+     * cause a seg fault if the tests take too long */
+    if (!unittest_mode) {
+        /* \todo We could update itimer dynamically based on the traffic */
+        setitimer(ITIMER_REAL, &itimer, NULL);
+    }
 }
 
 /**
@@ -246,7 +292,7 @@ static void SCCudaPBQueueBuffer(SCCudaPBThreadCtx *tctx)
         } else {
             /* Should only happen on signals. */
             SCMutexUnlock(&dq_inq->mutex_q);
-            SCLogDebug("Unable to Relooping in the quest to dequeue new buffer\n");
+            SCLogDebug("Unable to Relooping in the quest to dequeue new buffer");
         }
     } /* while (run_batcher) */
 
@@ -262,7 +308,7 @@ static void SCCudaPBQueueBuffer(SCCudaPBThreadCtx *tctx)
 void *SCCudaPBTmThreadsSlot1(void *td)
 {
     ThreadVars *tv = (ThreadVars *)td;
-    Tm1Slot *s = (Tm1Slot *)tv->tm_slots;
+    TmSlot *s = (TmSlot *)tv->tm_slots;
     Packet *p = NULL;
     char run = 1;
     TmEcode r = TM_ECODE_OK;
@@ -276,8 +322,8 @@ void *SCCudaPBTmThreadsSlot1(void *td)
 
     SCLogDebug("%s starting", tv->name);
 
-    if (s->s.SlotThreadInit != NULL) {
-        r = s->s.SlotThreadInit(tv, s->s.slot_initdata, &s->s.slot_data);
+    if (s->SlotThreadInit != NULL) {
+        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
         if (r != TM_ECODE_OK) {
             EngineKill();
 
@@ -285,8 +331,8 @@ void *SCCudaPBTmThreadsSlot1(void *td)
             pthread_exit((void *) -1);
         }
     }
-    memset(&s->s.slot_pre_pq, 0, sizeof(PacketQueue));
-    memset(&s->s.slot_post_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
+    memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
     TmThreadsSetFlag(tv, THV_INIT_DONE);
     while(run) {
@@ -296,19 +342,19 @@ void *SCCudaPBTmThreadsSlot1(void *td)
         p = tv->tmqh_in(tv);
 
         if (p == NULL) {
-            printf("packet is NULL for TM: %s\n", tv->name);
+            SCLogDebug("packet is NULL for TM: %s", tv->name);
             /* the only different between the actual Slot1 function in
              * tm-threads.c and this custom Slot1 function is this call
              * here.  We need to make the call here, even if we don't
              * receive a packet from the previous stage in the runmodes.
-             * This is needed in cases where we the SIG_ALRM handler
+             * This is needed in cases where the SIG_ALRM handler
              * wants us to queue the buffer to the GPU and ends up waking
              * the Batcher TM(which is waiting on a cond from the previous
-             * feeder TM).  Please handler the NULL packet case in the
+             * feeder TM).  Please handle the NULL packet case in the
              * function that you now call */
-            r = s->s.SlotFunc(tv, p, s->s.slot_data, NULL, NULL);
+            r = s->SlotFunc(tv, p, s->slot_data, NULL, NULL);
         } else {
-            r = s->s.SlotFunc(tv, p, s->s.slot_data, NULL, NULL);
+            r = s->SlotFunc(tv, p, s->slot_data, NULL, NULL);
             /* handle error */
             if (r == TM_ECODE_FAILED) {
                 TmqhOutputPacketpool(tv, p);
@@ -321,17 +367,19 @@ void *SCCudaPBTmThreadsSlot1(void *td)
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+            SCPerfSyncCounters(tv, 0);
             run = 0;
         }
     }
 
-    if (s->s.SlotThreadExitPrintStats != NULL) {
-        s->s.SlotThreadExitPrintStats(tv, s->s.slot_data);
+    TmThreadWaitForFlag(tv, THV_DEINIT);
+
+    if (s->SlotThreadExitPrintStats != NULL) {
+        s->SlotThreadExitPrintStats(tv, s->slot_data);
     }
 
-    if (s->s.SlotThreadDeinit != NULL) {
-        r = s->s.SlotThreadDeinit(tv, s->s.slot_data);
+    if (s->SlotThreadDeinit != NULL) {
+        r = s->SlotThreadDeinit(tv, s->slot_data);
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
@@ -353,16 +401,28 @@ void SCCudaPBDeAllocSCCudaPBPacketsBuffer(SCCudaPBPacketsBuffer *pb)
     if (pb == NULL)
         return;
 
-    if (pb->packets_buffer != NULL)
-        free(pb->packets_buffer);
-    if (pb->packets_offset_buffer != NULL)
-        free(pb->packets_offset_buffer);
-    if (pb->packets_payload_offset_buffer != NULL)
-        free(pb->packets_payload_offset_buffer);
+    if (pb->packets_buffer != NULL) {
+        if (SCCudaMemFreeHost(pb->packets_buffer) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                       "packets_buffer");
+        }
+    }
+    if (pb->packets_offset_buffer != NULL) {
+        if (SCCudaMemFreeHost(pb->packets_offset_buffer) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                       "packets_offset_buffer");
+        }
+    }
+    if (pb->packets_payload_offset_buffer != NULL) {
+        if (SCCudaMemFreeHost(pb->packets_payload_offset_buffer) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory "
+                       "packets_payload_offset_buffer");
+        }
+    }
     if (pb->packets_address_buffer != NULL)
-        free(pb->packets_address_buffer);
+        SCFree(pb->packets_address_buffer);
 
-    free(pb);
+    SCFree(pb);
 
     return;
 }
@@ -374,55 +434,118 @@ void SCCudaPBDeAllocSCCudaPBPacketsBuffer(SCCudaPBPacketsBuffer *pb)
  */
 SCCudaPBPacketsBuffer *SCCudaPBAllocSCCudaPBPacketsBuffer(void)
 {
-    SCCudaPBPacketsBuffer *pb = malloc(sizeof(SCCudaPBPacketsBuffer));
+    SCCudaPBPacketsBuffer *pb = SCMalloc(sizeof(SCCudaPBPacketsBuffer));
     if (pb == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
     memset(pb, 0, sizeof(SCCudaPBPacketsBuffer));
 
+    /* Register new module, needed for some unit tests */
+    if (SCCudaHlGetModuleHandle("SC_CUDA_PACKET_BATCHER") == -1) {
+        SCCudaHlRegisterModule("SC_CUDA_PACKET_BATCHER");
+    }
+
     /* the buffer for the packets to be sent over to the gpu.  We allot space for
-     * a minimum of SC_CUDA_PB_MIN_NO_OF_PACKETS, i.e. if each packet buffered
-     * is full to the brim */
-    pb->packets_buffer = malloc(sizeof(SCCudaPBPacketDataForGPU) *
-                                SC_CUDA_PB_MIN_NO_OF_PACKETS);
-    if (pb->packets_buffer == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
+     * profile->packet_buffer_limit packets, assuming a size of
+     * profile->packet_size_limit for each packet */
+    SCCudaHlModuleData *data = NULL;
+    data = SCCudaHlGetModuleData(SCCudaHlGetModuleHandle("SC_CUDA_PACKET_BATCHER"));
+    if (data == NULL) {
+        SCLogDebug("Module not registered.  To avail the benefits of this "
+                   "registration facility, first register a module using "
+                   "context using SCCudaHlRegisterModule(), after which you "
+                   "can call this function");
+        return NULL;
     }
-    memset(pb->packets_buffer, 0, sizeof(SCCudaPBPacketDataForGPU) *
-           SC_CUDA_PB_MIN_NO_OF_PACKETS);
 
-    /* used to hold the offsets of the buffered packets in the packets_buffer */
-    pb->packets_offset_buffer = malloc(sizeof(uint32_t) *
-                                       SC_CUDA_PB_MIN_NO_OF_PACKETS);
-    if (pb->packets_offset_buffer == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
+    if (SCCudaHlGetCudaContext(&data->cuda_context, "mpm", data->handle) == -1) {
+        SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Error getting cuda context");
+        return NULL;
     }
-    memset(pb->packets_offset_buffer, 0, sizeof(uint32_t) *
-           SC_CUDA_PB_MIN_NO_OF_PACKETS);
 
-    /* used to hold the offsets of the packets payload */
-    pb->packets_payload_offset_buffer = malloc(sizeof(uint32_t) *
-                                               SC_CUDA_PB_MIN_NO_OF_PACKETS);
-    if (pb->packets_payload_offset_buffer == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-        exit(EXIT_FAILURE);
+    if (SCCudaCtxPushCurrent(data->cuda_context) == -1) {
+        SCLogError(SC_ERR_CUDA_HANDLER_ERROR,
+                   "Error pushing cuda context to allocate memory");
     }
-    memset(pb->packets_payload_offset_buffer, 0, sizeof(uint32_t) *
-           SC_CUDA_PB_MIN_NO_OF_PACKETS);
+
+    if (profile->page_locked) {
+        if (SCCudaMemHostAlloc((void**)&pb->packets_buffer,
+                               profile->packet_buffer_limit *
+                               (profile->packet_size_limit +
+                                sizeof(SCCudaPBPacketDataForGPUNonPayload)),
+                               CU_MEMHOSTALLOC_PORTABLE |
+                               CU_MEMHOSTALLOC_WRITECOMBINED) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error allocating page-locked memory");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        pb->packets_buffer = SCMalloc(profile->packet_buffer_limit *
+                                    (profile->packet_size_limit +
+                                     sizeof(SCCudaPBPacketDataForGPUNonPayload)));
+        if (pb->packets_buffer == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
+    }
+    memset(pb->packets_buffer, 0, profile->packet_buffer_limit *
+           (profile->packet_size_limit + sizeof(SCCudaPBPacketDataForGPUNonPayload)));
+
+    if (profile->page_locked) {
+        /* used to hold the offsets of the buffered packets in the packets_buffer */
+        if (SCCudaMemHostAlloc((void**)&pb->packets_offset_buffer,
+                               sizeof(uint32_t) * profile->packet_buffer_limit,
+                               CU_MEMHOSTALLOC_PORTABLE |
+                               CU_MEMHOSTALLOC_WRITECOMBINED) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error allocating page-locked memory");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        pb->packets_offset_buffer = SCMalloc(sizeof(uint32_t) *
+                                           profile->packet_buffer_limit);
+        if (pb->packets_offset_buffer == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
+    }
+    memset(pb->packets_offset_buffer, 0,
+           sizeof(uint32_t) * profile->packet_buffer_limit);
+
+    if (profile->page_locked) {
+        /* used to hold the offsets of the packets payload */
+        if (SCCudaMemHostAlloc((void**)&pb->packets_payload_offset_buffer,
+                               sizeof(uint32_t) * profile->packet_buffer_limit,
+                               CU_MEMHOSTALLOC_PORTABLE |
+                               CU_MEMHOSTALLOC_WRITECOMBINED) == -1) {
+            SCLogError(SC_ERR_CUDA_ERROR, "Error allocating page-locked memory");
+            exit(EXIT_FAILURE);
+        }
+    } else {
+        pb->packets_payload_offset_buffer = SCMalloc(sizeof(uint32_t) *
+                                                   profile->packet_buffer_limit);
+        if (pb->packets_payload_offset_buffer == NULL) {
+            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
+    }
+    memset(pb->packets_payload_offset_buffer, 0,
+           sizeof(uint32_t) * profile->packet_buffer_limit);
+
+    SCLogDebug("Allocated pagelocked CUDA memory");
+    if (SCCudaCtxPopCurrent(NULL) == -1) {
+        SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Could not pop cuda context");
+    }
 
     /* used to hold the packet addresses for all the packets buffered inside
      * packets_buffer */
-    pb->packets_address_buffer = malloc(sizeof(Packet *) *
-                                        SC_CUDA_PB_MIN_NO_OF_PACKETS);
+    pb->packets_address_buffer = SCMalloc(sizeof(Packet *) *
+                                        profile->packet_buffer_limit);
     if (pb->packets_address_buffer == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
     memset(pb->packets_address_buffer, 0, sizeof(Packet *) *
-           SC_CUDA_PB_MIN_NO_OF_PACKETS);
+           profile->packet_buffer_limit);
 
     return pb;
 }
@@ -463,7 +586,7 @@ TmEcode SCCudaPBThreadInit(ThreadVars *tv, void *initdata, void **data)
         return TM_ECODE_FAILED;
     }
 
-    tctx = malloc(sizeof(SCCudaPBThreadCtx));
+    tctx = SCMalloc(sizeof(SCCudaPBThreadCtx));
     if (tctx == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
@@ -477,6 +600,9 @@ TmEcode SCCudaPBThreadInit(ThreadVars *tv, void *initdata, void **data)
     /* the first packet buffer from the queue */
     tctx->curr_pb = (SCCudaPBPacketsBuffer *)SCDQDataDequeue(&data_queues[tmq_inq->id]);
 
+    /* register new module */
+    SCCudaHlRegisterModule("SC_CUDA_PACKET_BATCHER");
+
     *data = tctx;
 
     /* we will need the cuda packet batcher TM's inq for further use later.  Read
@@ -486,13 +612,9 @@ TmEcode SCCudaPBThreadInit(ThreadVars *tv, void *initdata, void **data)
     /* set the SIG_ALRM handler */
     SCCudaPBSetBatcherAlarmTimeHandler();
 
-    /* if we are running unittests, don't set the alarm handler.  It will only
-     * cause a seg fault if the tests take too long */
-    if (!unittest_mode) {
-        /* Set the alarm time limit during which the batcher thread would
-         * buffer packets */
-        alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
-    }
+    /* Set the alarm time limit during which the batcher thread would
+     * buffer packets */
+    SCCudaPBResetBatcherAlarm();
 
     return TM_ECODE_OK;
 }
@@ -514,18 +636,15 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
 #define ALIGN_UP(offset, alignment) \
     (offset) = ((offset) + (alignment) - 1) & ~((alignment) - 1)
 
+    SCCudaPBThreadCtx *tctx = data;
+
     /* ah.  we have been signalled that we crossed the time limit within which we
      * need to buffer packets.  Let us queue the buffer to the GPU */
     if (queue_buffer) {
         SCLogDebug("Cuda packet buffer TIME limit exceeded.  Buffering packet "
                    "buffer and reseting the alarm");
-        queue_buffer = 0;
-        SCCudaPBQueueBuffer(data);
-        /* if we are running unittests, don't set the alarm handler.  It will only
-         * cause a seg fault if the tests take too long */
-        if (!unittest_mode) {
-            alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
-        }
+        SCCudaPBQueueBuffer(tctx);
+        SCCudaPBResetBatcherAlarm();
     }
 
     /* this is possible, since we are using a custom slot function that calls this
@@ -546,7 +665,6 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
         return TM_ECODE_OK;
     }
 
-    SCCudaPBThreadCtx *tctx = data;
     /* the packets buffer */
     SCCudaPBPacketsBuffer *pb = (SCCudaPBPacketsBuffer *)tctx->curr_pb;
     /* the previous packet which has been buffered into the packets_buffer */
@@ -679,17 +797,12 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
      * left in the buffer or we have been informed that we have hit the time limit
      * to queue the buffer */
     if ( (pb->nop_in_buffer == buffer_packet_threshhold) || queue_buffer) {
-        queue_buffer = 0;
-        SCLogDebug("Either we have hit the threshold limit for packets(i.e.) we "
+        SCLogDebug("Either we have hit the threshold limit for packets(i.e. we "
                    "have %d packets limit) OR we have exceeded the buffering "
                    "time limit.  Buffering the packet buffer and reseting the "
                    "alarm.", buffer_packet_threshhold);
         SCCudaPBQueueBuffer(tctx);
-        /* if we are running unittests, don't set the alarm handler.  It will only
-         * cause a seg fault if the tests take too long */
-        if (!unittest_mode) {
-            alarm(SC_CUDA_PB_BATCHER_ALARM_TIME);
-        }
+        SCCudaPBResetBatcherAlarm();
     }
 
     return TM_ECODE_OK;
@@ -715,10 +828,23 @@ TmEcode SCCudaPBThreadDeInit(ThreadVars *tv, void *data)
 
     if (tctx != NULL) {
         if (tctx->curr_pb != NULL) {
+            if (SCCudaHlPushCudaContextFromModule("SC_CUDA_PACKET_BATCHER") == -1){
+                SCLogError(SC_ERR_CUDA_HANDLER_ERROR,
+                           "Failed to push cuda context from module");
+            }
+
             SCCudaPBDeAllocSCCudaPBPacketsBuffer(tctx->curr_pb);
             tctx->curr_pb = NULL;
+
+            if (SCCudaCtxPopCurrent(NULL) == -1){
+                SCLogError(SC_ERR_CUDA_ERROR, "Failed to pop cuda context");
+            }
+
+            if (SCCudaHlDeRegisterModule("SC_CUDA_PACKET_BATCHER") == -1){
+                SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Failed to deregister module");
+            }
         }
-        free(tctx);
+        SCFree(tctx);
     }
 
     return TM_ECODE_OK;
@@ -759,6 +885,12 @@ void SCCudaPBSetUpQueuesAndBuffers(void)
     tmq_outq->reader_cnt++;
     tmq_outq->writer_cnt++;
 
+    /* Register a new module to be used by the packet batcher to allocate
+     * page-locked memory */
+    SCCudaHlRegisterModule("SC_CUDA_PACKET_BATCHER");
+
+    profile = SCCudaHlGetProfile("mpm");
+
     /* allocate the packet buffer */
     /* \todo need to work out the right no of packet buffers that we need to
      * queue.  I doubt we will need more than 4(as long as we don't run it on
@@ -766,7 +898,15 @@ void SCCudaPBSetUpQueuesAndBuffers(void)
      * new ones, when we run out of buffers, since malloc for a huge chunk
      * like this will take time.  We need to figure out a value based on
      * various other parameters like alarm time and buffer threshold value */
-    for (i = 0; i < 10; i++) {
+    for (i = 0; i < profile->packet_buffers; i++) {
+        if (profile->page_locked) {
+            SCLogDebug("Allocating \"%d\" page_locked cuda packet buffers",
+                       profile->packet_buffers);
+        } else {
+            SCLogDebug("Allocating \"%d\" non-page_locked cuda packet buffers",
+                       profile->packet_buffers);
+        }
+
         SCCudaPBPacketsBuffer *pb = SCCudaPBAllocSCCudaPBPacketsBuffer();
         /* dump the buffer into the inqueue for this batcher TM.  the batcher
          * thread would be the first consumer for these buffers */
@@ -776,7 +916,7 @@ void SCCudaPBSetUpQueuesAndBuffers(void)
     /* \todo This needs to be changed ASAP.  This can't exceed max_pending_packets.
      * Also we need to make this user configurable and allow dynamic updaes
      * based on live traffic */
-    buffer_packet_threshhold = 2400;
+    buffer_packet_threshhold = profile->packet_buffer_limit;
 
     return;
 }
@@ -794,19 +934,46 @@ void SCCudaPBCleanUpQueuesAndBuffers(void)
                    "tmq_outq NULL");
         return;
     }
+    if (SCCudaHlPushCudaContextFromModule("SC_CUDA_PACKET_BATCHER") == -1){
+        SCLogError(SC_ERR_CUDA_HANDLER_ERROR, "Could not push cuda context from module");
+    }
 
     /* clean all the buffers present in the inq */
     dq = &data_queues[tmq_inq->id];
     SCMutexLock(&dq->mutex_q);
     while ( (pb = (SCCudaPBPacketsBuffer *)SCDQDataDequeue(dq)) != NULL) {
-        if (pb->packets_buffer != NULL)
-            free(pb->packets_buffer);
-        if (pb->packets_offset_buffer != NULL)
-            free(pb->packets_offset_buffer);
-        if (pb->packets_payload_offset_buffer != NULL)
-            free(pb->packets_payload_offset_buffer);
+        if (pb->packets_buffer != NULL) {
+            if (profile->page_locked) {
+                if (SCCudaMemFreeHost(pb->packets_buffer) == -1) {
+                    SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                               "packets_buffer");
+                }
+            } else {
+                SCFree(pb->packets_buffer);
+            }
+        }
+        if (pb->packets_offset_buffer != NULL) {
+            if (profile->page_locked) {
+                if (SCCudaMemFreeHost(pb->packets_offset_buffer) == -1) {
+                    SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                               "packets_offset_buffer");
+                }
+            } else {
+                SCFree(pb->packets_offset_buffer);
+            }
+        }
+        if (pb->packets_payload_offset_buffer != NULL) {
+            if (profile->page_locked) {
+                if (SCCudaMemFreeHost(pb->packets_payload_offset_buffer) == -1) {
+                    SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                               "packets_payload_offset_buffer");
+                }
+            } else {
+                SCFree(pb->packets_payload_offset_buffer);
+            }
+        }
 
-        free(pb);
+        SCFree(pb);
     }
     SCMutexUnlock(&dq->mutex_q);
     SCCondSignal(&dq->cond_q);
@@ -815,14 +982,29 @@ void SCCudaPBCleanUpQueuesAndBuffers(void)
     dq = &data_queues[tmq_outq->id];
     SCMutexLock(&dq->mutex_q);
     while ( (pb = (SCCudaPBPacketsBuffer *)SCDQDataDequeue(dq)) != NULL) {
-        if (pb->packets_buffer != NULL)
-            free(pb->packets_buffer);
-        if (pb->packets_offset_buffer != NULL)
-            free(pb->packets_offset_buffer);
-        if (pb->packets_payload_offset_buffer != NULL)
-            free(pb->packets_payload_offset_buffer);
+        if (pb->packets_buffer != NULL) {
+            if (SCCudaMemFreeHost(pb->packets_buffer) == -1) {
+                SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                           "packets_buffer");
+            }
+        }
+        if (pb->packets_offset_buffer != NULL) {
+            if (SCCudaMemFreeHost(pb->packets_offset_buffer) == -1) {
+                SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                           "packets_offset_buffer");
+            }
+        }
+        if (pb->packets_payload_offset_buffer != NULL) {
+            if (SCCudaMemFreeHost(pb->packets_payload_offset_buffer) == -1) {
+                SCLogError(SC_ERR_CUDA_ERROR, "Error deallocating pagelocked memory: "
+                           "packets_payload_offset_buffer");
+            }
+        }
 
-        free(pb);
+        SCFree(pb);
+    }
+    if (SCCudaCtxPopCurrent(NULL) == -1){
+        SCLogError(SC_ERR_CUDA_ERROR, "Could not pop cuda context");
     }
     SCMutexUnlock(&dq->mutex_q);
     SCCondSignal(&dq->cond_q);
@@ -838,6 +1020,17 @@ void SCCudaPBCleanUpQueuesAndBuffers(void)
 void SCCudaPBSetBufferPacketThreshhold(uint32_t threshhold_override)
 {
     buffer_packet_threshhold = threshhold_override;
+
+    return;
+}
+
+/**
+ * \brief Function used to set the profile for cuda packet batcher.  Used
+ *        for unittests alone.
+ */
+void SCCudaPBSetProfile(char *profile_name)
+{
+    profile = SCCudaHlGetProfile("mpm");
 
     return;
 }
@@ -936,7 +1129,9 @@ int SCCudaPBTest01(void)
     int result = 0;
     SCCudaPBThreadCtx *tctx = NULL;
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     DecodeThreadVars dtv;
     ThreadVars tv;
     ThreadVars tv_cuda_PB;
@@ -980,13 +1175,14 @@ int SCCudaPBTest01(void)
     packets_buffer_len += packets_offset_buffer[(sizeof(strings)/sizeof(char *)) - 1] +
         sizeof(SCCudaPBPacketDataForGPUNonPayload) + strlen(strings[(sizeof(strings)/sizeof(char *)) - 1]);
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&tv_cuda_PB, 0, sizeof(ThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
-    DecodeEthernet(&tv, &dtv, &p, raw_eth, sizeof(raw_eth), NULL);
+    DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -997,7 +1193,7 @@ int SCCudaPBTest01(void)
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any (msg:\"Bamboo\"; "
-                               "content:test; sid:1;)");
+                               "content:\"test\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("signature parsing failed\n");
         goto end;
@@ -1015,81 +1211,81 @@ int SCCudaPBTest01(void)
     SCCudaPBThreadInit(&tv_cuda_PB, de_ctx, (void *)&tctx);
     SCCudaPBSetBufferPacketThreshhold(sizeof(strings)/sizeof(char *));
 
-    p.payload = (uint8_t *)strings[0];
-    p.payload_len = strlen(strings[0]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[0];
+    p->payload_len = strlen(strings[0]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[1];
-    p.payload_len = strlen(strings[1]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[1];
+    p->payload_len = strlen(strings[1]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[2];
-    p.payload_len = strlen(strings[2]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[2];
+    p->payload_len = strlen(strings[2]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[3];
-    p.payload_len = strlen(strings[3]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[3];
+    p->payload_len = strlen(strings[3]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[4];
-    p.payload_len = strlen(strings[4]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[4];
+    p->payload_len = strlen(strings[4]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[5];
-    p.payload_len = strlen(strings[5]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[5];
+    p->payload_len = strlen(strings[5]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[6];
-    p.payload_len = strlen(strings[6]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[6];
+    p->payload_len = strlen(strings[6]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[7];
-    p.payload_len = strlen(strings[7]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[7];
+    p->payload_len = strlen(strings[7]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[8];
-    p.payload_len = strlen(strings[8]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[8];
+    p->payload_len = strlen(strings[8]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
     result &= (dq->len == 9);
 
-    p.payload = (uint8_t *)strings[9];
-    p.payload_len = strlen(strings[9]);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)strings[9];
+    p->payload_len = strlen(strings[9]);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 1);
     dq = &data_queues[tmq_inq->id];
@@ -1127,6 +1323,7 @@ int SCCudaPBTest01(void)
     }
 
     SCCudaPBThreadDeInit(NULL, tctx);
+    SCFree(p);
     return result;
 }
 
@@ -1198,7 +1395,9 @@ int SCCudaPBTest02(void)
     const char *string = NULL;
     SCCudaPBThreadCtx *tctx = NULL;
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     DecodeThreadVars dtv;
     ThreadVars tv;
     ThreadVars tv_cuda_PB;
@@ -1208,13 +1407,14 @@ int SCCudaPBTest02(void)
     SCDQDataQueue *dq = NULL;
 
 
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&tv_cuda_PB, 0, sizeof(ThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
-    DecodeEthernet(&tv, &dtv, &p, raw_eth, sizeof(raw_eth), NULL);
+    DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1225,7 +1425,7 @@ int SCCudaPBTest02(void)
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any 5555 -> any any (msg:\"Bamboo\"; "
-                               "content:test; sid:1;)");
+                               "content:\"test\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("signature parsing failed\n");
         goto end;
@@ -1243,9 +1443,9 @@ int SCCudaPBTest02(void)
     result = 1;
 
     string = "test_one";
-    p.payload = (uint8_t *)string;
-    p.payload_len = strlen(string);
-    SCCudaPBBatchPackets(NULL, &p, tctx, NULL, NULL);
+    p->payload = (uint8_t *)string;
+    p->payload_len = strlen(string);
+    SCCudaPBBatchPackets(NULL, p, tctx, NULL, NULL);
     dq = &data_queues[tmq_outq->id];
     result &= (dq->len == 0);
     dq = &data_queues[tmq_inq->id];
@@ -1263,6 +1463,7 @@ int SCCudaPBTest02(void)
     }
 
     SCCudaPBThreadDeInit(NULL, tctx);
+    SCFree(p);
     return result;
 }
 

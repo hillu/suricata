@@ -29,8 +29,7 @@ enum {
     ALPROTO_HTTP,
     ALPROTO_FTP,
     ALPROTO_SMTP,
-    ALPROTO_SSL, /* SSLv2 */
-    ALPROTO_TLS, /* SSLv3 & TLSv1 */
+    ALPROTO_TLS, /* SSLv2, SSLv3 & TLSv1 */
     ALPROTO_SSH,
     ALPROTO_IMAP,
     ALPROTO_MSN,
@@ -39,17 +38,18 @@ enum {
     ALPROTO_SMB2,
     ALPROTO_DCERPC,
     ALPROTO_DCERPC_UDP,
+    ALPROTO_IRC,
 #ifdef UNITTESTS
     ALPROTO_TEST,
 #endif /* UNITESTS */
+    /* used by the probing parser when alproto detection fails
+     * permanently for that particular stream */
+    ALPROTO_FAILED,
     /* keep last */
     ALPROTO_MAX,
 };
 
-typedef struct TlsConfig_ {
-    int no_reassemble;
-}TlsConfig;
+const char *TmModuleAlprotoToString(int proto);
 
-TlsConfig tls;
 #endif /* __APP_LAYER_PROTOS_H__ */
 

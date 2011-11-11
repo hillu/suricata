@@ -19,8 +19,23 @@
  * \file
  *
  * \author Kirby Kuehl <kkuehl@gmail.com>
+ * \author Anoop Saldanha <poonaatsoc@gmail.com>
  *
- * DCE/RPC parser and decoder
+ * \file DCE/RPC parser and decoder
+ *
+ * \todo Remove all the unnecessary per byte incremental loops with a full one
+ *       time jump, i.e.
+ *
+ *       input[0], input_len
+ *       for (i = 0; i < x; i++)
+ *           input++;
+ *
+ *       with
+ *
+ *       input += x;
+ *
+ *       You'll be surprised at how many such cases we have here.  We also need
+ *       to do the same for htp parser.  Should speed up the engine drastically.
  */
 
 #include "suricata-common.h"
@@ -95,11 +110,11 @@ void hexdump(/*Flow *f,*/ const void *buf, size_t len) {
 
         /* store hex str (for left side) */
         snprintf(bytestr, sizeof(bytestr), "%02X ", *p);
-        strncat(hexstr, bytestr, sizeof(hexstr)-strlen(hexstr)-1);
+        strlcat(hexstr, bytestr, sizeof(hexstr)-strlen(hexstr)-1);
 
         /* store char str (for right side) */
         snprintf(bytestr, sizeof(bytestr), "%c", c);
-        strncat(charstr, bytestr, sizeof(charstr)-strlen(charstr)-1);
+        strlcat(charstr, bytestr, sizeof(charstr)-strlen(charstr)-1);
 
         if(n%16 == 0) {
             /* line completed */
@@ -108,8 +123,8 @@ void hexdump(/*Flow *f,*/ const void *buf, size_t len) {
             charstr[0] = 0;
         } else if(n%8 == 0) {
             /* half line: add whitespaces */
-            strncat(hexstr, "  ", sizeof(hexstr)-strlen(hexstr)-1);
-            strncat(charstr, " ", sizeof(charstr)-strlen(charstr)-1);
+            strlcat(hexstr, "  ", sizeof(hexstr)-strlen(hexstr)-1);
+            strlcat(charstr, " ", sizeof(charstr)-strlen(charstr)-1);
         }
         p++; /* next byte */
     }
@@ -214,65 +229,112 @@ static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t 
         switch (dcerpc->dcerpcbindbindack.ctxbytesprocessed) {
             case 0:
                 if (input_len >= 44) {
-                    dcerpc->dcerpcbindbindack.ctxid = *(p);
-                    dcerpc->dcerpcbindbindack.ctxid |= *(p + 1) << 8;
-                    dcerpc->dcerpcbindbindack.uuid[3] = *(p + 4);
-                    dcerpc->dcerpcbindbindack.uuid[2] = *(p + 5);
-                    dcerpc->dcerpcbindbindack.uuid[1] = *(p + 6);
-                    dcerpc->dcerpcbindbindack.uuid[0] = *(p + 7);
-                    dcerpc->dcerpcbindbindack.uuid[5] = *(p + 8);
-                    dcerpc->dcerpcbindbindack.uuid[4] = *(p + 9);
-                    dcerpc->dcerpcbindbindack.uuid[7] = *(p + 10);
-                    dcerpc->dcerpcbindbindack.uuid[6] = *(p + 11);
-                    dcerpc->dcerpcbindbindack.uuid[8] = *(p + 12);
-                    dcerpc->dcerpcbindbindack.uuid[9] = *(p + 13);
-                    dcerpc->dcerpcbindbindack.uuid[10] = *(p + 14);
-                    dcerpc->dcerpcbindbindack.uuid[11] = *(p + 15);
-                    dcerpc->dcerpcbindbindack.uuid[12] = *(p + 16);
-                    dcerpc->dcerpcbindbindack.uuid[13] = *(p + 17);
-                    dcerpc->dcerpcbindbindack.uuid[14] = *(p + 18);
-                    dcerpc->dcerpcbindbindack.uuid[15] = *(p + 19);
-                    dcerpc->dcerpcbindbindack.version = *(p + 20);
-                    dcerpc->dcerpcbindbindack.version |= *(p + 21) << 8;
-                    dcerpc->dcerpcbindbindack.versionminor = *(p + 22);
-                    dcerpc->dcerpcbindbindack.versionminor |= *(p + 23) << 8;
-                    if (dcerpc->dcerpcbindbindack.ctxid == dcerpc->dcerpcbindbindack.numctxitems
-                            - dcerpc->dcerpcbindbindack.numctxitemsleft) {
-                        dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *) SCCalloc(1,
-                                sizeof(DCERPCUuidEntry));
-                        if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
-				SCLogDebug("UUID Entry is NULL\n");
-                            SCReturnUInt(0);
-                        } else {
-                            memcpy(dcerpc->dcerpcbindbindack.uuid_entry->uuid, dcerpc->dcerpcbindbindack.uuid,
-                                    sizeof(dcerpc->dcerpcbindbindack.uuid));
-                            dcerpc->dcerpcbindbindack.uuid_entry->ctxid = dcerpc->dcerpcbindbindack.ctxid;
-                            dcerpc->dcerpcbindbindack.uuid_entry->version = dcerpc->dcerpcbindbindack.version;
-                            dcerpc->dcerpcbindbindack.uuid_entry->versionminor = dcerpc->dcerpcbindbindack.versionminor;
-                            TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.uuid_list, dcerpc->dcerpcbindbindack.uuid_entry,
-                                    next);
-#ifdef UNITTESTS
-                            if (RunmodeIsUnittests()) {
-                                printUUID("BIND", dcerpc->dcerpcbindbindack.uuid_entry);
-                            }
-#endif
-                            dcerpc->dcerpcbindbindack.numctxitemsleft--;
-                            dcerpc->bytesprocessed += (44);
-                            dcerpc->dcerpcbindbindack.ctxbytesprocessed += (44);
-                            SCReturnUInt(44U);
-                        }
-                    } else {
-                        SCLogDebug("ctxitem %u, expected %u\n", dcerpc->dcerpcbindbindack.ctxid,
-                                dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft);
+			if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+						dcerpc->dcerpcbindbindack.ctxid = *(p);
+						dcerpc->dcerpcbindbindack.ctxid |= *(p + 1) << 8;
+						dcerpc->dcerpcbindbindack.uuid[3] = *(p + 4);
+						dcerpc->dcerpcbindbindack.uuid[2] = *(p + 5);
+						dcerpc->dcerpcbindbindack.uuid[1] = *(p + 6);
+						dcerpc->dcerpcbindbindack.uuid[0] = *(p + 7);
+						dcerpc->dcerpcbindbindack.uuid[5] = *(p + 8);
+						dcerpc->dcerpcbindbindack.uuid[4] = *(p + 9);
+						dcerpc->dcerpcbindbindack.uuid[7] = *(p + 10);
+						dcerpc->dcerpcbindbindack.uuid[6] = *(p + 11);
+						dcerpc->dcerpcbindbindack.uuid[8] = *(p + 12);
+						dcerpc->dcerpcbindbindack.uuid[9] = *(p + 13);
+						dcerpc->dcerpcbindbindack.uuid[10] = *(p + 14);
+						dcerpc->dcerpcbindbindack.uuid[11] = *(p + 15);
+						dcerpc->dcerpcbindbindack.uuid[12] = *(p + 16);
+						dcerpc->dcerpcbindbindack.uuid[13] = *(p + 17);
+						dcerpc->dcerpcbindbindack.uuid[14] = *(p + 18);
+						dcerpc->dcerpcbindbindack.uuid[15] = *(p + 19);
+						dcerpc->dcerpcbindbindack.version = *(p + 20);
+						dcerpc->dcerpcbindbindack.version |= *(p + 21) << 8;
+						dcerpc->dcerpcbindbindack.versionminor = *(p + 22);
+						dcerpc->dcerpcbindbindack.versionminor |= *(p + 23) << 8;
+			} else { /* Big Endian */
+				dcerpc->dcerpcbindbindack.ctxid = *(p) << 8;
+				dcerpc->dcerpcbindbindack.ctxid |= *(p + 1);
+				dcerpc->dcerpcbindbindack.uuid[0] = *(p + 4);
+				dcerpc->dcerpcbindbindack.uuid[1] = *(p + 5);
+				dcerpc->dcerpcbindbindack.uuid[2] = *(p + 6);
+				dcerpc->dcerpcbindbindack.uuid[3] = *(p + 7);
+				dcerpc->dcerpcbindbindack.uuid[4] = *(p + 8);
+				dcerpc->dcerpcbindbindack.uuid[5] = *(p + 9);
+				dcerpc->dcerpcbindbindack.uuid[6] = *(p + 10);
+				dcerpc->dcerpcbindbindack.uuid[7] = *(p + 11);
+				dcerpc->dcerpcbindbindack.uuid[8] = *(p + 12);
+				dcerpc->dcerpcbindbindack.uuid[9] = *(p + 13);
+				dcerpc->dcerpcbindbindack.uuid[10] = *(p + 14);
+				dcerpc->dcerpcbindbindack.uuid[11] = *(p + 15);
+				dcerpc->dcerpcbindbindack.uuid[12] = *(p + 16);
+				dcerpc->dcerpcbindbindack.uuid[13] = *(p + 17);
+				dcerpc->dcerpcbindbindack.uuid[14] = *(p + 18);
+				dcerpc->dcerpcbindbindack.uuid[15] = *(p + 19);
+				dcerpc->dcerpcbindbindack.version = *(p + 20) << 8;
+				dcerpc->dcerpcbindbindack.version |= *(p + 21);
+				dcerpc->dcerpcbindbindack.versionminor = *(p + 22) << 8;
+				dcerpc->dcerpcbindbindack.versionminor |= *(p + 23);
+			}
+                    //if (dcerpc->dcerpcbindbindack.ctxid == dcerpc->dcerpcbindbindack.numctxitems
+                    //        - dcerpc->dcerpcbindbindack.numctxitemsleft) {
+
+                    dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *)SCCalloc(1, sizeof(DCERPCUuidEntry));
+                    if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
+                        SCLogDebug("UUID Entry is NULL");
                         SCReturnUInt(0);
                     }
+
+                    dcerpc->dcerpcbindbindack.uuid_entry->internal_id = dcerpc->dcerpcbindbindack.uuid_internal_id++;
+
+                    memcpy(dcerpc->dcerpcbindbindack.uuid_entry->uuid,
+                            dcerpc->dcerpcbindbindack.uuid,
+                            sizeof(dcerpc->dcerpcbindbindack.uuid));
+
+                    dcerpc->dcerpcbindbindack.uuid_entry->ctxid = dcerpc->dcerpcbindbindack.ctxid;
+                    dcerpc->dcerpcbindbindack.uuid_entry->version = dcerpc->dcerpcbindbindack.version;
+                    dcerpc->dcerpcbindbindack.uuid_entry->versionminor = dcerpc->dcerpcbindbindack.versionminor;
+
+                    /* store the first frag flag in the uuid as pfc_flags will
+                     * be overwritten by new packets. */
+                    if (dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+                        dcerpc->dcerpcbindbindack.uuid_entry->flags |= DCERPC_UUID_ENTRY_FLAG_FF;
+                    }
+
+                    TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.uuid_list,
+                            dcerpc->dcerpcbindbindack.uuid_entry,
+                            next);
+
+#ifdef UNITTESTS
+                    if (RunmodeIsUnittests()) {
+                        printUUID("BIND", dcerpc->dcerpcbindbindack.uuid_entry);
+                    }
+#endif
+                    dcerpc->dcerpcbindbindack.numctxitemsleft--;
+                    dcerpc->bytesprocessed += (44);
+                    dcerpc->dcerpcbindbindack.ctxbytesprocessed += (44);
+                    SCReturnUInt(44U);
+
+                    //} else {
+                    //    SCLogDebug("ctxitem %u, expected %u\n", dcerpc->dcerpcbindbindack.ctxid,
+                    //            dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft);
+                    //    SCReturnUInt(0);
+                    //}
                 } else {
-                    dcerpc->dcerpcbindbindack.ctxid = *(p++);
+			if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+				dcerpc->dcerpcbindbindack.ctxid = *(p++);
+			} else {
+				dcerpc->dcerpcbindbindack.ctxid = *(p++) << 8;
+			}
                     if (!(--input_len))
                         break;
                 }
             case 1:
-                dcerpc->dcerpcbindbindack.ctxid |= *(p++) << 8;
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.ctxid |= *(p++) << 8;
+		} else {
+			dcerpc->dcerpcbindbindack.ctxid |= *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 2:
@@ -286,39 +348,72 @@ static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t 
                 if (!(--input_len))
                     break;
             case 4:
-                dcerpc->dcerpcbindbindack.uuid[3] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[3] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[0] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 5:
-                dcerpc->dcerpcbindbindack.uuid[2] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[2] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[1] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 6:
-                dcerpc->dcerpcbindbindack.uuid[1] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[1] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[2] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 7:
-                dcerpc->dcerpcbindbindack.uuid[0] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[0] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[3] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 8:
-                dcerpc->dcerpcbindbindack.uuid[5] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[5] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[4] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 9:
-                dcerpc->dcerpcbindbindack.uuid[4] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[4] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[5] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 10:
-                dcerpc->dcerpcbindbindack.uuid[7] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[7] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[6] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 11:
-                dcerpc->dcerpcbindbindack.uuid[6] = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.uuid[6] = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.uuid[7] = *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 12:
-                dcerpc->dcerpcbindbindack.uuid[8] = *(p++);
+		/* The following bytes are in the same order for both big and little endian */
+		dcerpc->dcerpcbindbindack.uuid[8] = *(p++);
                 if (!(--input_len))
                     break;
             case 13:
@@ -350,19 +445,35 @@ static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t 
                 if (!(--input_len))
                     break;
             case 20:
-                dcerpc->dcerpcbindbindack.version = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.version = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.version = *(p++) << 8;
+		}
                 if (!(--input_len))
                     break;
             case 21:
-                dcerpc->dcerpcbindbindack.version |= *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.version |= *(p++) << 8;
+		} else {
+			dcerpc->dcerpcbindbindack.version |= *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 22:
-                dcerpc->dcerpcbindbindack.versionminor = *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.versionminor = *(p++);
+		} else {
+			dcerpc->dcerpcbindbindack.versionminor = *(p++) << 8;
+		}
                 if (!(--input_len))
                     break;
             case 23:
-                dcerpc->dcerpcbindbindack.versionminor |= *(p++);
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.versionminor |= *(p++) << 8;
+		} else {
+			dcerpc->dcerpcbindbindack.versionminor |= *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 24:
@@ -444,35 +555,47 @@ static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t 
             case 43:
                 p++;
                 --input_len;
-                if (dcerpc->dcerpcbindbindack.ctxid == dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft) {
-                    dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *) SCCalloc(1,
-                            sizeof(DCERPCUuidEntry));
-                    if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
-			SCLogDebug("UUID Entry is NULL\n");
-                        SCReturnUInt(0);
-                    } else {
-                        memcpy(dcerpc->dcerpcbindbindack.uuid_entry->uuid, dcerpc->dcerpcbindbindack.uuid,
-                                sizeof(dcerpc->dcerpcbindbindack.uuid));
-                        dcerpc->dcerpcbindbindack.uuid_entry->ctxid = dcerpc->dcerpcbindbindack.ctxid;
-                        dcerpc->dcerpcbindbindack.uuid_entry->version = dcerpc->dcerpcbindbindack.version;
-                        dcerpc->dcerpcbindbindack.uuid_entry->versionminor = dcerpc->dcerpcbindbindack.versionminor;
-                        TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.uuid_list, dcerpc->dcerpcbindbindack.uuid_entry,
-                                next);
-#ifdef UNITTESTS
-                        if (RunmodeIsUnittests()) {
-                            printUUID("BINDACK", dcerpc->dcerpcbindbindack.uuid_entry);
-                        }
-#endif
-                        dcerpc->dcerpcbindbindack.numctxitemsleft--;
-                        dcerpc->bytesprocessed += (p - input);
-                        dcerpc->dcerpcbindbindack.ctxbytesprocessed += (p - input);
-                        SCReturnUInt((uint32_t)(p - input));
-                    }
-                } else {
-                    SCLogDebug("ctxitem %u, expected %u\n", dcerpc->dcerpcbindbindack.ctxid,
-                            dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft);
+                //if (dcerpc->dcerpcbindbindack.ctxid == dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft) {
+                dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *)
+                    SCCalloc(1, sizeof(DCERPCUuidEntry));
+                if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
+                    SCLogDebug("UUID Entry is NULL\n");
                     SCReturnUInt(0);
                 }
+
+                dcerpc->dcerpcbindbindack.uuid_entry->internal_id =
+                    dcerpc->dcerpcbindbindack.uuid_internal_id++;
+                memcpy(dcerpc->dcerpcbindbindack.uuid_entry->uuid,
+                        dcerpc->dcerpcbindbindack.uuid,
+                        sizeof(dcerpc->dcerpcbindbindack.uuid));
+                dcerpc->dcerpcbindbindack.uuid_entry->ctxid = dcerpc->dcerpcbindbindack.ctxid;
+                dcerpc->dcerpcbindbindack.uuid_entry->version = dcerpc->dcerpcbindbindack.version;
+                dcerpc->dcerpcbindbindack.uuid_entry->versionminor = dcerpc->dcerpcbindbindack.versionminor;
+
+                /* store the first frag flag in the uuid as pfc_flags will
+                 * be overwritten by new packets. */
+                if (dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+                    dcerpc->dcerpcbindbindack.uuid_entry->flags |= DCERPC_UUID_ENTRY_FLAG_FF;
+                }
+
+                TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.uuid_list,
+                        dcerpc->dcerpcbindbindack.uuid_entry,
+                        next);
+#ifdef UNITTESTS
+                if (RunmodeIsUnittests()) {
+                    printUUID("BINDACK", dcerpc->dcerpcbindbindack.uuid_entry);
+                }
+#endif
+                dcerpc->dcerpcbindbindack.numctxitemsleft--;
+                dcerpc->bytesprocessed += (p - input);
+                dcerpc->dcerpcbindbindack.ctxbytesprocessed += (p - input);
+                SCReturnUInt((uint32_t)(p - input));
+
+                //} else {
+                //    SCLogDebug("ctxitem %u, expected %u\n", dcerpc->dcerpcbindbindack.ctxid,
+                //            dcerpc->dcerpcbindbindack.numctxitems - dcerpc->dcerpcbindbindack.numctxitemsleft);
+                //    SCReturnUInt(0);
+                //}
                 break;
         }
     }
@@ -495,31 +618,60 @@ static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32
         switch (dcerpc->dcerpcbindbindack.ctxbytesprocessed) {
             case 0:
                 if (input_len >= 24) {
-                    dcerpc->dcerpcbindbindack.result = *p;
-                    dcerpc->dcerpcbindbindack.result |= *(p + 1) << 8;
+			if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+				dcerpc->dcerpcbindbindack.result = *p;
+				dcerpc->dcerpcbindbindack.result |= *(p + 1) << 8;
+			} else {
+				dcerpc->dcerpcbindbindack.result = *p << 8;
+				dcerpc->dcerpcbindbindack.result |= *(p + 1);
+			}
                     TAILQ_FOREACH(uuid_entry, &dcerpc->dcerpcbindbindack.uuid_list, next) {
-                        if (uuid_entry->ctxid == dcerpc->dcerpcbindbindack.numctxitems
-                                - dcerpc->dcerpcbindbindack.numctxitemsleft) {
+                        if (uuid_entry->internal_id == dcerpc->dcerpcbindbindack.uuid_internal_id) {
                             uuid_entry->result = dcerpc->dcerpcbindbindack.result;
 #ifdef UNITTESTS
                             if (RunmodeIsUnittests()) {
                                 printUUID("BIND_ACK", uuid_entry);
                             }
 #endif
+                            if (uuid_entry->result != 0)
+                                break;
+
+                            dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *)
+                                SCCalloc(1, sizeof(DCERPCUuidEntry));
+                            if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
+                                SCLogError(SC_ERR_MEM_ALLOC,
+                                           "Error allocating memory\n");
+                                exit(EXIT_FAILURE);
+                            }
+                            memcpy(dcerpc->dcerpcbindbindack.uuid_entry,
+                                   uuid_entry,
+                                   sizeof(DCERPCUuidEntry));
+                            TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.accepted_uuid_list,
+                                              dcerpc->dcerpcbindbindack.uuid_entry,
+                                              next);
                             break;
                         }
                     }
+                    dcerpc->dcerpcbindbindack.uuid_internal_id++;
                     dcerpc->dcerpcbindbindack.numctxitemsleft--;
                     dcerpc->bytesprocessed += (24);
                     dcerpc->dcerpcbindbindack.ctxbytesprocessed += (24);
                     SCReturnUInt(24U);
                 } else {
-                    dcerpc->dcerpcbindbindack.result = *(p++);
+			if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+				dcerpc->dcerpcbindbindack.result = *(p++);
+			} else {
+				dcerpc->dcerpcbindbindack.result = *(p++) << 8;
+			}
                     if (!(--input_len))
                         break;
                 }
             case 1:
-                dcerpc->dcerpcbindbindack.result |= *(p++) << 8;
+		if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+			dcerpc->dcerpcbindbindack.result |= *(p++) << 8;
+		} else {
+			dcerpc->dcerpcbindbindack.result |= *(p++);
+		}
                 if (!(--input_len))
                     break;
             case 2:
@@ -610,17 +762,33 @@ static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32
                     break;
             case 23:
                 TAILQ_FOREACH(uuid_entry, &dcerpc->dcerpcbindbindack.uuid_list, next) {
-                    if (uuid_entry->ctxid == dcerpc->dcerpcbindbindack.numctxitems
-                            - dcerpc->dcerpcbindbindack.numctxitemsleft) {
+                    if (uuid_entry->internal_id == dcerpc->dcerpcbindbindack.uuid_internal_id) {
                         uuid_entry->result = dcerpc->dcerpcbindbindack.result;
 #ifdef UNITTESTS
                         if (RunmodeIsUnittests()) {
                             printUUID("BIND_ACK", uuid_entry);
                         }
 #endif
+                        if (uuid_entry->result != 0)
+                            break;
+
+                        dcerpc->dcerpcbindbindack.uuid_entry = (DCERPCUuidEntry *)
+                            SCCalloc(1, sizeof(DCERPCUuidEntry));
+                        if (dcerpc->dcerpcbindbindack.uuid_entry == NULL) {
+                            SCLogError(SC_ERR_MEM_ALLOC,
+                                       "Error allocating memory\n");
+                            exit(EXIT_FAILURE);
+                        }
+                        memcpy(dcerpc->dcerpcbindbindack.uuid_entry,
+                               uuid_entry,
+                               sizeof(DCERPCUuidEntry));
+                        TAILQ_INSERT_HEAD(&dcerpc->dcerpcbindbindack.accepted_uuid_list,
+                                          dcerpc->dcerpcbindbindack.uuid_entry,
+                                          next);
                         break;
                     }
                 }
+                dcerpc->dcerpcbindbindack.uuid_internal_id++;
                 dcerpc->dcerpcbindbindack.numctxitemsleft--;
                 p++;
                 --input_len;
@@ -635,15 +803,28 @@ static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32
 
 static uint32_t DCERPCParseBIND(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
     SCEnter();
+    DCERPCUuidEntry *item;
     uint8_t *p = input;
     if (input_len) {
         switch (dcerpc->bytesprocessed) {
             case 16:
                 dcerpc->dcerpcbindbindack.numctxitems = 0;
                 if (input_len >= 12) {
-                    TAILQ_INIT(&dcerpc->dcerpcbindbindack.uuid_list);
+                    while ((item = TAILQ_FIRST(&dcerpc->dcerpcbindbindack.uuid_list))) {
+                        TAILQ_REMOVE(&dcerpc->dcerpcbindbindack.uuid_list, item, next);
+                        SCFree(item);
+                    }
+                    if (dcerpc->dcerpchdr.type == BIND) {
+                        while ((item = TAILQ_FIRST(&dcerpc->dcerpcbindbindack.accepted_uuid_list))) {
+                            TAILQ_REMOVE(&dcerpc->dcerpcbindbindack.accepted_uuid_list, item, next);
+                            SCFree(item);
+                        }
+                        TAILQ_INIT(&dcerpc->dcerpcbindbindack.accepted_uuid_list);
+                    }
+                    dcerpc->dcerpcbindbindack.uuid_internal_id = 0;
                     dcerpc->dcerpcbindbindack.numctxitems = *(p + 8);
                     dcerpc->dcerpcbindbindack.numctxitemsleft = dcerpc->dcerpcbindbindack.numctxitems;
+                    TAILQ_INIT(&dcerpc->dcerpcbindbindack.uuid_list);
                     dcerpc->bytesprocessed += 12;
                     SCReturnUInt(12U);
                 } else {
@@ -688,6 +869,18 @@ static uint32_t DCERPCParseBIND(DCERPC *dcerpc, uint8_t *input, uint32_t input_l
                 if (!(--input_len))
                     break;
             case 24:
+                while ((item = TAILQ_FIRST(&dcerpc->dcerpcbindbindack.uuid_list))) {
+                    TAILQ_REMOVE(&dcerpc->dcerpcbindbindack.uuid_list, item, next);
+                    SCFree(item);
+                }
+                if (dcerpc->dcerpchdr.type == BIND) {
+                    while ((item = TAILQ_FIRST(&dcerpc->dcerpcbindbindack.accepted_uuid_list))) {
+                        TAILQ_REMOVE(&dcerpc->dcerpcbindbindack.accepted_uuid_list, item, next);
+                        SCFree(item);
+                    }
+                    TAILQ_INIT(&dcerpc->dcerpcbindbindack.accepted_uuid_list);
+                }
+                dcerpc->dcerpcbindbindack.uuid_internal_id = 0;
                 dcerpc->dcerpcbindbindack.numctxitems = *(p++);
                 dcerpc->dcerpcbindbindack.numctxitemsleft = dcerpc->dcerpcbindbindack.numctxitems;
                 TAILQ_INIT(&dcerpc->dcerpcbindbindack.uuid_list);
@@ -724,9 +917,10 @@ static uint32_t DCERPCParseBINDACK(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
 
     switch (dcerpc->bytesprocessed) {
         case 16:
+            dcerpc->dcerpcbindbindack.uuid_internal_id = 0;
             dcerpc->dcerpcbindbindack.numctxitems = 0;
             if (input_len >= 10) {
-                if (dcerpc->dcerpchdr.packed_drep[0] == 0x10) {
+                if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
                     dcerpc->dcerpcbindbindack.secondaryaddrlen = *(p + 8);
                     dcerpc->dcerpcbindbindack.secondaryaddrlen |= *(p + 9) << 8;
                 } else {
@@ -778,13 +972,13 @@ static uint32_t DCERPCParseBINDACK(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
             if (!(--input_len))
                 break;
         case 24:
-            dcerpc->dcerpcbindbindack.secondaryaddrlen = *(p++);
+            dcerpc->dcerpcbindbindack.secondaryaddrlen = *(p++) << 8;
             if (!(--input_len))
                 break;
         case 25:
-            dcerpc->dcerpcbindbindack.secondaryaddrlen |= *(p++) << 8;
-            if (dcerpc->dcerpchdr.packed_drep[0] == 0x01) {
-                SCByteSwap16(dcerpc->dcerpcbindbindack.secondaryaddrlen);
+            dcerpc->dcerpcbindbindack.secondaryaddrlen |= *(p++);
+            if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+                dcerpc->dcerpcbindbindack.secondaryaddrlen = SCByteSwap16(dcerpc->dcerpcbindbindack.secondaryaddrlen);
             }
             dcerpc->dcerpcbindbindack.secondaryaddrlenleft = dcerpc->dcerpcbindbindack.secondaryaddrlen;
             SCLogDebug("secondaryaddrlen %u 0x%04x\n", dcerpc->dcerpcbindbindack.secondaryaddrlen,
@@ -809,13 +1003,18 @@ static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
             dcerpc->dcerpcbindbindack.numctxitems = 0;
             if (input_len >= 8) {
                 if (dcerpc->dcerpchdr.type == REQUEST) {
-                    if (dcerpc->dcerpchdr.packed_drep[0] == 0x10) {
+                    if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
+                        dcerpc->dcerpcrequest.ctxid = *(p + 4);
+                        dcerpc->dcerpcrequest.ctxid |= *(p + 5) << 8;
                         dcerpc->dcerpcrequest.opnum = *(p + 6);
                         dcerpc->dcerpcrequest.opnum |= *(p + 7) << 8;
                     } else {
+                        dcerpc->dcerpcrequest.ctxid = *(p + 4) << 8;
+                        dcerpc->dcerpcrequest.ctxid |= *(p + 5);
                         dcerpc->dcerpcrequest.opnum = *(p + 6) << 8;
                         dcerpc->dcerpcrequest.opnum |= *(p + 7);
                     }
+                    dcerpc->dcerpcrequest.first_request_seen = 1;
                 }
                 dcerpc->bytesprocessed += 8;
                 SCReturnUInt(8U);
@@ -842,12 +1041,16 @@ static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
                 break;
         case 20:
             /* context id 1 */
-            p++;
+            dcerpc->dcerpcrequest.ctxid = *(p++);
             if (!(--input_len))
                 break;
         case 21:
             /* context id 2 */
-            p++;
+            dcerpc->dcerpcrequest.ctxid |= *(p++) << 8;
+            if (!(dcerpc->dcerpchdr.packed_drep[0] & 0x10)) {
+                dcerpc->dcerpcrequest.ctxid = SCByteSwap16(dcerpc->dcerpcrequest.ctxid);
+            }
+            dcerpc->dcerpcrequest.first_request_seen = 1;
             if (!(--input_len))
                 break;
         case 22:
@@ -861,8 +1064,8 @@ static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
         case 23:
             if (dcerpc->dcerpchdr.type == REQUEST) {
                 dcerpc->dcerpcrequest.opnum |= *(p++) << 8;
-                if (dcerpc->dcerpchdr.packed_drep[0] == 0x01) {
-                    SCByteSwap16(dcerpc->dcerpcrequest.opnum);
+                if (!(dcerpc->dcerpchdr.packed_drep[0] & 0x10)) {
+                    dcerpc->dcerpcrequest.opnum = SCByteSwap16(dcerpc->dcerpcrequest.opnum);
                 }
             } else {
                 p++;
@@ -870,9 +1073,9 @@ static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
             --input_len;
             break;
         default:
-		dcerpc->bytesprocessed++;
-		SCReturnUInt(1);
-		break;
+            dcerpc->bytesprocessed++;
+            SCReturnUInt(1);
+            break;
     }
     dcerpc->bytesprocessed += (p - input);
     SCReturnUInt((uint32_t)(p - input));
@@ -899,17 +1102,38 @@ static uint32_t StubDataParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_le
     }
 
     stub_len = (dcerpc->padleft < input_len) ? dcerpc->padleft : input_len;
+    if (stub_len == 0) {
+        SCLogError(SC_ERR_DCERPC, "stub_len is NULL.  We shouldn't be seeing "
+                   "this.  In case you are, there is something gravely wrong "
+                   "with the dcerpc parser");
+        SCReturnInt(0);
+    }
+
     /* To see what is in this stub fragment */
     //hexdump(input, stub_len);
     /* if the frag is the the first frag irrespective of it being a part of
      * a multi frag PDU or not, it indicates the previous PDU's stub would
      * have been buffered and processed and we can use the buffer to hold
-     * frags from a fresh request/response */
-    if (dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+     * frags from a fresh request/response.  Also if the state is in the
+     * process of processing a fragmented pdu, we should append to the
+     * existing stub and not reset the stub buffer */
+    if (dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG &&
+        !dcerpc->pdu_fragged) {
         *stub_data_buffer_len = 0;
+        /* just a hack to get thing working.  We shouldn't be setting
+         * this var here.  The ideal thing would have been to use
+         * an extra state var, to indicate that the stub parser has made a
+         * fresh entry after reseting the buffer, but maintaing an extra var
+         * would be a nuisance, while we can achieve the same thing with
+         * little or no effort, with a simple set here, although semantically
+         * it is a wrong thing to set it here, since we still can't conclude
+         * if a pdu is fragmented or not at this point, if we are parsing a PDU
+         * that has some stub data in the first segment, but it still doesn't
+         * contain the entire PDU */
+        dcerpc->pdu_fragged = 1;
     }
 
-    *stub_data_buffer = realloc(*stub_data_buffer, *stub_data_buffer_len + stub_len);
+    *stub_data_buffer = SCRealloc(*stub_data_buffer, *stub_data_buffer_len + stub_len);
     if (*stub_data_buffer == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         goto end;
@@ -971,7 +1195,7 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
                     dcerpc->dcerpchdr.packed_drep[1] = *(p + 5);
                     dcerpc->dcerpchdr.packed_drep[2] = *(p + 6);
                     dcerpc->dcerpchdr.packed_drep[3] = *(p + 7);
-                    if (dcerpc->dcerpchdr.packed_drep[0] == 0x10) {
+                    if (dcerpc->dcerpchdr.packed_drep[0] & 0x10) {
                         dcerpc->dcerpchdr.frag_length = *(p + 8);
                         dcerpc->dcerpchdr.frag_length |= *(p + 9) << 8;
                         dcerpc->dcerpchdr.auth_length = *(p + 10);
@@ -1035,39 +1259,39 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
                 if (!(--input_len))
                     break;
             case 8:
-                dcerpc->dcerpchdr.frag_length = *(p++) << 8;
+		dcerpc->dcerpchdr.frag_length = *(p++);
                 if (!(--input_len))
                     break;
             case 9:
-                dcerpc->dcerpchdr.frag_length |= *(p++);
+		dcerpc->dcerpchdr.frag_length |= *(p++) << 8;
                 if (!(--input_len))
                     break;
             case 10:
-                dcerpc->dcerpchdr.auth_length = *(p++) << 8;
+		dcerpc->dcerpchdr.auth_length = *(p++);
                 if (!(--input_len))
                     break;
             case 11:
-                dcerpc->dcerpchdr.auth_length |= *(p++);
+			dcerpc->dcerpchdr.auth_length |= *(p++) << 8;
                 if (!(--input_len))
                     break;
             case 12:
-                dcerpc->dcerpchdr.call_id = *(p++) << 24;
+			dcerpc->dcerpchdr.call_id = *(p++);
                 if (!(--input_len))
                     break;
             case 13:
-                dcerpc->dcerpchdr.call_id |= *(p++) << 16;
+			dcerpc->dcerpchdr.call_id |= *(p++) << 8;
                 if (!(--input_len))
                     break;
             case 14:
-                dcerpc->dcerpchdr.call_id |= *(p++) << 8;
+			dcerpc->dcerpchdr.call_id |= *(p++) << 16;
                 if (!(--input_len))
                     break;
             case 15:
-                dcerpc->dcerpchdr.call_id |= *(p++);
-                if (dcerpc->dcerpchdr.packed_drep[0] == 0x01) {
-                    SCByteSwap16(dcerpc->dcerpchdr.frag_length);
-                    SCByteSwap16(dcerpc->dcerpchdr.auth_length);
-                    SCByteSwap32(dcerpc->dcerpchdr.call_id);
+			dcerpc->dcerpchdr.call_id |= *(p++) << 24;
+                if (!(dcerpc->dcerpchdr.packed_drep[0] & 0x10)) {
+                    dcerpc->dcerpchdr.frag_length = SCByteSwap16(dcerpc->dcerpchdr.frag_length);
+                    dcerpc->dcerpchdr.auth_length = SCByteSwap16(dcerpc->dcerpchdr.auth_length);
+                    dcerpc->dcerpchdr.call_id = SCByteSwap32(dcerpc->dcerpchdr.call_id);
                 }
                 --input_len;
                 break;
@@ -1080,6 +1304,47 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
     SCReturnInt((p - input));
 }
 
+static inline void DCERPCResetParsingState(DCERPC *dcerpc) {
+    dcerpc->bytesprocessed = 0;
+    dcerpc->pdu_fragged = 0;
+    dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+
+    return;
+}
+
+static inline void DCERPCResetStub(DCERPC *dcerpc) {
+    if (dcerpc->dcerpchdr.type == REQUEST)
+        dcerpc->dcerpcrequest.stub_data_buffer_len = 0;
+    else if (dcerpc->dcerpchdr.type == RESPONSE)
+        dcerpc->dcerpcresponse.stub_data_buffer_len = 0;
+
+    return;
+}
+
+static inline int DCERPCThrowOutExtraData(DCERPC *dcerpc, uint8_t *input,
+                                           uint16_t input_len) {
+    int parsed = 0;
+    /* the function always assumes that
+     * dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length */
+    if (input_len > (dcerpc->dcerpchdr.frag_length - dcerpc->bytesprocessed)) {
+        parsed = dcerpc->dcerpchdr.frag_length - dcerpc->bytesprocessed;
+    } else {
+        parsed = input_len;
+    }
+    dcerpc->bytesprocessed += parsed;
+
+    return parsed;
+}
+
+/**
+ * \todo - Currently the parser is very generic.  Enable target based
+ *         reassembly.
+ *       - Disable reiniting tailq for mid and last bind/alter_context pdus.
+ *       - Use a PM to search for subsequent 05 00 when we see an inconsistent
+ *         pdu.  This should be done for each platform based on how it handles
+ *         a condition where it has receives a segment with 2 pdus, while the
+ *         first pdu in the segment is corrupt.
+ */
 int32_t DCERPCParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
     SCEnter();
 
@@ -1090,260 +1355,388 @@ int32_t DCERPCParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
     dcerpc->dcerpcrequest.stub_data_fresh = 0;
     dcerpc->dcerpcresponse.stub_data_fresh = 0;
 
+    /* temporary use.  we will get rid of this later, once we have ironed out
+     * all the endless loops cases */
+    int counter = 0;
+
     while(input_len) {
-    while (dcerpc->bytesprocessed < DCERPC_HDR_LEN && input_len) {
-        hdrretval = DCERPCParseHeader(dcerpc, input + parsed, input_len);
-        if (hdrretval == -1) {
-            dcerpc->bytesprocessed = 0;
+        /* in case we have any corner cases remainging, we have this */
+        if (counter++ == 30) {
+            SCLogDebug("Somehow seem to be stuck inside the dce "
+                    "parser for quite sometime.  Let's get out of here.");
+            DCERPCResetParsingState(dcerpc);
             SCReturnInt(0);
-        } else {
-            parsed += hdrretval;
-            input_len -= hdrretval;
         }
-    }
-    SCLogDebug("Done with DCERPCParseHeader bytesprocessed %u/%u left %u",
-            dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len);
+
+        while (dcerpc->bytesprocessed < DCERPC_HDR_LEN && input_len) {
+            hdrretval = DCERPCParseHeader(dcerpc, input + parsed, input_len);
+            if (hdrretval == -1) {
+                SCLogDebug("Error parsing dce header.  Discarding "
+                        "PDU and reseting parsing state to parse next PDU");
+                /* error parsing pdu header.  Let's clear the dce state */
+                DCERPCResetParsingState(dcerpc);
+                SCReturnInt(0);
+            } else {
+                parsed += hdrretval;
+                input_len -= hdrretval;
+            }
+        }
+        SCLogDebug("Done with DCERPCParseHeader bytesprocessed %u/%u left %u",
+                   dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len);
 #if 0
-    printf("Done with DCERPCParseHeader bytesprocessed %u/%u input_len left %u\n",
-            dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len);
-    printf("\nDCERPC Version:\t%u\n", dcerpc->dcerpchdr.rpc_vers);
-    printf("DCERPC Version Minor:\t%u\n", dcerpc->dcerpchdr.rpc_vers_minor);
-    printf("DCERPC Type:\t%u\n", dcerpc->dcerpchdr.type);
-    printf("DCERPC Flags:\t0x%02x\n", dcerpc->dcerpchdr.pfc_flags);
-    printf("DCERPC Packed Drep:\t%02x %02x %02x %02x\n",
-            dcerpc->dcerpchdr.packed_drep[0], dcerpc->dcerpchdr.packed_drep[1],
-            dcerpc->dcerpchdr.packed_drep[2], dcerpc->dcerpchdr.packed_drep[3]);
-    printf("DCERPC Frag Length:\t0x%04x %u\n",
-            dcerpc->dcerpchdr.frag_length, dcerpc->dcerpchdr.frag_length);
-    printf("DCERPC Auth Length:\t0x%04x\n", dcerpc->dcerpchdr.auth_length);
-    printf("DCERPC Call Id:\t0x%08x\n", dcerpc->dcerpchdr.call_id);
+        printf("Done with DCERPCParseHeader bytesprocessed %u/%u input_len left %u\n",
+               dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len);
+        printf("\nDCERPC Version:\t%u\n", dcerpc->dcerpchdr.rpc_vers);
+        printf("DCERPC Version Minor:\t%u\n", dcerpc->dcerpchdr.rpc_vers_minor);
+        printf("DCERPC Type:\t%u\n", dcerpc->dcerpchdr.type);
+        printf("DCERPC Flags:\t0x%02x\n", dcerpc->dcerpchdr.pfc_flags);
+        printf("DCERPC Packed Drep:\t%02x %02x %02x %02x\n",
+               dcerpc->dcerpchdr.packed_drep[0], dcerpc->dcerpchdr.packed_drep[1],
+               dcerpc->dcerpchdr.packed_drep[2], dcerpc->dcerpchdr.packed_drep[3]);
+        printf("DCERPC Frag Length:\t0x%04x %u\n",
+               dcerpc->dcerpchdr.frag_length, dcerpc->dcerpchdr.frag_length);
+        printf("DCERPC Auth Length:\t0x%04x\n", dcerpc->dcerpchdr.auth_length);
+        printf("DCERPC Call Id:\t0x%08x\n", dcerpc->dcerpchdr.call_id);
 #endif
 
-    switch (dcerpc->dcerpchdr.type) {
-        case BIND:
-        case ALTER_CONTEXT:
-            while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 12
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
-                    && input_len) {
-                retval = DCERPCParseBIND(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                } else if (input_len) {
-                    SCLogDebug("Error Parsing DCERPC %s", (dcerpc->dcerpchdr.type == BIND) ? "BIND" : "ALTER_CONTEXT");
-                    parsed = 0;
-                    input_len = 0;
+        /* check if we have parsed the entire input passed in the header parser.
+         * If we have, time to leave */
+        if (input_len == 0) {
+            if (dcerpc->bytesprocessed < 10) {
+                /* if the parser is known to be fragmented at this stage itself,
+                 * we reset the stub buffer here itself */
+                if (!dcerpc->pdu_fragged && dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+                    DCERPCResetStub(dcerpc);
                 }
-            }
-            SCLogDebug(
-                    "Done with DCERPCParseBIND bytesprocessed %u/%u numctxitems %u",
-                    dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length,
-                    dcerpc->dcerpcbindbindack.numctxitems);
-            while (dcerpc->dcerpcbindbindack.numctxitemsleft && dcerpc->bytesprocessed
-                    < dcerpc->dcerpchdr.frag_length && input_len) {
-                retval = DCERPCParseBINDCTXItem(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    if (dcerpc->dcerpcbindbindack.ctxbytesprocessed == 44) {
-                        dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+                dcerpc->pdu_fragged = 1;
+            } else {
+                if (dcerpc->bytesprocessed >= dcerpc->dcerpchdr.frag_length) {
+                    SCLogDebug("Weird DCE PDU");
+                    DCERPCResetParsingState(dcerpc);
+                } else {
+                    /* if the parser is known to be fragmented at this stage itself,
+                     * we reset the stub buffer here itself */
+                    if (!dcerpc->pdu_fragged && dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+                        DCERPCResetStub(dcerpc);
                     }
-                    parsed += retval;
-                    input_len -= retval;
-                    SCLogDebug("BIND processed %u/%u ctxitems %u/%u input_len left %u\n",
-                            dcerpc->bytesprocessed,
-                            dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcbindbindack.numctxitemsleft,
-                            dcerpc->dcerpcbindbindack.numctxitems, input_len);
-                } else if (input_len) {
-                    //parsed -= input_len;
-                    parsed = 0;
-                    SCLogDebug("Error Parsing CTX Item %u\n", parsed);
-                    input_len = 0;
-                    dcerpc->dcerpcbindbindack.numctxitemsleft = 0;
+                    dcerpc->pdu_fragged = 1;
                 }
             }
-            if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
-                dcerpc->bytesprocessed = 0;
-                dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
-            }
-            break;
-
-        case BIND_ACK:
-        case ALTER_CONTEXT_RESP:
-            while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 9
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
-                    && input_len) {
-                retval = DCERPCParseBINDACK(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                    SCLogDebug("DCERPCParseBINDACK processed %u/%u input_len left %u",
-                            dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len);
-                } else if (input_len) {
-                    SCLogDebug("Error parsing %s\n", (dcerpc->dcerpchdr.type == BIND_ACK) ? "BIND_ACK" : "ALTER_CONTEXT_RESP");
-                    parsed = 0;
-                    input_len = 0;
-                }
-            }
-
-            while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 10
-                    + dcerpc->dcerpcbindbindack.secondaryaddrlen
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
-                retval = DCERPCParseSecondaryAddr(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                    SCLogDebug(
-                            "DCERPCParseSecondaryAddr %u/%u left %u secondaryaddr len(%u)",
-                            dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len,
-                            dcerpc->dcerpcbindbindack.secondaryaddrlen);
-                } else if (input_len) {
-                    SCLogDebug("Error parsing Secondary Address");
-                    parsed = 0;
-                    input_len = 0;
-                }
-            }
-
-            if (dcerpc->bytesprocessed == DCERPC_HDR_LEN + 10
-                    + dcerpc->dcerpcbindbindack.secondaryaddrlen) {
-                if (dcerpc->bytesprocessed % 4) {
-                    dcerpc->pad = (4 - dcerpc->bytesprocessed % 4);
-                    dcerpc->padleft = dcerpc->pad;
-                }
-            }
-
-            while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 10
-                    + dcerpc->dcerpcbindbindack.secondaryaddrlen + dcerpc->pad
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
-                retval = PaddingParser(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                    SCLogDebug("PaddingParser %u/%u left %u pad(%u)",
-                            dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len,
-                            dcerpc->pad);
-                } else if (input_len) {
-                    SCLogDebug("Error parsing DCERPC Padding");
-                    parsed = 0;
-                    input_len = 0;
-                }
-            }
-
-            while (dcerpc->bytesprocessed >= DCERPC_HDR_LEN + 10 + dcerpc->pad
-                    + dcerpc->dcerpcbindbindack.secondaryaddrlen && dcerpc->bytesprocessed
-                    < DCERPC_HDR_LEN + 14 + dcerpc->pad + dcerpc->dcerpcbindbindack.secondaryaddrlen
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
-                retval = DCERPCGetCTXItems(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                    SCLogDebug("DCERPCGetCTXItems %u/%u (%u)", dcerpc->bytesprocessed,
-                            dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcbindbindack.numctxitems);
-                } else if (input_len) {
-                    SCLogDebug("Error parsing CTX Items");
-                    parsed = 0;
-                    input_len = 0;
-                }
-            }
-
-            if (dcerpc->bytesprocessed == DCERPC_HDR_LEN + 14 + dcerpc->pad
-                    + dcerpc->dcerpcbindbindack.secondaryaddrlen) {
-                dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
-            }
-
-            while (dcerpc->dcerpcbindbindack.numctxitemsleft && dcerpc->bytesprocessed
-                    < dcerpc->dcerpchdr.frag_length && input_len) {
-                retval = DCERPCParseBINDACKCTXItem(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    if (dcerpc->dcerpcbindbindack.ctxbytesprocessed == 24) {
-                        dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+            SCReturnInt(parsed);
+        }
+        switch (dcerpc->dcerpchdr.type) {
+            case BIND:
+            case ALTER_CONTEXT:
+                while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 12
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
+                       && input_len) {
+                    retval = DCERPCParseBIND(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                    } else if (input_len) {
+                        SCLogDebug("Error Parsing DCERPC %s PDU",
+                                   (dcerpc->dcerpchdr.type == BIND) ?
+                                   "BIND" : "ALTER_CONTEXT");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
                     }
-                    parsed += retval;
-                    input_len -= retval;
-                } else if (input_len) {
-                    SCLogDebug("Error parsing CTX Items");
-                    parsed = 0;
-                    input_len = 0;
-                    dcerpc->dcerpcbindbindack.numctxitemsleft = 0;
-
                 }
-            }
-            SCLogDebug("BINDACK processed %u/%u input_len left %u", dcerpc->bytesprocessed,
-                    dcerpc->dcerpchdr.frag_length, input_len);
-            if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
-                dcerpc->bytesprocessed = 0;
-                dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+                SCLogDebug("Done with DCERPCParseBIND bytesprocessed %u/%u numctxitems %u",
+                           dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length,
+                           dcerpc->dcerpcbindbindack.numctxitems);
+                while (dcerpc->dcerpcbindbindack.numctxitemsleft && dcerpc->bytesprocessed
+                       < dcerpc->dcerpchdr.frag_length && input_len) {
+                    retval = DCERPCParseBINDCTXItem(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        if (dcerpc->dcerpcbindbindack.ctxbytesprocessed == 44) {
+                            dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+                        }
+                        parsed += retval;
+                        input_len -= retval;
+                        SCLogDebug("BIND processed %u/%u ctxitems %u/%u input_len left %u\n",
+                                   dcerpc->bytesprocessed,
+                                   dcerpc->dcerpchdr.frag_length,
+                                   dcerpc->dcerpcbindbindack.numctxitemsleft,
+                                   dcerpc->dcerpcbindbindack.numctxitems, input_len);
+                    } else if (input_len) {
+                        //parsed -= input_len;
+                        SCLogDebug("Error Parsing CTX Item %u\n", parsed);
+                        parsed = 0;
+                        input_len = 0;
+                        dcerpc->dcerpcbindbindack.numctxitemsleft = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+                if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                } else if (dcerpc->bytesprocessed > dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                    SCReturnInt(0);
+                } else {
+                    /* temporary fix */
+                    if (input_len) {
+                        retval = DCERPCThrowOutExtraData(dcerpc, input + parsed,
+                                                         input_len);
+                        input_len -= retval;
+                        parsed += retval;
+                        if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                            DCERPCResetParsingState(dcerpc);
+                        } else {
+                            dcerpc->pdu_fragged = 1;
+                        }
+                    } else {
+                        dcerpc->pdu_fragged = 1;
+                    }
+                }
+                break;
+
+            case BIND_ACK:
+            case ALTER_CONTEXT_RESP:
+                while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 9
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
+                       && input_len) {
+                    retval = DCERPCParseBINDACK(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                        SCLogDebug("DCERPCParseBINDACK processed %u/%u input_len left %u",
+                                   dcerpc->bytesprocessed,
+                                   dcerpc->dcerpchdr.frag_length, input_len);
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing %s\n",
+                                   (dcerpc->dcerpchdr.type == BIND_ACK) ?
+                                   "BIND_ACK" : "ALTER_CONTEXT_RESP");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 10
+                       + dcerpc->dcerpcbindbindack.secondaryaddrlen
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
+                    retval = DCERPCParseSecondaryAddr(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                        SCLogDebug("DCERPCParseSecondaryAddr %u/%u left %u secondaryaddr len(%u)",
+                                   dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len,
+                                   dcerpc->dcerpcbindbindack.secondaryaddrlen);
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing Secondary Address");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                if (dcerpc->bytesprocessed == DCERPC_HDR_LEN + 10
+                    + dcerpc->dcerpcbindbindack.secondaryaddrlen) {
+                    if (dcerpc->bytesprocessed % 4) {
+                        dcerpc->pad = (4 - dcerpc->bytesprocessed % 4);
+                        dcerpc->padleft = dcerpc->pad;
+                    }
+                }
+
+                while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 10
+                       + dcerpc->dcerpcbindbindack.secondaryaddrlen + dcerpc->pad
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
+                    retval = PaddingParser(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                        SCLogDebug("PaddingParser %u/%u left %u pad(%u)",
+                                   dcerpc->bytesprocessed, dcerpc->dcerpchdr.frag_length, input_len,
+                                   dcerpc->pad);
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing DCERPC Padding");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                while (dcerpc->bytesprocessed >= DCERPC_HDR_LEN + 10 + dcerpc->pad
+                       + dcerpc->dcerpcbindbindack.secondaryaddrlen && dcerpc->bytesprocessed
+                       < DCERPC_HDR_LEN + 14 + dcerpc->pad + dcerpc->dcerpcbindbindack.secondaryaddrlen
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length && input_len) {
+                    retval = DCERPCGetCTXItems(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                        SCLogDebug("DCERPCGetCTXItems %u/%u (%u)", dcerpc->bytesprocessed,
+                                   dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcbindbindack.numctxitems);
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing CTX Items");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                if (dcerpc->bytesprocessed == DCERPC_HDR_LEN + 14 + dcerpc->pad
+                    + dcerpc->dcerpcbindbindack.secondaryaddrlen) {
+                    dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+                }
+
+                while (dcerpc->dcerpcbindbindack.numctxitemsleft && dcerpc->bytesprocessed
+                       < dcerpc->dcerpchdr.frag_length && input_len) {
+                    retval = DCERPCParseBINDACKCTXItem(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        if (dcerpc->dcerpcbindbindack.ctxbytesprocessed == 24) {
+                            dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
+                        }
+                        parsed += retval;
+                        input_len -= retval;
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing CTX Items");
+                        parsed = 0;
+                        input_len = 0;
+                        dcerpc->dcerpcbindbindack.numctxitemsleft = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+                SCLogDebug("BINDACK processed %u/%u input_len left %u",
+                           dcerpc->bytesprocessed,
+                           dcerpc->dcerpchdr.frag_length, input_len);
+
+                if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                    /* response and request done */
+                    if (dcerpc->dcerpchdr.type == BIND_ACK) {
+                        /* update transaction id */
+                        dcerpc->transaction_id++;
+                        SCLogDebug("transaction_id updated to %"PRIu16,
+                                   dcerpc->transaction_id);
+                    }
+                    DCERPCResetParsingState(dcerpc);
+                } else if (dcerpc->bytesprocessed > dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                    SCReturnInt(0);
+                } else {
+                    /* temporary fix */
+                    if (input_len) {
+                        retval = DCERPCThrowOutExtraData(dcerpc, input + parsed,
+                                                             input_len);
+                        input_len -= retval;
+                        parsed += retval;
+                        if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                            DCERPCResetParsingState(dcerpc);
+                        } else {
+                            dcerpc->pdu_fragged = 1;
+                        }
+                    } else {
+                        dcerpc->pdu_fragged = 1;
+                    }
+                }
+                break;
+
+            case REQUEST:
+            case RESPONSE:
+                while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 8
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
+                       && input_len) {
+                    retval = DCERPCParseREQUEST(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                        dcerpc->padleft = dcerpc->dcerpchdr.frag_length - dcerpc->bytesprocessed;
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing DCERPC %s",
+                                   (dcerpc->dcerpchdr.type == REQUEST) ? "REQUEST" : "RESPONSE");
+                        parsed = 0;
+                        dcerpc->padleft = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                while (dcerpc->bytesprocessed >= DCERPC_HDR_LEN + 8
+                       && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
+                       && dcerpc->padleft && input_len) {
+                    retval = StubDataParser(dcerpc, input + parsed, input_len);
+                    if (retval) {
+                        parsed += retval;
+                        input_len -= retval;
+                    } else if (input_len) {
+                        SCLogDebug("Error parsing DCERPC Stub Data");
+                        parsed = 0;
+                        input_len = 0;
+                        DCERPCResetParsingState(dcerpc);
+                        SCReturnInt(0);
+                    }
+                }
+
+                if (dcerpc->dcerpchdr.type == REQUEST) {
+                    SCLogDebug("REQUEST processed %u frag length %u opnum %u input_len %u", dcerpc->bytesprocessed,
+                               dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcrequest.opnum, input_len);
+                } else {
+                    SCLogDebug("RESPONSE processed %u frag length %u opnum %u input_len %u", dcerpc->bytesprocessed,
+                               dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcrequest.opnum, input_len);
+                }
+
+                /* don't see how we could break the parser for request pdus, by
+                 * pusing bytesprocessed beyond frag_length.  Let's have the
+                 * check anyways */
+                if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                } else if (dcerpc->bytesprocessed > dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                    SCReturnInt(0);
+                } else {
+                    if (!dcerpc->pdu_fragged &&
+                        dcerpc->dcerpchdr.pfc_flags & PFC_FIRST_FRAG) {
+                        DCERPCResetStub(dcerpc);
+                    }
+                    /* temporary fix */
+                    if (input_len) {
+                        retval = DCERPCThrowOutExtraData(dcerpc, input + parsed,
+                                                             input_len);
+                        input_len -= retval;
+                        parsed += retval;
+                        if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                            DCERPCResetParsingState(dcerpc);
+                        } else {
+                            dcerpc->pdu_fragged = 1;
+                        }
+                    } else {
+                        dcerpc->pdu_fragged = 1;
+                    }
+                }
 
                 /* response and request done */
-                if (dcerpc->dcerpchdr.type == BIND_ACK) {
+                if (dcerpc->dcerpchdr.type == RESPONSE) {
                     /* update transaction id */
                     dcerpc->transaction_id++;
                     SCLogDebug("transaction_id updated to %"PRIu16,
-                            dcerpc->transaction_id);
+                               dcerpc->transaction_id);
                 }
-            }
-            break;
+                break;
 
-        case REQUEST:
-        case RESPONSE:
-            while (dcerpc->bytesprocessed < DCERPC_HDR_LEN + 8
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
-                    && input_len) {
-                retval = DCERPCParseREQUEST(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                    dcerpc->padleft = dcerpc->dcerpchdr.frag_length - dcerpc->bytesprocessed;
-                } else if (input_len) {
-                    SCLogDebug("Error parsing DCERPC %s",
-                            (dcerpc->dcerpchdr.type == REQUEST) ? "REQUEST" : "RESPONSE");
-                    parsed = 0;
-                    dcerpc->padleft = 0;
-                    input_len = 0;
+            default:
+                SCLogDebug("DCERPC Type 0x%02x not implemented yet", dcerpc->dcerpchdr.type);
+                retval = DCERPCThrowOutExtraData(dcerpc, input + parsed,
+                                                 input_len);
+                input_len -= retval;
+                parsed += retval;
+                if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
+                    DCERPCResetParsingState(dcerpc);
+                } else {
+                    dcerpc->pdu_fragged = 1;
                 }
-            }
-
-            while (dcerpc->bytesprocessed >= DCERPC_HDR_LEN + 8
-                    && dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length
-                    && dcerpc->padleft && input_len) {
-                retval = StubDataParser(dcerpc, input + parsed, input_len);
-                if (retval) {
-                    parsed += retval;
-                    input_len -= retval;
-                } else if (input_len) {
-                    SCLogDebug("Error parsing DCERPC Stub Data");
-                    parsed = 0;
-                    input_len = 0;
-                    dcerpc->bytesprocessed = 0;
-                }
-            }
-
-            if (dcerpc->dcerpchdr.type == REQUEST) {
-                SCLogDebug("REQUEST processed %u frag length %u opnum %u input_len %u", dcerpc->bytesprocessed,
-                        dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcrequest.opnum, input_len);
-            } else {
-                SCLogDebug("RESPONSE processed %u frag length %u opnum %u input_len %u", dcerpc->bytesprocessed,
-                        dcerpc->dcerpchdr.frag_length, dcerpc->dcerpcrequest.opnum, input_len);
-            }
-
-            if (dcerpc->bytesprocessed == dcerpc->dcerpchdr.frag_length) {
-                dcerpc->bytesprocessed = 0;
-            }
-
-            /* response and request done */
-            if (dcerpc->dcerpchdr.type == RESPONSE) {
-                /* update transaction id */
-                dcerpc->transaction_id++;
-                SCLogDebug("transaction_id updated to %"PRIu16,
-                        dcerpc->transaction_id);
-            }
-            break;
-
-        default:
-            SCLogDebug("DCERPC Type 0x%02x not implemented yet", dcerpc->dcerpchdr.type);
-            dcerpc->bytesprocessed = 0;
-            break;
+                break;
+        }
     }
-    dcerpc->bytesprocessed = 0;
-  }
+
     SCReturnInt(parsed);
 }
 
@@ -1375,7 +1768,6 @@ static void *DCERPCStateAlloc(void) {
     if (s == NULL) {
         SCReturnPtr(NULL, "void");
     }
-
     memset(s, 0, sizeof(DCERPCState));
 
     s->dcerpc.transaction_id = 1;
@@ -1394,13 +1786,19 @@ static void DCERPCStateFree(void *s) {
         SCFree(item);
     }
 
+    while ((item = TAILQ_FIRST(&sstate->dcerpc.dcerpcbindbindack.accepted_uuid_list))) {
+        //printUUID("Free", item);
+        TAILQ_REMOVE(&sstate->dcerpc.dcerpcbindbindack.accepted_uuid_list, item, next);
+        SCFree(item);
+    }
+
     if (sstate->dcerpc.dcerpcrequest.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
         sstate->dcerpc.dcerpcrequest.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcrequest.stub_data_buffer_len = 0;
     }
     if (sstate->dcerpc.dcerpcresponse.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
         sstate->dcerpc.dcerpcresponse.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcresponse.stub_data_buffer_len = 0;
     }
@@ -1426,6 +1824,10 @@ void DCERPCUpdateTransactionId(void *state, uint16_t *id) {
 }
 
 void RegisterDCERPCParsers(void) {
+    /** DCERPC */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_DCERPC, "|05 00|", 2, 0, STREAM_TOSERVER);
+
     AppLayerRegisterProto("dcerpc", ALPROTO_DCERPC, STREAM_TOSERVER,
             DCERPCParse);
     AppLayerRegisterProto("dcerpc", ALPROTO_DCERPC, STREAM_TOCLIENT,
@@ -3612,12 +4014,1756 @@ end:
     return result;
 }
 
+/**
+ * \test General test.
+ */
+int DCERPCParserTest05(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+    uint8_t bind1[] = {
+        0x05, 0x00, 0x0b, 0x01, 0x10, 0x00, 0x00, 0x00,
+        0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0xb8, 0x4a, 0x9f, 0x4d, 0x1c, 0x7d, 0xcf, 0x11,
+        0x86, 0x1e, 0x00, 0x20, 0xaf, 0x6e, 0x7c, 0x57,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind1_len = sizeof(bind1);
+
+    uint8_t bind2[] = {
+        0x05, 0x00, 0x0b, 0x02, 0x10, 0x00, 0x00, 0x00,
+        0x48, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0xb8, 0x4a, 0x9f, 0x4d, 0x1c, 0x7d, 0xcf, 0x11,
+        0x86, 0x1e, 0x00, 0x20, 0xaf, 0x6e, 0x7c, 0x67,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind2_len = sizeof(bind2);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+                      bind1, bind1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    DCERPCUuidEntry *item = NULL;
+    int m = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.uuid_list, next) {
+        printf("%d ", m);
+        printUUID("BIND",item);
+        m++;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind2, bind2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    item = NULL;
+    m = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.uuid_list, next) {
+        printf("%d ", m);
+        printUUID("BIND",item);
+        m++;
+    }
+
+    /* we will need this test later for fragged bind pdus.  keep it */
+    result = 1;
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented bind PDU(one PDU which is frag'ed)
+ */
+int DCERPCParserTest06(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+    uint8_t bind1[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0xdc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0xc7, 0x70, 0x0d, 0x3e, 0x71, 0x37, 0x39, 0x0d,
+        0x3a, 0x4f, 0xd3, 0xdc, 0xca, 0x49, 0xe8, 0xa3,
+        0x05, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x84, 0xb6, 0x55, 0x75,
+        0xdb, 0x9e, 0xba, 0x54, 0x56, 0xd3, 0x45, 0x10,
+        0xb7, 0x7a, 0x2a, 0xe2, 0x04, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x6e, 0x39, 0x21, 0x24, 0x70, 0x6f, 0x41, 0x57,
+        0x54, 0x70, 0xb8, 0xc3, 0x5e, 0x89, 0x3b, 0x43,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x01, 0x00, 0x39, 0x6a, 0x86, 0x5d,
+        0x24, 0x0f, 0xd2, 0xf7, 0xb6, 0xce, 0x95, 0x9c,
+        0x54, 0x1d, 0x3a, 0xdb, 0x02, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00,
+        0x12, 0xa5, 0xdd, 0xc5, 0x55, 0xce, 0xc3, 0x46,
+        0xbd, 0xa0, 0x94, 0x39, 0x3c, 0x0d, 0x9b, 0x5b,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x00, 0x87, 0x1c, 0x8b, 0x6e,
+        0x11, 0xa8, 0x67, 0x98, 0xd4, 0x5d, 0xf6, 0x8a,
+        0x2f, 0x33, 0x24, 0x7b, 0x05, 0x00, 0x03, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00,
+        0x9b, 0x82, 0x13, 0xd1, 0x28, 0xe0, 0x63, 0xf3,
+        0x62, 0xee, 0x76, 0x73, 0xf9, 0xac, 0x3d, 0x2e,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x01, 0x00, 0xa9, 0xd4, 0x73, 0xf2,
+        0xed, 0xad, 0xe8, 0x82, 0xf8, 0xcf, 0x9d, 0x9f,
+        0x66, 0xe6, 0x43, 0x37, 0x02, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00,
+        0x06, 0x2b, 0x85, 0x38, 0x4f, 0x73, 0x96, 0xb1,
+        0x73, 0xe1, 0x59, 0xbe, 0x9d, 0xe2, 0x6c, 0x07,
+        0x05, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60};
+    uint32_t bind1_len = sizeof(bind1);
+
+    uint8_t bind2[] = {
+        0x02, 0x00, 0x00, 0x00, 0x09, 0x00, 0x01, 0x00,
+        0xbf, 0xfa, 0xbb, 0xa4, 0x9e, 0x5c, 0x80, 0x61,
+        0xb5, 0x8b, 0x79, 0x69, 0xa6, 0x32, 0x88, 0x77,
+        0x01, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0a, 0x00, 0x01, 0x00, 0x39, 0xa8, 0x2c, 0x39,
+        0x73, 0x50, 0x06, 0x8d, 0xf2, 0x37, 0x1e, 0x1e,
+        0xa8, 0x8f, 0x46, 0x98, 0x02, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0b, 0x00, 0x01, 0x00,
+        0x91, 0x13, 0xd0, 0xa7, 0xef, 0xc4, 0xa7, 0x96,
+        0x0c, 0x4a, 0x0d, 0x29, 0x80, 0xd3, 0xfe, 0xbf,
+        0x00, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x01, 0x00, 0xcc, 0x2b, 0x55, 0x1d,
+        0xd4, 0xa4, 0x0d, 0xfb, 0xcb, 0x6f, 0x86, 0x36,
+        0xa6, 0x57, 0xc3, 0x21, 0x02, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x01, 0x00,
+        0x43, 0x7b, 0x07, 0xee, 0x85, 0xa8, 0xb9, 0x3a,
+        0x0f, 0xf9, 0x83, 0x70, 0xe6, 0x0b, 0x4f, 0x33,
+        0x02, 0x00, 0x02, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0e, 0x00, 0x01, 0x00, 0x9c, 0x6a, 0x15, 0x8c,
+        0xd6, 0x9c, 0xa6, 0xc3, 0xb2, 0x9e, 0x62, 0x9f,
+        0x3d, 0x8e, 0x47, 0x73, 0x02, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0f, 0x00, 0x01, 0x00,
+        0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01,
+        0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind2_len = sizeof(bind2);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER|STREAM_START,
+                      bind1, bind1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 420);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.ctxbytesprocessed == 40);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.numctxitems == 16);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.numctxitemsleft == 8);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind2, bind2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.ctxbytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.numctxitems == 16);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.numctxitemsleft == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
+ */
+int DCERPCParserTest07(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x2C, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    uint8_t request2[] = {
+        0x0D, 0x0E
+    };
+    uint32_t request2_len = sizeof(request2);
+
+    uint8_t request3[] = {
+        0x0F, 0x10, 0x11, 0x12, 0x13, 0x14
+    };
+    uint32_t request3_len = sizeof(request3);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER|STREAM_START,
+                      request1, request1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 36);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len ==  12);
+    result &= (dcerpc_state->dcerpc.pdu_fragged = 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request2, request2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 38);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len == 14);
+    result &= (dcerpc_state->dcerpc.pdu_fragged = 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request3, request3_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len == 20);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
+ */
+int DCERPCParserTest08(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+    uint8_t request[] = {
+        0x05, 0x02, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x2C, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C,
+    };
+    uint32_t request_len = sizeof(request);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+                      request, request_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer == NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len == 0);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
+ */
+int DCERPCParserTest09(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+    uint8_t request[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x2C, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C,
+    };
+    uint32_t request_len = sizeof(request);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+                      request, request_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 36);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len ==  12);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 1);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented PDU.
+ */
+int DCERPCParserTest10(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t fault[] = {
+        0x05, 0x00, 0x03, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x20, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x00, 0x00,
+        0xf7, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    uint32_t fault_len = sizeof(fault);
+
+    uint8_t request1[] = {
+        0x05, 0x00
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    uint8_t request2[] = {
+        0x00, 0x03, 0x10, 0x00, 0x00, 0x00, 0x24, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+        0x0B, 0x0C
+    };
+    uint32_t request2_len = sizeof(request2);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER|STREAM_START,
+                      fault, fault_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request1, request1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 2);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer == NULL);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request2, request2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len == 12);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented PDU.
+ */
+int DCERPCParserTest11(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x24, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x00,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x09, 0x0A, 0x0B, 0x0C
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    uint8_t request2[] = {
+        0x05, 0x00
+    };
+    uint32_t request2_len = sizeof(request2);
+
+    uint8_t request3[] = {
+        0x00, 0x03, 0x10, 0x00, 0x00, 0x00, 0x26, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x0c, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+        0x0B, 0x0C, 0xFF, 0xFF
+    };
+    uint32_t request3_len = sizeof(request3);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request1, request1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len ==  12);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request2, request2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 2);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request3, request3_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len ==  14);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented PDU.
+ */
+int DCERPCParserTest12(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind_ack1[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x44, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0x48, 0x1a, 0x00, 0x00,
+    };
+    uint32_t bind_ack1_len = sizeof(bind_ack1);
+
+    uint8_t bind_ack2[] = {
+        0x0c, 0x00, 0x5c, 0x50, 0x49, 0x50, 0x45, 0x5c,
+        0x6c, 0x73, 0x61, 0x73, 0x73, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_ack2_len = sizeof(bind_ack2);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind_ack1, bind_ack1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 24);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack2, bind_ack2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test Check if the parser accepts bind pdus that have context ids starting
+ *       from a non-zero value.
+ */
+int DCERPCParserTest13(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x48, 0x00, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0xa0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_len = sizeof(bind);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind, bind_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcbindbindack.numctxitems == 1);
+    if (result == 0)
+        goto end;
+
+    result = 0;
+    uint8_t ctx_uuid_from_pcap[16] = {
+        0x00, 0x00, 0x01, 0xa0, 0x00, 0x00, 0x00, 0x00,
+        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46};
+    DCERPCUuidEntry *item = NULL;
+    int internal_id = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (ctx_uuid_from_pcap[i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        result = 1;
+        result &= (item->internal_id == internal_id++);
+    }
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test Check for another endless loop with bind pdus.
+ */
+int DCERPCParserTest14(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x4A, 0x00, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0xa0, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x46,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+        0x01, 0x02, 0x03, 0x04, 0xFF /* ka boom - endless loop */
+    };
+    uint32_t bind_len = sizeof(bind);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind, bind_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test Check for another endless loop for bind_ack pdus.
+ */
+int DCERPCParserTest15(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind_ack[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x3e, 0x00, 0x00, 0x00, 0x7f, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0xfd, 0x04, 0x01, 0x00,
+        0x04, 0x00, 0x31, 0x33, 0x35, 0x00, 0x00, 0x00,
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x01, 0x02, 0x03, 0x04, 0xFF
+    };
+    uint32_t bind_ack_len = sizeof(bind_ack);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack, bind_ack_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test Check for correct internal ids for bind_acks.
+ */
+int DCERPCParserTest16(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind1[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x58, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x50, 0x08, 0x43, 0x95, 0x43, 0x5a, 0x8b, 0xb2,
+        0xf4, 0xc5, 0xb9, 0xee, 0x67, 0x55, 0x7c, 0x19,
+        0x00, 0x00, 0x03, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0xda, 0xc2, 0xbc, 0x9b,
+        0x35, 0x2e, 0xd4, 0xc9, 0x1f, 0x85, 0x01, 0xe6,
+        0x4e, 0x5a, 0x5e, 0xd4, 0x04, 0x00, 0x03, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0xb2, 0x97, 0xcc, 0x14, 0x6f, 0x70, 0x0d, 0xa5,
+        0x33, 0xd7, 0xf4, 0xe3, 0x8e, 0xb2, 0x2a, 0x1e,
+        0x05, 0x00, 0x02, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x01, 0x00, 0x96, 0x4e, 0xa6, 0xf6,
+        0xb2, 0x4b, 0xae, 0xb3, 0x21, 0xf4, 0x97, 0x7c,
+        0xcd, 0xa7, 0x08, 0xb0, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00,
+        0xbc, 0xc0, 0xf7, 0x71, 0x3f, 0x71, 0x54, 0x44,
+        0x22, 0xa8, 0x55, 0x0f, 0x98, 0x83, 0x1f, 0xfe,
+        0x04, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x00, 0xbe, 0x52, 0xf2, 0x58,
+        0x4a, 0xc3, 0xb5, 0xd0, 0xba, 0xac, 0xda, 0xf0,
+        0x12, 0x99, 0x38, 0x6e, 0x04, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00,
+        0xdb, 0xfa, 0x73, 0x01, 0xb3, 0x81, 0x01, 0xd4,
+        0x7f, 0xa0, 0x36, 0xb1, 0x97, 0xae, 0x29, 0x7f,
+        0x01, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x01, 0x00, 0x89, 0xbe, 0x41, 0x1d,
+        0x38, 0x75, 0xf5, 0xb5, 0xad, 0x27, 0x73, 0xf1,
+        0xb0, 0x7a, 0x28, 0x82, 0x05, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00,
+        0xf6, 0x87, 0x09, 0x93, 0xb8, 0xa8, 0x20, 0xc4,
+        0xb8, 0x63, 0xe6, 0x95, 0xed, 0x59, 0xee, 0x3f,
+        0x05, 0x00, 0x03, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x09, 0x00, 0x01, 0x00, 0x92, 0x77, 0x92, 0x68,
+        0x3e, 0xa4, 0xbc, 0x3f, 0x44, 0x33, 0x0e, 0xb8,
+        0x33, 0x0a, 0x2f, 0xdf, 0x01, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00,
+        0xa1, 0x03, 0xd2, 0xa9, 0xd2, 0x16, 0xc9, 0x89,
+        0x67, 0x18, 0x3e, 0xb1, 0xee, 0x6b, 0xf9, 0x18,
+        0x02, 0x00, 0x03, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0b, 0x00, 0x01, 0x00, 0x2f, 0x09, 0x5e, 0x74,
+        0xec, 0xa0, 0xbb, 0xc1, 0x60, 0x18, 0xf1, 0x93,
+        0x04, 0x17, 0x11, 0xf9, 0x01, 0x00, 0x03, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x01, 0x00,
+        0xc8, 0x4f, 0x32, 0x4b, 0x70, 0x16, 0xd3, 0x01,
+        0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind1_len = sizeof(bind1);
+
+    uint8_t bind_ack1[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x64, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0xc1, 0x2b, 0x00, 0x00,
+        0x0e, 0x00, 0x5c, 0x50, 0x49, 0x50, 0x45, 0x5c,
+        0x62, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x72, 0x00,
+        0x0d, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_ack1_len = sizeof(bind_ack1);
+
+    uint8_t bind2[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0xdc, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0xc7, 0x70, 0x0d, 0x3e, 0x71, 0x37, 0x39, 0x0d,
+        0x3a, 0x4f, 0xd3, 0xdc, 0xca, 0x49, 0xe8, 0xa3,
+        0x05, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x84, 0xb6, 0x55, 0x75,
+        0xdb, 0x9e, 0xba, 0x54, 0x56, 0xd3, 0x45, 0x10,
+        0xb7, 0x7a, 0x2a, 0xe2, 0x04, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x6e, 0x39, 0x21, 0x24, 0x70, 0x6f, 0x41, 0x57,
+        0x54, 0x70, 0xb8, 0xc3, 0x5e, 0x89, 0x3b, 0x43,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x01, 0x00, 0x39, 0x6a, 0x86, 0x5d,
+        0x24, 0x0f, 0xd2, 0xf7, 0xb6, 0xce, 0x95, 0x9c,
+        0x54, 0x1d, 0x3a, 0xdb, 0x02, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00,
+        0x12, 0xa5, 0xdd, 0xc5, 0x55, 0xce, 0xc3, 0x46,
+        0xbd, 0xa0, 0x94, 0x39, 0x3c, 0x0d, 0x9b, 0x5b,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x00, 0x87, 0x1c, 0x8b, 0x6e,
+        0x11, 0xa8, 0x67, 0x98, 0xd4, 0x5d, 0xf6, 0x8a,
+        0x2f, 0x33, 0x24, 0x7b, 0x05, 0x00, 0x03, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00,
+        0x9b, 0x82, 0x13, 0xd1, 0x28, 0xe0, 0x63, 0xf3,
+        0x62, 0xee, 0x76, 0x73, 0xf9, 0xac, 0x3d, 0x2e,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x01, 0x00, 0xa9, 0xd4, 0x73, 0xf2,
+        0xed, 0xad, 0xe8, 0x82, 0xf8, 0xcf, 0x9d, 0x9f,
+        0x66, 0xe6, 0x43, 0x37, 0x02, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00,
+        0x06, 0x2b, 0x85, 0x38, 0x4f, 0x73, 0x96, 0xb1,
+        0x73, 0xe1, 0x59, 0xbe, 0x9d, 0xe2, 0x6c, 0x07,
+        0x05, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x09, 0x00, 0x01, 0x00, 0xbf, 0xfa, 0xbb, 0xa4,
+        0x9e, 0x5c, 0x80, 0x61, 0xb5, 0x8b, 0x79, 0x69,
+        0xa6, 0x32, 0x88, 0x77, 0x01, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00,
+        0x39, 0xa8, 0x2c, 0x39, 0x73, 0x50, 0x06, 0x8d,
+        0xf2, 0x37, 0x1e, 0x1e, 0xa8, 0x8f, 0x46, 0x98,
+        0x02, 0x00, 0x02, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0b, 0x00, 0x01, 0x00, 0x91, 0x13, 0xd0, 0xa7,
+        0xef, 0xc4, 0xa7, 0x96, 0x0c, 0x4a, 0x0d, 0x29,
+        0x80, 0xd3, 0xfe, 0xbf, 0x00, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0c, 0x00, 0x01, 0x00,
+        0xcc, 0x2b, 0x55, 0x1d, 0xd4, 0xa4, 0x0d, 0xfb,
+        0xcb, 0x6f, 0x86, 0x36, 0xa6, 0x57, 0xc3, 0x21,
+        0x02, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0d, 0x00, 0x01, 0x00, 0x43, 0x7b, 0x07, 0xee,
+        0x85, 0xa8, 0xb9, 0x3a, 0x0f, 0xf9, 0x83, 0x70,
+        0xe6, 0x0b, 0x4f, 0x33, 0x02, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0e, 0x00, 0x01, 0x00,
+        0x9c, 0x6a, 0x15, 0x8c, 0xd6, 0x9c, 0xa6, 0xc3,
+        0xb2, 0x9e, 0x62, 0x9f, 0x3d, 0x8e, 0x47, 0x73,
+        0x02, 0x00, 0x02, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0f, 0x00, 0x01, 0x00, 0xc8, 0x4f, 0x32, 0x4b,
+        0x70, 0x16, 0xd3, 0x01, 0x12, 0x78, 0x5a, 0x47,
+        0xbf, 0x6e, 0xe1, 0x88, 0x03, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind2_len = sizeof(bind2);
+
+    uint8_t bind_ack2[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0xac, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0xc2, 0x2b, 0x00, 0x00,
+        0x0e, 0x00, 0x5c, 0x50, 0x49, 0x50, 0x45, 0x5c,
+        0x62, 0x72, 0x6f, 0x77, 0x73, 0x65, 0x72, 0x00,
+        0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_ack2_len = sizeof(bind_ack2);
+
+    uint8_t bind3[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x2c, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0xa4, 0x7f, 0x8e, 0xc6, 0xef, 0x56, 0x9b, 0x63,
+        0x92, 0xfa, 0x08, 0xb3, 0x35, 0xe2, 0xa5, 0x81,
+        0x00, 0x00, 0x03, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x9f, 0xfc, 0x78, 0xd2,
+        0x5f, 0x16, 0x0b, 0xbc, 0xc6, 0xdb, 0x5d, 0xef,
+        0xde, 0x54, 0xa2, 0x6f, 0x04, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x78, 0xb8, 0x96, 0xc7, 0x2f, 0xda, 0x11, 0x6b,
+        0xd1, 0x28, 0x68, 0xe1, 0xd6, 0x71, 0xac, 0x9d,
+        0x03, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x03, 0x00, 0x01, 0x00, 0xcf, 0xf4, 0xd7, 0x37,
+        0x03, 0xda, 0xcc, 0xe3, 0x3e, 0x34, 0x7f, 0x67,
+        0x99, 0x91, 0x41, 0x3d, 0x01, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x04, 0x00, 0x01, 0x00,
+        0x48, 0xeb, 0x32, 0xf0, 0x27, 0xd5, 0x9d, 0xd0,
+        0x1e, 0xc6, 0x48, 0x46, 0x97, 0xe9, 0xdb, 0x09,
+        0x05, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x05, 0x00, 0x01, 0x00, 0x82, 0xec, 0x0d, 0x08,
+        0xf2, 0x8f, 0x22, 0x57, 0x42, 0x9b, 0xce, 0xa8,
+        0x74, 0x16, 0xc6, 0xec, 0x00, 0x00, 0x01, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x06, 0x00, 0x01, 0x00,
+        0x2e, 0x00, 0x70, 0x44, 0xee, 0xc9, 0x30, 0x6b,
+        0xf4, 0x34, 0x1e, 0x3d, 0x35, 0x0f, 0xf7, 0xf7,
+        0x00, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x07, 0x00, 0x01, 0x00, 0x59, 0x04, 0x39, 0x3f,
+        0x59, 0x87, 0x14, 0x0e, 0x76, 0x8d, 0x17, 0xc2,
+        0x47, 0xfa, 0x67, 0x7f, 0x04, 0x00, 0x02, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x01, 0x00,
+        0x30, 0xd6, 0xed, 0x2e, 0x57, 0xfa, 0xf4, 0x72,
+        0x6c, 0x10, 0x0d, 0xe5, 0x51, 0x7f, 0xd0, 0x39,
+        0x02, 0x00, 0x01, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x09, 0x00, 0x01, 0x00, 0xea, 0x8b, 0x84, 0x4d,
+        0x44, 0x43, 0xc1, 0x94, 0x75, 0xe2, 0x81, 0x48,
+        0xd8, 0x77, 0xd9, 0xce, 0x05, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00, 0x0a, 0x00, 0x01, 0x00,
+        0x89, 0x4f, 0xe7, 0x95, 0xa3, 0xc1, 0x62, 0x36,
+        0x26, 0x9e, 0x67, 0xdb, 0x2c, 0x52, 0x89, 0xd3,
+        0x01, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+        0x0b, 0x00, 0x01, 0x00, 0x78, 0x56, 0x34, 0x12,
+        0x34, 0x12, 0xcd, 0xab, 0xef, 0x00, 0x01, 0x23,
+        0x45, 0x67, 0x89, 0xab, 0x01, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind3_len = sizeof(bind3);
+
+    uint8_t bind_ack3[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x4c, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0x1a, 0x33, 0x00, 0x00,
+        0x0e, 0x00, 0x5c, 0x70, 0x69, 0x70, 0x65, 0x5c,
+        0x73, 0x70, 0x6f, 0x6f, 0x6c, 0x73, 0x73, 0x00,
+        0x0c, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_ack3_len = sizeof(bind_ack3);
+
+    TcpSession ssn;
+    DCERPCUuidEntry *item = NULL;
+    int count = 0;
+
+    uint8_t accepted_uuids[3][16] = {
+        {0x4b, 0x32, 0x4f, 0xc8, 0x16, 0x70, 0x01, 0xd3,
+         0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88},
+        {0x4b, 0x32, 0x4f, 0xc8, 0x16, 0x70, 0x01, 0xd3,
+         0x12, 0x78, 0x5a, 0x47, 0xbf, 0x6e, 0xe1, 0x88},
+        {0x12, 0x34, 0x56, 0x78, 0x12, 0x34, 0xab, 0xcd,
+         0xef, 0x00, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab}
+    };
+
+    uint16_t accepted_ctxids[3] = {12, 15, 11};
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind1, bind1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack1, bind_ack1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (accepted_uuids[0][i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        if (accepted_ctxids[0] != item->ctxid) {
+            result = 0;
+            goto end;
+        }
+        count++;
+    }
+    if (count != 1) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind2, bind2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        count++;
+    }
+    if (count != 0) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack2, bind_ack2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (accepted_uuids[1][i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        if (accepted_ctxids[1] != item->ctxid) {
+            result = 0;
+            goto end;
+        }
+        count++;
+    }
+    if (count != 1) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind3, bind3_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        count++;
+    }
+    if (count != 0) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack3, bind_ack3_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (accepted_uuids[2][i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        if (accepted_ctxids[2] != item->ctxid) {
+            result = 0;
+            goto end;
+        }
+        count++;
+    }
+    if (count != 1) {
+        result = 0;
+        goto end;
+    }
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+
+/**
+ * \test Check for correct internal ids for bind_acks + alter_contexts
+ */
+int DCERPCParserTest17(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t bind[] = {
+        0x05, 0x00, 0x0b, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00,
+        0x40, 0xfd, 0x2c, 0x34, 0x6c, 0x3c, 0xce, 0x11,
+        0xa8, 0x93, 0x08, 0x00, 0x2b, 0x2e, 0x9c, 0x6d,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_len = sizeof(bind);
+
+    uint8_t bind_ack[] = {
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x44, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0x7d, 0xd8, 0x00, 0x00,
+        0x0d, 0x00, 0x5c, 0x70, 0x69, 0x70, 0x65, 0x5c,
+        0x6c, 0x6c, 0x73, 0x72, 0x70, 0x63, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x5d, 0x88, 0x8a, 0xeb, 0x1c, 0xc9, 0x11,
+        0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60,
+        0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t bind_ack_len = sizeof(bind_ack);
+
+    uint8_t alter_context[] = {
+        0x05, 0x00, 0x0e, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x48, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0xd0, 0x16, 0xd0, 0x16, 0x00, 0x00, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0xd0, 0x4c, 0x67, 0x57, 0x00, 0x52, 0xce, 0x11,
+        0xa8, 0x97, 0x08, 0x00, 0x2b, 0x2e, 0x9c, 0x6d,
+        0x01, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t alter_context_len = sizeof(alter_context);
+
+    uint8_t alter_context_resp[] = {
+        0x05, 0x00, 0x0f, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x38, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0xb8, 0x10, 0xb8, 0x10, 0x7d, 0xd8, 0x00, 0x00,
+        0x00, 0x00, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a,
+        0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
+        0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
+    };
+    uint32_t alter_context_resp_len = sizeof(alter_context_resp);
+
+
+    TcpSession ssn;
+    DCERPCUuidEntry *item = NULL;
+    int count = 0;
+
+    uint8_t accepted_uuids[2][16] = {
+        {0x57, 0x67, 0x4c, 0xd0, 0x52, 0x00, 0x11, 0xce,
+         0xa8, 0x97, 0x08, 0x00, 0x2b, 0x2e, 0x9c, 0x6d},
+        {0x34, 0x2c, 0xfd, 0x40, 0x3c, 0x6c, 0x11, 0xce,
+         0xa8, 0x93, 0x08, 0x00, 0x2b, 0x2e, 0x9c, 0x6d},
+    };
+
+    uint16_t accepted_ctxids[2] = {1, 0};
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      bind, bind_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      bind_ack, bind_ack_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (accepted_uuids[1][i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        if (accepted_ctxids[1] != item->ctxid) {
+            result = 0;
+            goto end;
+        }
+        count++;
+    }
+    if (count != 1) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      alter_context, alter_context_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        count++;
+    }
+    if (count != 1) {
+        result = 0;
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT,
+                      alter_context_resp, alter_context_resp_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    count = 0;
+    TAILQ_FOREACH(item, &dcerpc_state->dcerpc.dcerpcbindbindack.accepted_uuid_list, next) {
+        int i = 0;
+        /* check the interface uuid */
+        for (i = 0; i < 16; i++) {
+            if (accepted_uuids[count][i] != item->uuid[i]) {
+                result = 0;
+                goto end;
+            }
+        }
+        if (accepted_ctxids[count] != item->ctxid) {
+            result = 0;
+            goto end;
+        }
+        count++;
+    }
+    if (count != 2) {
+        result = 0;
+        goto end;
+    }
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+/**
+ * \test DCERPC fragmented PDU.
+ */
+int DCERPCParserTest18(void) {
+    int result = 1;
+    Flow f;
+    int r = 0;
+
+    uint8_t request1[] = {
+        0x05, 0x00, 0x00, 0x03, 0x10, 0x00, 0x00, 0x00,
+        0x26, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x0c, 0x00,
+    };
+    uint32_t request1_len = sizeof(request1);
+
+    uint8_t request2[] = {
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0x02,
+        0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A,
+        0x0B, 0x0C, 0xFF, 0xFF
+    };
+    uint32_t request2_len = sizeof(request2);
+
+    TcpSession ssn;
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request1, request1_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    DCERPCState *dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    if (dcerpc_state == NULL) {
+        printf("no dcerpc state: ");
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 18);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer == NULL);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 1);
+
+    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER,
+                      request2, request2_len);
+    if (r != 0) {
+        printf("dcerpc header check returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    result &= (dcerpc_state->dcerpc.bytesprocessed == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL &&
+               dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer_len ==  14);
+    result &= (dcerpc_state->dcerpc.pdu_fragged == 0);
+    result &= (dcerpc_state->dcerpc.dcerpcrequest.opnum == 2);
+
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    return result;
+}
+
+#endif /* UNITTESTS */
+
 void DCERPCParserRegisterTests(void) {
+#ifdef UNITTESTS
     printf("DCERPCParserRegisterTests\n");
     UtRegisterTest("DCERPCParserTest01", DCERPCParserTest01, 1);
     UtRegisterTest("DCERPCParserTest02", DCERPCParserTest02, 1);
     UtRegisterTest("DCERPCParserTest03", DCERPCParserTest03, 1);
     UtRegisterTest("DCERPCParserTest04", DCERPCParserTest04, 1);
-}
-#endif
+    UtRegisterTest("DCERPCParserTest05", DCERPCParserTest05, 1);
+    UtRegisterTest("DCERPCParserTest06", DCERPCParserTest06, 1);
+    UtRegisterTest("DCERPCParserTest07", DCERPCParserTest07, 1);
+    UtRegisterTest("DCERPCParserTest08", DCERPCParserTest08, 1);
+    UtRegisterTest("DCERPCParserTest09", DCERPCParserTest09, 1);
+    UtRegisterTest("DCERPCParserTest10", DCERPCParserTest10, 1);
+    UtRegisterTest("DCERPCParserTest11", DCERPCParserTest11, 1);
+    UtRegisterTest("DCERPCParserTest12", DCERPCParserTest12, 1);
+    UtRegisterTest("DCERPCParserTest13", DCERPCParserTest13, 1);
+    UtRegisterTest("DCERPCParserTest14", DCERPCParserTest14, 1);
+    UtRegisterTest("DCERPCParserTest15", DCERPCParserTest15, 1);
+    UtRegisterTest("DCERPCParserTest16", DCERPCParserTest16, 1);
+    UtRegisterTest("DCERPCParserTest17", DCERPCParserTest17, 1);
+    UtRegisterTest("DCERPCParserTest18", DCERPCParserTest18, 1);
+#endif /* UNITTESTS */
 
+    return;
+}

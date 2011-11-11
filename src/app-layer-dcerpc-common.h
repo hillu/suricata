@@ -131,12 +131,17 @@ typedef struct DCERPCHdrUdp_ {
 
 #define DCERPC_UDP_HDR_LEN 80
 
+#define DCERPC_UUID_ENTRY_FLAG_FF       0x0001  /**< FIRST flag set on the packet
+                                                  that contained this uuid entry */
+
 typedef struct DCERPCUuidEntry_ {
     uint16_t ctxid;
+    uint16_t internal_id;
     uint16_t result;
     uint8_t uuid[16];
     uint16_t version;
     uint16_t versionminor;
+    uint16_t flags;                             /**< DCERPC_UUID_ENTRY_FLAG_* flags */
     TAILQ_ENTRY(DCERPCUuidEntry_) next;
 } DCERPCUuidEntry;
 
@@ -150,12 +155,16 @@ typedef struct DCERPCBindBindAck_ {
     uint16_t versionminor;
     DCERPCUuidEntry *uuid_entry;
     TAILQ_HEAD(, DCERPCUuidEntry_) uuid_list;
+    /* the interface uuids that the server has accepted */
+    TAILQ_HEAD(, DCERPCUuidEntry_) accepted_uuid_list;
+    uint16_t uuid_internal_id;
     uint16_t secondaryaddrlen;
     uint16_t secondaryaddrlenleft;
     uint16_t result;
 } DCERPCBindBindAck;
 
 typedef struct DCERPCRequest_ {
+    uint16_t ctxid;
     uint16_t opnum;
     /* holds the stub data for the request */
     uint8_t *stub_data_buffer;
@@ -163,6 +172,7 @@ typedef struct DCERPCRequest_ {
     uint32_t stub_data_buffer_len;
     /* used by the dce preproc to indicate fresh entry in the stub data buffer */
     uint8_t stub_data_fresh;
+    uint8_t first_request_seen;
 } DCERPCRequest;
 
 typedef struct DCERPCResponse_ {
@@ -183,6 +193,9 @@ typedef struct DCERPC_ {
     uint8_t pad;
     uint16_t padleft;
     uint16_t transaction_id;
+    /* indicates if the dcerpc pdu state is in the middle of processing
+     * a fragmented pdu */
+    uint8_t pdu_fragged;
 } DCERPC;
 
 typedef struct DCERPCUDP_ {

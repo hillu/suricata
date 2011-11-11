@@ -73,8 +73,7 @@ Packet *TmqhInputFlow(ThreadVars *tv)
         SCCondWait(&q->cond_q, &q->mutex_q);
     }
 
-    if (tv->sc_perf_pctx.perf_flag == 1)
-        SCPerfUpdateCounterArray(tv->sc_perf_pca, &tv->sc_perf_pctx, 0);
+    SCPerfSyncCountersIfSignalled(tv, 0);
 
     if (q->len > 0) {
         Packet *p = PacketDequeue(q);
@@ -135,10 +134,10 @@ void *TmqhOutputFlowSetupCtx(char *queue_str) {
     memset(ctx,0x00,sizeof(TmqhFlowCtx));
 
     char *str = SCStrdup(queue_str);
-    char *tstr = str;
     if (str == NULL) {
         goto error;
     }
+    char *tstr = str;
 
     /* parse the comma separated string */
     do {
@@ -161,8 +160,7 @@ void *TmqhOutputFlowSetupCtx(char *queue_str) {
     SCFree(str);
     return (void *)ctx;
 error:
-    if (ctx != NULL)
-        SCFree(ctx);
+    SCFree(ctx);
     if (str != NULL)
         SCFree(str);
     return NULL;

@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Breno Silva Pinto <breno.silva@gmail.com>
@@ -38,7 +45,7 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
     SCPerfCounterIncr(dtv->counter_ppp, tv->sc_perf_pca);
 
     if(len < PPP_HEADER_LEN)    {
-        DECODER_SET_EVENT(p,PPP_PKT_TOO_SMALL);
+        ENGINE_SET_EVENT(p,PPP_PKT_TOO_SMALL);
         return;
     }
 
@@ -79,13 +86,13 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
         case PPP_PAP:
         case PPP_LQM:
         case PPP_CHAP:
-            DECODER_SET_EVENT(p,PPP_UNSUP_PROTO);
+            ENGINE_SET_EVENT(p,PPP_UNSUP_PROTO);
             break;
 
         case PPP_VJ_UCOMP:
 
             if(len < (PPP_HEADER_LEN + IPV4_HEADER_LEN))    {
-                DECODER_SET_EVENT(p,PPPVJU_PKT_TOO_SMALL);
+                ENGINE_SET_EVENT(p,PPPVJU_PKT_TOO_SMALL);
                 return;
             }
 
@@ -96,7 +103,7 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
 
         case PPP_IP:
             if(len < (PPP_HEADER_LEN + IPV4_HEADER_LEN))    {
-                DECODER_SET_EVENT(p,PPPIPV4_PKT_TOO_SMALL);
+                ENGINE_SET_EVENT(p,PPPIPV4_PKT_TOO_SMALL);
                 return;
             }
 
@@ -106,7 +113,7 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
             /* PPP IPv6 was not tested */
         case PPP_IPV6:
             if(len < (PPP_HEADER_LEN + IPV6_HEADER_LEN))    {
-                DECODER_SET_EVENT(p,PPPIPV6_PKT_TOO_SMALL);
+                ENGINE_SET_EVENT(p,PPPIPV6_PKT_TOO_SMALL);
                 return;
             }
 
@@ -115,7 +122,7 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
 
         default:
             SCLogDebug("unknown PPP protocol: %" PRIx32 "",ntohs(p->ppph->protocol));
-            DECODER_SET_EVENT(p,PPP_WRONG_TYPE);
+            ENGINE_SET_EVENT(p,PPP_WRONG_TYPE);
             return;
     }
 
@@ -131,22 +138,27 @@ void DecodePPP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
  */
 static int DecodePPPtest01 (void)   {
     uint8_t raw_ppp[] = { 0xff, 0x03, 0x00, 0x21, 0x45, 0xc0, 0x00 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPP(&tv, &dtv, &p, raw_ppp, sizeof(raw_ppp), NULL);
+    DecodePPP(&tv, &dtv, p, raw_ppp, sizeof(raw_ppp), NULL);
 
     /* Function my returns here with expected value */
 
-    if(DECODER_ISSET_EVENT(&p,PPPIPV4_PKT_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,PPPIPV4_PKT_TOO_SMALL))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -160,22 +172,27 @@ static int DecodePPPtest02 (void)   {
                            0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
                            0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
                            0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPP(&tv, &dtv, &p, raw_ppp, sizeof(raw_ppp), NULL);
+    DecodePPP(&tv, &dtv, p, raw_ppp, sizeof(raw_ppp), NULL);
 
     /* Function must returns here */
 
-    if(DECODER_ISSET_EVENT(&p,PPP_WRONG_TYPE))  {
+    if(ENGINE_ISSET_EVENT(p,PPP_WRONG_TYPE))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -191,41 +208,50 @@ static int DecodePPPtest03 (void)   {
                            0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
                            0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
                            0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodePPP(&tv, &dtv, &p, raw_ppp, sizeof(raw_ppp), NULL);
+    DecodePPP(&tv, &dtv, p, raw_ppp, sizeof(raw_ppp), NULL);
 
     FlowShutdown();
 
-    if(p.ppph == NULL) {
+    if(p->ppph == NULL) {
+        SCFree(p);
         return 0;
     }
 
-    if(DECODER_ISSET_EVENT(&p,PPP_PKT_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,PPP_PKT_TOO_SMALL))  {
+        SCFree(p);
         return 0;
     }
 
-    if(DECODER_ISSET_EVENT(&p,PPPIPV4_PKT_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,PPPIPV4_PKT_TOO_SMALL))  {
+        SCFree(p);
         return 0;
     }
 
-    if(DECODER_ISSET_EVENT(&p,PPP_WRONG_TYPE))  {
+    if(ENGINE_ISSET_EVENT(p,PPP_WRONG_TYPE))  {
+        SCFree(p);
         return 0;
     }
 
-    if (!(DECODER_ISSET_EVENT(&p,IPV4_TRUNC_PKT))) {
+    if (!(ENGINE_ISSET_EVENT(p,IPV4_TRUNC_PKT))) {
+        SCFree(p);
         return 0;
     }
     /* Function must return here */
 
+    SCFree(p);
     return 1;
 }
 
@@ -241,30 +267,36 @@ static int DecodePPPtest04 (void)   {
                            0x0d, 0x01, 0xbf, 0x01, 0x0d, 0x03, 0xea, 0x37, 0x00,
                            0x17, 0x6d, 0x0b, 0xba, 0xc3, 0x00, 0x00, 0x00, 0x00,
                            0x60, 0x02, 0x10, 0x20, 0xdd, 0xe1, 0x00, 0x00 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodePPP(&tv, &dtv, &p, raw_ppp, sizeof(raw_ppp), NULL);
+    DecodePPP(&tv, &dtv, p, raw_ppp, sizeof(raw_ppp), NULL);
 
     FlowShutdown();
 
-    if(p.ppph == NULL) {
+    if(p->ppph == NULL) {
+        SCFree(p);
         return 0;
     }
 
-    if (!(DECODER_ISSET_EVENT(&p,IPV4_TRUNC_PKT))) {
+    if (!(ENGINE_ISSET_EVENT(p,IPV4_TRUNC_PKT))) {
+        SCFree(p);
         return 0;
     }
 
     /* Function must returns here */
 
+    SCFree(p);
     return 1;
 }
 #endif /* UNITTESTS */
@@ -278,3 +310,6 @@ void DecodePPPRegisterTests(void) {
 #endif /* UNITTESTS */
 }
 
+/**
+ * @}
+ */

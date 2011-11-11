@@ -24,12 +24,37 @@
 #ifndef __SOURCE_PFRING_H__
 #define __SOURCE_PFRING_H__
 
+#define PFRING_IFACE_NAME_LENGTH 48
+
+#include <config.h>
+#ifdef HAVE_PFRING
+#include <pfring.h>
+#endif
+
+typedef struct PfringIfaceConfig_
+{
+    /* cluster param */
+    int cluster_id;
+#ifdef HAVE_PFRING_CLUSTER_TYPE
+    cluster_type ctype;
+#endif /* HAVE_PFRING_CLUSTER_TYPE */
+    char iface[PFRING_IFACE_NAME_LENGTH];
+    /* number of threads */
+    int threads;
+    SC_ATOMIC_DECLARE(unsigned int, ref);
+    void (*DerefFunc)(void *);
+} PfringIfaceConfig;
+
+
+
 void TmModuleReceivePfringRegister (void);
 void TmModuleDecodePfringRegister (void);
 
-/* XXX replace with user configurable options */
-#define LIBPFRING_SNAPLEN     1518
-#define LIBPFRING_PROMISC     1
-#define LIBPFRING_REENTRANT   0
-#define LIBPFRING_WAIT_FOR_INCOMING 1
+int PfringConfGetThreads(void);
+void PfringLoadConfig(void);
+
+/* We don't have to use an enum that sucks in our code */
+#define CLUSTER_FLOW 0
+#define CLUSTER_ROUND_ROBIN 1
+
 #endif /* __SOURCE_PFRING_H__ */

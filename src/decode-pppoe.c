@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author James Riden <jamesr@europe.com>
@@ -45,7 +52,7 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
     SCPerfCounterIncr(dtv->counter_pppoe, tv->sc_perf_pca);
 
     if (len < PPPOE_DISCOVERY_HEADER_MIN_LEN) {
-        DECODER_SET_EVENT(p, PPPOE_PKT_TOO_SMALL);
+        ENGINE_SET_EVENT(p, PPPOE_PKT_TOO_SMALL);
         return;
     }
     p->pppoedh = NULL;
@@ -69,13 +76,13 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
             break;
         default:
             SCLogDebug("unknown PPPOE code: 0x%0"PRIX8"", p->pppoedh->pppoe_code);
-            DECODER_SET_EVENT(p,PPPOE_WRONG_CODE);
+            ENGINE_SET_EVENT(p,PPPOE_WRONG_CODE);
             return;
     }
 
     /* parse any tags we have in the packet */
 
-    uint16_t tag_type = 0, tag_length = 0;
+    uint16_t tag_length = 0;
     PPPOEDiscoveryTag* pppoedt = (PPPOEDiscoveryTag*) (p->pppoedh +  PPPOE_DISCOVERY_HEADER_MIN_LEN);
 
     uint16_t pppoe_length = ntohs(p->pppoedh->pppoe_length);
@@ -86,13 +93,15 @@ void DecodePPPOEDiscovery(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint
 
     if (pppoe_length > packet_length) {
         SCLogDebug("malformed PPPOE tags");
-        DECODER_SET_EVENT(p,PPPOE_MALFORMED_TAGS);
+        ENGINE_SET_EVENT(p,PPPOE_MALFORMED_TAGS);
         return;
     }
 
     while (pppoedt < (PPPOEDiscoveryTag*) (pkt + (len - sizeof(PPPOEDiscoveryTag))) && pppoe_length >=4 && packet_length >=4)
     {
-        tag_type = ntohs(pppoedt->pppoe_tag_type);
+#ifdef DEBUG
+        uint16_t tag_type = ntohs(pppoedt->pppoe_tag_type);
+#endif
         tag_length = ntohs(pppoedt->pppoe_tag_length);
 
         SCLogDebug ("PPPoE Tag type %x, length %u", tag_type, tag_length);
@@ -123,7 +132,7 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
     SCPerfCounterIncr(dtv->counter_pppoe, tv->sc_perf_pca);
 
     if (len < PPPOE_SESSION_HEADER_LEN) {
-        DECODER_SET_EVENT(p, PPPOE_PKT_TOO_SMALL);
+        ENGINE_SET_EVENT(p, PPPOE_PKT_TOO_SMALL);
         return;
     }
 
@@ -169,13 +178,13 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
             case PPP_PAP:
             case PPP_LQM:
             case PPP_CHAP:
-                DECODER_SET_EVENT(p,PPP_UNSUP_PROTO);
+                ENGINE_SET_EVENT(p,PPP_UNSUP_PROTO);
                 break;
 
             case PPP_VJ_UCOMP:
 
                 if(len < (PPPOE_SESSION_HEADER_LEN + IPV4_HEADER_LEN))    {
-                    DECODER_SET_EVENT(p,PPPVJU_PKT_TOO_SMALL);
+                    ENGINE_SET_EVENT(p,PPPVJU_PKT_TOO_SMALL);
                     return;
                 }
 
@@ -186,7 +195,7 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
 
             case PPP_IP:
                 if(len < (PPPOE_SESSION_HEADER_LEN + IPV4_HEADER_LEN))    {
-                    DECODER_SET_EVENT(p,PPPIPV4_PKT_TOO_SMALL);
+                    ENGINE_SET_EVENT(p,PPPIPV4_PKT_TOO_SMALL);
                     return;
                 }
 
@@ -196,7 +205,7 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
             /* PPP IPv6 was not tested */
             case PPP_IPV6:
                 if(len < (PPPOE_SESSION_HEADER_LEN + IPV6_HEADER_LEN))    {
-                    DECODER_SET_EVENT(p,PPPIPV6_PKT_TOO_SMALL);
+                    ENGINE_SET_EVENT(p,PPPIPV6_PKT_TOO_SMALL);
                     return;
                 }
 
@@ -205,7 +214,7 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
 
             default:
                 SCLogDebug("unknown PPP protocol: %" PRIx32 "",ntohs(p->ppph->protocol));
-                DECODER_SET_EVENT(p,PPP_WRONG_TYPE);
+                ENGINE_SET_EVENT(p,PPP_WRONG_TYPE);
                 return;
         }
     }
@@ -219,20 +228,25 @@ void DecodePPPOESession(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_
 static int DecodePPPOEtest01 (void)   {
 
     uint8_t raw_pppoe[] = { 0x11, 0x00, 0x00, 0x00, 0x00 };
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPPOESession(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    DecodePPPOESession(&tv, &dtv, p, raw_pppoe, sizeof(raw_pppoe), NULL);
 
-    if (DECODER_ISSET_EVENT(&p,PPPOE_PKT_TOO_SMALL))  {
+    if (ENGINE_ISSET_EVENT(p,PPPOE_PKT_TOO_SMALL))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -253,32 +267,36 @@ static int DecodePPPOEtest02 (void)   {
         0x55, 0x56, 0x57, 0x41, 0x42, 0x43, 0x44, 0x45,
         0x46, 0x47, 0x48, 0x49 };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
     int ret = 0;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
-    DecodePPPOESession(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    DecodePPPOESession(&tv, &dtv, p, raw_pppoe, sizeof(raw_pppoe), NULL);
 
-    if(DECODER_ISSET_EVENT(&p,PPPOE_PKT_TOO_SMALL))  {
+    if(ENGINE_ISSET_EVENT(p,PPPOE_PKT_TOO_SMALL))  {
         goto end;
     }
 
     // and we insist that the invalid ICMP encapsulated (type 0xab, code 0xcd) is flagged
 
-    if(! DECODER_ISSET_EVENT(&p,ICMPV4_UNKNOWN_TYPE))  {
+    if(! ENGINE_ISSET_EVENT(p,ICMPV4_UNKNOWN_TYPE))  {
         goto end;
     }
 
     ret = 1;
 end:
     FlowShutdown();
+    SCFree(p);
     return ret;
 }
 
@@ -298,18 +316,24 @@ static int DecodePPPOEtest03 (void)   {
         0x65, 0x73, 0x68, 0x6f, 0x6f, 0x74
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPPOEDiscovery(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
-    if (p.pppoedh == NULL)
-        return 0;
+    DecodePPPOEDiscovery(&tv, &dtv, p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    if (p->pppoedh == NULL) {
+    SCFree(p);
+    return 0;
+    }
 
+    SCFree(p);
     return 1;
 }
 
@@ -325,20 +349,25 @@ static int DecodePPPOEtest04 (void)   {
         0x00, 0x00
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPPOEDiscovery(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    DecodePPPOEDiscovery(&tv, &dtv, p, raw_pppoe, sizeof(raw_pppoe), NULL);
 
-    if(DECODER_ISSET_EVENT(&p,PPPOE_WRONG_CODE))  {
+    if(ENGINE_ISSET_EVENT(p,PPPOE_WRONG_CODE))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -356,20 +385,25 @@ static int DecodePPPOEtest05 (void)   {
         0x20, 0x2d, 0x20, 0x65, 0x73, 0x68, 0x73, 0x68
     };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&p, 0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
-    DecodePPPOEDiscovery(&tv, &dtv, &p, raw_pppoe, sizeof(raw_pppoe), NULL);
+    DecodePPPOEDiscovery(&tv, &dtv, p, raw_pppoe, sizeof(raw_pppoe), NULL);
 
-    if(DECODER_ISSET_EVENT(&p,PPPOE_MALFORMED_TAGS))  {
+    if(ENGINE_ISSET_EVENT(p,PPPOE_MALFORMED_TAGS))  {
+        SCFree(p);
         return 1;
     }
 
+    SCFree(p);
     return 0;
 }
 
@@ -424,3 +458,6 @@ void DecodePPPOERegisterTests(void) {
 #endif /* UNITTESTS */
 }
 
+/**
+ * @}
+ */

@@ -16,6 +16,13 @@
  */
 
 /**
+ * \ingroup decode
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
@@ -36,7 +43,7 @@ void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *p
     SCPerfCounterIncr(dtv->counter_eth, tv->sc_perf_pca);
 
     if (len < ETHERNET_HEADER_LEN) {
-        DECODER_SET_EVENT(p,ETHERNET_PKT_TOO_SMALL);
+        ENGINE_SET_EVENT(p,ETHERNET_PKT_TOO_SMALL);
         return;
     }
 
@@ -105,16 +112,20 @@ static int DecodeEthernetTest01 (void)   {
         0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd, 0xab, 0xcd,
         0xab, 0xcd };
 
-    Packet p;
+    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    if (p == NULL)
+    return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv,  0, sizeof(ThreadVars));
-    memset(&p,   0, sizeof(Packet));
+    memset(p, 0, SIZE_OF_PACKET);
+    p->pkt = (uint8_t *)(p + 1);
 
-    DecodeEthernet(&tv, &dtv, &p, raw_eth, sizeof(raw_eth), NULL);
+    DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
+    SCFree(p);
     return 0;
 }
 #endif /* UNITTESTS */
@@ -129,3 +140,6 @@ void DecodeEthernetRegisterTests(void) {
     UtRegisterTest("DecodeEthernetTest01", DecodeEthernetTest01, 0);
 #endif /* UNITTESTS */
 }
+/**
+ * @}
+ */

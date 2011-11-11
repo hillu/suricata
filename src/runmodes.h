@@ -23,35 +23,41 @@
 #ifndef __RUNMODES_H__
 #define __RUNMODES_H__
 
+/* Run mode */
+enum {
+    RUNMODE_UNKNOWN = 0,
+    RUNMODE_PCAP_DEV,
+    RUNMODE_PCAP_FILE,
+    RUNMODE_PFRING,
+    RUNMODE_NFQ,
+    RUNMODE_IPFW,
+    RUNMODE_ERF_FILE,
+    RUNMODE_DAG,
+    RUNMODE_AFP_DEV,
+    RUNMODE_UNITTEST,
+    RUNMODE_MAX,
+};
+
+void RunModeListRunmodes(void);
+void RunModeDispatch(int, const char *, DetectEngineCtx *);
+void RunModeRegisterRunModes(void);
+void RunModeRegisterNewRunMode(int, const char *, const char *,
+                               int (*RunModeFunc)(DetectEngineCtx *));
+void RunModeInitialize(void);
 void RunModeInitializeOutputs(void);
-
-int RunModeIdsPcap(DetectEngineCtx *, char *);
-int RunModeIdsPcap2(DetectEngineCtx *, char *);
-int RunModeIdsPcap3(DetectEngineCtx *, char *);
-int RunModeIdsPcapAuto(DetectEngineCtx *, char *);
-
-int RunModeIpsNFQ(DetectEngineCtx *, char *);
-int RunModeIpsNFQAuto(DetectEngineCtx *, char *);
-
-int RunModeFilePcap(DetectEngineCtx *, char *);
-int RunModeFilePcap2(DetectEngineCtx *, char *);
-int RunModeFilePcapAuto(DetectEngineCtx *, char *);
-int RunModeFilePcapAuto2(DetectEngineCtx *, char *);
-
-int RunModeIdsPfring(DetectEngineCtx *, char *);
-int RunModeIdsPfring2(DetectEngineCtx *, char *);
-int RunModeIdsPfring3(DetectEngineCtx *, char *);
-int RunModeIdsPfring4(DetectEngineCtx *, char *);
-int RunModeIdsPfringAuto(DetectEngineCtx *, char *);
-
-int RunModeIpsIPFW(DetectEngineCtx *);
-int RunModeIpsIPFWAuto(DetectEngineCtx *);
-
-int RunModeErfFileAuto(DetectEngineCtx *, char *);
-int RunModeErfDagAuto(DetectEngineCtx *, char *);
-
+void SetupOutputs(ThreadVars *);
 void RunModeShutDown(void);
 
-int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx, char *file);
-#endif /* __RUNMODES_H__ */
+#include "runmode-pcap.h"
+#include "runmode-pcap-file.h"
+#include "runmode-pfring.h"
+#include "runmode-nfq.h"
+#include "runmode-ipfw.h"
+#include "runmode-erf-file.h"
+#include "runmode-erf-dag.h"
+#include "runmode-af-packet.h"
 
+int threading_set_cpu_affinity;
+extern float threading_detect_ratio;
+
+#endif /* __RUNMODES_H__ */

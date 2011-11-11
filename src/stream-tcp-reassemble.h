@@ -54,11 +54,17 @@ enum
 typedef struct TcpReassemblyThreadCtx_ {
     StreamMsgQueue *stream_q;
     AlpProtoDetectThreadCtx dp_ctx;   /**< proto detection thread data */
+    /** TCP segments which are not being reassembled due to memcap was reached */
+    uint16_t counter_tcp_segment_memcap;
+    /** number of streams that stop reassembly because their depth is reached */
+    uint16_t counter_tcp_stream_depth;
+    /** ams that stop reassembly because their depth is reached */
+    uint16_t counter_tcp_reass_memuse;
 } TcpReassemblyThreadCtx;
 
 #define OS_POLICY_DEFAULT   OS_POLICY_BSD
 
-int StreamTcpReassembleHandleSegment(TcpReassemblyThreadCtx *, TcpSession *, TcpStream *, Packet *);
+int StreamTcpReassembleHandleSegment(ThreadVars *, TcpReassemblyThreadCtx *, TcpSession *, TcpStream *, Packet *, PacketQueue *);
 int StreamTcpReassembleInit(char);
 void StreamTcpReassembleFree(char);
 void StreamTcpReassembleRegisterTests(void);
@@ -74,6 +80,12 @@ void StreamTcpSetOSPolicy(TcpStream *, Packet *);
 void StreamTcpReassemblePause (TcpSession *, char );
 void StreamTcpReassembleUnPause (TcpSession *, char );
 int StreamTcpCheckStreamContents(uint8_t *, uint16_t , TcpStream *);
+
+int StreamTcpReassembleInsertSegment(ThreadVars *, TcpReassemblyThreadCtx *, TcpStream *, TcpSegment *, Packet *);
+TcpSegment* StreamTcpGetSegment(ThreadVars *, TcpReassemblyThreadCtx *, uint16_t);
+
+void StreamTcpReturnStreamSegments(TcpStream *);
+void StreamTcpSegmentReturntoPool(TcpSegment *);
 
 #endif /* __STREAM_TCP_REASSEMBLE_H__ */
 

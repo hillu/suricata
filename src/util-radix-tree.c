@@ -23,24 +23,12 @@
  * Implementation of radix trees
  */
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <string.h>
 #include "suricata-common.h"
-
-#include "suricata-common.h"
-#ifdef OS_FREEBSD
-#include <netinet/in.h>
-#endif /* OS_FREEBSD */
-#ifdef OS_DARWIN
-#include <netinet/in.h>
-#endif /* OS_FREEBSD */
-
 #include "util-radix-tree.h"
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-unittest.h"
+#include "util-memcmp.h"
 
 /**
  * \brief Validates an IPV4 address and returns the network endian arranged
@@ -752,6 +740,8 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
                 }
 
                 node->netmask_cnt++;
+                new_node = node;
+
                 if ( (node->netmasks = SCRealloc(node->netmasks, (node->netmask_cnt *
                                                                 sizeof(uint8_t)))) == NULL) {
                     SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCRadixAddKey. Mem not allocated...");
@@ -1219,7 +1209,7 @@ static void SCRadixRemoveKey(uint8_t *key_stream, uint16_t key_bitlen,
     }
 
     i = prefix->bitlen / 8;
-    if (memcmp(node->prefix->stream, prefix->stream, i) == 0) {
+    if (SCMemcmp(node->prefix->stream, prefix->stream, i) == 0) {
         mask = -1 << (8 - prefix->bitlen % 8);
 
         if (prefix->bitlen % 8 == 0 ||
@@ -1434,7 +1424,7 @@ static inline SCRadixNode *SCRadixFindKeyIPNetblock(uint8_t *key_stream, uint8_t
         if (node->bit != key_bitlen || node->prefix == NULL)
             return NULL;
 
-        if (memcmp(node->prefix->stream, key_stream, bytes) == 0) {
+        if (SCMemcmp(node->prefix->stream, key_stream, bytes) == 0) {
             mask = -1 << (8 - key_bitlen % 8);
 
             if (key_bitlen % 8 == 0 ||
@@ -1492,7 +1482,7 @@ static SCRadixNode *SCRadixFindKey(uint8_t *key_stream, uint16_t key_bitlen,
     }
 
     bytes = key_bitlen / 8;
-    if (memcmp(node->prefix->stream, tmp_stream, bytes) == 0) {
+    if (SCMemcmp(node->prefix->stream, tmp_stream, bytes) == 0) {
         mask = -1 << (8 - key_bitlen % 8);
 
         if (key_bitlen % 8 == 0 ||
@@ -1646,8 +1636,8 @@ void SCRadixPrintNodeInfo(SCRadixNode *node, int level,  void (*PrintData)(void*
             printf("%s%d", (0 == i ? "" : "."), node->prefix->stream[i]);
         printf(")\n");
 
+        SCRadixUserData *ud = NULL;
         if (PrintData != NULL) {
-            SCRadixUserData *ud = NULL;
             do {
                 ud = node->prefix->user_data;
                 printf(" [%d], ", ud->netmask);
@@ -1655,6 +1645,11 @@ void SCRadixPrintNodeInfo(SCRadixNode *node, int level,  void (*PrintData)(void*
                 ud = ud->next;
             } while (ud != NULL);
         } else {
+            //ud = node->prefix->user_data;
+            //while (ud != NULL) {
+            //    printf(" [nm %d with data], ", ud->netmask);
+            //    ud = ud->next;
+            //}
             printf("No print function provided");
         }
         printf("\n");
@@ -4144,15 +4139,75 @@ int SCRadixTestIPV4NetblockInsertion25(void)
 }
 
 /**
+ * \test SCRadixTestIPV4NetblockInsertion26 insert a node searching on it.
+ *       Should always return true but the purposse of the test is to monitor
+ *       the memory usage to detect memleaks (there was one on searching)
+ */
+int SCRadixTestIPV4NetblockInsertion26(void)
+{
+    SCRadixNode *tmp = NULL;
+    SCRadixTree *tree = NULL;
+    struct sockaddr_in servaddr;
+    int result = 1;
+    char *str = SCStrdup("Hello1");
+
+    tree = SCRadixCreateRadixTree(free, NULL);
+
+    bzero(&servaddr, sizeof(servaddr));
+    if (inet_pton(AF_INET, "0.0.0.0", &servaddr.sin_addr) <= 0)
+        return 0;
+    tmp = SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, str, 0);
+    if (!tmp) {
+        printf("Not inserted correctly 1 :");
+        result = 0;
+        goto this_end;
+    }
+    str = SCStrdup("Hello1");
+
+    bzero(&servaddr, sizeof(servaddr));
+    if (inet_pton(AF_INET, "176.0.0.1", &servaddr.sin_addr) <= 0)
+        return 0;
+    tmp = SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, str, 5);
+    if (!tmp) {
+        printf("Not inserted correctly 2 :");
+        result = 0;
+        goto this_end;
+    }
+
+    str = SCStrdup("Hello1");
+    bzero(&servaddr, sizeof(servaddr));
+    if (inet_pton(AF_INET, "0.0.0.0", &servaddr.sin_addr) <= 0)
+        return 0;
+    tmp = SCRadixAddKeyIPV4Netblock((uint8_t *)&servaddr.sin_addr, tree, str, 7);
+    if (!tmp) {
+        printf("Not inserted correctly 3 :");
+        result = 0;
+        goto this_end;
+    }
+
+    /* test for the existance of a key */
+    //result &= (SCRadixFindKeyIPV4BestMatch((uint8_t *)&servaddr.sin_addr, tree) != NULL);
+
+this_end:
+    SCRadixReleaseRadixTree(tree);
+
+    //SCFree(str);
+    return result;
+}
+
+/**
  * \test SC_RADIX_NODE_USERDATA macro
  */
 static int SCRadixTestUserdataMacro01(void) {
-    SCRadixNode node;
     int result = 0;
+    SCRadixNode *node = SCMalloc(sizeof(SCRadixNode));
+    if (node == NULL) {
+        goto end;
+    }
 
-    memset(&node, 0x00, sizeof(node));
+    memset(node, 0x00, sizeof(node));
 
-    void *ptr = SC_RADIX_NODE_USERDATA(&node, void);
+    void *ptr = SC_RADIX_NODE_USERDATA(node, void);
     if (ptr != NULL) {
         printf("ptr %p, expected NULL: ", ptr);
         goto end;
@@ -4160,6 +4215,8 @@ static int SCRadixTestUserdataMacro01(void) {
 
     result = 1;
 end:
+    if (node != NULL)
+        SCFree(node);
     return result;
 }
 
@@ -4167,16 +4224,19 @@ end:
  * \test SC_RADIX_NODE_USERDATA macro
  */
 static int SCRadixTestUserdataMacro02(void) {
-    SCRadixNode node;
     SCRadixPrefix prefix;
     int result = 0;
+    SCRadixNode *node = SCMalloc(sizeof(SCRadixNode));
+    if (node == NULL) {
+        goto end;
+    }
 
-    memset(&node, 0x00, sizeof(node));
+    memset(node, 0x00, sizeof(node));
     memset(&prefix, 0x00, sizeof(prefix));
 
-    node.prefix = &prefix;
+    node->prefix = &prefix;
 
-    void *ptr = SC_RADIX_NODE_USERDATA(&node, void);
+    void *ptr = SC_RADIX_NODE_USERDATA(node, void);
     if (ptr != NULL) {
         printf("ptr %p, expected NULL: ", ptr);
         goto end;
@@ -4184,6 +4244,8 @@ static int SCRadixTestUserdataMacro02(void) {
 
     result = 1;
 end:
+    if (node != NULL)
+        SCFree(node);
     return result;
 }
 
@@ -4191,18 +4253,21 @@ end:
  * \test SC_RADIX_NODE_USERDATA macro
  */
 static int SCRadixTestUserdataMacro03(void) {
-    SCRadixNode node;
     SCRadixPrefix prefix;
     int result = 0;
     void *somep = &result;
+    SCRadixNode *node = SCMalloc(sizeof(SCRadixNode));
+    if (node == NULL) {
+        goto end;
+    }
 
-    memset(&node, 0x00, sizeof(node));
+    memset(node, 0x00, sizeof(node));
     memset(&prefix, 0x00, sizeof(prefix));
 
-    node.prefix = &prefix;
+    node->prefix = &prefix;
     prefix.user_data_result = somep;
 
-    void *ptr = SC_RADIX_NODE_USERDATA(&node, void);
+    void *ptr = SC_RADIX_NODE_USERDATA(node, void);
     if (ptr != somep) {
         printf("ptr %p, expected %p: ", ptr, somep);
         goto end;
@@ -4210,6 +4275,8 @@ static int SCRadixTestUserdataMacro03(void) {
 
     result = 1;
 end:
+    if (node != NULL)
+        SCFree(node);
     return result;
 }
 
@@ -4263,6 +4330,8 @@ void SCRadixRegisterTests(void)
                    SCRadixTestIPV6NetBlocksAndBestSearch24, 1);
     UtRegisterTest("SCRadixTestIPV4NetblockInsertion25",
                    SCRadixTestIPV4NetblockInsertion25, 1);
+    UtRegisterTest("SCRadixTestIPV4NetblockInsertion26",
+                   SCRadixTestIPV4NetblockInsertion26, 1);
     UtRegisterTest("SCRadixTestUserdataMacro01",
                    SCRadixTestUserdataMacro01, 1);
     UtRegisterTest("SCRadixTestUserdataMacro02",

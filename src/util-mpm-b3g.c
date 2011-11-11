@@ -49,7 +49,11 @@
 
 static uint32_t b3g_hash_size = 0;
 static uint32_t b3g_bloom_size = 0;
+static uint8_t b3g_hash_shift = 0;
+static uint8_t b3g_hash_shift2 = 0;
 static void *b3g_func;
+
+#define B3G_HASH(a,b,c)   (((a) << b3g_hash_shift) | (b) << (b3g_hash_shift2) |(c))
 
 void B3gInitCtx (MpmCtx *, int);
 void B3gThreadInitCtx(MpmCtx *, MpmThreadCtx *, uint32_t);
@@ -110,7 +114,6 @@ void B3gPrintInfo(MpmCtx *mpm_ctx) {
     printf("  B3gPattern      %" PRIuMAX "\n", (uintmax_t)sizeof(B3gPattern));
     printf("  B3gHashItem     %" PRIuMAX "\n", (uintmax_t)sizeof(B3gHashItem));
     printf("Unique Patterns: %" PRIu32 "\n", mpm_ctx->pattern_cnt);
-    printf("Total Patterns:  %" PRIu32 "\n", mpm_ctx->total_pattern_cnt);
     printf("Smallest:        %" PRIu32 "\n", mpm_ctx->minlen);
     printf("Largest:         %" PRIu32 "\n", mpm_ctx->maxlen);
     printf("Hash size:       %" PRIu32 "\n", ctx->hash_size);
@@ -332,7 +335,6 @@ static int B3gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
     }
 
-    mpm_ctx->total_pattern_cnt++;
     return 0;
 
 error:
@@ -421,7 +423,7 @@ static void B3gPrepareHash(MpmCtx *mpm_ctx) {
             }
             ctx->pat_1_cnt++;
         } else if(ctx->parray[i]->len == 2) {
-            idx = (uint16_t)(ctx->parray[i]->ci[0] << B3G_HASHSHIFT | ctx->parray[i]->ci[1]);
+            idx = (uint16_t)(ctx->parray[i]->ci[0] << b3g_hash_shift | ctx->parray[i]->ci[1]);
             if (ctx->hash2[idx] == NULL) {
                 B3gHashItem *hi = B3gAllocHashItem(mpm_ctx);
                 if (hi == NULL)
@@ -545,8 +547,6 @@ int B3gBuildMatchArray(MpmCtx *mpm_ctx) {
 
 int B3gPreparePatterns(MpmCtx *mpm_ctx) {
     B3gCtx *ctx = (B3gCtx *)mpm_ctx->ctx;
-    uint32_t u = 0;
-    uint32_t p = 0;
 
     /* alloc the pattern array */
     ctx->parray = (B3gPattern **)SCMalloc(mpm_ctx->pattern_cnt * sizeof(B3gPattern *));
@@ -558,8 +558,9 @@ int B3gPreparePatterns(MpmCtx *mpm_ctx) {
     mpm_ctx->memory_size += (mpm_ctx->pattern_cnt * sizeof(B3gPattern *));
 
     /* populate it with the patterns in the hash */
-    for (u = 0; u < INIT_HASH_SIZE; u++) {
-        B3gPattern *node = ctx->init_hash[u], *nnode = NULL;
+    uint32_t i = 0, p = 0;
+    for (i = 0; i < INIT_HASH_SIZE; i++) {
+        B3gPattern *node = ctx->init_hash[i], *nnode = NULL;
         for ( ; node != NULL; ) {
             nnode = node->next;
             node->next = NULL;
@@ -679,8 +680,35 @@ void B3gGetConfig()
                     }
                 }
 
-                if (hash_val != NULL)
+                if (hash_val != NULL) {
                     b3g_hash_size = MpmGetHashSize(hash_val);
+                    switch (b3g_hash_size) {
+                        case HASHSIZE_LOWEST:
+                            b3g_hash_shift = B3G_HASHSHIFT_LOWEST;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_LOWEST2;
+                            break;
+                        case HASHSIZE_LOW:
+                            b3g_hash_shift = B3G_HASHSHIFT_LOW;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_LOW2;
+                            break;
+                        case HASHSIZE_MEDIUM:
+                            b3g_hash_shift = B3G_HASHSHIFT_MEDIUM;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_MEDIUM2;
+                            break;
+                        case HASHSIZE_HIGH:
+                            b3g_hash_shift = B3G_HASHSHIFT_HIGH;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_HIGH2;
+                            break;
+                        case HASHSIZE_HIGHER:
+                            b3g_hash_shift = B3G_HASHSHIFT_HIGHER;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_HIGHER2;
+                            break;
+                        case HASHSIZE_MAX:
+                            b3g_hash_shift = B3G_HASHSHIFT_MAX;
+                            b3g_hash_shift2 = B3G_HASHSHIFT_MAX2;
+                            break;
+                    }
+                }
 
                 if (bloom_val != NULL)
                     b3g_bloom_size = MpmGetBloomSize(bloom_val);
@@ -846,7 +874,6 @@ uint32_t B3gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
 #endif
     uint32_t pos = ctx->m - B3G_Q + 1, matches = 0;
     B3G_TYPE d;
-    B3gHashItem *hi;
 
     COUNT(tctx->stat_calls++);
     COUNT(tctx->stat_m_total+=ctx->m);
@@ -889,9 +916,10 @@ uint32_t B3gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                             }
                         }
 
-                        for (hi = ctx->hash[h]; hi != NULL; hi = hi->nxt) {
+                        B3gHashItem *hi = ctx->hash[h], *thi;
+                        for (thi = hi; thi != NULL; thi = thi->nxt) {
                             COUNT(tctx->stat_d0_hashloop++);
-                            B3gPattern *p = ctx->parray[hi->idx];
+                            B3gPattern *p = ctx->parray[thi->idx];
 
                             if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                                 if (buflen - j < p->len)
@@ -945,7 +973,6 @@ uint32_t B3gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
     uint32_t pos = 0, matches = 0;
     B3G_TYPE d;
     uint32_t j;
-    B3gHashItem *hi;
 
     COUNT(tctx->stat_calls++);
     COUNT(tctx->stat_m_total+=ctx->m);
@@ -989,9 +1016,10 @@ uint32_t B3gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
                 }
             }
 
-            for (hi = ctx->hash[h]; hi != NULL; hi = hi->nxt) {
+            B3gHashItem *hi = ctx->hash[h], *thi;
+            for (thi = hi; thi != NULL; thi = thi->nxt) {
                 COUNT(tctx->stat_d0_hashloop++);
-                B3gPattern *p = ctx->parray[hi->idx];
+                B3gPattern *p = ctx->parray[thi->idx];
 
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (buflen - pos < p->len)
@@ -1064,7 +1092,7 @@ uint32_t B3gSearch12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatch
 
         if (buf != bufend) {
             /* save one conversion by reusing h8 */
-            uint16_t h16 = (uint16_t)(h8 << B3G_HASHSHIFT | u8_tolower(*(buf+1)));
+            uint16_t h16 = (uint16_t)(h8 << b3g_hash_shift | u8_tolower(*(buf+1)));
             hi = ctx->hash2[h16];
 
             for (thi = hi; thi != NULL; thi = thi->nxt) {
@@ -1108,7 +1136,7 @@ uint32_t B3gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
     //printf("BUF "); prt(buf,buflen); printf("\n");
 
     while (buf <= bufend) {
-        uint16_t h = u8_tolower(*buf) << B3G_HASHSHIFT | u8_tolower(*(buf+1));
+        uint16_t h = u8_tolower(*buf) << b3g_hash_shift | u8_tolower(*(buf+1));
         hi = ctx->hash2[h];
 
         if (hi != NULL) {

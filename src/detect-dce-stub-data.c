@@ -90,17 +90,20 @@ void DetectDceStubDataRegister(void)
 int DetectDceStubDataMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
                            uint8_t flags, void *state, Signature *s, SigMatch *m)
 {
+    SCEnter();
+
     DCERPCState *dcerpc_state = (DCERPCState *)state;
     if (dcerpc_state == NULL) {
         SCLogDebug("No DCERPCState for the flow");
-        return 0;
+        SCReturnInt(0);
     }
 
     if (dcerpc_state->dcerpc.dcerpcrequest.stub_data_buffer != NULL ||
-        dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer != NULL) {
-        return 1;
+        dcerpc_state->dcerpc.dcerpcresponse.stub_data_buffer != NULL)
+    {
+        SCReturnInt(1);
     } else {
-        return 0;
+        SCReturnInt(0);
     }
 }
 
@@ -135,6 +138,8 @@ static int DetectDceStubDataSetup(DetectEngineCtx *de_ctx, Signature *s, char *a
     }
 
     s->alproto = ALPROTO_DCERPC;
+    /* Flagged the signature as to inspect the app layer data */
+    s->flags |= SIG_FLAG_APPLAYER;
     return 0;
 
  error:
@@ -156,8 +161,10 @@ static int DetectDceStubDataTestParse01(void)
 
     result = (DetectDceStubDataSetup(NULL, &s, NULL) == 0);
 
-    if (s.match != NULL) {
+    if (s.sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         result = 1;
+    } else {
+        result = 0;
     }
 
     return result;
@@ -637,6 +644,7 @@ static int DetectDceStubDataTestParse02(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -1179,6 +1187,7 @@ static int DetectDceStubDataTestParse03(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -1374,6 +1383,7 @@ static int DetectDceStubDataTestParse04(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
@@ -1640,6 +1650,7 @@ static int DetectDceStubDataTestParse05(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);

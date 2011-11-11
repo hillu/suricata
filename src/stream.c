@@ -20,7 +20,7 @@
  *
  * \author Victor Julien <victor@inliniac.net>
  *
- * Stream Handling API
+ * Stream Chunk Handling API
  */
 
 #include "suricata-common.h"
@@ -29,16 +29,15 @@
 #include "stream.h"
 #include "util-pool.h"
 #include "util-debug.h"
+#include "stream-tcp.h"
 
 static SCMutex stream_pool_memuse_mutex;
 static uint64_t stream_pool_memuse = 0;
 static uint64_t stream_pool_memcnt = 0;
 
 /* per queue setting */
-static uint16_t toserver_min_init_chunk_len = 0;
-static uint16_t toserver_min_chunk_len = 0;
-static uint16_t toclient_min_init_chunk_len = 0;
-static uint16_t toclient_min_chunk_len = 0;
+static uint16_t toserver_min_chunk_len = 2560;
+static uint16_t toclient_min_chunk_len = 2560;
 
 static Pool *stream_msg_pool = NULL;
 static SCMutex stream_msg_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
@@ -154,7 +153,7 @@ void StreamMsgPutInQueue(StreamMsgQueue *q, StreamMsg *s)
 void StreamMsgQueuesInit(void) {
     SCMutexInit(&stream_pool_memuse_mutex, NULL);
 
-    stream_msg_pool = PoolInit(5000,250,StreamMsgAlloc,NULL,StreamMsgFree);
+    stream_msg_pool = PoolInit(0,250,StreamMsgAlloc,NULL,StreamMsgFree);
     if (stream_msg_pool == NULL)
         exit(EXIT_FAILURE); /* XXX */
 }
@@ -191,27 +190,11 @@ StreamMsgQueue *StreamMsgQueueGetByPort(uint16_t port) {
     return NULL;//&stream_q;
 }
 
-void StreamMsgQueueSetMinInitChunkLen(uint8_t dir, uint16_t len) {
-    if (dir == FLOW_PKT_TOSERVER) {
-        toserver_min_init_chunk_len = len;
-    } else {
-        toclient_min_init_chunk_len = len;
-    }
-}
-
 void StreamMsgQueueSetMinChunkLen(uint8_t dir, uint16_t len) {
     if (dir == FLOW_PKT_TOSERVER) {
         toserver_min_chunk_len = len;
     } else {
         toclient_min_chunk_len = len;
-    }
-}
-
-uint16_t StreamMsgQueueGetMinInitChunkLen(uint8_t dir) {
-    if (dir == FLOW_PKT_TOSERVER) {
-        return toserver_min_init_chunk_len;
-    } else {
-        return toclient_min_init_chunk_len;
     }
 }
 
@@ -223,3 +206,37 @@ uint16_t StreamMsgQueueGetMinChunkLen(uint8_t dir) {
     }
 }
 
+/** \brief Return a list of smsgs to the pool */
+void StreamMsgReturnListToPool(void *list) {
+    /* if we have (a) smsg(s), return to the pool */
+    StreamMsg *smsg = (StreamMsg *)list;
+    while (smsg != NULL) {
+        StreamMsg *smsg_next = smsg->next;
+        SCLogDebug("returning smsg %p to pool", smsg);
+        smsg->next = NULL;
+        smsg->prev = NULL;
+        smsg->flow = NULL;
+        StreamMsgReturnToPool(smsg);
+        smsg = smsg_next;
+    }
+}
+
+/** \brief Run callback for all segments
+ *
+ * \return -1 in case of error, the number of segment in case of success
+ */
+int StreamSegmentForEach(Packet *p, uint8_t flag, StreamSegmentCallback CallbackFunc, void *data)
+{
+    switch(p->proto) {
+        case IPPROTO_TCP:
+            return StreamTcpSegmentForEach(p, flag, CallbackFunc, data);
+            break;
+        case IPPROTO_UDP:
+            SCLogWarning(SC_ERR_UNKNOWN_PROTOCOL, "UDP is currently unsupported");
+            break;
+        default:
+            SCLogWarning(SC_ERR_UNKNOWN_PROTOCOL, "This protocol is currently unsupported");
+            break;
+    }
+    return 0;
+}

@@ -42,6 +42,7 @@
 typedef struct NFQPacketVars_
 {
     int id; /* this nfq packets id */
+    uint16_t nfq_index; /* index in NFQ array */
 
     uint32_t mark;
     uint32_t ifi;
@@ -50,6 +51,16 @@ typedef struct NFQPacketVars_
 } NFQPacketVars;
 
 typedef struct NFQThreadVars_
+{
+    uint16_t nfq_index;
+    ThreadVars *tv;
+
+    char *data; /** Per function and thread data */
+    int datalen; /** Length of per function and thread data */
+
+} NFQThreadVars;
+
+typedef struct NFQQueueVars_
 {
     struct nfq_handle *h;
 #ifndef OS_WIN32
@@ -64,6 +75,8 @@ typedef struct NFQThreadVars_
     SCMutex mutex_qh;
     /* this one should be not changing after init */
     uint16_t queue_num;
+    /* position into the NFQ queue var array */
+    uint16_t nfq_index;
 
 #ifdef DBG_PERF
     int dbg_maxreadsize;
@@ -75,18 +88,23 @@ typedef struct NFQThreadVars_
     uint32_t errs;
     uint32_t accepted;
     uint32_t dropped;
+    uint32_t replaced;
 
-    char *data; /** Per function and thread data */
-    int datalen; /** Length of per function and thread data */
+} NFQQueueVars;
 
-    ThreadVars *tv;
-} NFQThreadVars;
+
 
 typedef struct NFQGlobalVars_
 {
     char unbind;
 } NFQGlobalVars;
 
+void NFQInitConfig(char quiet);
+int NFQRegisterQueue(char *queue);
+int NFQGetQueueCount(void);
+void *NFQGetQueue(int number);
+int NFQGetQueueNum(int number);
+void *NFQGetThread(int number);
 #endif /* NFQ */
 #endif /* __SOURCE_NFQ_H__ */
 

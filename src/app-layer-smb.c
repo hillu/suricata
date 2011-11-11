@@ -38,11 +38,13 @@
 #include "stream-tcp.h"
 #include "stream.h"
 
+#include "app-layer-detect-proto.h"
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 
 #include "util-spm.h"
 #include "util-unittest.h"
+#include "util-memcmp.h"
 
 #include "app-layer-smb.h"
 
@@ -832,12 +834,12 @@ static int SMBParseHeader(Flow *f, void *smb_state,
 
     if (input_len > 0) {
         switch (sstate->bytesprocessed) {
-            // fallthrough
-            /* above statement to prevent coverity FPs from the switch
-             * fall through */
             case 4:
+                // fallthrough
+                /* above statement to prevent coverity FPs from the switch
+                 * fall through */
                 if (input_len >= SMB_HDR_LEN) {
-                    if (memcmp(p, "\xff\x53\x4d\x42", 4) != 0) {
+                    if (SCMemcmp(p, "\xff\x53\x4d\x42", 4) != 0) {
                         SCLogDebug("SMB Header did not validate");
                         SCReturnInt(-1);
                     }
@@ -1021,153 +1023,216 @@ static int SMBParseHeader(Flow *f, void *smb_state,
 }
 
 static int SMBParse(Flow *f, void *smb_state, AppLayerParserState *pstate,
-        uint8_t *input, uint32_t input_len, AppLayerParserResult *output) {
+                    uint8_t *input, uint32_t input_len,
+                    AppLayerParserResult *output)
+{
     SCEnter();
 
     SMBState *sstate = (SMBState *) smb_state;
     uint64_t retval = 0;
     uint64_t parsed = 0;
     int hdrretval = 0;
+    int counter = 0;
 
     if (pstate == NULL) {
         SCLogDebug("pstate == NULL");
         SCReturnInt(0);
     }
 
-    while (input_len && sstate->bytesprocessed < NBSS_HDR_LEN) {
-        retval = NBSSParseHeader(f, smb_state, pstate, input,
-                input_len, output);
-        if (retval) {
-            parsed += retval;
-            input_len -= retval;
-            SCLogDebug(
-                    "[1] NBSS Header (%u/%u) Type 0x%02x Length 0x%04x parsed %"PRIu64" input_len %u\n",
-                    sstate->bytesprocessed, NBSS_HDR_LEN, sstate->nbss.type,
-                    sstate->nbss.length, parsed, input_len);
-        } else if (input_len) {
-            SCLogDebug("Error parsing NBSS Header");
+    while (input_len) {
+        /* till we clear corner cases */
+        if (counter++ == 30) {
+            SCLogDebug("Somehow seem to be stuck inside the smb "
+                    "parser for quite sometime.  Let's get out of here.");
             sstate->bytesprocessed = 0;
             SCReturnInt(0);
         }
-    }
 
-    switch (sstate->nbss.type) {
-        case NBSS_SESSION_MESSAGE:
-            while (input_len && (sstate->bytesprocessed >= NBSS_HDR_LEN
-                        && sstate->bytesprocessed < NBSS_HDR_LEN + SMB_HDR_LEN)) {
-                hdrretval = SMBParseHeader(f, smb_state, pstate, input + parsed,
-                        input_len, output);
-                if (hdrretval == -1) {
-                    SCLogDebug("Error parsing SMB Header\n");
-                    sstate->bytesprocessed = 0;
-                    SCReturnInt(0);
-                } else {
-                    parsed += hdrretval;
-                    input_len -= hdrretval;
-                    SCLogDebug(
-                            "[2] SMB Header (%u/%u) Command 0x%02x parsed %"PRIu64" input_len %u\n",
-                            sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN,
-                            sstate->smb.command, parsed, input_len);
-                }
-            }
-
-            do {
-                if (input_len && (sstate->bytesprocessed == NBSS_HDR_LEN
-                            + SMB_HDR_LEN)) {
-                    retval = SMBGetWordCount(f, smb_state, pstate, input + parsed,
-                            input_len, output);
-                    if (retval) {
-                        parsed += retval;
-                        input_len -= retval;
-                    } else if (input_len) {
-                        SCLogDebug("Error parsing SMB Word Count\n");
-                        sstate->bytesprocessed = 0;
-                        SCReturnInt(0);
-                    }
-                    SCLogDebug("[3] WordCount (%u/%u) WordCount %u parsed %"PRIu64" input_len %u\n",
-                            sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN + 1,
-                            sstate->wordcount.wordcount,
-                            parsed, input_len);
-                }
-
-                while (input_len && (sstate->bytesprocessed >= NBSS_HDR_LEN
-                            + SMB_HDR_LEN + 1 && sstate->bytesprocessed < NBSS_HDR_LEN
-                            + SMB_HDR_LEN + 1 + sstate->wordcount.wordcount)) {
-                    retval = SMBParseWordCount(f, smb_state, pstate,
-                            input + parsed, input_len, output);
-                    if (retval) {
-                        parsed += retval;
-                        input_len -= retval;
-                    } else if (input_len) {
-                        SCLogDebug("Error parsing SMB Word Count Data retval %"PRIu64" input_len %u\n", retval, input_len);
-                        sstate->bytesprocessed = 0;
-                        SCReturnInt(0);
-                    }
-                    SCLogDebug("[4] Parsing WordCount (%u/%u) WordCount %u parsed %"PRIu64" input_len %u\n",
-						sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN + 1 + sstate->wordcount.wordcount,
-                                        sstate->wordcount.wordcount,
-                                        parsed, input_len);
-                }
-
-                while (input_len && (sstate->bytesprocessed >= NBSS_HDR_LEN
-                            + SMB_HDR_LEN + 1 + sstate->wordcount.wordcount
-                            && sstate->bytesprocessed < NBSS_HDR_LEN + SMB_HDR_LEN + 3
-                            + sstate->wordcount.wordcount)) {
-                    retval = SMBGetByteCount(f, smb_state, pstate, input + parsed,
-                            input_len, output);
-                    if (retval) {
-                        parsed += retval;
-                        input_len -= retval;
-                    } else if (input_len) {
-                        SCLogDebug("Error parsing SMB Byte Count\n");
-                        sstate->bytesprocessed = 0;
-                        SCReturnInt(0);
-                    }
-                    SCLogDebug("[5] ByteCount (%u/%u) ByteCount %u parsed %"PRIu64" input_len %u\n",
-						sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN + 3,
-                                           sstate->bytecount.bytecount,
-                                           parsed, input_len);
-
-                    if (sstate->bytecount.bytecount == 0) {
-			sstate->bytesprocessed = 0;
-			input_len = 0;
-                    }
-                }
-
-                while (input_len && (sstate->bytesprocessed >= NBSS_HDR_LEN
-                            + SMB_HDR_LEN + 3 + sstate->wordcount.wordcount)
-                            && (sstate->bytesprocessed < NBSS_HDR_LEN + SMB_HDR_LEN + 3
-                            + sstate->wordcount.wordcount
-                            + sstate->bytecount.bytecount)) {
-                    retval = SMBParseByteCount(f, smb_state, pstate,
-                            input + parsed, input_len, output);
-                    if (retval) {
-                        parsed += retval;
-                        input_len -= retval;
-                    } else if (input_len) {
-                        SCLogDebug("Error parsing SMB Byte Count Data\n");
-                        sstate->bytesprocessed = 0;
-                        SCReturnInt(0);
-                    }
-                    SCLogDebug("[6] Parsing ByteCount (%u/%u) ByteCount %u parsed %"PRIu64" input_len %u\n",
-									sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN + 1 + sstate->wordcount.wordcount + 2 + sstate->bytecount.bytecount,
-                                                                          sstate->bytecount.bytecount, parsed, input_len);
-                }
-
-            } while (sstate->andx.andxcommand != SMB_NO_SECONDARY_ANDX_COMMAND
-                    && input_len && sstate->andx.maxchainedandx--);
-
-            if (sstate->bytesprocessed >= sstate->nbss.length + NBSS_HDR_LEN ||
-                    sstate->andx.maxchainedandx == 0) {
+        while (input_len && sstate->bytesprocessed < NBSS_HDR_LEN) {
+            retval = NBSSParseHeader(f, smb_state, pstate, input + parsed,
+                                     input_len, output);
+            if (retval) {
+                parsed += retval;
+                input_len -= retval;
+                SCLogDebug("[1] NBSS Header (%u/%u) Type 0x%02x Length 0x%04x "
+                           "parsed %"PRIu64" input_len %u",
+                           sstate->bytesprocessed, NBSS_HDR_LEN, sstate->nbss.type,
+                           sstate->nbss.length, parsed, input_len);
+            } else if (input_len) {
+                SCLogDebug("Error parsing NBSS Header");
                 sstate->bytesprocessed = 0;
-                sstate->transaction_id++;
+                SCReturnInt(0);
             }
-            break;
-        default:
-            sstate->bytesprocessed = 0;
-            break;
-    }
+        }
+
+        switch (sstate->nbss.type) {
+            case NBSS_SESSION_MESSAGE:
+                while (input_len &&
+                       (sstate->bytesprocessed >= NBSS_HDR_LEN &&
+                        sstate->bytesprocessed < NBSS_HDR_LEN + SMB_HDR_LEN)) {
+                    /* inside while */
+                    hdrretval = SMBParseHeader(f, smb_state, pstate, input + parsed,
+                                               input_len, output);
+                    if (hdrretval == -1) {
+                        SCLogDebug("Error parsing SMB Header");
+                        sstate->bytesprocessed = 0;
+                        SCReturnInt(0);
+                    } else {
+                        parsed += hdrretval;
+                        input_len -= hdrretval;
+                        SCLogDebug("[2] SMB Header (%u/%u) Command 0x%02x "
+                                   "parsed %"PRIu64" input_len %u",
+                                   sstate->bytesprocessed, NBSS_HDR_LEN + SMB_HDR_LEN,
+                                   sstate->smb.command, parsed, input_len);
+                    }
+                } /* while */
+
+                do {
+                    if (input_len &&
+                        (sstate->bytesprocessed == NBSS_HDR_LEN + SMB_HDR_LEN)) {
+                        /* inside if */
+                        retval = SMBGetWordCount(f, smb_state, pstate, input + parsed,
+                                                 input_len, output);
+                        if (retval) {
+                            parsed += retval;
+                            input_len -= retval;
+                        } else if (input_len) {
+                            SCLogDebug("Error parsing SMB Word Count");
+                            sstate->bytesprocessed = 0;
+                            SCReturnInt(0);
+                        }
+                        SCLogDebug("[3] WordCount (%u/%u) WordCount %u parsed "
+                                   "%"PRIu64" input_len %u",
+                                   sstate->bytesprocessed,
+                                   NBSS_HDR_LEN + SMB_HDR_LEN + 1,
+                                   sstate->wordcount.wordcount,
+                                   parsed, input_len);
+                    } /* if (input_len && ..) */
+
+                    while (input_len &&
+                           (sstate->bytesprocessed >= NBSS_HDR_LEN + SMB_HDR_LEN + 1 &&
+                            sstate->bytesprocessed < (NBSS_HDR_LEN + SMB_HDR_LEN + 1 +
+                                                      sstate->wordcount.wordcount))) {
+                        /* inside while */
+                        retval = SMBParseWordCount(f, smb_state, pstate,
+                                                   input + parsed, input_len, output);
+                        if (retval) {
+                            parsed += retval;
+                            input_len -= retval;
+                        } else if (input_len) {
+                            SCLogDebug("Error parsing SMB Word Count Data retval "
+                                       "%"PRIu64" input_len %u", retval, input_len);
+                            sstate->bytesprocessed = 0;
+                            SCReturnInt(0);
+                        }
+                        SCLogDebug("[4] Parsing WordCount (%u/%u) WordCount %u "
+                                   "parsed %"PRIu64" input_len %u",
+                                   sstate->bytesprocessed,
+                                   NBSS_HDR_LEN + SMB_HDR_LEN + 1 +
+                                   sstate->wordcount.wordcount,
+                                   sstate->wordcount.wordcount,
+                                   parsed, input_len);
+                    } /* while (input_len && ..) */
+
+                    while (input_len &&
+                           (sstate->bytesprocessed >= (NBSS_HDR_LEN + SMB_HDR_LEN +
+                                                       1 + sstate->wordcount.wordcount) &&
+                            sstate->bytesprocessed < (NBSS_HDR_LEN + SMB_HDR_LEN + 3
+                                                      + sstate->wordcount.wordcount))) {
+                        /* inside while */
+                        retval = SMBGetByteCount(f, smb_state, pstate, input + parsed,
+                                                 input_len, output);
+                        if (retval) {
+                            parsed += retval;
+                            input_len -= retval;
+                        } else if (input_len) {
+                            SCLogDebug("Error parsing SMB Byte Count");
+                            sstate->bytesprocessed = 0;
+                            SCReturnInt(0);
+                        }
+                        SCLogDebug("[5] ByteCount (%u/%u) ByteCount %u parsed "
+                                   "%"PRIu64" input_len %u",
+                                   sstate->bytesprocessed,
+                                   NBSS_HDR_LEN + SMB_HDR_LEN + 3,
+                                   sstate->bytecount.bytecount,
+                                   parsed, input_len);
+
+                        if (sstate->bytecount.bytecount == 0) {
+                            sstate->bytesprocessed = 0;
+                            input_len = 0;
+                        }
+                    } /* while (input_len && ..) */
+
+                    while (input_len &&
+                           (sstate->bytesprocessed >= (NBSS_HDR_LEN + SMB_HDR_LEN +
+                                                       3 + sstate->wordcount.wordcount)) &&
+                           (sstate->bytesprocessed < (NBSS_HDR_LEN + SMB_HDR_LEN + 3
+                                                      + sstate->wordcount.wordcount
+                                                      + sstate->bytecount.bytecount))) {
+                        /* inside while */
+                        retval = SMBParseByteCount(f, smb_state, pstate,
+                                                   input + parsed, input_len, output);
+                        if (retval) {
+                            parsed += retval;
+                            input_len -= retval;
+                        } else if (input_len) {
+                            SCLogDebug("Error parsing SMB Byte Count Data");
+                            sstate->bytesprocessed = 0;
+                            SCReturnInt(0);
+                        }
+                        SCLogDebug("[6] Parsing ByteCount (%u/%u) ByteCount %u "
+                                   "parsed %"PRIu64" input_len %u",
+                                   sstate->bytesprocessed,
+                                   NBSS_HDR_LEN + SMB_HDR_LEN + 1 +
+                                   sstate->wordcount.wordcount + 2 +
+                                   sstate->bytecount.bytecount,
+                                   sstate->bytecount.bytecount, parsed, input_len);
+                    } /* while (input_len && ..) */
+
+                } while (sstate->andx.andxcommand != SMB_NO_SECONDARY_ANDX_COMMAND &&
+                         input_len && sstate->andx.maxchainedandx--);
+
+                if (sstate->bytesprocessed >= sstate->nbss.length + NBSS_HDR_LEN ||
+                    sstate->andx.maxchainedandx == 0) {
+                    /* inside if */
+                    sstate->bytesprocessed = 0;
+                    sstate->transaction_id++;
+                    input_len = 0;
+                }
+                break;
+
+            case NBSS_SESSION_REQUEST:
+            case NBSS_POSITIVE_SESSION_RESPONSE:
+            case NBSS_NEGATIVE_SESSION_RESPONSE:
+            case NBSS_RETARGET_SESSION_RESPONSE:
+            case NBSS_SESSION_KEEP_ALIVE:
+                if (sstate->bytesprocessed < (sstate->nbss.length + NBSS_HDR_LEN)) {
+                    if (input_len >= (sstate->nbss.length + NBSS_HDR_LEN -
+                                      sstate->bytesprocessed)) {
+                        /* inside if */
+                        input_len -= (sstate->nbss.length + NBSS_HDR_LEN -
+                                      sstate->bytesprocessed);
+                        parsed += (sstate->nbss.length + NBSS_HDR_LEN -
+                                   sstate->bytesprocessed);
+                        sstate->bytesprocessed = 0;
+                    } else {
+                        sstate->bytesprocessed += input_len;
+                        input_len = 0;
+                    }
+                } else {
+                    sstate->bytesprocessed = 0;
+                }
+                break;
+
+            default:
+                sstate->bytesprocessed = 0;
+                break;
+        } /* switch */
+
+    } /* while (input_len) */
+
     pstate->parse_field = 0;
+
     SCReturnInt(1);
 }
 
@@ -1226,15 +1291,15 @@ static void SMBStateFree(void *s) {
     while ((item = TAILQ_FIRST(&sstate->dcerpc.dcerpcbindbindack.uuid_list))) {
 	//printUUID("Free", item);
 	TAILQ_REMOVE(&sstate->dcerpc.dcerpcbindbindack.uuid_list, item, next);
-	free(item);
+	SCFree(item);
     }
     if (sstate->dcerpc.dcerpcrequest.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcrequest.stub_data_buffer);
         sstate->dcerpc.dcerpcrequest.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcrequest.stub_data_buffer_len = 0;
     }
     if (sstate->dcerpc.dcerpcresponse.stub_data_buffer != NULL) {
-        free(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
+        SCFree(sstate->dcerpc.dcerpcresponse.stub_data_buffer);
         sstate->dcerpc.dcerpcresponse.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcresponse.stub_data_buffer_len = 0;
     }
@@ -1261,12 +1326,75 @@ void SMBUpdateTransactionId(void *state, uint16_t *id) {
     SCReturn;
 }
 
+#define SMB_PROBING_PARSER_MIN_DEPTH 8
+
+static uint16_t SMBProbingParser(uint8_t *input, uint32_t ilen)
+{
+    int32_t len;
+    int32_t input_len = ilen;
+
+    while (input_len >= SMB_PROBING_PARSER_MIN_DEPTH) {
+        switch (input[0]) {
+            case NBSS_SESSION_MESSAGE:
+                if (input[4] == 0xFF && input[5] == 'S' && input[6] == 'M' &&
+                    input[7] == 'B') {
+                    return ALPROTO_SMB;
+                }
+
+            case NBSS_SESSION_REQUEST:
+            case NBSS_POSITIVE_SESSION_RESPONSE:
+            case NBSS_NEGATIVE_SESSION_RESPONSE:
+            case NBSS_RETARGET_SESSION_RESPONSE:
+            case NBSS_SESSION_KEEP_ALIVE:
+                len = (input[1] & 0x01) << 16;
+                len = input[2] << 8;
+                len |= input[3];
+                break;
+            default:
+                /* -1 indicates a stream where the probing parser would be
+                 * unable to find nbss, even if it exists.  This should
+                 * prevent the probing parser from beig invoked henceforth */
+                return ALPROTO_FAILED;
+        }
+
+        input_len -= 4;
+        if (len >= input_len) {
+            return ALPROTO_UNKNOWN;
+        }
+
+        input_len -= len;
+        input += 4 + len;
+    }
+
+    return ALPROTO_UNKNOWN;
+}
+
 void RegisterSMBParsers(void) {
+    /** SMB */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOSERVER);
+
+    /** SMB2 */
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOSERVER);
+
     AppLayerRegisterProto("smb", ALPROTO_SMB, STREAM_TOSERVER, SMBParse);
     AppLayerRegisterProto("smb", ALPROTO_SMB, STREAM_TOCLIENT, SMBParse);
     AppLayerRegisterStateFuncs(ALPROTO_SMB, SMBStateAlloc, SMBStateFree);
     AppLayerRegisterTransactionIdFuncs(ALPROTO_SMB,
             SMBUpdateTransactionId, NULL);
+
+    AppLayerRegisterProbingParser(&alp_proto_ctx,
+                                  139,
+                                  IPPROTO_TCP,
+                                  "smb",
+                                  ALPROTO_SMB,
+                                  SMB_PROBING_PARSER_MIN_DEPTH, 0,
+                                  STREAM_TOSERVER,
+                                  APP_LAYER_PROBING_PARSER_PRIORITY_HIGH, 1,
+                                  SMBProbingParser);
+
+    return;
 }
 
 /* UNITTESTS */
@@ -1807,6 +1935,439 @@ end:
     return result;
 }
 
+int SMBParserTest05(void)
+{
+    uint8_t smbbuf1[] = {
+        /* session request */
+        0x81, 0x00, 0x00, 0x44, 0x20, 0x43, 0x4b, 0x46,
+        0x44, 0x45, 0x4e, 0x45, 0x43, 0x46, 0x44, 0x45,
+        0x46, 0x46, 0x43, 0x46, 0x47, 0x45, 0x46, 0x46,
+        0x43, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x00, 0x20, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x41, 0x41, 0x00
+    };
+    uint32_t smblen1 = sizeof(smbbuf1);
+    uint8_t smbbuf2[] = {
+        /* session request */
+        0x81, 0x00, 0x00, 0x44, 0x20, 0x43, 0x4b, 0x46,
+        0x44, 0x45, 0x4e, 0x45, 0x43, 0x46, 0x44, 0x45,
+        0x46, 0x46, 0x43, 0x46, 0x47, 0x45, 0x46, 0x46,
+        0x43, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x00, 0x20, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x43, 0x41, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x41, 0x41, 0x00,
+        /* session message */
+        0x00, 0x00, 0x00, 0x60, 0xff, 0x53, 0x4d, 0x42,
+        0x72, 0x00, 0x00, 0x00, 0x00, 0x18, 0x01, 0x20,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x48, 0x2d,
+        0x00, 0x00, 0xdd, 0xca, 0x00, 0x3d, 0x00, 0x02,
+        0x4d, 0x45, 0x54, 0x41, 0x53, 0x50, 0x4c, 0x4f,
+        0x49, 0x54, 0x00, 0x02, 0x4c, 0x41, 0x4e, 0x4d,
+        0x41, 0x4e, 0x31, 0x2e, 0x30, 0x00, 0x02, 0x4c,
+        0x4d, 0x31, 0x2e, 0x32, 0x58, 0x30, 0x30, 0x32,
+        0x00, 0x02, 0x4e, 0x54, 0x20, 0x4c, 0x41, 0x4e,
+        0x4d, 0x41, 0x4e, 0x20, 0x31, 0x2e, 0x30, 0x00,
+        0x02, 0x4e, 0x54, 0x20, 0x4c, 0x4d, 0x20, 0x30,
+        0x2e, 0x31, 0x32, 0x00
+    };
+    uint32_t smblen2 = sizeof(smbbuf2);
+
+    int result = 0;
+    AlpProtoDetectCtx ctx;
+    AlpProtoDetectThreadCtx tctx;
+    uint16_t alproto;
+    Flow f;
+    memset(&f, 0, sizeof(f));
+    f.dp = 139;
+
+    AlpProtoInit(&ctx);
+
+    /** SMB */
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOSERVER);
+
+    /** SMB2 */
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOSERVER);
+
+    AppLayerRegisterProbingParser(&ctx,
+                                  f.dp,
+                                  IPPROTO_TCP,
+                                  "smb",
+                                  ALPROTO_SMB,
+                                  SMB_PROBING_PARSER_MIN_DEPTH, 0,
+                                  STREAM_TOSERVER,
+                                  APP_LAYER_PROBING_PARSER_PRIORITY_HIGH, 1,
+                                  SMBProbingParser);
+
+
+    AlpProtoFinalizeGlobal(&ctx);
+    AlpProtoFinalizeThread(&ctx, &tctx);
+
+    alproto = AppLayerDetectGetProto(&ctx, &tctx, &f,
+                                     smbbuf1, smblen1,
+                                     STREAM_TOSERVER, IPPROTO_TCP);
+    if (alproto != ALPROTO_UNKNOWN) {
+        printf("alproto is %"PRIu16 ".  Should be ALPROTO_UNKNOWN\n",
+               alproto);
+        goto end;
+    }
+
+    alproto = AppLayerDetectGetProto(&ctx, &tctx, &f,
+                                     smbbuf2, smblen2,
+                                     STREAM_TOSERVER, IPPROTO_TCP);
+    if (alproto != ALPROTO_SMB) {
+        printf("alproto is %"PRIu16 ".  Should be ALPROTO_SMB\n",
+               alproto);
+        goto end;
+    }
+
+    result = 1;
+ end:
+    AlpProtoTestDestroy(&ctx);
+    PmqFree(&tctx.toclient.pmq);
+    PmqFree(&tctx.toserver.pmq);
+    return result;
+}
+
+int SMBParserTest06(void)
+{
+    uint8_t smbbuf1[] = {
+        /* session request */
+        0x83, 0x00, 0x00, 0x01, 0x82
+    };
+    uint32_t smblen1 = sizeof(smbbuf1);
+    uint8_t smbbuf2[] = {
+        /* session request */
+        0x83, 0x00, 0x00, 0x01, 0x82,
+        /* session message */
+        0x00, 0x00, 0x00, 0x55, 0xff, 0x53, 0x4d, 0x42,
+        0x72, 0x00, 0x00, 0x00, 0x00, 0x98, 0x53, 0xc8,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe,
+        0x00, 0x00, 0x00, 0x00, 0x11, 0x05, 0x00, 0x03,
+        0x0a, 0x00, 0x01, 0x00, 0x04, 0x11, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xfd, 0xe3, 0x00, 0x80, 0xb8, 0xcb, 0x22, 0x5f,
+        0xfd, 0xeb, 0xc3, 0x01, 0x68, 0x01, 0x00, 0x10,
+        0x00, 0x50, 0xb5, 0xc3, 0x62, 0x59, 0x02, 0xd1,
+        0x4d, 0x99, 0x6d, 0x85, 0x7d, 0xfa, 0x93, 0x2d,
+        0xbb
+    };
+    uint32_t smblen2 = sizeof(smbbuf2);
+
+    int result = 0;
+    AlpProtoDetectCtx ctx;
+    AlpProtoDetectThreadCtx tctx;
+    uint16_t alproto;
+    Flow f;
+    memset(&f, 0, sizeof(f));
+    f.dp = 139;
+
+    AlpProtoInit(&ctx);
+
+    /** SMB */
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB, "|ff|SMB", 8, 4, STREAM_TOSERVER);
+
+    /** SMB2 */
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOCLIENT);
+    AlpProtoAdd(&ctx, IPPROTO_TCP, ALPROTO_SMB2, "|fe|SMB", 8, 4, STREAM_TOSERVER);
+
+    AppLayerRegisterProbingParser(&ctx,
+                                  f.dp,
+                                  IPPROTO_TCP,
+                                  "smb",
+                                  ALPROTO_SMB,
+                                  SMB_PROBING_PARSER_MIN_DEPTH, 0,
+                                  STREAM_TOSERVER,
+                                  APP_LAYER_PROBING_PARSER_PRIORITY_HIGH, 1,
+                                  SMBProbingParser);
+
+
+    AlpProtoFinalizeGlobal(&ctx);
+    AlpProtoFinalizeThread(&ctx, &tctx);
+
+    alproto = AppLayerDetectGetProto(&ctx, &tctx, &f,
+                                     smbbuf1, smblen1,
+                                     STREAM_TOSERVER, IPPROTO_TCP);
+    if (alproto != ALPROTO_UNKNOWN) {
+        printf("alproto is %"PRIu16 ".  Should be ALPROTO_UNKNOWN\n",
+               alproto);
+        goto end;
+    }
+
+    alproto = AppLayerDetectGetProto(&ctx, &tctx, &f,
+                                     smbbuf2, smblen2,
+                                     STREAM_TOSERVER, IPPROTO_TCP);
+    if (alproto != ALPROTO_SMB) {
+        printf("alproto is %"PRIu16 ".  Should be ALPROTO_SMB\n",
+               alproto);
+        goto end;
+    }
+
+    result = 1;
+ end:
+    AlpProtoTestDestroy(&ctx);
+    PmqFree(&tctx.toclient.pmq);
+    PmqFree(&tctx.toserver.pmq);
+    return result;
+}
+
+int SMBParserTest07(void) {
+    int result = 0;
+    Flow f;
+    uint8_t smbbuf1[] = {
+        /* negative session response */
+        0x83, 0x00, 0x00, 0x01, 0x82
+    };
+    uint32_t smblen1 = sizeof(smbbuf1);
+    TcpSession ssn;
+    int r = 0;
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_SMB, STREAM_TOCLIENT | STREAM_START, smbbuf1, smblen1);
+    if (r != 0) {
+        printf("smb header check returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    SMBState *smb_state = f.aldata[AlpGetStateIdx(ALPROTO_SMB)];
+    if (smb_state == NULL) {
+        printf("no smb state: ");
+        goto end;
+    }
+
+    if (smb_state->smb.command != 0) {
+        printf("we shouldn't have any smb state as yet\n");
+        goto end;
+    }
+
+    if (smb_state->nbss.length != 1 ||
+        smb_state->nbss.type != NBSS_NEGATIVE_SESSION_RESPONSE) {
+        printf("something wrong with nbss parsing\n");
+        goto end;
+    }
+
+    if (smb_state->bytesprocessed != 0) {
+        printf("smb parser bytesprocessed should be 0, but it is not\n");
+        goto end;
+    }
+
+    result = 1;
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+int SMBParserTest08(void) {
+    int result = 0;
+    Flow f;
+    uint8_t smbbuf1[] = {
+        /* positive session response */
+        0x82, 0x00, 0x00, 0x00
+    };
+    uint8_t smbbuf2[] = {
+        /* negotiate protocol */
+        0x00, 0x00, 0x00, 0x55, 0xff, 0x53, 0x4d, 0x42,
+        0x72, 0x00, 0x00, 0x00, 0x00, 0x98, 0x53, 0xc8,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe,
+        0x00, 0x00, 0x00, 0x00, 0x11, 0x05, 0x00, 0x03,
+        0x0a, 0x00, 0x01, 0x00, 0x04, 0x11, 0x00, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xfd, 0xe3, 0x00, 0x80, 0x40, 0x8a, 0x57, 0x5c,
+        0xfd, 0xeb, 0xc3, 0x01, 0x68, 0x01, 0x00, 0x10,
+        0x00, 0x50, 0xb5, 0xc3, 0x62, 0x59, 0x02, 0xd1,
+        0x4d, 0x99, 0x6d, 0x85, 0x7d, 0xfa, 0x93, 0x2d,
+        0xbb
+    };
+    uint32_t smblen1 = sizeof(smbbuf1);
+    uint32_t smblen2 = sizeof(smbbuf2);
+    TcpSession ssn;
+    int r = 0;
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_SMB, STREAM_TOCLIENT | STREAM_START, smbbuf1, smblen1);
+    if (r != 0) {
+        printf("smb header check returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    SMBState *smb_state = f.aldata[AlpGetStateIdx(ALPROTO_SMB)];
+    if (smb_state == NULL) {
+        printf("no smb state: ");
+        goto end;
+    }
+
+    if (smb_state->smb.command != 0) {
+        printf("we shouldn't have any smb state as yet\n");
+        goto end;
+    }
+
+    if (smb_state->nbss.length != 0 ||
+        smb_state->nbss.type != NBSS_POSITIVE_SESSION_RESPONSE) {
+        printf("something wrong with nbss parsing\n");
+        goto end;
+    }
+
+    if (smb_state->bytesprocessed != 0) {
+        printf("smb parser bytesprocessed should be 0, but it is not\n");
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_SMB, STREAM_TOCLIENT, smbbuf2, smblen2);
+    if (r != 0) {
+        printf("smb header check returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    if (smb_state->smb.command != SMB_COM_NEGOTIATE) {
+        printf("we should expect SMB command 0x%02x , got 0x%02x : ",
+               SMB_COM_NEGOTIATE, smb_state->smb.command);
+        goto end;
+    }
+
+    if (smb_state->nbss.length != 85 ||
+        smb_state->nbss.type != NBSS_SESSION_MESSAGE) {
+        printf("something wrong with nbss parsing\n");
+        goto end;
+    }
+
+    if (smb_state->bytesprocessed != 0) {
+        printf("smb parser bytesprocessed should be 0, but it is not\n");
+        goto end;
+    }
+
+    result = 1;
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+int SMBParserTest09(void) {
+    int result = 0;
+    Flow f;
+    uint8_t smbbuf1[] = {
+        /* session request */
+        0x81, 0x00, 0x00, 0x44, 0x20, 0x45, 0x44, 0x45,
+        0x4a, 0x46, 0x44, 0x45, 0x44, 0x45, 0x50, 0x43,
+        0x4e, 0x46, 0x48, 0x44, 0x43, 0x45, 0x4c, 0x43,
+        0x4e, 0x46, 0x43, 0x46, 0x45, 0x45, 0x4e, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x00, 0x20, 0x45,
+        0x44, 0x45, 0x4a, 0x46, 0x44, 0x45, 0x44, 0x45,
+        0x50, 0x43, 0x4e, 0x46, 0x49, 0x46, 0x41, 0x43,
+        0x4e, 0x46, 0x43, 0x46, 0x45, 0x45, 0x4e, 0x43,
+        0x41, 0x43, 0x41, 0x43, 0x41, 0x41, 0x41, 0x00
+    };
+    uint8_t smbbuf2[] = {
+        /* session service - negotiate protocol */
+        0x00, 0x00, 0x00, 0x85, 0xff, 0x53, 0x4d, 0x42,
+        0x72, 0x00, 0x00, 0x00, 0x00, 0x18, 0x53, 0xc8,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xfe,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x62, 0x00, 0x02,
+        0x50, 0x43, 0x20, 0x4e, 0x45, 0x54, 0x57, 0x4f,
+        0x52, 0x4b, 0x20, 0x50, 0x52, 0x4f, 0x47, 0x52,
+        0x41, 0x4d, 0x20, 0x31, 0x2e, 0x30, 0x00, 0x02,
+        0x4c, 0x41, 0x4e, 0x4d, 0x41, 0x4e, 0x31, 0x2e,
+        0x30, 0x00, 0x02, 0x57, 0x69, 0x6e, 0x64, 0x6f,
+        0x77, 0x73, 0x20, 0x66, 0x6f, 0x72, 0x20, 0x57,
+        0x6f, 0x72, 0x6b, 0x67, 0x72, 0x6f, 0x75, 0x70,
+        0x73, 0x20, 0x33, 0x2e, 0x31, 0x61, 0x00, 0x02,
+        0x4c, 0x4d, 0x31, 0x2e, 0x32, 0x58, 0x30, 0x30,
+        0x32, 0x00, 0x02, 0x4c, 0x41, 0x4e, 0x4d, 0x41,
+        0x4e, 0x32, 0x2e, 0x31, 0x00, 0x02, 0x4e, 0x54,
+        0x20, 0x4c, 0x4d, 0x20, 0x30, 0x2e, 0x31, 0x32,
+        0x00
+    };
+    uint32_t smblen1 = sizeof(smbbuf1);
+    uint32_t smblen2 = sizeof(smbbuf2);
+    TcpSession ssn;
+    int r = 0;
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+    f.protoctx = (void *)&ssn;
+
+    StreamTcpInitConfig(TRUE);
+    FlowL7DataPtrInit(&f);
+
+    r = AppLayerParse(&f, ALPROTO_SMB, STREAM_TOSERVER | STREAM_START, smbbuf1, smblen1);
+    if (r != 0) {
+        printf("smb header check returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    SMBState *smb_state = f.aldata[AlpGetStateIdx(ALPROTO_SMB)];
+    if (smb_state == NULL) {
+        printf("no smb state: ");
+        goto end;
+    }
+
+    if (smb_state->smb.command != 0) {
+        printf("we shouldn't have any smb state as yet\n");
+        goto end;
+    }
+
+    if (smb_state->nbss.length != 68 ||
+        smb_state->nbss.type != NBSS_SESSION_REQUEST) {
+        printf("something wrong with nbss parsing\n");
+        goto end;
+    }
+
+    if (smb_state->bytesprocessed != 0) {
+        printf("smb parser bytesprocessed should be 0, but it is not\n");
+        goto end;
+    }
+
+    r = AppLayerParse(&f, ALPROTO_SMB, STREAM_TOSERVER, smbbuf2, smblen2);
+    if (r != 0) {
+        printf("smb header check returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    if (smb_state->smb.command != SMB_COM_NEGOTIATE) {
+        printf("we should expect SMB command 0x%02x , got 0x%02x : ",
+               SMB_COM_NEGOTIATE, smb_state->smb.command);
+        goto end;
+    }
+
+    if (smb_state->nbss.length != 133 ||
+        smb_state->nbss.type != NBSS_SESSION_MESSAGE) {
+        printf("something wrong with nbss parsing\n");
+        goto end;
+    }
+
+    if (smb_state->bytesprocessed != 0) {
+        printf("smb parser bytesprocessed should be 0, but it is not\n");
+        goto end;
+    }
+
+    result = 1;
+end:
+    FlowL7DataPtrFree(&f);
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
 #endif
 
 void SMBParserRegisterTests(void) {
@@ -1816,6 +2377,11 @@ void SMBParserRegisterTests(void) {
     UtRegisterTest("SMBParserTest02", SMBParserTest02, 1);
     UtRegisterTest("SMBParserTest03", SMBParserTest03, 1);
     UtRegisterTest("SMBParserTest04", SMBParserTest04, 1);
+    UtRegisterTest("SMBParserTest05", SMBParserTest05, 1);
+    UtRegisterTest("SMBParserTest06", SMBParserTest06, 1);
+    UtRegisterTest("SMBParserTest07", SMBParserTest07, 1);
+    UtRegisterTest("SMBParserTest08", SMBParserTest08, 1);
+    UtRegisterTest("SMBParserTest09", SMBParserTest09, 1);
 #endif
 }
 

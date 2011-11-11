@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2011 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -27,6 +27,31 @@
 #include "flow.h"
 #include "flow-private.h"
 
+/** tag signature we use for tag alerts */
+static Signature g_tag_signature;
+/** tag packet alert structure for tag alerts */
+static PacketAlert g_tag_pa;
+
+void PacketAlertTagInit(void) {
+    memset(&g_tag_signature, 0x00, sizeof(g_tag_signature));
+
+    g_tag_signature.id = TAG_SIG_ID;
+    g_tag_signature.gid = TAG_SIG_GEN;
+    g_tag_signature.num = TAG_SIG_ID;
+    g_tag_signature.rev = 1;
+    g_tag_signature.prio = 2;
+
+    memset(&g_tag_pa, 0x00, sizeof(g_tag_pa));
+
+    g_tag_pa.order_id = 1000;
+    g_tag_pa.action = ACTION_ALERT;
+    g_tag_pa.s = &g_tag_signature;
+}
+
+PacketAlert *PacketAlertGetTag(void) {
+    return &g_tag_pa;
+}
+
 /**
  * \brief Handle a packet and check if needs a threshold logic
  *
@@ -34,32 +59,33 @@
  * \param sig Signature pointer
  * \param p Packet structure
  *
+ * \retval 1 alert is not suppressed
+ * \retval 0 alert is suppressed
  */
-int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+static int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
                        Signature *s, Packet *p, uint16_t pos)
 {
     SCEnter();
-    int ret = 0;
+    int ret = 1;
     DetectThresholdData *td = NULL;
+    SigMatch *sm = NULL;
 
-    /* retrieve the sig match data */
-    if (PKT_IS_IPV4(p) || PKT_IS_IPV6(p)) {
-        td = SigGetThresholdType(s,p);
+    if (!(PKT_IS_IPV4(p) || PKT_IS_IPV6(p))) {
+        SCReturnInt(1);
     }
 
-    SCLogDebug("td %p", td);
-
-    /* if have none just alert, otherwise handle thresholding */
-    if (td == NULL) {
-        /* Already inserted so get out */
-        ret = 1;
-    } else {
-        ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
-        if (ret == 0) {
-            /* It doesn't match threshold, remove it */
-            PacketAlertRemove(p, pos);
+    do {
+        td = SigGetThresholdTypeIter(s, p, &sm);
+        if (td != NULL) {
+            SCLogDebug("td %p", td);
+            ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+            if (ret == 0) {
+                /* It doesn't match threshold, remove it */
+                PacketAlertRemove(p, pos);
+                break;
+            }
         }
-    }
+    } while (sm != NULL);
 
     SCReturnInt(ret);
 }
@@ -79,7 +105,10 @@ int PacketAlertCheck(Packet *p, uint32_t sid)
     int match = 0;
 
     for (i = 0; i < p->alerts.cnt; i++) {
-        if (p->alerts.alerts[i].sid == sid)
+        if (p->alerts.alerts[i].s == NULL)
+            continue;
+
+        if (p->alerts.alerts[i].s->id == sid)
             match++;
     }
 
@@ -110,7 +139,15 @@ int PacketAlertRemove(Packet *p, uint16_t pos)
     return match;
 }
 
-int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, uint8_t flags)
+/** \brief append a signature match to a packet
+ *
+ *  \param det_ctx thread detection engine ctx
+ *  \param s the signature that matched
+ *  \param p packet
+ *  \param flags alert flags
+ *  \param alert_msg ptr to StreamMsg object that the signature matched on
+ */
+int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, uint8_t flags, void *alert_msg)
 {
     int i = 0;
 
@@ -123,71 +160,31 @@ int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, u
     if (p->alerts.cnt == 0 || (p->alerts.cnt > 0 &&
                                p->alerts.alerts[p->alerts.cnt - 1].order_id < s->order_id)) {
         /* We just add it */
-        if (s->gid > 1)
-            p->alerts.alerts[p->alerts.cnt].gid = s->gid;
-        else
-            p->alerts.alerts[p->alerts.cnt].gid = 1;
-
         p->alerts.alerts[p->alerts.cnt].num = s->num;
         p->alerts.alerts[p->alerts.cnt].order_id = s->order_id;
         p->alerts.alerts[p->alerts.cnt].action = s->action;
-        p->alerts.alerts[p->alerts.cnt].sid = s->id;
-        p->alerts.alerts[p->alerts.cnt].rev = s->rev;
-        p->alerts.alerts[p->alerts.cnt].prio = s->prio;
-        p->alerts.alerts[p->alerts.cnt].msg = s->msg;
-        p->alerts.alerts[p->alerts.cnt].class = s->class;
-        p->alerts.alerts[p->alerts.cnt].class_msg = s->class_msg;
-        p->alerts.alerts[p->alerts.cnt].references = s->references;
         p->alerts.alerts[p->alerts.cnt].flags = flags;
+        p->alerts.alerts[p->alerts.cnt].alert_msg = alert_msg;
+        p->alerts.alerts[p->alerts.cnt].s = s;
     } else {
         /* We need to make room for this s->num
-         (a bit ugly with mamcpy but we are planning changes here)*/
+         (a bit ugly with memcpy but we are planning changes here)*/
         for (i = p->alerts.cnt - 1; i >= 0 && p->alerts.alerts[i].order_id > s->order_id; i--) {
             memcpy(&p->alerts.alerts[i + 1], &p->alerts.alerts[i], sizeof(PacketAlert));
         }
 
         i++; /* The right place to store the alert */
 
-        if (s->gid > 1)
-            p->alerts.alerts[i].gid = s->gid;
-        else
-            p->alerts.alerts[i].gid = 1;
-
         p->alerts.alerts[i].num = s->num;
         p->alerts.alerts[i].order_id = s->order_id;
         p->alerts.alerts[i].action = s->action;
-        p->alerts.alerts[i].sid = s->id;
-        p->alerts.alerts[i].rev = s->rev;
-        p->alerts.alerts[i].prio = s->prio;
-        p->alerts.alerts[i].msg = s->msg;
-        p->alerts.alerts[i].class = s->class;
-        p->alerts.alerts[i].class_msg = s->class_msg;
-        p->alerts.alerts[i].references = s->references;
         p->alerts.alerts[i].flags = flags;
+        p->alerts.alerts[i].alert_msg = alert_msg;
+        p->alerts.alerts[i].s = s;
     }
 
     /* Update the count */
     p->alerts.cnt++;
-
-    return 0;
-}
-
-/**
- * \brief Fill the data of a tagged packet to be logged by unified
- */
-int PacketAlertAppendTag(Packet *p, PacketAlert *pa)
-{
-        pa->sid = TAG_SIG_ID;
-        pa->gid = TAG_SIG_GEN;
-        pa->num = TAG_SIG_ID;
-        pa->order_id = 1000;
-        pa->action = ACTION_ALERT;
-        pa->rev = 1;
-        pa->prio = 2;
-        pa->msg = NULL;
-        pa->class = 0;
-        pa->class_msg = NULL;
-        pa->references = NULL;
 
     return 0;
 }
@@ -219,7 +216,7 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
         } else {
             /* Now, if we have an alert, we have to check if we want
              * to tag this session or src/dst host */
-            sm = s->tmatch;
+            sm = s->sm_lists[DETECT_SM_LIST_TMATCH];
             while (sm) {
                 /* tags are set only for alerts */
                 sigmatch_table[sm->type].Match(NULL, det_ctx, p, s, sm);

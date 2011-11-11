@@ -48,7 +48,6 @@ static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
 {
     char *str = NULL;
     uint16_t len;
-    char converted = 0;
 
     if (strlen(msgstr) == 0)
         goto error;
@@ -74,6 +73,8 @@ static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
     len = strlen(str);
     if (len == 0)
         goto error;
+
+    char converted = 0;
 
     {
         uint16_t i, x;

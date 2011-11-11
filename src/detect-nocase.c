@@ -65,101 +65,101 @@ void DetectNocaseRegister (void) {
  *  \retval sm sigmatch of either content or uricontent that is the last
  *             or NULL if none was found
  */
-static SigMatch *SigMatchGetLastNocasePattern(Signature *s) {
-    SCEnter();
-
-    BUG_ON(s == NULL);
-
-    SigMatch *co_sm = DetectContentGetLastPattern(s->pmatch_tail);
-    SigMatch *ur_sm = SigMatchGetLastSM(s->umatch_tail, DETECT_URICONTENT);
-    /* http client body SigMatch */
-    SigMatch *hcbd_sm = SigMatchGetLastSM(s->amatch_tail, DETECT_AL_HTTP_CLIENT_BODY);
-    /* http cookie SigMatch */
-    SigMatch *hcd_sm = SigMatchGetLastSM(s->amatch_tail, DETECT_AL_HTTP_COOKIE);
-    /* http header SigMatch */
-    SigMatch *hhd_sm = SigMatchGetLastSM(s->amatch_tail, DETECT_AL_HTTP_HEADER);
-    /* http method SigMatch */
-    SigMatch *hmd_sm = SigMatchGetLastSM(s->amatch_tail, DETECT_AL_HTTP_METHOD);
-
-    SigMatch *temp_sm = NULL;
-
-    SigMatch **sm_list = NULL;
-    uint8_t sm_list_count = 0;
-
-    if (co_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = co_sm;
-    }
-    if (ur_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = ur_sm;
-    }
-    if (hcbd_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = hcbd_sm;
-    }
-    if (hcd_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = hcd_sm;
-    }
-    if (hhd_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = hhd_sm;
-    }
-
-    if (hmd_sm != NULL) {
-        sm_list_count++;
-        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        sm_list[sm_list_count - 1] = hmd_sm;
-    }
-
-    if (sm_list_count == 0)
-        SCReturnPtr(NULL, "SigMatch");
-
-    /* find the highest idx sm, so we apply to the last sm that we support */
-    int i = 0, j = 0;
-    int swapped = 1;
-    while (swapped) {
-        swapped = 0;
-        for (j = i; j < sm_list_count - 1; j++) {
-            if (sm_list[j]->idx < sm_list[j + 1]->idx) {
-                temp_sm = sm_list[j];
-                sm_list[j] = sm_list[j + 1];
-                sm_list[j + 1] = temp_sm;
-                swapped = 1;
-                i++;
-            }
-        }
-    }
-
-    temp_sm = sm_list[0];
-    SCFree(sm_list);
-
-    SCReturnPtr(temp_sm, "SigMatch");
-}
+//static SigMatch *SigMatchGetLastNocasePattern(Signature *s) {
+//    SCEnter();
+//
+//    BUG_ON(s == NULL);
+//
+//    SigMatch *co_sm = DetectContentGetLastPattern(s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+//    SigMatch *ur_sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_UMATCH], DETECT_URICONTENT);
+//    /* http client body SigMatch */
+//    SigMatch *hcbd_sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_AMATCH], DETECT_AL_HTTP_CLIENT_BODY);
+//    /* http cookie SigMatch */
+//    SigMatch *hcd_sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_AMATCH], DETECT_AL_HTTP_COOKIE);
+//    /* http header SigMatch */
+//    SigMatch *hhd_sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_AMATCH], DETECT_AL_HTTP_HEADER);
+//    /* http method SigMatch */
+//    SigMatch *hmd_sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_AMATCH], DETECT_AL_HTTP_METHOD);
+//
+//    SigMatch *temp_sm = NULL;
+//
+//    SigMatch **sm_list = NULL;
+//    uint8_t sm_list_count = 0;
+//
+//    if (co_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = co_sm;
+//    }
+//    if (ur_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = ur_sm;
+//    }
+//    if (hcbd_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = hcbd_sm;
+//    }
+//    if (hcd_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = hcd_sm;
+//    }
+//    if (hhd_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = hhd_sm;
+//    }
+//
+//    if (hmd_sm != NULL) {
+//        sm_list_count++;
+//        if ( (sm_list = SCRealloc(sm_list, sizeof(SigMatch *) * sm_list_count)) == NULL) {
+//            SCLogError(SC_ERR_FATAL, "Fatal error encountered in SigMatchGetLastNocasePattern. Exiting...");
+//            exit(EXIT_FAILURE);
+//        }
+//        sm_list[sm_list_count - 1] = hmd_sm;
+//    }
+//
+//    if (sm_list_count == 0)
+//        SCReturnPtr(NULL, "SigMatch");
+//
+//    /* find the highest idx sm, so we apply to the last sm that we support */
+//    int i = 0, j = 0;
+//    int swapped = 1;
+//    while (swapped) {
+//        swapped = 0;
+//        for (j = i; j < sm_list_count - 1; j++) {
+//            if (sm_list[j]->idx < sm_list[j + 1]->idx) {
+//                temp_sm = sm_list[j];
+//                sm_list[j] = sm_list[j + 1];
+//                sm_list[j + 1] = temp_sm;
+//                swapped = 1;
+//                i++;
+//            }
+//        }
+//    }
+//
+//    temp_sm = sm_list[0];
+//    SCFree(sm_list);
+//
+//    SCReturnPtr(temp_sm, "SigMatch");
+//}
 
 /**
  *  \internal
@@ -180,30 +180,42 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
     }
 
     /* Search for the first previous SigMatch that supports nocase */
-    SigMatch *pm = SigMatchGetLastNocasePattern(s);
+    //SigMatch *pm = SigMatchGetLastNocasePattern(s);
+    SigMatch *pm = SigMatchGetLastSMFromLists(s, 16,
+                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                              DETECT_URICONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                              DETECT_AL_HTTP_CLIENT_BODY, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                              DETECT_AL_HTTP_HEADER, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                              DETECT_AL_HTTP_RAW_HEADER, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                              DETECT_AL_HTTP_METHOD, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                              DETECT_AL_HTTP_RAW_URI, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                              DETECT_AL_HTTP_COOKIE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]);
     if (pm == NULL) {
-        SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "\"nocase\" needs a preceeding"
-                " content, uricontent, http_client_body, http_header, http_method, http_uri, http_cookie option");
+        SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "\"nocase\" needs a preceeding "
+                   "content, uricontent, http_client_body, http_header, "
+                   "http_method, http_uri, http_cookie or http_raw_uri option");
         SCReturnInt(-1);
     }
 
-    DetectUricontentData *ud = NULL;
+    DetectContentData *ud = NULL;
     DetectContentData *cd = NULL;
-    DetectHttpClientBodyData *dhcb = NULL;
-    DetectHttpCookieData *dhcd = NULL;
-    DetectHttpHeaderData *dhhd = NULL;
-    DetectHttpMethodData *dhmd = NULL;
+    DetectContentData *dhcb = NULL;
+    DetectContentData *dhcd = NULL;
+    DetectContentData *dhhd = NULL;
+    DetectContentData *dhrhd = NULL;
+    DetectContentData *dhmd = NULL;
+    DetectContentData *dhrud = NULL;
 
     switch (pm->type) {
         case DETECT_URICONTENT:
-            ud = (DetectUricontentData *)pm->ctx;
+            ud = (DetectContentData *)pm->ctx;
             if (ud == NULL) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid argument");
                 SCReturnInt(-1);
             }
-            ud->flags |= DETECT_URICONTENT_NOCASE;
+            ud->flags |= DETECT_CONTENT_NOCASE;
             /* Recreate the context with nocase chars */
-            BoyerMooreCtxToNocase(ud->bm_ctx, ud->uricontent, ud->uricontent_len);
+            BoyerMooreCtxToNocase(ud->bm_ctx, ud->content, ud->content_len);
             break;
 
         case DETECT_CONTENT:
@@ -217,31 +229,50 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
             BoyerMooreCtxToNocase(cd->bm_ctx, cd->content, cd->content_len);
             break;
         case DETECT_AL_HTTP_CLIENT_BODY:
-            dhcb =(DetectHttpClientBodyData *) pm->ctx;
-            dhcb->flags |= DETECT_AL_HTTP_CLIENT_BODY_NOCASE;
+            dhcb =(DetectContentData *) pm->ctx;
+            dhcb->flags |= DETECT_CONTENT_NOCASE;
             /* Recreate the context with nocase chars */
             BoyerMooreCtxToNocase(dhcb->bm_ctx, dhcb->content, dhcb->content_len);
             break;
         case DETECT_AL_HTTP_HEADER:
-            dhhd =(DetectHttpHeaderData *) pm->ctx;
-            dhhd->flags |= DETECT_AL_HTTP_HEADER_NOCASE;
+            dhhd =(DetectContentData *) pm->ctx;
+            dhhd->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhhd->bm_ctx, dhhd->content, dhhd->content_len);
+            break;
+        case DETECT_AL_HTTP_RAW_HEADER:
+            dhrhd =(DetectContentData *) pm->ctx;
+            dhrhd->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhrhd->bm_ctx, dhrhd->content, dhrhd->content_len);
             break;
         case DETECT_AL_HTTP_METHOD:
-            dhmd =(DetectHttpMethodData *) pm->ctx;
-            dhmd->flags |= DETECT_AL_HTTP_METHOD_NOCASE;
+            dhmd =(DetectContentData *) pm->ctx;
+            dhmd->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhmd->bm_ctx, dhmd->content, dhmd->content_len);
             break;
         case DETECT_AL_HTTP_COOKIE:
-            dhcd = (DetectHttpCookieData *) pm->ctx;
-            dhcd->flags |= DETECT_AL_HTTP_COOKIE_NOCASE;
+            dhcd = (DetectContentData *) pm->ctx;
+            dhcd->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhcd->bm_ctx, dhcd->content, dhcd->content_len);
+            break;
+        case DETECT_AL_HTTP_RAW_URI:
+            dhrud = (DetectContentData *) pm->ctx;
+            dhrud->flags |= DETECT_CONTENT_NOCASE;
+            /* Recreate the context with nocase chars */
+            BoyerMooreCtxToNocase(dhrud->bm_ctx, dhrud->content, dhrud->content_len);
             break;
             /* should never happen */
         default:
             SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "\"nocase\" needs a"
-                    " preceeding content, uricontent, http_client_body or http_cookie option");
+                       " preceeding content, uricontent, http_client_body "
+                       "http_header, http_raw_header, http_method, "
+                       "http_cookie, http_raw_uri option");
             SCReturnInt(-1);
             break;
     }
 
     SCReturnInt(0);
 }
-

@@ -28,7 +28,7 @@
 
 #include "suricata-common.h"
 #include "suricata.h"
-#include "tm-modules.h"
+#include "tm-threads.h"
 
 #include "util-privs.h"
 #include "tmqh-packetpool.h"
@@ -45,6 +45,7 @@ void TmModuleReceiveErfDagRegister (void) {
     tmm_modules[TMM_RECEIVEERFDAG].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEERFDAG].RegisterTests = NULL;
     tmm_modules[TMM_RECEIVEERFDAG].cap_flags = SC_CAP_NET_ADMIN;
+    tmm_modules[TMM_RECEIVEERFDAG].flags = TM_FLAG_RECEIVE_TM;
 }
 
 void TmModuleDecodeErfDagRegister (void) {
@@ -521,16 +522,16 @@ TmEcode ProcessErfDagRecord(ErfDagThreadVars *ewtn, char *prec, Packet *p)
 
     pload = &(dr->rec);
 
-    p->pktlen = wlen - 4;   /* Trim the FCS... */
+    SET_PKT_LEN(p, wlen - 4);   /* Trim the FCS... */
     p->datalink = LINKTYPE_ETHERNET;
 
     /* Take into account for link type Ethernet ETH frame starts
      * after ther ERF header + pad.
      */
-    memcpy(p->pkt, pload->eth.dst, p->pktlen);
+    PacketCopyData(p, pload->eth.dst, GET_PKT_LEN(p));
 
-    SCLogDebug("p->pktlen: %" PRIu32 " (pkt %02x, p->pkt %02x)",
-               p->pktlen, *p, *p->pkt);
+    SCLogDebug("pktlen: %" PRIu32 " (pkt %02x, pkt data %02x)",
+               GET_PKT_LEN(p), *p, *GET_PKT_DATA(p));
 
     /* Convert ERF time to timeval - from libpcap. */
     uint64_t ts = dr->ts;
@@ -609,18 +610,20 @@ TmEcode DecodeErfDag(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
     SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
 
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, p->pktlen);
+    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
+#if 0
+    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (p->pktlen * 8)/1000000.0);
+                           (GET_PKT_LEN(p) * 8)/1000000.0);
+#endif
 
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, p->pktlen);
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, p->pktlen);
+    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
 
         /* call the decoder */
     switch(p->datalink) {
         case LINKTYPE_ETHERNET:
-            DecodeEthernet(tv, dtv, p, p->pkt, p->pktlen, pq);
+            DecodeEthernet(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         default:
             SCLogError(SC_ERR_DATALINK_UNIMPLEMENTED,

@@ -137,7 +137,6 @@ void WmPrintInfo(MpmCtx *mpm_ctx) {
     printf("  WmPattern      %" PRIuMAX "\n", (uintmax_t)sizeof(WmPattern));
     printf("  WmHashItem     %" PRIuMAX "\n", (uintmax_t)sizeof(WmHashItem));
     printf("Unique Patterns: %" PRIu32 "\n", mpm_ctx->pattern_cnt);
-    printf("Total Patterns:  %" PRIu32 "\n", mpm_ctx->total_pattern_cnt);
     printf("Smallest:        %" PRIu32 "\n", mpm_ctx->minlen);
     printf("Largest:         %" PRIu32 "\n", mpm_ctx->maxlen);
     printf("Max shiftlen:    %" PRIu32 "\n", ctx->shiftlen);
@@ -385,7 +384,6 @@ static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
     }
 
-    mpm_ctx->total_pattern_cnt++;
     return 0;
 
 error:
@@ -640,7 +638,6 @@ static void WmSearchPrepareShiftTable(MpmCtx *mpm_ctx)
 
 int WmPreparePatterns(MpmCtx *mpm_ctx) {
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
-    uint32_t u = 0, p = 0;
 
     /* alloc the pattern array */
     ctx->parray = (WmPattern **)SCMalloc(mpm_ctx->pattern_cnt * sizeof(WmPattern *));
@@ -652,8 +649,9 @@ int WmPreparePatterns(MpmCtx *mpm_ctx) {
     mpm_ctx->memory_size += (mpm_ctx->pattern_cnt * sizeof(WmPattern *));
 
     /* populate it with the patterns in the hash */
-    for (u = 0; u < INIT_HASH_SIZE; u++) {
-        WmPattern *node = ctx->init_hash[u], *nnode = NULL;
+    uint32_t i = 0, p = 0;
+    for (i = 0; i < INIT_HASH_SIZE; i++) {
+        WmPattern *node = ctx->init_hash[i], *nnode = NULL;
         for ( ; node != NULL; ) {
             nnode = node->next;
             node->next = NULL;

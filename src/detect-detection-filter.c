@@ -116,8 +116,9 @@ DetectThresholdData *DetectDetectionFilterParse (char *rawstr) {
     int i = 0;
 
     copy_str = SCStrdup(rawstr);
-    if (copy_str == NULL)
+    if (copy_str == NULL) {
         goto error;
+    }
 
     for(pos = 0, df_opt = strtok(copy_str,",");  pos < strlen(copy_str) &&  df_opt != NULL;  pos++, df_opt = strtok(NULL,",")) {
 
@@ -128,7 +129,11 @@ DetectThresholdData *DetectDetectionFilterParse (char *rawstr) {
         if(strstr(df_opt,"track"))
             track_found++;
     }
-    SCFree(copy_str);
+
+    if (copy_str) {
+        SCFree(copy_str);
+        copy_str = NULL;
+    }
 
     if(count_found != 1 || seconds_found != 1 || track_found != 1)
         goto error;
@@ -185,16 +190,21 @@ DetectThresholdData *DetectDetectionFilterParse (char *rawstr) {
         goto error;
     }
 
-    for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) SCFree(args[i]);
+    for (i = 0; i < 6; i++){
+        if (args[i] != NULL)
+            SCFree(args[i]);
     }
     return df;
 
 error:
-    for (i = 0; i < (ret - 1); i++){
-        if (args[i] != NULL) SCFree(args[i]);
+    for (i = 0; i < 6; i++){
+        if (args[i] != NULL)
+            SCFree(args[i]);
     }
-    if (df) SCFree(df);
+    if (df != NULL)
+        SCFree(df);
+    if (copy_str != NULL)
+        SCFree(copy_str);
     return NULL;
 }
 
@@ -217,13 +227,13 @@ int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     SigMatch *tmpm = NULL;
 
     /* checks if there's a previous instance of threshold */
-    tmpm = SigMatchGetLastSM(s->match_tail, DETECT_THRESHOLD);
+    tmpm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and \"threshold\" are not allowed in the same rule");
         SCReturnInt(-1);
     }
     /* checks there's no previous instance of detection_filter */
-    tmpm = SigMatchGetLastSM(s->match_tail, DETECT_DETECTION_FILTER);
+    tmpm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "At most one \"detection_filter\" is allowed per rule");
         SCReturnInt(-1);

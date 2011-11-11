@@ -7,6 +7,14 @@ noinst_HEADERS = action-globals.h \
 bin_PROGRAMS = suricata
 suricata_SOURCES = suricata.c suricata.h \
 runmodes.c runmodes.h \
+runmode-pcap.c runmode-pcap.h \
+runmode-pcap-file.c runmode-pcap-file.h \
+runmode-pfring.c runmode-pfring.h \
+runmode-nfq.c runmode-nfq.h \
+runmode-ipfw.c runmode-ipfw.h \
+runmode-erf-file.c runmode-erf-file.h \
+runmode-erf-dag.c runmode-erf-dag.h \
+runmode-af-packet.c runmode-af-packet.h \
 packet-queue.c packet-queue.h \
 data-queue.c data-queue.h \
 threads.c threads.h \
@@ -17,6 +25,7 @@ source-pfring.c source-pfring.h \
 source-ipfw.c source-ipfw.h \
 source-erf-file.c source-erf-file.h \
 source-erf-dag.c source-erf-dag.h \
+source-af-packet.c source-af-packet.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
 decode-vlan.c decode-vlan.h \
@@ -31,7 +40,10 @@ decode-icmpv4.c decode-icmpv4.h \
 decode-icmpv6.c decode-icmpv6.h \
 decode-tcp.c decode-tcp.h \
 decode-udp.c decode-udp.h \
+decode-sctp.c decode-sctp.h \
 flow.c flow.h \
+flow-timeout.c flow-timeout.h \
+flow-manager.c flow-manager.h \
 flow-queue.c flow-queue.h \
 flow-hash.c flow-hash.h \
 flow-util.c flow-util.h \
@@ -63,6 +75,12 @@ detect-engine-iponly.c detect-engine-iponly.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-uri.c detect-engine-uri.h \
+detect-engine-hcbd.c detect-engine-hcbd.h \
+detect-engine-hhd.c detect-engine-hhd.h \
+detect-engine-hrhd.c detect-engine-hrhd.h \
+detect-engine-hmd.c detect-engine-hmd.h \
+detect-engine-hcd.c detect-engine-hcd.h \
+detect-engine-hrud.c detect-engine-hrud.h \
 detect-engine-state.c detect-engine-state.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
@@ -99,12 +117,13 @@ detect-id.c detect-id.h \
 detect-flow.c detect-flow.h \
 detect-dsize.c detect-dsize.h \
 detect-stream_size.c detect-stream_size.h \
-detect-decode-event.c detect-decode-event.h \
+detect-engine-event.c detect-engine-event.h \
 detect-ipopts.c detect-ipopts.h \
 detect-flags.c detect-flags.h \
 detect-fragbits.c detect-fragbits.h \
 detect-fragoffset.c detect-fragoffset.h \
 detect-gid.c detect-gid.h \
+detect-mark.c detect-mark.h \
 detect-noalert.c detect-noalert.h \
 detect-csum.c detect-csum.h \
 detect-ttl.c detect-ttl.h \
@@ -113,7 +132,9 @@ detect-icode.c detect-icode.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-method.c detect-http-method.h \
 detect-http-header.c detect-http-header.h \
+detect-http-raw-header.c detect-http-raw-header.h \
 detect-http-uri.c detect-http-uri.h \
+detect-http-raw-uri.c detect-http-raw-uri.h \
 detect-tls-version.c detect-tls-version.h \
 detect-ssh-proto-version.c detect-ssh-proto-version.h \
 detect-ssh-software-version.c detect-ssh-software-version.h \
@@ -125,7 +146,13 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-urilen.c detect-urilen.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-http-client-body.c detect-http-client-body.h \
+detect-http-stat-msg.c detect-http-stat-msg.h \
 detect-asn1.c detect-asn1.h \
+detect-http-stat-code.c detect-http-stat-code.h \
+detect-ssl-version.c detect-ssl-version.h \
+detect-ssl-state.c detect-ssl-state.h \
+detect-byte-extract.c detect-byte-extract.h \
+detect-replace.c detect-replace.h \
 util-atomic.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
@@ -140,6 +167,10 @@ util-mpm-wumanber.c util-mpm-wumanber.h \
 util-mpm-b2g.c util-mpm-b2g.h \
 util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
 util-mpm-b3g.c util-mpm-b3g.h \
+util-mpm-b2gc.c util-mpm-b2gc.h \
+util-mpm-b2gm.c util-mpm-b2gm.h \
+util-mpm-ac.c util-mpm-ac.h \
+util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
 util-cidr.c util-cidr.h \
 util-unittest.c util-unittest.h \
 util-unittest-helper.c util-unittest-helper.h \
@@ -164,18 +195,27 @@ util-daemon.c util-daemon.h \
 util-random.c util-random.h \
 util-classification-config.c util-classification-config.h \
 util-threshold-config.c util-threshold-config.h \
+util-reference-config.c util-reference-config.h \
 util-strlcatu.c \
 util-strlcpyu.c \
 util-cuda.c util-cuda.h \
 util-cuda-handlers.c util-cuda-handlers.h \
+util-optimize.h \
 util-privs.c util-privs.h \
 util-decode-asn1.c util-decode-asn1.h \
 util-ringbuffer.c util-ringbuffer.h \
-util-validate.h \
+util-validate.h util-affinity.h util-affinity.c \
+util-memcmp.c util-memcmp.h \
+util-proto-name.c util-proto-name.h \
+util-syslog.c util-syslog.h \
+util-vector.h \
+util-device.c util-device.h \
+util-checksum.c util-checksum.h \
+util-runmodes.c util-runmodes.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
-tm-threads.c tm-threads.h \
+tm-threads.c tm-threads.h tm-threads-common.h \
 tmqh-simple.c tmqh-simple.h \
 tmqh-nfq.c tmqh-nfq.h \
 tmqh-packetpool.c tmqh-packetpool.h \
@@ -184,13 +224,18 @@ tmqh-ringbuffer.c tmqh-ringbuffer.h \
 alert-fastlog.c alert-fastlog.h \
 alert-debuglog.c alert-debuglog.h \
 alert-prelude.c alert-prelude.h \
-alert-unified-log.c alert-unified-log.h \
-alert-unified-alert.c alert-unified-alert.h \
 alert-unified2-alert.c alert-unified2-alert.h \
+alert-syslog.c alert-syslog.h \
+alert-pcapinfo.c alert-pcapinfo.h \
+log-droplog.c log-droplog.h \
 log-httplog.c log-httplog.h \
+log-pcap.c log-pcap.h \
 stream.c stream.h \
 stream-tcp.c stream-tcp.h stream-tcp-private.h \
 stream-tcp-reassemble.c stream-tcp-reassemble.h \
+stream-tcp-inline.c stream-tcp-inline.h \
+stream-tcp-sack.c stream-tcp-sack.h \
+stream-tcp-util.c stream-tcp-util.h \
 respond-reject.c respond-reject.h \
 respond-reject-libnet11.h respond-reject-libnet11.c \
 conf.c conf.h \
@@ -199,9 +244,8 @@ counters.c counters.h \
 app-layer.c app-layer.h \
 app-layer-detect-proto.c app-layer-detect-proto.h \
 app-layer-parser.c app-layer-parser.h \
-app-layer-protos.h \
+app-layer-protos.c app-layer-protos.h \
 app-layer-htp.c app-layer-htp.h \
-app-layer-tls.c app-layer-tls.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
@@ -209,6 +253,7 @@ app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-ssl.c app-layer-ssl.h \
 app-layer-ssh.c app-layer-ssh.h \
+app-layer-smtp.c app-layer-smtp.h \
 defrag.c defrag.h \
 output.c output.h \
 win32-misc.c win32-misc.h \
@@ -216,7 +261,8 @@ win32-service.c win32-service.h \
 util-action.c util-action.h \
 win32-syslog.h \
 util-profiling.c util-profiling.h \
-cuda-packet-batcher.c cuda-packet-batcher.h
+cuda-packet-batcher.c cuda-packet-batcher.h \
+util-ioctl.h util-ioctl.c
 
 # set the include path found by configure
 INCLUDES= $(all_includes)
@@ -230,5 +276,59 @@ suricata_LDADD = $(top_builddir)/libhtp/htp/libhtp.la
 INCLUDES += -I$(top_srcdir)/libhtp
 endif
 
+# Rules to build CUDA ptx modules
+if BUILD_CUDA
+BUILT_SOURCES = cuda-ptxdump.h
+suricata_SOURCES += cuda-ptxdump.h
+
+suricata_CUDA_KERNELS = \
+util-mpm-b2g-cuda-kernel.cu
+
+NVCCFLAGS=-O2
+
+SUFFIXES = \
+.ptx_sm_10 \
+.ptx_sm_11 \
+.ptx_sm_12 \
+.ptx_sm_13 \
+.ptx_sm_20 \
+.ptx_sm_21
+
+PTXS =  $(suricata_CUDA_KERNELS:.cu=.ptx_sm_10)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_11)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_12)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_13)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_20)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_21)
+
+.cu.ptx_sm_10:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_10 -ptx $<
+
+.cu.ptx_sm_11:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_11 -ptx $<
+
+.cu.ptx_sm_12:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_12 -ptx $<
+
+.cu.ptx_sm_13:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_13 -ptx $<
+
+.cu.ptx_sm_20:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_20 -ptx $<
+
+.cu.ptx_sm_21:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_21 -ptx $<
+
+cuda-ptxdump.h: $(PTXS)
+	$(PYTHON) ptxdump.py cuda-ptxdump $(PTXS)
+
+CLEANFILES = $(PTXS) cuda-ptxdump.h
+endif
+
+
 #suricata_CFLAGS = -Wall -fno-strict-aliasing 
 
+if BUILD_UNITTESTS
+check-am:
+	$(top_builddir)/src/suricata -u
+endif
