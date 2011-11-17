@@ -1,4 +1,4 @@
-suricata for Debian
+Suricata for Debian
 -------------------
 
 The engine is an Open Source Next Generation Intrusion Detection and
@@ -18,8 +18,22 @@ To run in live NFQUEUE mode, use (as root):
 You can also run suricata on a PCAP file:
  suricata -c /etc/suricata/suricata.yaml -r file.pcap
 
+Updating Rules
+--------------
+
 The default configuration use the snort-rules-default package (with all rules loaded),
 and all logging modules activated.
 You should edit /etc/suricata/suricata.yaml and adjust it to fit your needs.
 
- -- Pierre Chifflier <pollux@debian.org>  Sat, 30 Jan 2010 18:25:05 +0100
+Using rules from the snort-rules-default package will not provide up-to-date
+rules. The recommended method is to install oinkmaster, configure it to get
+Emerging Threats (ET), ET Pro or VRT rules.
+
+Edit ``/etc/oinkmaster.conf`` and use the following URL:
+
+ http://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz
+
+For more help, see
+https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule_Management_with_Oinkmaster
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 17 Nov 2011 22:58:00 +0100
