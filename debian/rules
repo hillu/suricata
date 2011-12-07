@@ -12,9 +12,12 @@ export DH_VERBOSE=1
 
 export DEB_BUILD_HARDENING=1
 
+CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude \
+	--enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native
+
 build:
 	dh_testdir
-	dh_auto_configure -- --enable-nfqueue --enable-prelude --enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native
+	dh_auto_configure -- $(CONFIGURE_ARGS)
 	sed \
 		-e 's|^classification-file: .*$$|classification-file: /etc/snort/classification.config|' \
 		-e 's|^default-rule-path: .*$$|default-rule-path: /etc/snort/rules|' \
