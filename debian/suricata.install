@@ -1,1 +1,3 @@
 suricata-debian.yaml /etc/suricata
+classification.config /etc/suricata
+reference.config /etc/suricata
