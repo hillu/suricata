@@ -18,11 +18,25 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __APP_LAYER_SMTP_H__
 #define __APP_LAYER_SMTP_H__
+
+#include "decode-events.h"
+
+enum {
+    SMTP_DECODER_EVENT_INVALID_REPLY,
+    SMTP_DECODER_EVENT_UNABLE_TO_MATCH_REPLY_WITH_REQUEST,
+    SMTP_DECODER_EVENT_MAX_COMMAND_LINE_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_MAX_REPLY_LINE_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_INVALID_PIPELINED_SEQUENCE,
+    SMTP_DECODER_EVENT_BDAT_CHUNK_LEN_EXCEEDED,
+    SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE,
+    SMTP_DECODER_EVENT_TLS_REJECTED,
+    SMTP_DECODER_EVENT_DATA_COMMAND_REJECTED,
+};
 
 typedef struct SMTPState_ {
     /* current input that is being parsed */
@@ -36,6 +50,7 @@ typedef struct SMTPState_ {
     /** length of the line in current_line.  Doesn't include the delimiter */
     int32_t current_line_len;
     uint8_t current_line_delimiter_len;
+    PatternMatcherQueue *thread_local_data;
 
     /** used to indicate if the current_line buffer is a malloced buffer.  We
      * use a malloced buffer, if a line is fragmented */
@@ -73,6 +88,7 @@ typedef struct SMTPState_ {
     /** index of the command in the buffer, currently in inspection by reply
      *  handler */
     uint16_t cmds_idx;
+
 } SMTPState;
 
 void RegisterSMTPParsers(void);

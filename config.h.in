@@ -12,6 +12,9 @@
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
+/* Assuming htp_tx_get_response_headers_raw function in bundled libhtp */
+#undef HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW
+
 /* Assuming htp_config_register_request_uri_normalize function in bundled
    libhtp */
 #undef HAVE_HTP_URI_NORMALIZE_HOOK
@@ -27,6 +30,9 @@
 
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
+
+/* Define to 1 if you have the `magic' library (-lmagic). */
+#undef HAVE_LIBMAGIC
 
 /* Define to 1 if you have the `net' library (-lnet). */
 #undef HAVE_LIBNET
@@ -92,6 +98,9 @@
 
 /* PF_RING pfring_recv buffer is u_char** */
 #undef HAVE_PFRING_RECV_UCHAR
+
+/* PF_RING pfring_set_bpf_filter is available */
+#undef HAVE_PFRING_SET_BPF_FILTER
 
 /* Define to 1 if you have the <poll.h> header file. */
 #undef HAVE_POLL_H

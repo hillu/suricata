@@ -54,6 +54,7 @@
 #include "flow-bit.h"
 #include "util-var-name.h"
 #include "util-optimize.h"
+#include "util-logopenfile.h"
 
 #define DEFAULT_LOG_FILENAME "alert-debug.log"
 
@@ -65,7 +66,6 @@ TmEcode AlertDebugLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *, PacketQ
 TmEcode AlertDebugLogThreadInit(ThreadVars *, void*, void **);
 TmEcode AlertDebugLogThreadDeinit(ThreadVars *, void *);
 void AlertDebugLogExitPrintStats(ThreadVars *, void *);
-int AlertDebugLogOpenFileCtx(LogFileCtx* , const char *, const char *);
 
 void TmModuleAlertDebugLogRegister (void) {
     tmm_modules[TMM_ALERTDEBUGLOG].name = MODULE_NAME;
@@ -182,7 +182,7 @@ static int AlertDebugPrintStreamSegmentCallback(Packet *p, void *data, uint8_t *
 
 
 
-TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
+TmEcode AlertDebugLogger(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
     int i;
@@ -201,13 +201,18 @@ TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
         fprintf(aft->file_ctx->fp, "PCAP PKT NUM:      %"PRIu64"\n", p->pcap_cnt);
     }
 
-    char srcip[16], dstip[16];
-    PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
-    PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+    char srcip[46], dstip[46];
+    if (PKT_IS_IPV4(p)) {
+        PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
+        PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+    } else if (PKT_IS_IPV6(p)) {
+        PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
+        PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+    }
 
     fprintf(aft->file_ctx->fp, "SRC IP:            %s\n", srcip);
     fprintf(aft->file_ctx->fp, "DST IP:            %s\n", dstip);
-    fprintf(aft->file_ctx->fp, "PROTO:             %" PRIu32 "\n", IPV4_GET_IPPROTO(p));
+    fprintf(aft->file_ctx->fp, "PROTO:             %" PRIu32 "\n", p->proto);
     if (PKT_IS_TCP(p) || PKT_IS_UDP(p)) {
         fprintf(aft->file_ctx->fp, "SRC PORT:          %" PRIu32 "\n", p->sp);
         fprintf(aft->file_ctx->fp, "DST PORT:          %" PRIu32 "\n", p->dp);
@@ -316,77 +321,6 @@ TmEcode AlertDebugLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq
     return TM_ECODE_OK;
 }
 
-TmEcode AlertDebugLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
-{
-    AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
-    int i;
-    char timebuf[64];
-
-    if (p->alerts.cnt == 0)
-        return TM_ECODE_OK;
-
-    aft->file_ctx->alerts += p->alerts.cnt;
-
-    CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
-
-    SCMutexLock(&aft->file_ctx->fp_mutex);
-    for (i = 0; i < p->alerts.cnt; i++) {
-        PacketAlert *pa = &p->alerts.alerts[i];
-        if (unlikely(pa->s == NULL)) {
-            continue;
-        }
-
-        char srcip[46], dstip[46];
-
-        PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
-        PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
-
-        fprintf(aft->file_ctx->fp, "%s  [**] [%" PRIu32 ":%" PRIu32 ":%" PRIu32 "] %s [**] [Classification: fixme] [Priority: %" PRIu32 "] {%" PRIu32 "} %s:%" PRIu32 " -> %s:%" PRIu32 "\n",
-            timebuf, pa->s->gid, pa->s->id, pa->s->rev, pa->s->msg, pa->s->prio, IPV6_GET_L4PROTO(p), srcip, p->sp, dstip, p->dp);
-    }
-
-    fprintf(aft->file_ctx->fp, "FLOW:              to_server: %s, to_client: %s\n",
-        p->flowflags & FLOW_PKT_TOSERVER ? "TRUE" : "FALSE",
-        p->flowflags & FLOW_PKT_TOCLIENT ? "TRUE" : "FALSE");
-
-    if (p->flow != NULL) {
-        SCMutexLock(&p->flow->m);
-        CreateTimeString(&p->flow->startts, timebuf, sizeof(timebuf));
-        fprintf(aft->file_ctx->fp, "FLOW Start TS:     %s\n",timebuf);
-#ifdef DEBUG
-        fprintf(aft->file_ctx->fp, "FLOW PKTS TODST:   %"PRIu32"\n",p->flow->todstpktcnt);
-        fprintf(aft->file_ctx->fp, "FLOW PKTS TOSRC:   %"PRIu32"\n",p->flow->tosrcpktcnt);
-        fprintf(aft->file_ctx->fp, "FLOW Total Bytes:  %"PRIu64"\n",p->flow->bytecnt);
-#endif
-        fprintf(aft->file_ctx->fp, "FLOW IPONLY SET:   TOSERVER: %s, TOCLIENT: %s\n",
-        p->flow->flags & FLOW_TOSERVER_IPONLY_SET ? "TRUE" : "FALSE",
-        p->flow->flags & FLOW_TOCLIENT_IPONLY_SET ? "TRUE" : "FALSE");
-        fprintf(aft->file_ctx->fp, "FLOW ACTION:       DROP: %s, PASS %s\n",
-        p->flow->flags & FLOW_ACTION_DROP ? "TRUE" : "FALSE",
-        p->flow->flags & FLOW_ACTION_PASS ? "TRUE" : "FALSE");
-        fprintf(aft->file_ctx->fp, "FLOW NOINSPECTION: PACKET: %s, PAYLOAD: %s, APP_LAYER: %s\n",
-        p->flow->flags & FLOW_NOPACKET_INSPECTION ? "TRUE" : "FALSE",
-        p->flow->flags & FLOW_NOPAYLOAD_INSPECTION ? "TRUE" : "FALSE",
-        p->flow->flags & FLOW_NO_APPLAYER_INSPECTION ? "TRUE" : "FALSE");
-        fprintf(aft->file_ctx->fp, "FLOW APP_LAYER:    DETECTED: %s, PROTO %"PRIu16"\n",
-                (p->flow->alproto != ALPROTO_UNKNOWN) ? "TRUE" : "FALSE", p->flow->alproto);
-        AlertDebugLogFlowVars(aft, p);
-        AlertDebugLogFlowBits(aft, p);
-        SCMutexUnlock(&p->flow->m);
-    }
-
-    AlertDebugLogPktVars(aft, p);
-
-    fprintf(aft->file_ctx->fp, "PACKET LEN:        %" PRIu32 "\n", GET_PKT_LEN(p));
-    fprintf(aft->file_ctx->fp, "PACKET:\n");
-    PrintRawDataFp(aft->file_ctx->fp, GET_PKT_DATA(p), GET_PKT_LEN(p));
-
-    fflush(aft->file_ctx->fp);
-    SCMutexUnlock(&aft->file_ctx->fp_mutex);
-
-    return TM_ECODE_OK;
-}
-
 TmEcode AlertDebugLogDecoderEvent(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     AlertDebugLogThread *aft = (AlertDebugLogThread *)data;
@@ -436,9 +370,9 @@ TmEcode AlertDebugLogDecoderEvent(ThreadVars *tv, Packet *p, void *data, PacketQ
 TmEcode AlertDebugLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
     if (PKT_IS_IPV4(p)) {
-        return AlertDebugLogIPv4(tv, p, data, pq, postpq);
+        return AlertDebugLogger(tv, p, data, pq, postpq);
     } else if (PKT_IS_IPV6(p)) {
-        return AlertDebugLogIPv6(tv, p, data, pq, postpq);
+        return AlertDebugLogger(tv, p, data, pq, postpq);
     } else if (p->events.cnt > 0) {
         return AlertDebugLogDecoderEvent(tv, p, data, pq, postpq);
     }
@@ -509,27 +443,17 @@ static void AlertDebugLogDeInitCtx(OutputCtx *output_ctx)
  */
 OutputCtx *AlertDebugLogInitCtx(ConfNode *conf)
 {
-    int ret = 0;
     LogFileCtx *file_ctx = NULL;
 
     file_ctx = LogFileNewCtx();
-    if(file_ctx == NULL) {
+    if (file_ctx == NULL) {
         SCLogDebug("couldn't create new file_ctx");
         goto error;
     }
 
-    const char *filename = ConfNodeLookupChildValue(conf, "filename");
-    if (filename == NULL)
-        filename = DEFAULT_LOG_FILENAME;
-
-    const char *mode = ConfNodeLookupChildValue(conf, "append");
-    if (mode == NULL)
-        mode = DEFAULT_LOG_MODE_APPEND;
-
-    /** fill the new LogFileCtx with the specific AlertDebugLog configuration */
-    ret = AlertDebugLogOpenFileCtx(file_ctx, filename, mode);
-    if(ret < 0)
+    if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME) < 0) {
         goto error;
+    }
 
     OutputCtx *output_ctx = SCMalloc(sizeof(OutputCtx));
     if (output_ctx == NULL)
@@ -539,7 +463,7 @@ OutputCtx *AlertDebugLogInitCtx(ConfNode *conf)
     output_ctx->data = file_ctx;
     output_ctx->DeInit = AlertDebugLogDeInitCtx;
 
-    SCLogInfo("Alert debug log output initialized, filename: %s", filename);
+    SCLogDebug("Alert debug log output initialized");
     return output_ctx;
 
 error:
@@ -549,36 +473,3 @@ error:
 
     return NULL;
 }
-
-/** \brief Read the config set the file pointer, open the file
- *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param filename name of log file
- *  \param mode append mode (bool)
- *  \return -1 if failure, 0 if succesful
- * */
-int AlertDebugLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename, const
-                                char *mode)
-{
-    char log_path[PATH_MAX];
-    char *log_dir;
-
-    if (ConfGet("default-log-dir", &log_dir) != 1)
-        log_dir = DEFAULT_LOG_DIR;
-
-    snprintf(log_path, PATH_MAX, "%s/%s", log_dir, filename);
-
-    if (ConfValIsTrue(mode)) {
-        file_ctx->fp = fopen(log_path, "a");
-    } else {
-        file_ctx->fp = fopen(log_path, "w");
-    }
-
-    if (file_ctx->fp == NULL) {
-        SCLogError(SC_ERR_FOPEN, "failed to open %s: %s", log_path,
-            strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
-

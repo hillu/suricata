@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2011 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -58,12 +58,14 @@
 
 #include "detect-engine-uri.h"
 #include "detect-engine-hcbd.h"
+#include "detect-engine-hsbd.h"
 #include "detect-engine-hhd.h"
 #include "detect-engine-hrhd.h"
 #include "detect-engine-hmd.h"
 #include "detect-engine-hcd.h"
 #include "detect-engine-hrud.h"
 #include "detect-engine-dcepayload.h"
+#include "detect-engine-file.h"
 
 #include "stream-tcp.h"
 #include "stream-tcp-private.h"
@@ -83,6 +85,26 @@
 /** convert enum to string */
 #define CASE_CODE(E)  case E: return #E
 
+/* prototype */
+static void DeStateResetFileInspection(Flow *f, uint16_t alproto, void *alstate);
+
+
+int DeStateStoreFilestoreSigsCantMatch(SigGroupHead *sgh,
+        DetectEngineState *de_state, uint8_t direction)
+{
+    if (direction & STREAM_TOSERVER) {
+        if (de_state->toserver_filestore_cnt == sgh->filestore_cnt) {
+            SCReturnInt(1);
+        }
+    } else if (direction & STREAM_TOCLIENT) {
+        if (de_state->toclient_filestore_cnt == sgh->filestore_cnt) {
+            SCReturnInt(1);
+        }
+    }
+
+    SCReturnInt(0);
+}
+
 /** \brief get string for match enum */
 const char *DeStateMatchResultToString(DeStateMatchResult res)
 {
@@ -91,6 +113,7 @@ const char *DeStateMatchResultToString(DeStateMatchResult res)
         CASE_CODE (DE_STATE_MATCH_FULL);
         CASE_CODE (DE_STATE_MATCH_PARTIAL);
         CASE_CODE (DE_STATE_MATCH_NEW);
+        CASE_CODE (DE_STATE_MATCH_NOMATCH);
     }
 
     return NULL;
@@ -314,6 +337,26 @@ void DeStateStoreStateVersion(DetectEngineState *de_state, uint8_t direction,
 }
 
 /**
+ *  \brief Increment de_state filestore_cnt in the proper direction.
+ *
+ *  \param de_state flow's locked de_state
+ *  \param direction flags containing direction
+ *  \param file_no_match number of sigs that are identified as "can't match"
+ *                       with filestore.
+ */
+void DeStateStoreFileNoMatch(DetectEngineState *de_state, uint8_t direction,
+        uint16_t file_no_match)
+{
+    if (direction & STREAM_TOSERVER) {
+        SCLogDebug("STREAM_TOSERVER added %"PRIu16, file_no_match);
+        de_state->toserver_filestore_cnt += file_no_match;
+    } else {
+        SCLogDebug("STREAM_TOCLIENT added %"PRIu16, file_no_match);
+        de_state->toclient_filestore_cnt += file_no_match;
+    }
+}
+
+/**
  *  \brief Check if a flow already contains a flow detect state
  *
  *  \retval 2 has state, but it's not updated
@@ -326,9 +369,9 @@ int DeStateFlowHasState(Flow *f, uint8_t flags, uint16_t alversion) {
     int r = 0;
     SCMutexLock(&f->de_state_m);
 
-    if (f->de_state == NULL || f->de_state->cnt == 0)
+    if (f->de_state == NULL || f->de_state->cnt == 0) {
         r = 0;
-    else if (DeStateGetStateVersion(f->de_state, flags) == alversion)
+    } else if (DeStateGetStateVersion(f->de_state, flags) == alversion)
         r = 2;
     else
         r = 1;
@@ -353,6 +396,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
     int r = 0;
     uint16_t inspect_flags = 0;
     uint16_t match_flags = 0;
+    uint16_t file_no_match = 0;
 
     if (alstate == NULL) {
         SCReturnInt(0);
@@ -384,6 +428,10 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                     match_flags |= DE_STATE_FLAG_HCBD_MATCH;
                 }
                 SCLogDebug("inspecting http client body");
+            }
+            /* not inspecting in toserver direction */
+            if (s->sm_lists[DETECT_SM_LIST_HSBDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSBD_INSPECT;
             }
             if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
                 inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
@@ -425,6 +473,26 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 }
                 SCLogDebug("inspecting http raw uri");
             }
+
+            if (s->sm_lists[DETECT_SM_LIST_FILEMATCH] != NULL) {
+                SCLogDebug("file inspection");
+                if (match_flags == inspect_flags) {
+                    SCLogDebug("ready to inspect files");
+                    inspect_flags |= DE_STATE_FLAG_FILE_TS_INSPECT;
+
+                    match = DetectFileInspectHttp(tv, det_ctx, f, s, alstate, flags);
+                    if (match == 1) {
+                        match_flags |= DE_STATE_FLAG_FILE_TS_MATCH;
+                    } else if (match == 2) {
+                        match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                    } else if (match == 3) {
+                        match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                        file_no_match++;
+                    }
+                } else {
+                    SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
+                }
+            }
         } else if (flags & STREAM_TOCLIENT) {
             /* For to client set the flags in inspect so it can't match
              * if the sig requires something only the request has. The rest
@@ -434,6 +502,14 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
             }
             if (s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL) {
                 inspect_flags |= DE_STATE_FLAG_HCBD_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HSBDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSBD_INSPECT;
+                if (DetectEngineInspectHttpServerBody(de_ctx, det_ctx, s, f,
+                            flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HSBD_MATCH;
+                }
+                SCLogDebug("inspecting http server body");
             }
             if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
                 inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
@@ -464,6 +540,27 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
             }
             if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL) {
                 inspect_flags |= DE_STATE_FLAG_HRUD_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_FILEMATCH] != NULL) {
+                SCLogDebug("file inspection");
+                if (match_flags == inspect_flags) {
+                    SCLogDebug("ready to inspect files");
+
+                    inspect_flags |= DE_STATE_FLAG_FILE_TC_INSPECT;
+
+                    match = DetectFileInspectHttp(tv, det_ctx, f, s, alstate, flags);
+                    SCLogDebug("match %d", match);
+                    if (match == 1) {
+                        match_flags |= DE_STATE_FLAG_FILE_TC_MATCH;
+                    } else if (match == 2) {
+                        match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                    } else if (match == 3) {
+                        match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                        file_no_match++;
+                    }
+                } else {
+                    SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
+                }
             }
         }
     } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
@@ -500,8 +597,8 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
             SCLogDebug("sm %p, sm->next %p", sm, sm->next);
 
             if (sigmatch_table[sm->type].AppLayerMatch != NULL &&
-                (alproto == sigmatch_table[sm->type].alproto ||
-                 alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) )
+                (alproto == s->alproto ||
+                 alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2))
             {
                 if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                     SMBState *smb_state = (SMBState *)alstate;
@@ -530,6 +627,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
         }
     } else {
         if (inspect_flags != 0 && (inspect_flags == match_flags)) {
+            match_flags |= DE_STATE_FLAG_FULL_MATCH;
             r = 1;
         }
     }
@@ -548,6 +646,14 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
         /* \todo shift to an array to transfer these match values*/
         DeStateSignatureAppend(f->de_state, s, sm, match_flags);
         DeStateStoreStateVersion(f->de_state, flags, alversion);
+        DeStateStoreFileNoMatch(f->de_state, flags, file_no_match);
+
+        if (DeStateStoreFilestoreSigsCantMatch(det_ctx->sgh, f->de_state, flags) == 1) {
+            SCLogDebug("disabling file storage for transaction %u", det_ctx->tx_id);
+            FileDisableStoringForTransaction(f, flags & (STREAM_TOCLIENT|STREAM_TOSERVER),
+                    det_ctx->tx_id);
+            f->de_state->flags |= DE_STATE_FILE_STORE_DISABLED;
+        }
     }
     SCMutexUnlock(&f->de_state_m);
 
@@ -568,6 +674,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     uint16_t inspect_flags = 0;
     uint16_t match_flags = 0;
     int match = 0;
+    uint16_t file_no_match = 0;
 
     if (f == NULL || alstate == NULL || alproto == ALPROTO_UNKNOWN) {
         return 0;
@@ -578,9 +685,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     if (f->de_state == NULL || f->de_state->cnt == 0)
         goto end;
 
-    if (DeStateGetStateVersion(f->de_state, flags) == alversion) {
-        goto end;
-    }
+    DeStateResetFileInspection(f, alproto, alstate);
 
     /* loop through the stores */
     for (store = f->de_state->head; store != NULL; store = store->next)
@@ -603,13 +708,60 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
             SCLogDebug("id of signature to inspect: %"PRIuMAX,
                     (uintmax_t)s->id);
 
-            RULE_PROFILING_START;
-
             /* if we already fully matched previously, detect that here */
             if (item->flags & DE_STATE_FLAG_FULL_MATCH) {
-                det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_FULL;
-                goto next_sig;
+                /* check first if we have received new files in the livetime of
+                 * this de_state (this tx). */
+                if (item->flags & (DE_STATE_FLAG_FILE_TC_INSPECT|DE_STATE_FLAG_FILE_TS_INSPECT)) {
+                    if (flags & STREAM_TOCLIENT && f->de_state->flags & DE_STATE_FILE_TC_NEW) {
+                        item->flags &= ~DE_STATE_FLAG_FILE_TC_INSPECT;
+                        item->flags &= ~DE_STATE_FLAG_FULL_MATCH;
+                    }
+
+                    if (flags & STREAM_TOSERVER && f->de_state->flags & DE_STATE_FILE_TS_NEW) {
+                        item->flags &= ~DE_STATE_FLAG_FILE_TS_INSPECT;
+                        item->flags &= ~DE_STATE_FLAG_FULL_MATCH;
+                    }
+                }
+
+                if (item->flags & DE_STATE_FLAG_FULL_MATCH) {
+                    det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_FULL;
+                    SCLogDebug("full match state");
+                    continue;
+                }
             }
+
+            /* if we know for sure we can't ever match, detect that here */
+            if (item->flags & DE_STATE_FLAG_SIG_CANT_MATCH) {
+                if (flags & STREAM_TOSERVER &&
+                        item->flags & DE_STATE_FLAG_FILE_TS_INSPECT &&
+                        f->de_state->flags & DE_STATE_FILE_TS_NEW) {
+
+                    /* new file, fall through */
+                    item->flags &= ~DE_STATE_FLAG_FILE_TS_INSPECT;
+                    item->flags &= ~DE_STATE_FLAG_SIG_CANT_MATCH;
+
+                } else if (flags & STREAM_TOCLIENT &&
+                        item->flags & DE_STATE_FLAG_FILE_TC_INSPECT &&
+                        f->de_state->flags & DE_STATE_FILE_TC_NEW) {
+
+                    /* new file, fall through */
+                    item->flags &= ~DE_STATE_FLAG_FILE_TC_INSPECT;
+                    item->flags &= ~DE_STATE_FLAG_SIG_CANT_MATCH;
+
+                } else {
+                    det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_NOMATCH;
+                    continue;
+                }
+            }
+
+            /* only inspect in the right direction here */
+            if (flags & STREAM_TOSERVER && !(s->flags & SIG_FLAG_TOSERVER))
+                continue;
+            else if (flags & STREAM_TOCLIENT && !(s->flags & SIG_FLAG_TOCLIENT))
+                continue;
+
+            RULE_PROFILING_START;
 
             /* let's continue detection */
 
@@ -642,6 +794,12 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                             SCLogDebug("http client body matched");
                             match_flags |= DE_STATE_FLAG_HCBD_MATCH;
                         }
+                    }
+                }
+                /* not inspecting in toserver direction */
+                if (s->sm_lists[DETECT_SM_LIST_HSBDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSBD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HSBD_INSPECT;
                     }
                 }
                 if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
@@ -701,6 +859,117 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                                                           flags, alstate) == 1) {
                             SCLogDebug("http raw uri matched");
                             match_flags |= DE_STATE_FLAG_HRUD_MATCH;
+                        }
+                    }
+                }
+
+                if (s->sm_lists[DETECT_SM_LIST_FILEMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_FILE_TS_MATCH)) {
+                        SCLogDebug("file inspection");
+                        if (match_flags == inspect_flags) {
+                            SCLogDebug("ready to inspect files");
+
+                            inspect_flags |= DE_STATE_FLAG_FILE_TS_INSPECT;
+
+                            match = DetectFileInspectHttp(tv, det_ctx, f, s, alstate, flags);
+                            if (match == 1) {
+                                match_flags |= DE_STATE_FLAG_FILE_TS_MATCH;
+                            } else if (match == 2) {
+                                match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                            } else if (match == 3) {
+                                match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                                file_no_match++;
+                            }
+                        } else {
+                            SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
+                        }
+                    }
+                }
+            } else if (alproto == ALPROTO_HTTP && (flags & STREAM_TOCLIENT)) {
+                /* For to client set the flags in inspect so it can't match
+                 * if the sig requires something only the request has. The rest
+                 * will be inspected in the opposite direction. */
+                if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_URI_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_URI_INSPECT;
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HCBD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HCBD_INSPECT;
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HSBDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSBD_MATCH)) {
+                        SCLogDebug("inspecting http server body data");
+                        inspect_flags |= DE_STATE_FLAG_HSBD_INSPECT;
+
+                        if (DetectEngineInspectHttpServerBody(de_ctx, det_ctx, s, f,
+                                                              flags, alstate) == 1) {
+                            SCLogDebug("http server body matched");
+                            match_flags |= DE_STATE_FLAG_HSBD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HHD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HHD_INSPECT;
+                        if (DetectEngineInspectHttpHeader(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            match_flags |= DE_STATE_FLAG_HHD_MATCH;
+                        }
+                    }
+                    SCLogDebug("inspecting http header");
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HRHDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HRHD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HRHD_INSPECT;
+                        if (DetectEngineInspectHttpRawHeader(de_ctx, det_ctx, s, f,
+                                                             flags, alstate) == 1) {
+                            match_flags |= DE_STATE_FLAG_HRHD_MATCH;
+                        }
+                        SCLogDebug("inspecting http raw header");
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HMDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HMD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HMD_INSPECT;
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HCDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HCD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HCD_INSPECT;
+                        if (DetectEngineInspectHttpCookie(de_ctx, det_ctx, s, f,
+                                                          flags, alstate) == 1) {
+                            match_flags |= DE_STATE_FLAG_HCD_MATCH;
+                        }
+                        SCLogDebug("inspecting http cookie");
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HRUD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HRUD_INSPECT;
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_FILEMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_FILE_TC_MATCH)) {
+                        SCLogDebug("file inspection");
+                        if (match_flags == inspect_flags) {
+                            SCLogDebug("ready to inspect files");
+
+                            inspect_flags |= DE_STATE_FLAG_FILE_TC_INSPECT;
+
+                            match = DetectFileInspectHttp(tv, det_ctx, f, s, alstate, flags);
+                            if (match == 1) {
+                                match_flags |= DE_STATE_FLAG_FILE_TC_MATCH;
+                            } else if (match == 2) {
+                                match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                            } else if (match == 3) {
+                                match_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                                file_no_match++;
+                            }
+                        } else {
+                            SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
                         }
                     }
                 }
@@ -770,6 +1039,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         /* mark the sig as matched */
                         item->nm = NULL;
 
+                        SCLogDebug("inspect_flags %04x match_flags %04x", inspect_flags, match_flags);
                         if (inspect_flags == 0 || (inspect_flags == match_flags)) {
                             det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_NEW;
                             SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_NEW));
@@ -781,6 +1051,7 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                     }
                 }
             } else {
+                SCLogDebug("inspect_flags %04x match_flags %04x", inspect_flags, match_flags);
                 if (inspect_flags != 0 && (inspect_flags == match_flags)) {
                     det_ctx->de_state_sig_array[item->sid] = DE_STATE_MATCH_NEW;
                     SCLogDebug("state set to %s", DeStateMatchResultToString(DE_STATE_MATCH_NEW));
@@ -796,14 +1067,29 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
             SCLogDebug("signature %"PRIu32" match state %s",
                     s->id, DeStateMatchResultToString(det_ctx->de_state_sig_array[item->sid]));
 
-next_sig:
             RULE_PROFILING_END(s, match);
 
         }
     }
 
     DeStateStoreStateVersion(f->de_state, flags, alversion);
+    DeStateStoreFileNoMatch(f->de_state, flags, file_no_match);
+
+    if (!(f->de_state->flags & DE_STATE_FILE_STORE_DISABLED)) {
+        if (DeStateStoreFilestoreSigsCantMatch(det_ctx->sgh, f->de_state, flags) == 1) {
+            SCLogDebug("disabling file storage for transaction");
+            FileDisableStoringForTransaction(f, flags & (STREAM_TOCLIENT|STREAM_TOSERVER),
+                    det_ctx->tx_id);
+            f->de_state->flags |= DE_STATE_FILE_STORE_DISABLED;
+        }
+    }
+
 end:
+    if (flags & STREAM_TOCLIENT)
+        f->de_state->flags &= ~DE_STATE_FILE_TC_NEW;
+    else
+        f->de_state->flags &= ~DE_STATE_FILE_TS_NEW;
+
     SCMutexUnlock(&f->de_state_m);
     SCReturnInt(0);
 }
@@ -825,6 +1111,32 @@ int DeStateRestartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngin
     SCMutexUnlock(&f->de_state_m);
 
     SCReturnInt(0);
+}
+
+/**
+ *  \brief Act on HTTP new file in same tx flag.
+ *
+ *  \param f flow with *LOCKED* de_state
+ */
+static void DeStateResetFileInspection(Flow *f, uint16_t alproto, void *alstate) {
+    if (f == NULL || alproto != ALPROTO_HTTP || alstate == NULL || f->de_state == NULL) {
+        SCReturn;
+    }
+
+    SCMutexLock(&f->m);
+    HtpState *htp_state = (HtpState *)alstate;
+
+    if (htp_state->flags & HTP_FLAG_NEW_FILE_TX_TC) {
+        SCLogDebug("new file in the TC direction");
+        htp_state->flags &= ~HTP_FLAG_NEW_FILE_TX_TC;
+        f->de_state->flags |= DE_STATE_FILE_TC_NEW;
+    } else if (htp_state->flags & HTP_FLAG_NEW_FILE_TX_TS) {
+        SCLogDebug("new file in the TS direction");
+        htp_state->flags &= ~HTP_FLAG_NEW_FILE_TX_TS;
+        f->de_state->flags |= DE_STATE_FILE_TS_NEW;
+    }
+
+    SCMutexUnlock(&f->m);
 }
 
 #ifdef UNITTESTS
@@ -990,8 +1302,7 @@ static int DeStateSigTest01(void) {
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1000,7 +1311,6 @@ static int DeStateSigTest01(void) {
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1018,7 +1328,7 @@ static int DeStateSigTest01(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1031,7 +1341,7 @@ static int DeStateSigTest01(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1044,7 +1354,7 @@ static int DeStateSigTest01(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1057,7 +1367,7 @@ static int DeStateSigTest01(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1084,7 +1394,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
@@ -1124,8 +1433,7 @@ static int DeStateSigTest02(void) {
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1134,7 +1442,6 @@ static int DeStateSigTest02(void) {
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1157,7 +1464,7 @@ static int DeStateSigTest02(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1170,7 +1477,7 @@ static int DeStateSigTest02(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1183,7 +1490,7 @@ static int DeStateSigTest02(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1196,7 +1503,7 @@ static int DeStateSigTest02(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1210,7 +1517,7 @@ static int DeStateSigTest02(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
     if (r != 0) {
         printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1223,7 +1530,7 @@ static int DeStateSigTest02(void) {
     }
     p->alerts.cnt = 0;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
     if (r != 0) {
         printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1238,7 +1545,7 @@ static int DeStateSigTest02(void) {
 
     SCLogDebug("sending data chunk 7");
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
     if (r != 0) {
         printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1261,12 +1568,604 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     return result;
 }
+
+static int DeStateSigTest03(void) {
+    uint8_t httpbuf1[] = "POST /upload.cgi HTTP/1.1\r\n"
+                         "Host: www.server.lan\r\n"
+                         "Content-Type: multipart/form-data; boundary=---------------------------277531038314945\r\n"
+                         "Content-Length: 215\r\n"
+                         "\r\n"
+                         "-----------------------------277531038314945\r\n"
+                         "Content-Disposition: form-data; name=\"uploadfile_0\"; filename=\"somepicture1.jpg\"\r\n"
+                         "Content-Type: image/jpeg\r\n"
+                         "\r\n"
+                         "filecontent\r\n"
+                         "-----------------------------277531038314945--";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    ThreadVars th_v;
+    TcpSession ssn;
+    int result = 0;
+    Flow *f = NULL;
+    Packet *p = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&ssn, 0, sizeof(ssn));
+
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"POST\"; http_method; content:\"upload.cgi\"; http_uri; filestore; sid:1; rev:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL)
+        goto end;
+
+    p->flow = f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (!(PacketAlertCheck(p, 1))) {
+        printf("sig 1 didn't alert: ");
+        goto end;
+    }
+
+    http_state = f->alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    if (http_state->files_ts == NULL) {
+        printf("no files in state: ");
+        goto end;
+    }
+
+    FileContainer *files = AppLayerGetFilesFromFlow(p->flow, STREAM_TOSERVER);
+    if (files == NULL) {
+        printf("no stored files: ");
+        goto end;
+    }
+
+    File *file = files->head;
+    if (file == NULL) {
+        printf("no file: ");
+        goto end;
+    }
+
+    if (file->store != 1) {
+        printf("file is set to store, but sig didn't match: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    UTHFreeFlow(f);
+
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+static int DeStateSigTest04(void) {
+    uint8_t httpbuf1[] = "POST /upload.cgi HTTP/1.1\r\n"
+                         "Host: www.server.lan\r\n"
+                         "Content-Type: multipart/form-data; boundary=---------------------------277531038314945\r\n"
+                         "Content-Length: 215\r\n"
+                         "\r\n"
+                         "-----------------------------277531038314945\r\n"
+                         "Content-Disposition: form-data; name=\"uploadfile_0\"; filename=\"somepicture1.jpg\"\r\n"
+                         "Content-Type: image/jpeg\r\n"
+                         "\r\n"
+                         "filecontent\r\n"
+                         "-----------------------------277531038314945--";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    ThreadVars th_v;
+    TcpSession ssn;
+    int result = 0;
+    Flow *f = NULL;
+    Packet *p = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&ssn, 0, sizeof(ssn));
+
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"GET\"; http_method; content:\"upload.cgi\"; http_uri; filestore; sid:1; rev:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL)
+        goto end;
+
+    p->flow = f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted: ");
+        goto end;
+    }
+
+    http_state = f->alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    if (http_state->files_ts == NULL) {
+        printf("no files in state: ");
+        goto end;
+    }
+
+    FileContainer *files = AppLayerGetFilesFromFlow(p->flow, STREAM_TOSERVER);
+    if (files == NULL) {
+        printf("no stored files: ");
+        goto end;
+    }
+
+    File *file = files->head;
+    if (file == NULL) {
+        printf("no file: ");
+        goto end;
+    }
+
+    if (file->store == 1) {
+        printf("file is set to store, but sig didn't match: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    UTHFreeFlow(f);
+
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+static int DeStateSigTest05(void) {
+    uint8_t httpbuf1[] = "POST /upload.cgi HTTP/1.1\r\n"
+                         "Host: www.server.lan\r\n"
+                         "Content-Type: multipart/form-data; boundary=---------------------------277531038314945\r\n"
+                         "Content-Length: 215\r\n"
+                         "\r\n"
+                         "-----------------------------277531038314945\r\n"
+                         "Content-Disposition: form-data; name=\"uploadfile_0\"; filename=\"somepicture1.jpg\"\r\n"
+                         "Content-Type: image/jpeg\r\n"
+                         "\r\n"
+                         "filecontent\r\n"
+                         "-----------------------------277531038314945--";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    ThreadVars th_v;
+    TcpSession ssn;
+    int result = 0;
+    Flow *f = NULL;
+    Packet *p = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&ssn, 0, sizeof(ssn));
+
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"GET\"; http_method; content:\"upload.cgi\"; http_uri; filename:\"nomatch\"; sid:1; rev:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL)
+        goto end;
+
+    p->flow = f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted: ");
+        goto end;
+    }
+
+    http_state = f->alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    if (http_state->files_ts == NULL) {
+        printf("no files in state: ");
+        goto end;
+    }
+
+    FileContainer *files = AppLayerGetFilesFromFlow(p->flow, STREAM_TOSERVER);
+    if (files == NULL) {
+        printf("no stored files: ");
+        goto end;
+    }
+
+    File *file = files->head;
+    if (file == NULL) {
+        printf("no file: ");
+        goto end;
+    }
+
+    if (file->store != -1) {
+        printf("file is not set to \"no store\", but %d: ", file->store);
+        goto end;
+    }
+
+    result = 1;
+end:
+    UTHFreeFlow(f);
+
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+static int DeStateSigTest06(void) {
+    uint8_t httpbuf1[] = "POST /upload.cgi HTTP/1.1\r\n"
+                         "Host: www.server.lan\r\n"
+                         "Content-Type: multipart/form-data; boundary=---------------------------277531038314945\r\n"
+                         "Content-Length: 215\r\n"
+                         "\r\n"
+                         "-----------------------------277531038314945\r\n"
+                         "Content-Disposition: form-data; name=\"uploadfile_0\"; filename=\"somepicture1.jpg\"\r\n"
+                         "Content-Type: image/jpeg\r\n"
+                         "\r\n"
+                         "filecontent\r\n"
+                         "-----------------------------277531038314945--";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    ThreadVars th_v;
+    TcpSession ssn;
+    int result = 0;
+    Flow *f = NULL;
+    Packet *p = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&ssn, 0, sizeof(ssn));
+
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"POST\"; http_method; content:\"upload.cgi\"; http_uri; filename:\"nomatch\"; filestore; sid:1; rev:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL)
+        goto end;
+
+    p->flow = f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted: ");
+        goto end;
+    }
+
+    http_state = f->alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    if (http_state->files_ts == NULL) {
+        printf("no files in state: ");
+        goto end;
+    }
+
+    FileContainer *files = AppLayerGetFilesFromFlow(p->flow, STREAM_TOSERVER);
+    if (files == NULL) {
+        printf("no stored files: ");
+        goto end;
+    }
+
+    File *file = files->head;
+    if (file == NULL) {
+        printf("no file: ");
+        goto end;
+    }
+
+    if (file->store != -1) {
+        printf("file is not set to \"no store\", but %d: ", file->store);
+        goto end;
+    }
+
+    result = 1;
+end:
+    UTHFreeFlow(f);
+
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
+static int DeStateSigTest07(void) {
+    uint8_t httpbuf1[] = "POST /upload.cgi HTTP/1.1\r\n"
+                         "Host: www.server.lan\r\n"
+                         "Content-Type: multipart/form-data; boundary=---------------------------277531038314945\r\n"
+                         "Content-Length: 215\r\n"
+                         "\r\n"
+                         "-----------------------------277531038314945\r\n"
+                         "Content-Disposition: form-data; name=\"uploadfile_0\"; filename=\"somepicture1.jpg\"\r\n"
+                         "Content-Type: image/jpeg\r\n"
+                         "\r\n";
+
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    uint8_t httpbuf2[] = "filecontent\r\n"
+                         "-----------------------------277531038314945--";
+    uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
+    ThreadVars th_v;
+    TcpSession ssn;
+    int result = 0;
+    Flow *f = NULL;
+    Packet *p = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&ssn, 0, sizeof(ssn));
+
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"GET\"; http_method; content:\"upload.cgi\"; http_uri; filestore; sid:1; rev:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL)
+        goto end;
+
+    p->flow = f;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    StreamTcpInitConfig(TRUE);
+
+    SCLogDebug("\n>>>> processing chunk 1 <<<<\n");
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted: ");
+        goto end;
+    }
+
+    SCLogDebug("\n>>>> processing chunk 2 size %u <<<<\n", httplen2);
+    r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_EOF, httpbuf2, httplen2);
+    if (r != 0) {
+        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted: ");
+        goto end;
+    }
+
+    http_state = f->alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        result = 0;
+        goto end;
+    }
+
+    if (http_state->files_ts == NULL) {
+        printf("no files in state: ");
+        goto end;
+    }
+
+    FileContainer *files = AppLayerGetFilesFromFlow(p->flow, STREAM_TOSERVER);
+    if (files == NULL) {
+        printf("no stored files: ");
+        goto end;
+    }
+
+    File *file = files->head;
+    if (file == NULL) {
+        printf("no file: ");
+        goto end;
+    }
+
+    if (file->store == 1) {
+        printf("file is set to store, but sig didn't match: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    UTHFreeFlow(f);
+
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+    StreamTcpFreeConfig(TRUE);
+    return result;
+}
+
 #endif
 
 void DeStateRegisterTests(void) {
@@ -1276,6 +2175,11 @@ void DeStateRegisterTests(void) {
     UtRegisterTest("DeStateTest03", DeStateTest03, 1);
     UtRegisterTest("DeStateSigTest01", DeStateSigTest01, 1);
     UtRegisterTest("DeStateSigTest02", DeStateSigTest02, 1);
+    UtRegisterTest("DeStateSigTest03", DeStateSigTest03, 1);
+    UtRegisterTest("DeStateSigTest04", DeStateSigTest04, 1);
+    UtRegisterTest("DeStateSigTest05", DeStateSigTest05, 1);
+    UtRegisterTest("DeStateSigTest06", DeStateSigTest06, 1);
+    UtRegisterTest("DeStateSigTest07", DeStateSigTest07, 1);
 #endif
 }
 

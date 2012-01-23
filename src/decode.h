@@ -31,9 +31,18 @@
 
 #include "threadvars.h"
 
-#include "source-nfq.h"
+typedef enum {
+    CHECKSUM_VALIDATION_DISABLE,
+    CHECKSUM_VALIDATION_ENABLE,
+    CHECKSUM_VALIDATION_AUTO,
+    CHECKSUM_VALIDATION_RXONLY,
+    CHECKSUM_VALIDATION_KERNEL,
+} ChecksumValidationMode;
 
+#include "source-nfq.h"
+#include "source-ipfw.h"
 #include "source-pcap.h"
+
 #include "action-globals.h"
 
 #include "decode-ethernet.h"
@@ -352,6 +361,10 @@ typedef struct Packet_
 #ifdef NFQ
         NFQPacketVars nfq_v;
 #endif /* NFQ */
+#ifdef IPFW
+        IPFWPacketVars ipfw_v;
+#endif /* IPFW */
+
 
         /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
         PcapPacketVars pcap_v;
@@ -407,6 +420,9 @@ typedef struct Packet_
     uint8_t *pkt;
     uint8_t *ext_pkt;
     uint32_t pktlen;
+
+    /* Incoming interface */
+    struct LiveDevice_ *livedev;
 
     PacketAlerts alerts;
 
@@ -465,7 +481,7 @@ typedef struct Packet_
 #define DEFAULT_PACKET_SIZE (1500 + ETHERNET_HEADER_LEN)
 /* storage: maximum ip packet size + link header */
 #define MAX_PAYLOAD_SIZE (IPV6_HEADER_LEN + 65536 + 28)
-intmax_t default_packet_size;
+uint32_t default_packet_size;
 #define SIZE_OF_PACKET (default_packet_size + sizeof(Packet))
 
 typedef struct PacketQueue_ {
@@ -489,6 +505,8 @@ typedef struct AlpProtoDetectDirectionThread_ {
 typedef struct AlpProtoDetectThreadCtx_ {
     AlpProtoDetectDirectionThread toserver;
     AlpProtoDetectDirectionThread toclient;
+
+    void *alproto_local_storage[ALPROTO_MAX];
 
 #ifdef PROFILING
     uint64_t ticks_start;
@@ -559,6 +577,7 @@ typedef struct DecodeThreadVars_
     SCMutexInit(&(p)->tunnel_mutex, NULL); \
     PACKET_RESET_CHECKSUMS((p)); \
     (p)->pkt = ((uint8_t *)(p)) + sizeof(Packet); \
+    (p)->livedev = NULL; \
 }
 #else
 #define PACKET_INITIALIZE(p) { \
@@ -568,6 +587,7 @@ typedef struct DecodeThreadVars_
     SCMutexInit(&(p)->cuda_mutex, NULL); \
     SCCondInit(&(p)->cuda_cond, NULL); \
     (p)->pkt = ((uint8_t *)(p)) + sizeof(Packet); \
+    (p)->livedev = NULL; \
 }
 #endif
 
@@ -634,6 +654,7 @@ typedef struct DecodeThreadVars_
         (p)->next = NULL;                       \
         (p)->prev = NULL;                       \
         (p)->root = NULL;                       \
+        (p)->livedev = NULL;                      \
         PACKET_RESET_CHECKSUMS((p));            \
         PACKET_PROFILING_RESET((p));            \
     } while (0)
@@ -871,6 +892,8 @@ void AddressDebugPrint(Address *);
 
 #define PKT_TUNNEL                      0x1000
 #define PKT_TUNNEL_VERDICTED            0x2000
+
+#define PKT_IGNORE_CHECKSUM             0x4000    /**< Packet checksum is not computed (TX packet for example) */
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)

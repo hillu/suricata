@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #include "suricata-common.h"
@@ -1699,12 +1699,10 @@ int DcePayloadTest01(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1755,7 +1753,7 @@ int DcePayloadTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1796,7 +1794,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1837,7 +1835,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1879,7 +1877,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 2");
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1921,7 +1919,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 3");
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1964,7 +1962,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 4");
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request4, request4_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request4, request4_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2005,7 +2003,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request5, request5_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request5, request5_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2046,7 +2044,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request6, request6_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request6, request6_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2087,7 +2085,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request7, request7_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request7, request7_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2128,7 +2126,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request8, request8_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request8, request8_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2169,7 +2167,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request9, request9_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request9, request9_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2221,7 +2219,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 11);
@@ -2564,12 +2561,10 @@ int DcePayloadTest02(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -2589,7 +2584,7 @@ int DcePayloadTest02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2606,7 +2601,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2623,7 +2618,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2640,7 +2635,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2668,7 +2663,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -3010,12 +3004,10 @@ int DcePayloadTest03(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -3035,7 +3027,7 @@ int DcePayloadTest03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3052,7 +3044,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3069,7 +3061,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3086,7 +3078,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3114,7 +3106,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -3456,12 +3447,10 @@ int DcePayloadTest04(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -3481,7 +3470,7 @@ int DcePayloadTest04(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3498,7 +3487,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3515,7 +3504,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3532,7 +3521,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3560,7 +3549,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -3901,12 +3889,10 @@ int DcePayloadTest05(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -3926,7 +3912,7 @@ int DcePayloadTest05(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3943,7 +3929,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3960,7 +3946,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3977,7 +3963,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4005,7 +3991,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -4347,12 +4332,10 @@ int DcePayloadTest06(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -4372,7 +4355,7 @@ int DcePayloadTest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4389,7 +4372,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4406,7 +4389,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4423,7 +4406,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4451,7 +4434,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -4792,12 +4774,10 @@ int DcePayloadTest07(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -4817,7 +4797,7 @@ int DcePayloadTest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4834,7 +4814,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4851,7 +4831,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4868,7 +4848,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4896,7 +4876,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 4);
@@ -5074,12 +5053,10 @@ int DcePayloadTest08(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -5094,7 +5071,7 @@ int DcePayloadTest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5118,7 +5095,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 1);
@@ -5296,12 +5272,10 @@ int DcePayloadTest09(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -5316,7 +5290,7 @@ int DcePayloadTest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5340,7 +5314,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 1);
@@ -5518,12 +5491,10 @@ int DcePayloadTest10(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -5538,7 +5509,7 @@ int DcePayloadTest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5562,7 +5533,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 1);
@@ -5875,12 +5845,10 @@ int DcePayloadTest11(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -5895,7 +5863,7 @@ int DcePayloadTest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5908,7 +5876,7 @@ int DcePayloadTest11(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5932,7 +5900,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 2);
@@ -6246,12 +6213,10 @@ int DcePayloadTest12(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -6266,7 +6231,7 @@ int DcePayloadTest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6279,7 +6244,7 @@ int DcePayloadTest12(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6303,7 +6268,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 2);
@@ -6432,12 +6396,10 @@ int DcePayloadTest13(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -6452,7 +6414,7 @@ int DcePayloadTest13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6472,7 +6434,7 @@ int DcePayloadTest13(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, response1, response1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response1, response1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6485,7 +6447,7 @@ int DcePayloadTest13(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6508,7 +6470,7 @@ int DcePayloadTest13(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6521,7 +6483,7 @@ int DcePayloadTest13(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6537,7 +6499,7 @@ int DcePayloadTest13(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, response3, response3_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response3, response3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6561,7 +6523,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 8);
@@ -6672,12 +6633,10 @@ int DcePayloadTest14(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -6693,7 +6652,7 @@ int DcePayloadTest14(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6714,7 +6673,7 @@ int DcePayloadTest14(void)
     }
 
     /* bind */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6728,7 +6687,7 @@ int DcePayloadTest14(void)
     }
 
     /* bind_ack.  A new transaction initiation */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6744,7 +6703,7 @@ int DcePayloadTest14(void)
     /* we should have a match for the sig once again for the same flow, since
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6758,7 +6717,7 @@ int DcePayloadTest14(void)
     }
 
     /* response */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6782,7 +6741,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(p, 6);
@@ -6842,12 +6800,10 @@ int DcePayloadTest15(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -6866,7 +6822,7 @@ int DcePayloadTest15(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6894,7 +6850,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -6954,12 +6909,10 @@ int DcePayloadTest16(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -6978,7 +6931,7 @@ int DcePayloadTest16(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7006,7 +6959,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7066,12 +7018,10 @@ int DcePayloadTest17(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7090,7 +7040,7 @@ int DcePayloadTest17(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7118,7 +7068,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7178,12 +7127,10 @@ int DcePayloadTest18(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7202,7 +7149,7 @@ int DcePayloadTest18(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7230,7 +7177,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7290,12 +7236,10 @@ int DcePayloadTest19(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7314,7 +7258,7 @@ int DcePayloadTest19(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7342,7 +7286,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7402,12 +7345,10 @@ int DcePayloadTest20(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7426,7 +7367,7 @@ int DcePayloadTest20(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7454,7 +7395,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7506,12 +7446,10 @@ int DcePayloadTest21(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7527,7 +7465,7 @@ int DcePayloadTest21(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7551,7 +7489,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7603,12 +7540,10 @@ int DcePayloadTest22(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7624,7 +7559,7 @@ int DcePayloadTest22(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7648,7 +7583,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7701,12 +7635,10 @@ int DcePayloadTest23(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7722,7 +7654,7 @@ int DcePayloadTest23(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7746,7 +7678,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -7797,12 +7728,10 @@ int DcePayloadTest24(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -7818,7 +7747,7 @@ int DcePayloadTest24(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -7842,7 +7771,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -9995,12 +9923,10 @@ int DcePayloadTest42(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -10016,7 +9942,7 @@ int DcePayloadTest42(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -10040,7 +9966,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);
@@ -10093,12 +10018,10 @@ int DcePayloadTest43(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -10114,7 +10037,7 @@ int DcePayloadTest43(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -10138,7 +10061,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
 
     UTHFreePackets(&p, 1);

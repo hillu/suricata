@@ -53,6 +53,7 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 #include "util-byte.h"
+#include "util-misc.h"
 
 #include "util-debug.h"
 #include "util-privs.h"
@@ -86,51 +87,12 @@ int FlowKill(FlowQueue *);
 /* Run mode selected at suricata.c */
 extern int run_mode;
 
-/** \brief Initialize the l7data ptr in the Flow session used by the L7 Modules
- *         for data storage.
- *
- *  \param f Flow to init the ptrs for
- *  \param cnt number of items in the array
- *
- *  \todo VJ use a pool?
- */
-void FlowL7DataPtrInit(Flow *f)
-{
-    if (f->aldata != NULL)
-        return;
-
-    uint32_t size = (uint32_t)(sizeof (void *) * AppLayerGetStorageSize());
-
-    // XXXPR pass to flow memcap   if (StreamTcpCheckMemcap(size) == 0)
-    // XXXPR pass to flow memcap        return;
-
-    f->aldata = (void **) SCMalloc(size);
-    if (f->aldata != NULL) {
-        // StreamTcpIncrMemuse(size);
-        uint8_t u;
-        for (u = 0; u < AppLayerGetStorageSize(); u++) {
-            f->aldata[u] = NULL;
-        }
-    }
-
-    return;
-}
-
-void FlowL7DataPtrFree(Flow *f)
+void FlowCleanupAppLayer(Flow *f)
 {
     if (f == NULL)
         return;
 
-    if (f->aldata == NULL)
-        return;
-
     AppLayerParserCleanupState(f);
-    SCFree(f->aldata);
-    f->aldata = NULL;
-
-    // uint32_t size = (uint32_t)(sizeof (void *) * StreamL7GetStorageSize());
-    // StreamTcpDecrMemuse(size);
-
     return;
 }
 
@@ -146,12 +108,12 @@ void FlowUpdateQueue(Flow *f)
         /* in the new list -- we consider a flow no longer
          * new if we have seen at least 2 pkts in both ways. */
         if (f->flags & FLOW_TO_DST_SEEN && f->flags & FLOW_TO_SRC_SEEN) {
-            FlowRequeue(f, &flow_new_q[f->protomap], &flow_est_q[f->protomap], 1);
+            FlowRequeue(f, &flow_new_q[f->protomap], &flow_est_q[f->protomap]);
 
             f->flags |= FLOW_EST_LIST; /* transition */
             f->flags &= ~FLOW_NEW_LIST;
         } else {
-            FlowRequeue(f, &flow_new_q[f->protomap], &flow_new_q[f->protomap], 1);
+            FlowRequeueMoveToBot(f, &flow_new_q[f->protomap]);
         }
     } else if (f->flags & FLOW_EST_LIST) {
         if (flow_proto[f->protomap].GetProtoState != NULL) {
@@ -161,21 +123,39 @@ void FlowUpdateQueue(Flow *f)
                 f->flags &=~ FLOW_EST_LIST;
 
                 SCLogDebug("flow %p was put into closing queue ts %"PRIuMAX"", f, (uintmax_t)f->lastts_sec);
-                FlowRequeue(f, &flow_est_q[f->protomap], &flow_close_q[f->protomap], 1);
+                FlowRequeue(f, &flow_est_q[f->protomap], &flow_close_q[f->protomap]);
             } else {
                 /* Pull and put back -- this way the flows on
                  * top of the list are least recently used. */
-                FlowRequeue(f, &flow_est_q[f->protomap], &flow_est_q[f->protomap], 1);
+                FlowRequeueMoveToBot(f, &flow_est_q[f->protomap]);
             }
         } else {
             /* Pull and put back -- this way the flows on
              * top of the list are least recently used. */
-            FlowRequeue(f, &flow_est_q[f->protomap], &flow_est_q[f->protomap], 1);
+            FlowRequeueMoveToBot(f, &flow_est_q[f->protomap]);
         }
     } else if (f->flags & FLOW_CLOSED_LIST){
-        /* Pull and put back -- this way the flows on
-         * top of the list are least recently used. */
-        FlowRequeue(f, &flow_close_q[f->protomap], &flow_close_q[f->protomap], 1);
+        /* for the case of ssn reuse in TCP sessions we need to be able to pull
+         * a flow back from the dungeon and inject adrenalin straight into it's
+         * heart. */
+        if (flow_proto[f->protomap].GetProtoState != NULL) {
+            uint8_t state = flow_proto[f->protomap].GetProtoState(f->protoctx);
+            if (state == FLOW_STATE_NEW) {
+                f->flags |= FLOW_NEW_LIST; /* transition */
+                f->flags &=~ FLOW_CLOSED_LIST;
+
+                SCLogDebug("flow %p was put into new queue ts %"PRIuMAX"", f, (uintmax_t)f->lastts_sec);
+                FlowRequeue(f, &flow_close_q[f->protomap], &flow_new_q[f->protomap]);
+            } else {
+                /* Pull and put back -- this way the flows on
+                 * top of the list are least recently used. */
+                FlowRequeueMoveToBot(f, &flow_close_q[f->protomap]);
+            }
+        } else {
+            /* Pull and put back -- this way the flows on
+             * top of the list are least recently used. */
+            FlowRequeueMoveToBot(f, &flow_close_q[f->protomap]);
+        }
     }
 
     return;
@@ -347,17 +327,18 @@ static int FlowPrune(FlowQueue *q, struct timeval *ts, int try_cnt)
         if (FlowForceReassemblyForFlowV2(f) == 1) {
             Flow *prev_f = f;
             f = f->lnext;
+            SCSpinUnlock(&prev_f->fb->s);
             SCMutexUnlock(&prev_f->m);
             continue;
         }
-
+#ifdef DEBUG
         /* this should not be possible */
         BUG_ON(SC_ATOMIC_GET(f->use_cnt) > 0);
-
+#endif
         /* remove from the hash */
-        if (f->hprev)
+        if (f->hprev != NULL)
             f->hprev->hnext = f->hnext;
-        if (f->hnext)
+        if (f->hnext != NULL)
             f->hnext->hprev = f->hprev;
         if (f->fb->f == f)
             f->fb->f = f->hnext;
@@ -368,14 +349,18 @@ static int FlowPrune(FlowQueue *q, struct timeval *ts, int try_cnt)
         SCSpinUnlock(&f->fb->s);
         f->fb = NULL;
 
-        cnt++;
         FlowClearMemory (f, f->protomap);
         Flow *next_flow = f->lnext;
-        /* move to spare list */
-        FlowRequeue(f, q, &flow_spare_q, 0);
-        SCMutexUnlock(&f->m);
-        f = next_flow;
 
+        /* no one is referring to this flow, use_cnt 0, removed from hash
+         * so we can unlock it and move it back to the spare queue. */
+        SCMutexUnlock(&f->m);
+
+        /* move to spare list */
+        FlowRequeueMoveToSpare(f, q);
+
+        f = next_flow;
+        cnt++;
     }
 
     SCMutexUnlock(&q->mutex_q);
@@ -526,13 +511,15 @@ int FlowKill (FlowQueue *q)
 
         FlowClearMemory (f, f->protomap);
 
-        /* move to spare list */
-        FlowRequeue(f, q, &flow_spare_q, 0);
-
+        /* no one is referring to this flow, use_cnt 0, removed from hash
+         * so we can unlock it and move it back to the spare queue. */
         SCMutexUnlock(&f->m);
 
+        /* move to spare list */
+        FlowRequeueMoveToSpare(f, q);
+
         /* so.. we did it */
-        /* unlock list */
+        /* unlock queue */
         SCMutexUnlock(&q->mutex_q);
         return 1;
     } while (f != NULL);
@@ -631,9 +618,7 @@ int FlowUpdateSpareFlows(void)
             if (f == NULL)
                 return 0;
 
-            SCMutexLock(&flow_spare_q.mutex_q);
             FlowEnqueue(&flow_spare_q,f);
-            SCMutexUnlock(&flow_spare_q.mutex_q);
         }
     } else if (len > flow_config.prealloc) {
         tofree = len - flow_config.prealloc;
@@ -675,7 +660,7 @@ void FlowSetIPOnlyFlagNoLock(Flow *f, char direction)
 {
     direction ? (f->flags |= FLOW_TOSERVER_IPONLY_SET) :
         (f->flags |= FLOW_TOCLIENT_IPONLY_SET);
-                 return;
+    return;
 }
 
 /**
@@ -807,12 +792,6 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
     /* update queue positions */
     FlowUpdateQueue(f);
 
-    /* set the iponly stuff */
-    if (f->flags & FLOW_TOCLIENT_IPONLY_SET)
-        p->flowflags |= FLOW_PKT_TOCLIENT_IPONLY_SET;
-    if (f->flags & FLOW_TOSERVER_IPONLY_SET)
-        p->flowflags |= FLOW_PKT_TOSERVER_IPONLY_SET;
-
     /*set the detection bypass flags*/
     if (f->flags & FLOW_NOPACKET_INSPECTION) {
         SCLogDebug("setting FLOW_NOPACKET_INSPECTION flag on flow %p", f);
@@ -823,11 +802,10 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
         DecodeSetNoPayloadInspectionFlag(p);
     }
 
-    /* set the flow in the packet */
-    p->flow = f;
-
     SCMutexUnlock(&f->m);
 
+    /* set the flow in the packet */
+    p->flow = f;
     p->flags |= PKT_HAS_FLOW;
     return;
 }
@@ -836,8 +814,7 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
  *  \warning Not thread safe */
 void FlowInitConfig(char quiet)
 {
-    if (quiet == FALSE)
-        SCLogInfo("initializing flow engine...");
+    SCLogDebug("initializing flow engine...");
 
     memset(&flow_config,  0, sizeof(flow_config));
     SC_ATOMIC_INIT(flow_memuse);
@@ -883,14 +860,15 @@ void FlowInitConfig(char quiet)
     /* Check if we have memcap and hash_size defined at config */
     char *conf_val;
     uint32_t configval = 0;
-    uint64_t configval64 = 0;
 
     /** set config values for memcap, prealloc and hash_size */
     if ((ConfGet("flow.memcap", &conf_val)) == 1)
     {
-        if (ByteExtractStringUint64(&configval64, 10, strlen(conf_val),
-                                    conf_val) > 0) {
-            flow_config.memcap = configval64;
+        if (ParseSizeStringU64(conf_val, &flow_config.memcap) < 0) {
+            SCLogError(SC_ERR_SIZE_PARSE, "Error parsing flow.memcap "
+                       "from conf file - %s.  Killing engine",
+                       conf_val);
+            exit(EXIT_FAILURE);
         }
     }
     if ((ConfGet("flow.hash_size", &conf_val)) == 1)

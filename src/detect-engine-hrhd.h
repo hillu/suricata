@@ -17,7 +17,7 @@
 
 /** \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __DETECT_ENGINE_HRHD_H__
@@ -26,7 +26,8 @@
 #include "app-layer-htp.h"
 
 int DetectEngineInspectHttpRawHeader(DetectEngineCtx *, DetectEngineThreadCtx *, Signature *, Flow *, uint8_t, void *);
-int DetectEngineRunHttpRawHeaderMpm(DetectEngineThreadCtx *, Flow *, HtpState *);
+int DetectEngineRunHttpRawHeaderMpm(DetectEngineThreadCtx *, Flow *, HtpState *,
+                                    uint8_t);
 void DetectEngineHttpRawHeaderRegisterTests(void);
 
 #endif /* __DETECT_ENGINE_HHD_H__ */

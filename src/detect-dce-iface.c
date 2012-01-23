@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  *
  * Implements dce_iface keyword.
  */
@@ -874,7 +874,6 @@ static int DetectDceIfaceTestParse12(void)
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -894,14 +893,14 @@ static int DetectDceIfaceTestParse12(void)
 
     SCLogDebug("handling to_server chunk");
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
 
-    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.alstate;
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
@@ -917,7 +916,7 @@ static int DetectDceIfaceTestParse12(void)
 
     SCLogDebug("handling to_client chunk");
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -932,7 +931,7 @@ static int DetectDceIfaceTestParse12(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_request,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_request,
                       dcerpc_request_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -956,7 +955,6 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
@@ -1106,7 +1104,6 @@ static int DetectDceIfaceTestParse13(void)
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1124,14 +1121,14 @@ static int DetectDceIfaceTestParse13(void)
 
     SCLogDebug("chunk 1, bind");
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
 
-    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.alstate;
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
@@ -1149,7 +1146,7 @@ static int DetectDceIfaceTestParse13(void)
 
     SCLogDebug("chunk 2, bind_ack");
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1169,7 +1166,7 @@ static int DetectDceIfaceTestParse13(void)
     SCLogDebug("chunk 3, request 1");
 
     /* request1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request1,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request1,
                       dcerpc_request1_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1189,7 +1186,7 @@ static int DetectDceIfaceTestParse13(void)
     SCLogDebug("sending response1");
 
     /* response1 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response1,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response1,
                       dcerpc_response1_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1209,7 +1206,7 @@ static int DetectDceIfaceTestParse13(void)
     SCLogDebug("sending request2");
 
     /* request2 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request2,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request2,
                       dcerpc_request2_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1227,7 +1224,7 @@ static int DetectDceIfaceTestParse13(void)
     }
 
     /* response2 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response2,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response2,
                       dcerpc_response2_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1245,7 +1242,7 @@ static int DetectDceIfaceTestParse13(void)
     }
 
     /* request3 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request3,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request3,
                       dcerpc_request3_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1263,7 +1260,7 @@ static int DetectDceIfaceTestParse13(void)
     }
 
     /* response3 */
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT | STREAM_EOF,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT | STREAM_EOF,
                       dcerpc_response3, dcerpc_response3_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1289,7 +1286,6 @@ static int DetectDceIfaceTestParse13(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
     return result;
@@ -1362,7 +1358,6 @@ static int DetectDceIfaceTestParse14(void)
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1380,14 +1375,14 @@ static int DetectDceIfaceTestParse14(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
 
-    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.alstate;
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
@@ -1399,7 +1394,7 @@ static int DetectDceIfaceTestParse14(void)
     if (PacketAlertCheck(p, 1))
         goto end;
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1414,7 +1409,7 @@ static int DetectDceIfaceTestParse14(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_request,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_request,
                       dcerpc_request_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1438,7 +1433,6 @@ static int DetectDceIfaceTestParse14(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
@@ -1553,7 +1547,6 @@ static int DetectDceIfaceTestParse15(void)
     f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -1578,14 +1571,14 @@ static int DetectDceIfaceTestParse15(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER | STREAM_START,
                       dcerpc_bind, dcerpc_bind_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
         goto end;
     }
 
-    dcerpc_state = f.aldata[AlpGetStateIdx(ALPROTO_DCERPC)];
+    dcerpc_state = f.alstate;
     if (dcerpc_state == NULL) {
         SCLogDebug("no dcerpc state: ");
         goto end;
@@ -1599,7 +1592,7 @@ static int DetectDceIfaceTestParse15(void)
     if (PacketAlertCheck(p, 2))
         goto end;
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_bindack,
                       dcerpc_bindack_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1618,7 +1611,7 @@ static int DetectDceIfaceTestParse15(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_alter_context,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_alter_context,
                       dcerpc_alter_context_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1637,7 +1630,7 @@ static int DetectDceIfaceTestParse15(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_alter_context_resp,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_alter_context_resp,
                       dcerpc_alter_context_resp_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1656,7 +1649,7 @@ static int DetectDceIfaceTestParse15(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request1,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request1,
                       dcerpc_request1_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1675,7 +1668,7 @@ static int DetectDceIfaceTestParse15(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response1,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, dcerpc_response1,
                       dcerpc_response1_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1694,7 +1687,7 @@ static int DetectDceIfaceTestParse15(void)
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request2,
+    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, dcerpc_request2,
                       dcerpc_request2_len);
     if (r != 0) {
         SCLogDebug("AppLayerParse for dcerpc failed.  Returned %" PRId32, r);
@@ -1722,7 +1715,6 @@ static int DetectDceIfaceTestParse15(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);

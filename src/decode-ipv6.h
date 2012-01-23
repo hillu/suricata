@@ -58,6 +58,7 @@ typedef struct IPV6Hdr_
 #define IPV6_GET_RAW_HLIM(ip6h)           ((ip6h)->s_ip6_hlim)
 
 #define IPV6_SET_RAW_VER(ip6h, value)     ((ip6h)->s_ip6_vfc = (((ip6h)->s_ip6_vfc & 0x0f) | (value << 4)))
+#define IPV6_SET_RAW_NH(ip6h, value)      ((ip6h)->s_ip6_nxt = (value))
 
 #define IPV6_SET_L4PROTO(p,proto)         (p)->ip6vars.l4proto = proto
 
@@ -309,6 +310,8 @@ typedef struct IPV6ExtHdrs_
 #define IPV6_EXTHDR_ISSET_DH2(p)      (IPV6_EXTHDR_DH2((p)) != NULL)
 #define IPV6_EXTHDR_SET_HH(p,pkt)     IPV6_EXTHDR_HH((p)) = (IPV6HopOptsHdr *)pkt
 #define IPV6_EXTHDR_ISSET_HH(p)       (IPV6_EXTHDR_HH((p)) != NULL)
+
+void DecodeIPV6RegisterTests(void);
 
 #endif /* __DECODE_IPV6_H__ */
 

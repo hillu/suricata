@@ -1,3 +1,52 @@
+1.2.1 -- 2012-01-20
+
+- fix malformed unified2 records when writing alerts trigger by stream inspection (#402)
+- only force a pseudo packet inspection cycle for TCP streams in a state >= established
+
+1.2 -- 2012-01-19
+
+- improved Windows/CYGWIN path handling (#387)
+- fixed some issues with passing an interface or ip address with -i
+- make live worker runmode threads adhere to the 'detect' cpu affinity settings
+
+1.2rc1 -- 2012-01-11
+
+- app-layer-events keyword: similar to the decoder-events and stream-events, this will allow matching on HTTP and SMTP events
+- auto detection of checksum offloading per interface (#311)
+- urilen options to match on raw or normalized URI (#341)
+- flow keyword option "only_stream" and "no_stream"
+- unixsock output options for all outputs except unified2 (PoC python script in the qa/ dir) (#250)
+- in IPS mode, reject rules now also drop (#399)
+- http_header now also inspects response headers (#389)
+- "worker" runmodes for NFQ and IPFW
+- performance improvement for "ac" pattern matcher
+- allow empty/non-initialized flowints to be incremented
+- PCRE-JIT is now enabled by default if available (#356)
+- many file inspection and extraction improvements
+- flowbits and flowints are now modified in a post-match action list
+- general performance increasements
+- fixed parsing really high sid numbers >2 Billion (#393)
+- fixed ICMPv6 not matching in IP-only sigs (#363)
+
+1.2beta1 -- 2011-12-19
+
+- File name, type inspection and extraction for HTTP
+- filename, fileext, filemagic and filestore keywords added
+- "file" output for storing extracted files to disk
+- file_data keyword support, inspecting normalized, dechunked, decompressed HTTP response body (feature #241
+- new keyword http_server_body, pcre regex /S option
+- Option to enable/disable core dumping from the suricata.yaml (enabled by default)
+- Human readable size limit settings in suricata.yaml
+- PF_RING bpf support (required PF_RING >= 5.1) (feature #334)
+- tos keyword support (feature #364)
+- IPFW IPS mode does now support multiple divert sockets
+- New IPS running modes, Linux and FreeBSD do now support "worker" and "autofp"
+- Improved alert accuracy in autofp and single runmodes
+- major performance optimizations for the ac-gfbs pattern matcher implementation
+- unified2 output fixes
+- PF_RING supports privilege dropping now (bug #367)
+- Improved detection of duplicate signatures
+
 1.1.1 -- 2011-12-07
 
 - Fix for a error in the smtp parser that could crash Suricata.

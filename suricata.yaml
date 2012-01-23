@@ -19,6 +19,10 @@
 # to get the runmode custom modes that can be used here for a particular runmode.
 #runmode: auto
 
+# Default pid file.
+# Will use this file if no --pidfile in command options.
+#pid-file: /var/run/suricata.pid
+
 # Preallocated size for packet. Default is 1514 which is the classical
 # size for pcap on ethernet. You should adjust this value to the highest
 # packet size (MTU + hardware header) on your system.
@@ -46,21 +50,24 @@ outputs:
       enabled: yes
       filename: fast.log
       append: yes
+      #filetype: regular # 'regular', 'unix_stream' or 'unix_dgram'
 
   # alert output for use with Barnyard2
   - unified2-alert:
       enabled: yes
       filename: unified2.alert
 
-      # Limit in MB.
-      #limit: 32
+      # File size limit.  Can be specified in kb, mb, gb.  Just a number
+      # is parsed as bytes.
+      #limit: 32mb
 
   # a line based log of HTTP requests (no alerts)
   - http-log:
       enabled: yes
       filename: http.log
       append: yes
-      #extended: yes # enable this for extended logging information
+      #extended: yes     # enable this for extended logging information
+      #filetype: regular # 'regular', 'unix_stream' or 'unix_dgram'
 
   # a line based log to used with pcap file study.
   # this module is dedicated to offline pcap parsing (empty output
@@ -86,14 +93,15 @@ outputs:
       enabled:  no
       filename: log.pcap
 
-      # Limit in MB.
-      limit: 1000
+      # File size limit.  Can be specified in kb, mb, gb.  Just a number
+      # is parsed as bytes.
+      limit: 1000mb
 
       # If set to a value will enable ring buffer mode. Will keep Maximum of "max_files" of size "limit"
       max_files: 2000
 
       mode: normal # normal or sguil.
-      #dir: /nsm_data/
+      #sguil-base-dir: /nsm_data/
       #ts_format: usec # sec or usec second format (default) is filename.sec usec is filename.sec.usec
       use_stream_depth: no #If set to "yes" packets seen after reaching stream inspection depth are ignored. "no" logs all packets
 
@@ -103,6 +111,7 @@ outputs:
       enabled: no
       filename: alert-debug.log
       append: yes
+      #filetype: regular # 'regular', 'unix_stream' or 'unix_dgram'
 
   # alert output to prelude (http://www.prelude-technologies.com/) only
   # available if Suricata has been compiled with --enable-prelude
@@ -129,12 +138,32 @@ outputs:
       facility: local5
       #level: Info ## possible levels: Emergency, Alert, Critical,
                    ## Error, Warning, Notice, Info, Debug
-  # a line based information for dropped packet
+
+  # a line based information for dropped packets in IPS mode
   - drop:
-      enabled: yes
+      enabled: no
       filename: drop.log
       append: yes
+      #filetype: regular # 'regular', 'unix_stream' or 'unix_dgram'
 
+  # output module to store extracted files to disk
+  #
+  # The files are stored to the log-dir in a format "file.<id>" where <id> is
+  # an incrementing number starting at 1. For each file "file.<id>" a meta
+  # file "file.<id>.meta" is created.
+  #
+  # File extraction depends on a lot of things to be fully done:
+  # - stream reassembly depth. For optimal results, set this to 0 (unlimited)
+  # - http request / response body sizes. Again set to 0 for optimal results.
+  # - rules that contain the "filestore" keyword.
+  - file:
+      enabled: no       # set to yes to enable
+      log-dir: files    # directory to store the files
+      force-magic: no   # force logging magic on all stored files
+      #waldo: file.waldo # waldo file to store the file_id across runs
+
+# Magic file. The extension .mgc is added to the value here.
+#magic-file: /usr/share/file/magic
 
 # When running in NFQ inline mode, it is possible to use a simulated
 # non-terminal NFQUEUE verdict.
@@ -175,6 +204,17 @@ af-packet:
     # buffer-size: 32768
     # Set to yes to disable promiscuous mode
     # disable-promisc: no
+    # Choose checksum verification mode for the interface. At the moment
+    # of the capture, some packets may be with an invalid checksum due to
+    # offloading to the network card of the checksum computation.
+    # Possible values are:
+    #  - kernel: use indication sent by kernel for each packet (default)
+    #  - yes: checksum validation is forced
+    #  - no: checksum validation is disabled
+    #  - auto: suricata uses a statistical approach to detect when
+    #  checksum off-loading is used.
+    # Warning: 'checksum_validation' must be set to yes to have any validation
+    #checksum-checks: kernel
   - interface: eth1
     threads: 1
     cluster-id: 98
@@ -304,6 +344,7 @@ cuda:
       packet_buffer_limit: 2400
       # The maximum length for a packet that we would buffer to the gpu.
       # Anything over this is MPM'ed on the CPU.  All entries > 0 are valid.
+      # Can be specified in kb, mb, gb.  Just a number indicates it's in bytes.
       packet_size_limit: 1500
       # No of packet buffers we initialize.  All entries > 0 are valid.
       packet_buffers: 10
@@ -396,9 +437,11 @@ pattern-matcher:
 # the emergency bit and it will try again with more agressive timeouts.
 # If that doesn't work, then it will try to kill the last time seen flows
 # not in use.
+# The memcap can be specified in kb, mb, gb.  Just a number indicates it's
+# in bytes.
 
 flow:
-  memcap: 33554432
+  memcap: 32mb
   hash_size: 65536
   prealloc: 10000
   emergency_recovery: 30
@@ -451,14 +494,17 @@ flow-timeouts:
 # engine is configured.
 #
 # stream:
-#   memcap: 33554432            # 32mb tcp session memcap
+#   memcap: 32mb                # Can be specified in kb, mb, gb.  Just a
+#                               # number indicates it's in bytes.
 #   checksum_validation: yes    # To validate the checksum of received
 #                               # packet. If csum validation is specified as
 #                               # "yes", then packet with invalid csum will not
 #                               # be processed by the engine stream/app layer.
 #                               # Warning: locally generated trafic can be
 #                               # generated without checksum due to hardware offload
-#                               # of checksum
+#                               # of checksum. You can control the handling of checksum
+#				# on a per-interface basis via the 'checksum-checks'
+#				# option
 #   max_sessions: 262144        # 256k concurrent sessions
 #   prealloc_sessions: 32768    # 32k sessions prealloc'd
 #   midstream: false            # don't allow midstream session pickups
@@ -466,19 +512,24 @@ flow-timeouts:
 #   inline: no                  # stream inline mode
 #
 #   reassembly:
-#     memcap: 67108864          # 64mb tcp reassembly memcap
-#     depth: 1048576            # 1 MB reassembly depth
+#     memcap: 64mb              # Can be specified in kb, mb, gb.  Just a number
+#                               # indicates it's in bytes.
+#     depth: 1mb                # Can be specified in kb, mb, gb.  Just a number
+#                               # indicates it's in bytes.
 #     toserver_chunk_size: 2560 # inspect raw stream in chunks of at least
-#                               # this size
+#                               # this size.  Can be specified in kb, mb,
+#                               # gb.  Just a number indicates it's in bytes.
 #     toclient_chunk_size: 2560 # inspect raw stream in chunks of at least
-#                               # this size
+#                               # this size.  Can be specified in kb, mb,
+#                               # gb.  Just a number indicates it's in bytes.
+
 stream:
-  memcap: 33554432              # 32mb
+  memcap: 32mb
   checksum_validation: yes      # reject wrong csums
   inline: no                    # no inline mode
   reassembly:
-    memcap: 67108864            # 64mb for reassembly
-    depth: 1048576              # reassemble 1mb into a stream
+    memcap: 64mb
+    depth: 1mb                  # reassemble 1mb into a stream
     toserver_chunk_size: 2560
     toclient_chunk_size: 2560
 
@@ -526,18 +577,31 @@ pfring:
     # Number of receive threads (>1 will enable experimental flow pinned
     # runmode)
     threads: 1
-  
+
     # Default interface we will listen on.
     interface: eth0
-  
+
     # Default clusterid.  PF_RING will load balance packets based on flow.
     # All threads/processes that will participate need to have the same
     # clusterid.
     cluster-id: 99
-  
+
     # Default PF_RING cluster type. PF_RING can load balance per flow or per hash.
     # This is only supported in versions of PF_RING > 4.1.1.
     cluster-type: cluster_round_robin
+    # bpf filter for this interface
+    #bpf-filter: tcp
+    # Choose checksum verification mode for the interface. At the moment
+    # of the capture, some packets may be with an invalid checksum due to
+    # offloading to the network card of the checksum computation.
+    # Possible values are:
+    #  - rxonly: only compute checksum for packets received by network card.
+    #  - yes: checksum validation is forced
+    #  - no: checksum validation is disabled
+    #  - auto: suricata uses a statistical approach to detect when
+    #  checksum off-loading is used. (default)
+    # Warning: 'checksum_validation' must be set to yes to have any validation
+    #checksum-checks: auto
   # Second interface
   #- interface: eth1
   #  threads: 3
@@ -548,6 +612,16 @@ pcap:
   - interface: eth0
     #buffer-size: 32768
     #bpf-filter: "tcp and port 25"
+    # Choose checksum verification mode for the interface. At the moment
+    # of the capture, some packets may be with an invalid checksum due to
+    # offloading to the network card of the checksum computation.
+    # Possible values are:
+    #  - yes: checksum validation is forced
+    #  - no: checksum validation is disabled
+    #  - auto: suricata uses a statistical approach to detect when
+    #  checksum off-loading is used. (default)
+    # Warning: 'checksum_validation' must be set to yes to have any validation
+    #checksum-checks: auto
 
 # For FreeBSD ipfw(8) divert(4) support.
 # Please make sure you have ipfw_load="YES" and ipdivert_load="YES"
@@ -719,13 +793,13 @@ asn1_max_frames: 256
 #
 # default-config:       Used when no server-config matches
 #   personality:        List of personalities used by default
-#   request_body_limit: Limit reassembly of request body for inspection
+#   request-body-limit: Limit reassembly of request body for inspection
 #                       by http_client_body & pcre /P option.
 #
 # server-config:        List of server configurations to use if address matches
 #   address:            List of ip addresses or networks for this block
 #   personalitiy:       List of personalities used by this block
-#   request_body_limit: Limit reassembly of request body for inspection
+#   request-body-limit: Limit reassembly of request body for inspection
 #                       by http_client_body & pcre /P option.
 #
 # Currently Available Personalities:
@@ -745,21 +819,30 @@ libhtp:
 
    default-config:
      personality: IDS
+     # Can be specified in kb, mb, gb.  Just a number indicates
+     # it's in bytes.
      request_body_limit: 3072
+     response-body-limit: 3072
 
    server-config:
 
      - apache:
          address: [192.168.1.0/24, 127.0.0.0/8, "::1"]
          personality: Apache_2_2
+         # Can be specified in kb, mb, gb.  Just a number indicates
+         # it's in bytes.
          request_body_limit: 4096
+         response-body-limit: 4096
 
      - iis7:
          address:
            - 192.168.0.0/24
            - 192.168.10.0/24
          personality: IIS_7_0
+         # Can be specified in kb, mb, gb.  Just a number indicates
+         # it's in bytes.
          request_body_limit: 4096
+         response-body-limit: 4096
 
 # Profiling settings. Only effective if Suricata has been built with the
 # the --enable-profiling configure flag.
@@ -797,3 +880,15 @@ profiling:
       # performance impact if compiled in.
       enabled: no
       filename: packet_stats.csv
+
+# Suricata core dump configuration. Limits the size of the core dump file to
+# approximately max_dump. The actual core dump size will be a multiple of the
+# page size. Core dumps that would be larger than max_dump are truncated. On
+# Linux, the actual core dump size may be a few pages larger than max_dump.
+# Setting max_dump to 0 disables core dumping.
+# Setting max_dump to 'unlimited' will give the full core dump file.
+# On 32-bit Linux, a max_dump value >= ULONG_MAX may cause the core dump size
+# to be 'unlimited'.
+
+coredump:
+  max_dump: unlimited

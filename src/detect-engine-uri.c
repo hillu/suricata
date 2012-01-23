@@ -78,7 +78,8 @@
 static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
                               DetectEngineThreadCtx *det_ctx,
                               Signature *s, SigMatch *sm,
-                              uint8_t *payload, uint32_t payload_len)
+                              uint8_t *payload, uint32_t payload_len,
+                              htp_tx_t *tx)
 {
     SCEnter();
 
@@ -272,7 +273,7 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
                 /* see if the next payload keywords match. If not, we will
                  * search for another occurence of this uricontent and see
                  * if the others match then until we run out of matches */
-                int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, payload, payload_len);
+                int r = DoInspectPacketUri(de_ctx,det_ctx,s,sm->next, payload, payload_len, tx);
                 if (r == 1) {
                     SCReturnInt(1);
                 }
@@ -314,7 +315,7 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
              * search for another occurence of this pcre and see
              * if the others match, until we run out of matches */
             r = DoInspectPacketUri(de_ctx, det_ctx, s, sm->next,
-                                   payload, payload_len);
+                                   payload, payload_len, tx);
             if (r == 1) {
                 SCReturnInt(1);
             }
@@ -359,23 +360,26 @@ static int DoInspectPacketUri(DetectEngineCtx *de_ctx,
 
         int r = 0;
         DetectUrilenData *urilend = (DetectUrilenData *) sm->ctx;
+        uint32_t p_len = payload_len;
+        if (urilend->raw_buffer)
+            p_len = bstr_len(tx->request_uri);
 
         switch (urilend->mode) {
             case DETECT_URILEN_EQ:
-                if (payload_len == urilend->urilen1)
+                if (p_len == urilend->urilen1)
                     r = 1;
                 break;
             case DETECT_URILEN_LT:
-                if (payload_len < urilend->urilen1)
+                if (p_len < urilend->urilen1)
                     r = 1;
                 break;
             case DETECT_URILEN_GT:
-                if (payload_len > urilend->urilen1)
+                if (p_len > urilend->urilen1)
                     r = 1;
                 break;
             case DETECT_URILEN_RA:
-                if (payload_len > urilend->urilen1 &&
-                        payload_len < urilend->urilen2)
+                if (p_len > urilend->urilen1 &&
+                        p_len < urilend->urilen2)
                     r = 1;
                 break;
         }
@@ -409,7 +413,7 @@ match:
      * the payload portion of the signature matched. */
     if (sm->next != NULL) {
         int r = DoInspectPacketUri(de_ctx, det_ctx, s, sm->next, payload,
-                                   payload_len);
+                                   payload_len, tx);
         SCReturnInt(r);
     } else {
         SCReturnInt(1);
@@ -457,10 +461,15 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
     SCLogDebug("co->id %"PRIu32, co->id);
 #endif
 
-    size_t idx = AppLayerTransactionGetInspectId(f);
+    int idx = AppLayerTransactionGetInspectId(f);
+    if (idx == -1) {
+        goto end;
+    }
+
     htp_tx_t *tx = NULL;
 
-    for ( ; idx < list_size(htp_state->connp->conn->transactions); idx++)
+    int size = (int)list_size(htp_state->connp->conn->transactions);
+    for ( ; idx < size; idx++)
     {
         tx = list_get(htp_state->connp->conn->transactions, idx);
         if (tx == NULL || tx->request_uri_normalized == NULL)
@@ -476,9 +485,8 @@ int DetectEngineInspectPacketUris(DetectEngineCtx *de_ctx,
         /* Inspect all the uricontents fetched on each
          * transaction at the app layer */
         r = DoInspectPacketUri(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_UMATCH],
-                (uint8_t *) bstr_ptr(tx->request_uri_normalized),
-                bstr_len(tx->request_uri_normalized));
-
+                               (uint8_t *)bstr_ptr(tx->request_uri_normalized),
+                               bstr_len(tx->request_uri_normalized), tx);
         if (r == 1) {
             break;
         }
@@ -523,8 +531,7 @@ static int UriTestSig01(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -533,7 +540,6 @@ static int UriTestSig01(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -552,13 +558,13 @@ static int UriTestSig01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -574,13 +580,13 @@ static int UriTestSig01(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -638,8 +644,7 @@ static int UriTestSig02(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -648,7 +653,6 @@ static int UriTestSig02(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -667,13 +671,13 @@ static int UriTestSig02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -689,13 +693,13 @@ static int UriTestSig02(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -753,8 +757,7 @@ static int UriTestSig03(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -763,7 +766,6 @@ static int UriTestSig03(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -782,13 +784,13 @@ static int UriTestSig03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -804,13 +806,13 @@ static int UriTestSig03(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -868,8 +870,7 @@ static int UriTestSig04(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -878,7 +879,6 @@ static int UriTestSig04(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -897,13 +897,13 @@ static int UriTestSig04(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -919,13 +919,13 @@ static int UriTestSig04(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -983,8 +983,7 @@ static int UriTestSig05(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -993,7 +992,6 @@ static int UriTestSig05(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1012,13 +1010,13 @@ static int UriTestSig05(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1034,13 +1032,13 @@ static int UriTestSig05(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1098,8 +1096,7 @@ static int UriTestSig06(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1108,7 +1105,6 @@ static int UriTestSig06(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1127,13 +1123,13 @@ static int UriTestSig06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1149,13 +1145,13 @@ static int UriTestSig06(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1213,8 +1209,7 @@ static int UriTestSig07(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1223,7 +1218,6 @@ static int UriTestSig07(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1242,13 +1236,13 @@ static int UriTestSig07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1264,13 +1258,13 @@ static int UriTestSig07(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1328,8 +1322,7 @@ static int UriTestSig08(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1338,7 +1331,6 @@ static int UriTestSig08(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1357,13 +1349,13 @@ static int UriTestSig08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1379,13 +1371,13 @@ static int UriTestSig08(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1443,8 +1435,7 @@ static int UriTestSig09(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1453,7 +1444,6 @@ static int UriTestSig09(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1472,13 +1462,13 @@ static int UriTestSig09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1494,13 +1484,13 @@ static int UriTestSig09(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1558,8 +1548,7 @@ static int UriTestSig10(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1568,7 +1557,6 @@ static int UriTestSig10(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1587,13 +1575,13 @@ static int UriTestSig10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1609,13 +1597,13 @@ static int UriTestSig10(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1673,8 +1661,7 @@ static int UriTestSig11(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1683,7 +1670,6 @@ static int UriTestSig11(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1703,13 +1689,13 @@ static int UriTestSig11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1725,13 +1711,13 @@ static int UriTestSig11(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1789,8 +1775,7 @@ static int UriTestSig12(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1799,7 +1784,6 @@ static int UriTestSig12(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1819,13 +1803,13 @@ static int UriTestSig12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1841,13 +1825,13 @@ static int UriTestSig12(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1905,8 +1889,7 @@ static int UriTestSig13(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -1915,7 +1898,6 @@ static int UriTestSig13(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1934,13 +1916,13 @@ static int UriTestSig13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1956,13 +1938,13 @@ static int UriTestSig13(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2021,8 +2003,7 @@ static int UriTestSig14(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2031,7 +2012,6 @@ static int UriTestSig14(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2050,13 +2030,13 @@ static int UriTestSig14(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2072,13 +2052,13 @@ static int UriTestSig14(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2137,8 +2117,7 @@ static int UriTestSig15(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2147,7 +2126,6 @@ static int UriTestSig15(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2166,13 +2144,13 @@ static int UriTestSig15(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2188,13 +2166,13 @@ static int UriTestSig15(void)
 
     DetectEngineStateReset(f.de_state);
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2253,8 +2231,7 @@ static int UriTestSig16(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2263,7 +2240,6 @@ static int UriTestSig16(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2280,13 +2256,13 @@ static int UriTestSig16(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2305,13 +2281,13 @@ static int UriTestSig16(void)
     p->payload = http_buf2;
     p->payload_len = http_buf2_len;
 
-    r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf2, http_buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2365,8 +2341,7 @@ static int UriTestSig17(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2375,7 +2350,6 @@ static int UriTestSig17(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2396,13 +2370,13 @@ static int UriTestSig17(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2456,8 +2430,7 @@ static int UriTestSig18(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2466,7 +2439,6 @@ static int UriTestSig18(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2487,13 +2459,13 @@ static int UriTestSig18(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2547,8 +2519,7 @@ static int UriTestSig19(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2557,7 +2528,6 @@ static int UriTestSig19(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2579,13 +2549,13 @@ static int UriTestSig19(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2639,8 +2609,7 @@ static int UriTestSig20(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2649,7 +2618,6 @@ static int UriTestSig20(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2670,13 +2638,13 @@ static int UriTestSig20(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2730,8 +2698,7 @@ static int UriTestSig21(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2740,7 +2707,6 @@ static int UriTestSig21(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2760,13 +2726,13 @@ static int UriTestSig21(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2821,8 +2787,7 @@ static int UriTestSig22(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2831,7 +2796,6 @@ static int UriTestSig22(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2850,13 +2814,13 @@ static int UriTestSig22(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2910,8 +2874,7 @@ static int UriTestSig23(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -2920,7 +2883,6 @@ static int UriTestSig23(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -2939,13 +2901,13 @@ static int UriTestSig23(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -2999,8 +2961,7 @@ static int UriTestSig24(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3009,7 +2970,6 @@ static int UriTestSig24(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3028,13 +2988,13 @@ static int UriTestSig24(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3088,8 +3048,7 @@ static int UriTestSig25(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
@@ -3098,7 +3057,6 @@ static int UriTestSig25(void)
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3117,13 +3075,13 @@ static int UriTestSig25(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3177,8 +3135,7 @@ static int UriTestSig26(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3187,7 +3144,6 @@ static int UriTestSig26(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3206,13 +3162,13 @@ static int UriTestSig26(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3266,8 +3222,7 @@ static int UriTestSig27(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3276,7 +3231,6 @@ static int UriTestSig27(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3295,13 +3249,13 @@ static int UriTestSig27(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3387,8 +3341,7 @@ static int UriTestSig28(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3397,7 +3350,6 @@ static int UriTestSig28(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3418,13 +3370,13 @@ static int UriTestSig28(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3475,8 +3427,7 @@ static int UriTestSig29(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3485,7 +3436,6 @@ static int UriTestSig29(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3506,13 +3456,13 @@ static int UriTestSig29(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3563,8 +3513,7 @@ static int UriTestSig30(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3573,7 +3522,6 @@ static int UriTestSig30(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3594,13 +3542,13 @@ static int UriTestSig30(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3651,8 +3599,7 @@ static int UriTestSig31(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3661,7 +3608,6 @@ static int UriTestSig31(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3682,13 +3628,13 @@ static int UriTestSig31(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3739,8 +3685,7 @@ static int UriTestSig32(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f.flags |= FLOW_IPV4;
 
     p->flow = &f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
@@ -3749,7 +3694,6 @@ static int UriTestSig32(void)
     f.alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -3770,13 +3714,13 @@ static int UriTestSig32(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f.alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -3787,6 +3731,510 @@ static int UriTestSig32(void)
 
     if (!PacketAlertCheck(p, 1)) {
         printf("sig 1 didn't alert, but should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig33(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:15; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig34(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:15, norm; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig35(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:16; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it shouldn't have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig36(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:16, norm; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it shouldn't have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig37(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:17, raw; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 didn't alert, but it should have: ");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL)
+        DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePacket(p);
+    return result;
+}
+
+static int UriTestSig38(void)
+{
+    int result = 0;
+    uint8_t *http_buf = (uint8_t *)"POST /normalized%20uri "
+        "HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n";
+    uint32_t http_buf_len = strlen((char *)http_buf);
+    Flow f;
+    TcpSession ssn;
+    HtpState *http_state = NULL;
+    Packet *p = NULL;
+    ThreadVars tv;
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    memset(&tv, 0, sizeof(ThreadVars));
+    memset(&f, 0, sizeof(Flow));
+    memset(&ssn, 0, sizeof(TcpSession));
+
+    p = UTHBuildPacket(http_buf, http_buf_len, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    f.alproto = ALPROTO_HTTP;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+    de_ctx->mpm_matcher = MPM_B2G;
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"test multiple relative uricontents\"; "
+                               "urilen:18, raw; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_buf_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+
+    if (PacketAlertCheck(p, 1)) {
+        printf("sig 1 alerted, but it shouldn't have: ");
         goto end;
     }
 
@@ -3845,6 +4293,12 @@ void UriRegisterTests(void)
     UtRegisterTest("UriTestSig30", UriTestSig30, 1);
     UtRegisterTest("UriTestSig31", UriTestSig31, 1);
     UtRegisterTest("UriTestSig32", UriTestSig32, 1);
+    UtRegisterTest("UriTestSig33", UriTestSig33, 1);
+    UtRegisterTest("UriTestSig34", UriTestSig34, 1);
+    UtRegisterTest("UriTestSig35", UriTestSig35, 1);
+    UtRegisterTest("UriTestSig36", UriTestSig36, 1);
+    UtRegisterTest("UriTestSig37", UriTestSig37, 1);
+    UtRegisterTest("UriTestSig38", UriTestSig38, 1);
 #endif /* UNITTESTS */
 
     return;

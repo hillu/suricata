@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  *
  * Error utility functions
  *
@@ -181,7 +181,7 @@ const char * SCErrorToString(SCError err)
         CASE_CODE (SC_ERR_LIBCAP_NG_REQUIRED);
         CASE_CODE (SC_ERR_LIBNET11_INCOMPATIBLE_WITH_LIBCAP_NG);
         CASE_CODE (SC_WARN_FLOW_EMERGENCY);
-		CASE_CODE (SC_ERR_SVC);
+        CASE_CODE (SC_ERR_SVC);
         CASE_CODE (SC_ERR_ERF_DAG_OPEN_FAILED);
         CASE_CODE (SC_ERR_ERF_DAG_STREAM_OPEN_FAILED);
         CASE_CODE (SC_ERR_ERF_DAG_STREAM_START_FAILED);
@@ -209,6 +209,12 @@ const char * SCErrorToString(SCError err)
         CASE_CODE (SC_ERR_AFP_CREATE);
         CASE_CODE (SC_ERR_AFP_READ);
         CASE_CODE (SC_ERR_AFP_DISPATCH);
+        CASE_CODE (SC_ERR_CMD_LINE);
+        CASE_CODE (SC_ERR_SIZE_PARSE);
+        CASE_CODE (SC_ERR_RAWBYTES_FILE_DATA);
+        CASE_CODE (SC_ERR_SOCKET);
+        CASE_CODE (SC_ERR_PCAP_TRANSLATE);
+        CASE_CODE (SC_WARN_OUTDATED_LIBHTP);
 
         default:
             return "UNKNOWN_ERROR";

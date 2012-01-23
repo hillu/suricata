@@ -178,6 +178,7 @@ typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM_STREAM,         /* STREAM MPM */
     PROF_DETECT_MPM_URI,
     PROF_DETECT_MPM_HCBD,
+    PROF_DETECT_MPM_HSBD,
     PROF_DETECT_MPM_HHD,
     PROF_DETECT_MPM_HRHD,
     PROF_DETECT_MPM_HMD,
@@ -202,6 +203,7 @@ typedef enum PacketProfileDetectId_ {
 #include "util-mem.h"
 #include "detect-engine-alert.h"
 #include "util-optimize.h"
+#include "util-path.h"
 
 size_t strlcat(char *, const char *src, size_t siz);
 size_t strlcpy(char *dst, const char *src, size_t siz);

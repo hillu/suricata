@@ -11301,7 +11301,6 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
-
 ac_fn_c_check_header_mongrel "$LINENO" "zlib.h" "ac_cv_header_zlib_h" "$ac_includes_default"
 if test "x$ac_cv_header_zlib_h" = xyes; then :
 
@@ -11365,6 +11364,62 @@ if test "$ZLIB" = "no"; then
     exit 1
 fi
 
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for -z relro" >&5
+$as_echo_n "checking for -z relro... " >&6; }
+TMPLDFLAGS="${LDFLAGS}"
+LDFLAGS="${LDFLAGS} -z relro"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  SECLDFLAGS="${SECLDFLAGS} -z relro"
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LDFLAGS="${TMPLDFLAGS}"
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for -z now" >&5
+$as_echo_n "checking for -z now... " >&6; }
+TMPLDFLAGS="${LDFLAGS}"
+LDFLAGS="${LDFLAGS} -z now"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+int
+main ()
+{
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  SECLDFLAGS="${SECLDFLAGS} -z now"
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LDFLAGS="${TMPLDFLAGS}"
+
+CFLAGS="${CFLAGS} ${SECCFLAGS}"
+LDFLAGS="${LDFLAGS} ${SECLDFLAGS}"
 
 
 
