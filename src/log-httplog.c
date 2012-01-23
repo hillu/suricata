@@ -46,6 +46,8 @@
 #include "app-layer.h"
 #include "util-privs.h"
 
+#include "util-logopenfile.h"
+
 #define DEFAULT_LOG_FILENAME "http.log"
 
 #define MODULE_NAME "LogHttpLog"
@@ -56,7 +58,6 @@ TmEcode LogHttpLogIPv6(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueu
 TmEcode LogHttpLogThreadInit(ThreadVars *, void *, void **);
 TmEcode LogHttpLogThreadDeinit(ThreadVars *, void *);
 void LogHttpLogExitPrintStats(ThreadVars *, void *);
-int LogHttpLogOpenFileCtx(LogFileCtx* , const char *, const char *);
 static void LogHttpLogDeInitCtx(OutputCtx *);
 
 void TmModuleLogHttpLogRegister (void) {
@@ -69,6 +70,9 @@ void TmModuleLogHttpLogRegister (void) {
     tmm_modules[TMM_LOGHTTPLOG].cap_flags = 0;
 
     OutputRegisterModule(MODULE_NAME, "http-log", LogHttpLogInitCtx);
+
+    /* enable the logger for the app layer */
+    AppLayerRegisterLogger(ALPROTO_HTTP);
 }
 
 void TmModuleLogHttpLogIPv4Register (void) {
@@ -366,9 +370,6 @@ TmEcode LogHttpLogThreadInit(ThreadVars *t, void *initdata, void **data)
     /* Use the Ouptut Context (file pointer and mutex) */
     aft->httplog_ctx= ((OutputCtx *)initdata)->data;
 
-    /* enable the logger for the app layer */
-    AppLayerRegisterLogger(ALPROTO_HTTP);
-
     *data = (void *)aft;
     return TM_ECODE_OK;
 }
@@ -393,7 +394,7 @@ void LogHttpLogExitPrintStats(ThreadVars *tv, void *data) {
         return;
     }
 
-    SCLogInfo("(%s) HTTP requests %" PRIu32 "", tv->name, aft->uri_cnt);
+    SCLogInfo("HTTP logger logged %" PRIu32 " requests", aft->uri_cnt);
 }
 
 /** \brief Create a new http log LogFileCtx.
@@ -402,8 +403,6 @@ void LogHttpLogExitPrintStats(ThreadVars *tv, void *data) {
  * */
 OutputCtx *LogHttpLogInitCtx(ConfNode *conf)
 {
-    int ret=0;
-
     LogFileCtx* file_ctx=LogFileNewCtx();
 
     if(file_ctx == NULL)
@@ -413,18 +412,10 @@ OutputCtx *LogHttpLogInitCtx(ConfNode *conf)
         return NULL;
     }
 
-    const char *filename = ConfNodeLookupChildValue(conf, "filename");
-    if (filename == NULL)
-        filename = DEFAULT_LOG_FILENAME;
-
-    const char *mode = ConfNodeLookupChildValue(conf, "append");
-    if (mode == NULL)
-        mode = DEFAULT_LOG_MODE_APPEND;
-    /** fill the new LogFileCtx with the specific LogHttpLog configuration */
-    ret=LogHttpLogOpenFileCtx(file_ctx, filename, mode);
-
-    if(ret < 0)
+    if (SCConfLogOpenGeneric(conf, file_ctx, DEFAULT_LOG_FILENAME) < 0) {
+        LogFileFreeCtx(file_ctx);
         return NULL;
+    }
 
     LogHttpFileCtx *httplog_ctx = SCCalloc(1, sizeof(LogHttpFileCtx));
     if (httplog_ctx == NULL)
@@ -445,7 +436,7 @@ OutputCtx *LogHttpLogInitCtx(ConfNode *conf)
     output_ctx->data = httplog_ctx;
     output_ctx->DeInit = LogHttpLogDeInitCtx;
 
-    SCLogInfo("HTTP log output initialized, filename: %s", filename);
+    SCLogDebug("HTTP log output initialized");
 
     return output_ctx;
 }
@@ -457,36 +448,3 @@ static void LogHttpLogDeInitCtx(OutputCtx *output_ctx)
     SCFree(httplog_ctx);
     SCFree(output_ctx);
 }
-
-/** \brief Read the config set the file pointer, open the file
- *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param filename name of log file
- *  \param mode append mode (bool)
- *  \return -1 if failure, 0 if succesful
- * */
-int LogHttpLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename, const
-                            char *mode)
-{
-    char log_path[PATH_MAX];
-    char *log_dir;
-
-    if (ConfGet("default-log-dir", &log_dir) != 1)
-        log_dir = DEFAULT_LOG_DIR;
-
-    snprintf(log_path, PATH_MAX, "%s/%s", log_dir, filename);
-
-    if (ConfValIsTrue(mode)) {
-        file_ctx->fp = fopen(log_path, "a");
-    } else {
-        file_ctx->fp = fopen(log_path, "w");
-    }
-
-    if (file_ctx->fp == NULL) {
-        SCLogError(SC_ERR_FOPEN, "failed to open %s: %s", log_path,
-            strerror(errno));
-        return -1;
-    }
-
-    return 0;
-}
-

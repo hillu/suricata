@@ -67,7 +67,7 @@ AM_RECURSIVE_TARGETS = $(RECURSIVE_TARGETS:-recursive=) \
 	distdir dist dist-all distcheck
 ETAGS = etags
 CTAGS = ctags
-DIST_SUBDIRS = libhtp src qa
+DIST_SUBDIRS = libhtp src qa rules doc
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 distdir = $(PACKAGE)-$(VERSION)
 top_distdir = $(distdir)
@@ -248,14 +248,11 @@ top_srcdir = @top_srcdir@
 AUTOMAKE_OPTIONS = foreign 1.4
 ACLOCAL_AMFLAGS = -I m4
 EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml \
-             doc/AUTHORS doc/GITGUIDE doc/INSTALL doc/NEWS \
-             doc/README doc/TODO doc/INSTALL.PF_RING \
-             doc/INSTALL.WINDOWS classification.config \
-             reference.config rules/decoder-events.rules \
-             rules/stream-events.rules
+             classification.config \
+             reference.config
 
 @BUILD_LIBHTP_TRUE@HTP_DIR = libhtp
-SUBDIRS = $(HTP_DIR) src qa
+SUBDIRS = $(HTP_DIR) src qa rules doc
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 

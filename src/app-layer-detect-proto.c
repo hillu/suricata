@@ -282,6 +282,12 @@ void AlpProtoFinalizeThread(AlpProtoDetectCtx *ctx, AlpProtoDetectThreadCtx *tct
         PmqSetup(&tctx->toserver.pmq, sig_maxid, pat_maxid);
     }
 
+    int i;
+    for (i = 0; i < ALPROTO_MAX; i++) {
+        tctx->alproto_local_storage[i] = AppLayerGetProtocolParserLocalStorage(i);
+    }
+
+    return;
 }
 
 void AlpProtoDeFinalize2Thread(AlpProtoDetectThreadCtx *tctx) {
@@ -1521,7 +1527,7 @@ int AlpDetectTest14(void) {
 static int AlpDetectTestSig1(void)
 {
     int result = 0;
-    Flow f;
+    Flow *f = NULL;
     HtpState *http_state = NULL;
     uint8_t http_buf1[] = "POST /one HTTP/1.0\r\n"
         "User-Agent: Mozilla/1.0\r\n"
@@ -1532,28 +1538,34 @@ static int AlpDetectTestSig1(void)
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
     p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    if (p == NULL) {
+        printf("packet setup failed: ");
+        goto end;
+    }
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
+    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
+    if (f == NULL) {
+        printf("flow setup failed: ");
+        goto end;
+    }
+    f->protoctx = &ssn;
+    p->flow = f;
 
-    p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_HTTP;
+
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -1570,13 +1582,13 @@ static int AlpDetectTestSig1(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+   int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f->alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1589,9 +1601,7 @@ static int AlpDetectTestSig1(void)
         printf("sig 1 didn't alert, but it should: ");
         goto end;
     }
-
     result = 1;
-
 end:
     if (det_ctx != NULL)
         DetectEngineThreadCtxDeinit(&tv, det_ctx);
@@ -1601,9 +1611,9 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
+    UTHFreeFlow(f);
     return result;
 }
 
@@ -1612,7 +1622,7 @@ end:
 static int AlpDetectTestSig2(void)
 {
     int result = 0;
-    Flow f;
+    Flow *f = NULL;
     HtpState *http_state = NULL;
     uint8_t http_buf1[] = "POST /one HTTP/1.0\r\n"
         "User-Agent: Mozilla/1.0\r\n"
@@ -1623,28 +1633,26 @@ static int AlpDetectTestSig2(void)
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
     p = UTHBuildPacketSrcDstPorts(http_buf1, http_buf1_len, IPPROTO_TCP, 12345, 88);
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
-
-    p->flow = &f;
+    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_HTTP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -1661,13 +1669,13 @@ static int AlpDetectTestSig2(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f->alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1692,9 +1700,9 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
+    UTHFreeFlow(f);
     return result;
 }
 
@@ -1703,7 +1711,7 @@ end:
 static int AlpDetectTestSig3(void)
 {
     int result = 0;
-    Flow f;
+    Flow *f = NULL;
     HtpState *http_state = NULL;
     uint8_t http_buf1[] = "POST /one HTTP/1.0\r\n"
         "User-Agent: Mozilla/1.0\r\n"
@@ -1714,28 +1722,26 @@ static int AlpDetectTestSig3(void)
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
     p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
-
-    p->flow = &f;
+    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_HTTP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -1752,13 +1758,13 @@ static int AlpDetectTestSig3(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
+    http_state = f->alstate;
     if (http_state == NULL) {
         printf("no http state: ");
         goto end;
@@ -1782,9 +1788,9 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
+    UTHFreeFlow(f);
     return result;
 }
 
@@ -1793,8 +1799,7 @@ end:
 static int AlpDetectTestSig4(void)
 {
     int result = 0;
-    Flow f;
-    HtpState *http_state = NULL;
+    Flow *f = NULL;
     uint8_t http_buf1[] = "MPUT one\r\n";
     uint32_t http_buf1_len = sizeof(http_buf1) - 1;
     TcpSession ssn;
@@ -1802,28 +1807,26 @@ static int AlpDetectTestSig4(void)
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
     p = UTHBuildPacketSrcDstPorts(http_buf1, http_buf1_len, IPPROTO_TCP, 12345, 88);
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
-
-    p->flow = &f;
+    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_FTP;
+    f->alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
@@ -1840,15 +1843,9 @@ static int AlpDetectTestSig4(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_FTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, f, ALPROTO_FTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
-
-    http_state = f.aldata[AlpGetStateIdx(ALPROTO_HTTP)];
-    if (http_state != NULL) {
-        printf("this is not http: ");
         goto end;
     }
 
@@ -1871,8 +1868,8 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
+    UTHFreeFlow(f);
     return result;
 }
 
@@ -1881,7 +1878,7 @@ end:
 static int AlpDetectTestSig5(void)
 {
     int result = 0;
-    Flow f;
+    Flow *f = NULL;
     uint8_t http_buf1[] = "POST /one HTTP/1.0\r\n"
         "User-Agent: Mozilla/1.0\r\n"
         "Cookie: hellocatch\r\n\r\n";
@@ -1891,34 +1888,32 @@ static int AlpDetectTestSig5(void)
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = NULL;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
 
     p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.src.family = AF_INET;
-    f.dst.family = AF_INET;
-
-    p->flow = &f;
+    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+    p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_HTTP;
-    f.proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
+    f->proto = IPPROTO_TCP;
     p->flags |= PKT_STREAM_ADD;
     p->flags |= PKT_STREAM_EOF;
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
         goto end;
     }
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     StreamMsg *stream_msg = StreamMsgGetFromPool();
     if (stream_msg == NULL) {
@@ -1945,7 +1940,7 @@ static int AlpDetectTestSig5(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
+    int r = AppLayerParse(NULL, f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1, http_buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
@@ -1970,8 +1965,8 @@ end:
         DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
+    UTHFreeFlow(f);
     return result;
 }
 

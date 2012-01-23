@@ -1,6 +1,6 @@
 noinst_HEADERS = action-globals.h \
     app-layer-nbss.h app-layer-dcerpc-common.h \
-    debug.h decode-events.h \
+    debug.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
 	suricata-common.h threadvars.h util-binsearch.h \
     util-atomic.h util-validate.h
@@ -76,12 +76,14 @@ detect-engine-payload.c detect-engine-payload.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-engine-hcbd.c detect-engine-hcbd.h \
+detect-engine-hsbd.c detect-engine-hsbd.h \
 detect-engine-hhd.c detect-engine-hhd.h \
 detect-engine-hrhd.c detect-engine-hrhd.h \
 detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hcd.c detect-engine-hcd.h \
 detect-engine-hrud.c detect-engine-hrud.h \
 detect-engine-state.c detect-engine-state.h \
+detect-engine-file.c detect-engine-file.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
 detect-seq.c detect-seq.h \
@@ -116,6 +118,7 @@ detect-msg.c detect-msg.h \
 detect-id.c detect-id.h \
 detect-flow.c detect-flow.h \
 detect-dsize.c detect-dsize.h \
+detect-tos.c detect-tos.h \
 detect-stream_size.c detect-stream_size.h \
 detect-engine-event.c detect-engine-event.h \
 detect-ipopts.c detect-ipopts.h \
@@ -135,6 +138,7 @@ detect-http-header.c detect-http-header.h \
 detect-http-raw-header.c detect-http-raw-header.h \
 detect-http-uri.c detect-http-uri.h \
 detect-http-raw-uri.c detect-http-raw-uri.h \
+detect-file-data.c detect-file-data.h \
 detect-tls-version.c detect-tls-version.h \
 detect-ssh-proto-version.c detect-ssh-proto-version.h \
 detect-ssh-software-version.c detect-ssh-software-version.h \
@@ -146,13 +150,22 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-urilen.c detect-urilen.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-http-client-body.c detect-http-client-body.h \
+detect-http-server-body.c detect-http-server-body.h \
 detect-http-stat-msg.c detect-http-stat-msg.h \
 detect-asn1.c detect-asn1.h \
+detect-filename.c detect-filename.h \
+detect-fileext.c detect-fileext.h \
+detect-filestore.c detect-filestore.h \
+detect-filemagic.c detect-filemagic.h \
 detect-http-stat-code.c detect-http-stat-code.h \
 detect-ssl-version.c detect-ssl-version.h \
 detect-ssl-state.c detect-ssl-state.h \
 detect-byte-extract.c detect-byte-extract.h \
+detect-app-layer-event.c detect-app-layer-event.h \
+decode-events.c decode-events.h \
 detect-replace.c detect-replace.h \
+util-magic.c util-magic.h \
+util-misc.c util-misc.h \
 util-atomic.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
@@ -196,6 +209,7 @@ util-random.c util-random.h \
 util-classification-config.c util-classification-config.h \
 util-threshold-config.c util-threshold-config.h \
 util-reference-config.c util-reference-config.h \
+util-coredump-config.c util-coredump-config.h \
 util-strlcatu.c \
 util-strlcpyu.c \
 util-cuda.c util-cuda.h \
@@ -212,6 +226,8 @@ util-vector.h \
 util-device.c util-device.h \
 util-checksum.c util-checksum.h \
 util-runmodes.c util-runmodes.h \
+util-file.c util-file.h \
+util-path.c util-path.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -230,6 +246,7 @@ alert-pcapinfo.c alert-pcapinfo.h \
 log-droplog.c log-droplog.h \
 log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
+log-file.c log-file.h \
 stream.c stream.h \
 stream-tcp.c stream-tcp.h stream-tcp-private.h \
 stream-tcp-reassemble.c stream-tcp-reassemble.h \
@@ -246,6 +263,8 @@ app-layer-detect-proto.c app-layer-detect-proto.h \
 app-layer-parser.c app-layer-parser.h \
 app-layer-protos.c app-layer-protos.h \
 app-layer-htp.c app-layer-htp.h \
+app-layer-htp-body.c app-layer-htp-body.h \
+app-layer-htp-file.c app-layer-htp-file.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
@@ -262,7 +281,8 @@ util-action.c util-action.h \
 win32-syslog.h \
 util-profiling.c util-profiling.h \
 cuda-packet-batcher.c cuda-packet-batcher.h \
-util-ioctl.h util-ioctl.c
+util-ioctl.h util-ioctl.c \
+util-logopenfile.h util-logopenfile.c
 
 # set the include path found by configure
 INCLUDES= $(all_includes)

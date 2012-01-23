@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  *
  * Signature ordering part of the detection engine.
  */
@@ -119,6 +119,17 @@ static inline int SCSigGetFlowbitsType(Signature *sig)
     int flowbits = DETECT_FLOWBITS_CMD_MAX;
     int flowbits_user_type = DETECT_FLOWBITS_NOT_USED;
 
+    while (sm != NULL) {
+        if (sm->type == DETECT_FLOWBITS) {
+            fb = (DetectFlowbitsData *)sm->ctx;
+            if (flowbits > fb->cmd)
+                flowbits = fb->cmd;
+        }
+
+        sm = sm->next;
+    }
+
+    sm = sig->sm_lists[DETECT_SM_LIST_POSTMATCH];
     while (sm != NULL) {
         if (sm->type == DETECT_FLOWBITS) {
             fb = (DetectFlowbitsData *)sm->ctx;
@@ -1862,7 +1873,7 @@ static int SCSigTestSignatureOrdering08(void)
     prevsig->next = sig;
     prevsig = sig;
 
-    sig = SigInit(de_ctx, "drop tcp any !21:902 -> any any (msg:\"Testing sigordering drop\"; content:\"220\"; offset:11; depth:4; pcre:\"/220[- ]/\"; sid:6; rev:4; priority:1;)");
+    sig = SigInit(de_ctx, "reject tcp any !21:902 -> any any (msg:\"Testing sigordering drop\"; content:\"220\"; offset:11; depth:4; pcre:\"/220[- ]/\"; sid:6; rev:4; priority:1;)");
     if (sig == NULL) {
         goto end;
     }

@@ -82,6 +82,11 @@ void PfringDerefConfig(void *conf)
 {
     PfringIfaceConfig *pfp = (PfringIfaceConfig *)conf;
     if (SC_ATOMIC_SUB(pfp->ref, 1) == 0) {
+#ifdef HAVE_PFRING_SET_BPF_FILTER
+        if (pfp->bpf_filter) {
+            SCFree(pfp->bpf_filter);
+        }
+#endif
         SCFree(pfp);
     }
 }
@@ -123,6 +128,7 @@ void *OldParsePfringConfig(const char *iface)
     pfconf->ctype = default_ctype;
 #endif
     pfconf->DerefFunc = PfringDerefConfig;
+    pfconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
     SC_ATOMIC_INIT(pfconf->ref);
     SC_ATOMIC_ADD(pfconf->ref, 1);
 
@@ -188,11 +194,14 @@ void *ParsePfringConfig(const char *iface)
     ConfNode *pf_ring_node;
     PfringIfaceConfig *pfconf = SCMalloc(sizeof(*pfconf));
     char *tmpclusterid;
-#ifdef HAVE_PFRING_CLUSTER_TYPE
     char *tmpctype = NULL;
+#ifdef HAVE_PFRING_CLUSTER_TYPE
     cluster_type default_ctype = CLUSTER_ROUND_ROBIN;
     int getctype = 0;
 #endif
+#ifdef HAVE_PFRING_SET_BPF_FILTER
+    char *bpf_filter = NULL;
+#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
     if (iface == NULL) {
         return NULL;
@@ -201,6 +210,7 @@ void *ParsePfringConfig(const char *iface)
     if (pfconf == NULL) {
         return NULL;
     }
+    memset(pfconf, 0, sizeof(PfringIfaceConfig));
     strlcpy(pfconf->iface, iface, sizeof(pfconf->iface));
     pfconf->threads = 1;
     pfconf->cluster_id = 1;
@@ -257,6 +267,24 @@ void *ParsePfringConfig(const char *iface)
             SCLogDebug("Going to use cluster-id %" PRId32, pfconf->cluster_id);
         }
     }
+#ifdef HAVE_PFRING_SET_BPF_FILTER
+    /*load pfring bpf filter*/
+    /* command line value has precedence */
+    if (ConfGet("bpf-filter", &bpf_filter) == 1) {
+        if (strlen(bpf_filter) > 0) {
+            pfconf->bpf_filter = SCStrdup(bpf_filter);
+            SCLogDebug("Going to use command-line provided bpf filter %s",
+                       pfconf->bpf_filter);
+        }
+    } else {
+        if (ConfGetChildValue(if_root, "bpf-filter", &bpf_filter) == 1) {
+            if (strlen(bpf_filter) > 0) {
+                pfconf->bpf_filter = SCStrdup(bpf_filter);
+                SCLogDebug("Going to use bpf filter %s", pfconf->bpf_filter);
+            }
+        }
+    }
+#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
 #ifdef HAVE_PFRING_CLUSTER_TYPE
     if (ConfGet("pfring.cluster-type", &tmpctype) == 1) {
@@ -288,7 +316,21 @@ void *ParsePfringConfig(const char *iface)
         }
     }
 
-#endif
+#endif /* HAVE_PFRING_CLUSTER_TYPE */
+
+    if (ConfGetChildValue(if_root, "checksum-checks", &tmpctype) == 1) {
+        if (strcmp(tmpctype, "auto") == 0) {
+            pfconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
+        } else if (strcmp(tmpctype, "yes") == 0) {
+            pfconf->checksum_mode = CHECKSUM_VALIDATION_ENABLE;
+        } else if (strcmp(tmpctype, "no") == 0) {
+            pfconf->checksum_mode = CHECKSUM_VALIDATION_DISABLE;
+        } else if (strcmp(tmpctype, "rx-only") == 0) {
+            pfconf->checksum_mode = CHECKSUM_VALIDATION_RXONLY;
+        } else {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid value for checksum-checks for %s", pfconf->iface);
+        }
+    }
 
     return pfconf;
 }
@@ -376,7 +418,8 @@ int RunModeIdsPfringAuto(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureAuto(de_ctx, tparser, "ReceivePfring", "DecodePfring",
+    ret = RunModeSetLiveCaptureAuto(de_ctx, tparser, PfringConfigGeThreadsCount,
+                                    "ReceivePfring", "DecodePfring",
                                     "RxPFR", live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Runmode start failed");

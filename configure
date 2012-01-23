@@ -767,7 +767,6 @@ enable_gccprofile
 enable_gccmarch_native
 with_libpcre_includes
 with_libpcre_libraries
-enable_pcre_jit
 with_libyaml_includes
 with_libyaml_libraries
 with_libpthread_includes
@@ -806,6 +805,8 @@ enable_profiling
 enable_dag
 with_dag_includes
 with_dag_libraries
+with_libmagic_includes
+with_libmagic_libraries
 '
       ac_precious_vars='build_alias
 host_alias
@@ -1451,7 +1452,6 @@ Optional Features:
   --enable-gccprofile     Enable gcc profile info i.e -pg flag is set
   --enable-gccmarch-native
                           Enable gcc march=native gcc 4.2 and later only
-  --enable-pcre-jit       Enable experimental support for PCRE-jit
   --enable-nfqueue        Enable NFQUEUE support for inline IDP
   --enable-ipfw           Enable FreeBSD IPFW support for inline IDP
   --enable-prelude        Enable Prelude support for alerts
@@ -1505,6 +1505,8 @@ Optional Packages:
   --with-libcap_ng-libraries=DIR    libcap_ng library directory
   --with-dag-includes=DIR  dagapi include directory
   --with-dag-libraries=DIR  dagapi library directory
+  --with-libmagic-includes=DIR  libmagic include directory
+  --with-libmagic-libraries=DIR    libmagic library directory
 
 Some influential environment variables:
   CC          C compiler command
@@ -2874,7 +2876,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=1.1.1
+ VERSION=1.2.1
 
 
 cat >>confdefs.h <<_ACEOF
@@ -2914,6 +2916,7 @@ am__tar='${AMTAR} chof - "$$tardir"'; am__untar='${AMTAR} xf -'
 
 
 
+    CFLAGS="$CFLAGS -DRELEASE"
 
     ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
@@ -13865,26 +13868,17 @@ rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
    fi
 
     #enable support for PCRE-jit available since pcre-8.20
-    # Check whether --enable-pcre-jit was given.
-if test "${enable_pcre_jit+set}" = set; then :
-  enableval=$enable_pcre_jit;
-else
-  enable_pcre_jit=no
-fi
-
-    if test "x$enable_pcre_jit" = "xyes"; then :
-
-        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PCRE JIT support" >&5
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PCRE JIT support" >&5
 $as_echo_n "checking for PCRE JIT support... " >&6; }
-        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
  #include <pcre.h>
 int
 main ()
 {
 
-            int jit = 0;
-            pcre_config(PCRE_CONFIG_JIT, &jit);
+        int jit = 0;
+        pcre_config(PCRE_CONFIG_JIT, &jit);
 
   ;
   return 0;
@@ -13893,41 +13887,41 @@ _ACEOF
 if ac_fn_c_try_compile "$LINENO"; then :
    pcre_jit_available=yes
 else
-  :
+   pcre_jit_available=no
 
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
 
-        if test "x$pcre_jit_available" = "xyes"; then
-            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+    if test "x$pcre_jit_available" = "xyes"; then
+       { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
 
 $as_echo "#define PCRE_HAVE_JIT 1" >>confdefs.h
 
 
-            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PCRE JIT support usability" >&5
+       { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PCRE JIT support usability" >&5
 $as_echo_n "checking for PCRE JIT support usability... " >&6; }
-            cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+       cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
  #include <pcre.h>
 int
 main ()
 {
 
-                const char* regexstr = "(a|b|c|d)";
-                pcre *re;
-                const char *error;
-                pcre_extra *extra;
-                int err_offset;
-                re = pcre_compile(regexstr,0, &error, &err_offset,NULL);
-                extra = pcre_study(re, PCRE_STUDY_JIT_COMPILE, &error);
-                if (extra == NULL)
-                    exit(EXIT_FAILURE);
-                int jit = 0;
-                int ret = pcre_fullinfo(re, extra, PCRE_INFO_JIT, &jit);
-                if (ret != 0 || jit != 1)
-                    exit(EXIT_FAILURE);
-                exit(EXIT_SUCCESS);
+           const char* regexstr = "(a|b|c|d)";
+           pcre *re;
+           const char *error;
+           pcre_extra *extra;
+           int err_offset;
+           re = pcre_compile(regexstr,0, &error, &err_offset,NULL);
+           extra = pcre_study(re, PCRE_STUDY_JIT_COMPILE, &error);
+           if (extra == NULL)
+               exit(EXIT_FAILURE);
+           int jit = 0;
+           int ret = pcre_fullinfo(re, extra, PCRE_INFO_JIT, &jit);
+           if (ret != 0 || jit != 1)
+               exit(EXIT_FAILURE);
+           exit(EXIT_SUCCESS);
 
   ;
   return 0;
@@ -13940,30 +13934,19 @@ else
 
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-            if test "x$pcre_jit_works" != "xyes"; then
-                { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+       if test "x$pcre_jit_works" != "xyes"; then
+           { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
 $as_echo "no" >&6; }
-                echo
-                echo "   PCRE JIT support detection worked but testing it failed"
-                echo "   something odd is going on, please file a bug report."
-                echo
-                exit 1
-            else
-                { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+           echo
+           echo "   PCRE JIT support detection worked but testing it failed"
+           echo "   something odd is going on, please file a bug report."
+           echo
+           exit 1
+       else
+           { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
-            fi
-        else
-            { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
-            echo
-            echo "   Error! --enable-pcre-jit set but PCRE_CONFIG_JIT not found"
-            echo "   Make sure your PCRE supports JIT. Version 8.20+ with"
-            echo "   --enable-jit passed to it's configure script."
-            echo
-            exit 1
-        fi
-
-fi
+       fi
+    fi
 
 #libyaml
 
@@ -15076,13 +15059,13 @@ fi
         fi
 
         LIBPFRING=""
-        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_set_cluster in -lpfring" >&5
-$as_echo_n "checking for pfring_set_cluster in -lpfring... " >&6; }
-if ${ac_cv_lib_pfring_pfring_set_cluster+:} false; then :
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_open in -lpfring" >&5
+$as_echo_n "checking for pfring_open in -lpfring... " >&6; }
+if ${ac_cv_lib_pfring_pfring_open+:} false; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpfring  $LIBS"
+LIBS="-lpfring -lpcap $LIBS"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -15092,27 +15075,27 @@ cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 #ifdef __cplusplus
 extern "C"
 #endif
-char pfring_set_cluster ();
+char pfring_open ();
 int
 main ()
 {
-return pfring_set_cluster ();
+return pfring_open ();
   ;
   return 0;
 }
 _ACEOF
 if ac_fn_c_try_link "$LINENO"; then :
-  ac_cv_lib_pfring_pfring_set_cluster=yes
+  ac_cv_lib_pfring_pfring_open=yes
 else
-  ac_cv_lib_pfring_pfring_set_cluster=no
+  ac_cv_lib_pfring_pfring_open=no
 fi
 rm -f core conftest.err conftest.$ac_objext \
     conftest$ac_exeext conftest.$ac_ext
 LIBS=$ac_check_lib_save_LIBS
 fi
-{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_set_cluster" >&5
-$as_echo "$ac_cv_lib_pfring_pfring_set_cluster" >&6; }
-if test "x$ac_cv_lib_pfring_pfring_set_cluster" = xyes; then :
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_open" >&5
+$as_echo "$ac_cv_lib_pfring_pfring_open" >&6; }
+if test "x$ac_cv_lib_pfring_pfring_open" = xyes; then :
   cat >>confdefs.h <<_ACEOF
 #define HAVE_LIBPFRING 1
 _ACEOF
@@ -15140,7 +15123,7 @@ if ${ac_cv_lib_pfring_pfring_enable_ring+:} false; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpfring  $LIBS"
+LIBS="-lpfring -lpcap $LIBS"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -15187,41 +15170,160 @@ $as_echo "#define HAVE_PFRING_ENABLE 1" >>confdefs.h
 
         fi
 
-        { $as_echo "$as_me:${as_lineno-$LINENO}: checking if pfring_set_cluster is available" >&5
-$as_echo_n "checking if pfring_set_cluster is available... " >&6; }
-        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+        LIBPFRING_CLUSTER_TYPE=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_set_cluster in -lpfring" >&5
+$as_echo_n "checking for pfring_set_cluster in -lpfring... " >&6; }
+if ${ac_cv_lib_pfring_pfring_set_cluster+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lpfring -lpcap $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
-                    #include <pfring.h>
-
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char pfring_set_cluster ();
 int
 main ()
 {
-
-                    pfring *pd;
-                    pd = pfring_open("eth1", 1,  1515, 1);
-                    pfring_set_cluster(pd, 99, cluster_round_robin);
-
+return pfring_set_cluster ();
   ;
   return 0;
 }
 _ACEOF
-if ac_fn_c_try_compile "$LINENO"; then :
-   pfring_cluster_type_available=yes
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_pfring_pfring_set_cluster=yes
 else
-  :
+  ac_cv_lib_pfring_pfring_set_cluster=no
 fi
-rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_set_cluster" >&5
+$as_echo "$ac_cv_lib_pfring_pfring_set_cluster" >&6; }
+if test "x$ac_cv_lib_pfring_pfring_set_cluster" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBPFRING 1
+_ACEOF
 
-        if test "$pfring_cluster_type_available" = "yes"; then
+  LIBS="-lpfring $LIBS"
+
+else
+  LIBPFRING_CLUSTER_TYPE="no"
+fi
+
+        if test "$LIBPFRING_CLUSTER_TYPE" != "no"; then
 
 $as_echo "#define HAVE_PFRING_CLUSTER_TYPE 1" >>confdefs.h
 
-            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
-$as_echo "yes" >&6; }
-        else
-            { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
-$as_echo "no" >&6; }
+        fi
+
+        LIBPFRING_BPF_FILTER=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_set_bpf_filter in -lpfring" >&5
+$as_echo_n "checking for pfring_set_bpf_filter in -lpfring... " >&6; }
+if ${ac_cv_lib_pfring_pfring_set_bpf_filter+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lpfring -lpcap $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char pfring_set_bpf_filter ();
+int
+main ()
+{
+return pfring_set_bpf_filter ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_pfring_pfring_set_bpf_filter=yes
+else
+  ac_cv_lib_pfring_pfring_set_bpf_filter=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_set_bpf_filter" >&5
+$as_echo "$ac_cv_lib_pfring_pfring_set_bpf_filter" >&6; }
+if test "x$ac_cv_lib_pfring_pfring_set_bpf_filter" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBPFRING 1
+_ACEOF
+
+  LIBS="-lpfring $LIBS"
+
+else
+  LIBPFRING_BPF_FILTER="no"
+fi
+
+        LIBPFRING_REMOVE_BPF_FILTER=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pfring_remove_bpf_filter in -lpfring" >&5
+$as_echo_n "checking for pfring_remove_bpf_filter in -lpfring... " >&6; }
+if ${ac_cv_lib_pfring_pfring_remove_bpf_filter+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lpfring -lpcap $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char pfring_remove_bpf_filter ();
+int
+main ()
+{
+return pfring_remove_bpf_filter ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_pfring_pfring_remove_bpf_filter=yes
+else
+  ac_cv_lib_pfring_pfring_remove_bpf_filter=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_pfring_pfring_remove_bpf_filter" >&5
+$as_echo "$ac_cv_lib_pfring_pfring_remove_bpf_filter" >&6; }
+if test "x$ac_cv_lib_pfring_pfring_remove_bpf_filter" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBPFRING 1
+_ACEOF
+
+  LIBS="-lpfring $LIBS"
+
+else
+  LIBPFRING_REMOVE_BPF_FILTER="no"
+fi
+
+        if test "$LIBPFRING_BPF_FILTER" != "no" -a "$LIBPFRING_REMOVE_BPF_FILTER" != "no"; then
+
+$as_echo "#define HAVE_PFRING_SET_BPF_FILTER 1" >>confdefs.h
+
         fi
 
         STORE_CFLAGS="${CFLAGS}"
@@ -15916,6 +16018,52 @@ _ACEOF
 
 fi
 
+        # check for htp_tx_get_response_headers_raw
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_tx_get_response_headers_raw in -lhtp" >&5
+$as_echo_n "checking for htp_tx_get_response_headers_raw in -lhtp... " >&6; }
+if ${ac_cv_lib_htp_htp_tx_get_response_headers_raw+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lhtp -lhtp $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char htp_tx_get_response_headers_raw ();
+int
+main ()
+{
+return htp_tx_get_response_headers_raw ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_htp_htp_tx_get_response_headers_raw=yes
+else
+  ac_cv_lib_htp_htp_tx_get_response_headers_raw=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_htp_htp_tx_get_response_headers_raw" >&5
+$as_echo "$ac_cv_lib_htp_htp_tx_get_response_headers_raw" >&6; }
+if test "x$ac_cv_lib_htp_htp_tx_get_response_headers_raw" = xyes; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW 1
+_ACEOF
+
+fi
+
+
 
 fi
 
@@ -15937,6 +16085,11 @@ fi
 
 cat >>confdefs.h <<_ACEOF
 #define HAVE_HTP_URI_NORMALIZE_HOOK 1
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW 1
 _ACEOF
 
 
@@ -16528,15 +16681,116 @@ fi
         fi
     fi
 
+#libmagic
+
+# Check whether --with-libmagic_includes was given.
+if test "${with_libmagic_includes+set}" = set; then :
+  withval=$with_libmagic_includes; with_libmagic_includes="$withval"
+else
+  with_libmagic_includes=no
+fi
+
+
+# Check whether --with-libmagic_libraries was given.
+if test "${with_libmagic_libraries+set}" = set; then :
+  withval=$with_libmagic_libraries; with_libmagic_libraries="$withval"
+else
+  with_libmagic_libraries="no"
+fi
+
+
+    if test "$with_libmagic_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libmagic_includes}"
+    fi
+
+    ac_fn_c_check_header_mongrel "$LINENO" "magic.h" "ac_cv_header_magic_h" "$ac_includes_default"
+if test "x$ac_cv_header_magic_h" = xyes; then :
+
+else
+  as_fn_error $? "magic.h not found ..." "$LINENO" 5
+fi
+
+
+
+    if test "$with_libmagic_libraries" != "no"; then
+        LDFLAGS="${LDFLAGS}  -L${with_libmagic_libraries}"
+    fi
+
+    MAGIC=""
+    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for magic_open in -lmagic" >&5
+$as_echo_n "checking for magic_open in -lmagic... " >&6; }
+if ${ac_cv_lib_magic_magic_open+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lmagic  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char magic_open ();
+int
+main ()
+{
+return magic_open ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_magic_magic_open=yes
+else
+  ac_cv_lib_magic_magic_open=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_magic_magic_open" >&5
+$as_echo "$ac_cv_lib_magic_magic_open" >&6; }
+if test "x$ac_cv_lib_magic_magic_open" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBMAGIC 1
+_ACEOF
+
+  LIBS="-lmagic $LIBS"
+
+else
+  MAGIC="no"
+fi
+
+
+    if test "$MAGIC" = "no"; then
+        echo
+        echo "   ERROR!  magic library not found, go get it"
+        echo "   from http://www.darwinsys.com/file/."
+        echo
+        exit 1
+    fi
+
 # get revision
     if test -f ./revision; then
         REVISION=`cat ./revision`
         CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
     else
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking git command available" >&5
+$as_echo_n "checking git command available... " >&6; }
         GIT=`which git`
-        if test "$GIT" != ""; then
-            REVISION=`git rev-parse --short HEAD`
-            CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
+        if  test "$GIT" != ""; then
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+            if  test -d .git ; then
+                REVISION=`git rev-parse --short HEAD`
+                CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
+            fi
+        else
+            { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
         fi
     fi
 
@@ -16544,7 +16798,7 @@ fi
 
 
 
-ac_config_files="$ac_config_files Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile"
+ac_config_files="$ac_config_files Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -17577,6 +17831,8 @@ do
     "src/Makefile") CONFIG_FILES="$CONFIG_FILES src/Makefile" ;;
     "qa/Makefile") CONFIG_FILES="$CONFIG_FILES qa/Makefile" ;;
     "qa/coccinelle/Makefile") CONFIG_FILES="$CONFIG_FILES qa/coccinelle/Makefile" ;;
+    "rules/Makefile") CONFIG_FILES="$CONFIG_FILES rules/Makefile" ;;
+    "doc/Makefile") CONFIG_FILES="$CONFIG_FILES doc/Makefile" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
   esac
@@ -19100,5 +19356,5 @@ Suricata Configuration:
   GCC Profile enabled:      ${enable_gccprofile}
   Old barnyard2 support:    ${enable_old_barnyard2}
   Non-bundled htp:          ${enable_non_bundled_htp}
-  PCRE jit:                 ${enable_pcre_jit}
+  PCRE jit:                 ${pcre_jit_available}
 "

@@ -34,6 +34,7 @@
 #include "flow-hash.h"
 #include "flow-util.h"
 #include "flow-private.h"
+#include "flow-manager.h"
 #include "app-layer-parser.h"
 
 #include "util-time.h"
@@ -294,6 +295,7 @@ static inline int FlowCreateCheck(Packet *p) {
 static Flow *FlowGetNew(Packet *p) {
     Flow *f = NULL;
 
+
     if (FlowCreateCheck(p) == 0) {
         return NULL;
     }
@@ -323,6 +325,7 @@ static Flow *FlowGetNew(Packet *p) {
                             "(ts.tv_sec: %"PRIuMAX", ts.tv_usec:%"PRIuMAX")",
                             (uintmax_t)p->ts.tv_sec, (uintmax_t)p->ts.tv_usec);
                     flow_flags |= FLOW_EMERGENCY; /* XXX mutex this */
+                    FlowWakeupFlowManagerThread();
                 }
                 SCLogDebug("We need to prune some flows with emerg bit (2)");
 
@@ -402,7 +405,7 @@ Flow *FlowGetFlowFromHash (Packet *p)
         f->flags |= FLOW_NEW_LIST;
         f->fb = fb;
 
-        FlowRequeue(f, NULL, &flow_new_q[f->protomap], 1);
+        FlowEnqueue(&flow_new_q[f->protomap], f);
 
         SCSpinUnlock(&fb->s);
         FlowHashCountUpdate;
@@ -440,7 +443,7 @@ Flow *FlowGetFlowFromHash (Packet *p)
                 f->flags |= FLOW_NEW_LIST;
                 f->fb = fb;
 
-                FlowRequeue(f, NULL, &flow_new_q[f->protomap], 1);
+                FlowEnqueue(&flow_new_q[f->protomap], f);
 
                 SCSpinUnlock(&fb->s);
                 FlowHashCountUpdate;

@@ -47,6 +47,7 @@
 #include "util-debug.h"
 #include "util-time.h"
 #include "util-byte.h"
+#include "util-misc.h"
 
 #include "source-pcap.h"
 
@@ -56,8 +57,8 @@
 
 #define DEFAULT_LOG_FILENAME            "pcaplog"
 #define MODULE_NAME                     "PcapLog"
-#define MIN_LIMIT                       1
-#define DEFAULT_LIMIT                   100
+#define MIN_LIMIT                       1 * 1024 * 1024
+#define DEFAULT_LIMIT                   100 * 1024 * 1024
 #define DEFAULT_FILE_LIMIT              0
 
 #define LOGMODE_NORMAL                  0
@@ -424,18 +425,23 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
             return NULL;
     }
 
-    uint64_t limit = DEFAULT_LIMIT;
+    pl->size_limit = DEFAULT_LIMIT;
     if (conf != NULL) {
         const char *s_limit = NULL;
         s_limit = ConfNodeLookupChildValue(conf, "limit");
         if (s_limit != NULL) {
-            if (ByteExtractStringUint64(&limit, 10, 0, s_limit) == -1) {
+            if (ParseSizeStringU64(s_limit, &pl->size_limit) < 0) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
-                    "Fail to initialize pcap-log output, invalid limit: %s",
+                    "Failed to initialize unified2 output, invalid limit: %s",
                     s_limit);
                 exit(EXIT_FAILURE);
             }
-            if (limit < MIN_LIMIT) {
+            if (pl->size_limit < 4096) {
+                SCLogInfo("pcap-log \"limit\" value of %"PRIu64" assumed to be pre-1.2 "
+                        "style: setting limit to %"PRIu64"mb", pl->size_limit, pl->size_limit);
+                uint64_t size = pl->size_limit * 1024 * 1024;
+                pl->size_limit = size;
+            } else if (pl->size_limit < MIN_LIMIT) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
                     "Fail to initialize pcap-log output, limit less than "
                     "allowed minimum.");
@@ -443,7 +449,6 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
             }
         }
     }
-    pl->size_limit = limit * 1024 * 1024;
 
     if (conf != NULL) {
         const char *s_mode = NULL;
@@ -462,12 +467,15 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
         const char *s_dir = NULL;
         s_dir = ConfNodeLookupChildValue(conf, "dir");
         if (s_dir == NULL) {
-            s_dir = ConfNodeLookupChildValue(conf, "sguil_base_dir");
+            s_dir = ConfNodeLookupChildValue(conf, "sguil-base-dir");
+            if (s_dir == NULL) {
+                s_dir = ConfNodeLookupChildValue(conf, "sguil_base_dir");
+            }
         }
         if (s_dir == NULL) {
             if (pl->mode == LOGMODE_SGUIL) {
                 SCLogError(SC_ERR_LOGPCAP_SGUIL_BASE_DIR_MISSING,
-                    "log-pcap \"sguil\" mode requires \"dir\" "
+                    "log-pcap \"sguil\" mode requires \"sguil-base-dir\" "
                     "option to be set.");
                 exit(EXIT_FAILURE);
             } else {
@@ -480,9 +488,26 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
                     SCLogInfo("Using log dir %s", pl->dir);
             }
         } else {
-            strlcpy(pl->dir,
-                    s_dir, sizeof(pl->dir));
-                    SCLogInfo("Using log dir %s", pl->dir);
+            if (PathIsAbsolute(s_dir)) {
+                strlcpy(pl->dir,
+                        s_dir, sizeof(pl->dir));
+            } else {
+                char *log_dir = NULL;
+                if (ConfGet("default-log-dir", &log_dir) != 1)
+                    log_dir = DEFAULT_LOG_DIR;
+
+                snprintf(pl->dir, sizeof(pl->dir), "%s/%s",
+                    log_dir, s_dir);
+            }
+
+            struct stat stat_buf;
+            if (stat(pl->dir, &stat_buf) != 0) {
+                SCLogError(SC_ERR_LOGDIR_CONFIG, "The sguil-base-dir directory \"%s\" "
+                        "supplied doesn't exist. Shutting down the engine",
+                        pl->dir);
+                exit(EXIT_FAILURE);
+            }
+            SCLogInfo("Using log dir %s", pl->dir);
         }
     }
 

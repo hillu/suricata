@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2011 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -19,6 +19,7 @@
  * \file
  *
  * \author Breno Silva <breno.silva@gmail.com>
+ * \author Eric Leblond <eric@regit.org>
  *
  * Logs alerts in a format compatible to Snort's unified2 format, so it should
  * be readable by Barnyard2.
@@ -43,6 +44,7 @@
 #include "util-debug.h"
 #include "util-time.h"
 #include "util-byte.h"
+#include "util-misc.h"
 
 #include "output.h"
 #include "alert-unified2-alert.h"
@@ -60,10 +62,10 @@
 #define DEFAULT_LOG_FILENAME "unified2.alert"
 
 /**< Default log file limit in MB. */
-#define DEFAULT_LIMIT 32
+#define DEFAULT_LIMIT 32 * 1024 * 1024
 
 /**< Minimum log file limit in MB. */
-#define MIN_LIMIT 1
+#define MIN_LIMIT 1 * 1024 * 1024
 
 /**
  * Unified2 file header struct
@@ -360,6 +362,8 @@ static int Unified2StreamTypeAlertIPv4 (Unified2AlertThread *aun,
         IPV4Hdr ip4h;
         TCPHdr tcph;
     } fakehdr;
+    EthernetHdr ethhdr = { {0,0,0,0,0,0}, {0,0,0,0,0,0}, htons(ETHERNET_TYPE_IP) };
+    int eth_offset = 0;
     Unified2Packet phdr;
     Unified2AlertFileHeader hdr;
     int ret;
@@ -391,7 +395,14 @@ static int Unified2StreamTypeAlertIPv4 (Unified2AlertThread *aun,
     fakehdr.tcph.th_dport = p->tcph->th_dport;
     fakehdr.tcph.th_offx2 = 0x50; /* just the TCP header, no options */
 
-    aun->length += (int)pkt_len;
+
+    if (p->datalink == DLT_EN10MB) {
+        eth_offset = 14;
+        phdr.linktype = htonl(DLT_EN10MB);
+    } else {
+        phdr.linktype = htonl(DLT_RAW);
+    }
+    aun->length += (int)pkt_len + eth_offset;
 
     if (aun->length > aun->datalen) {
         SCLogError(SC_ERR_INVALID_VALUE, "len is too big for thread data: %d vs %d",
@@ -400,22 +411,25 @@ static int Unified2StreamTypeAlertIPv4 (Unified2AlertThread *aun,
     }
 
     hdr.type = htonl(UNIFIED2_PACKET_TYPE);
-    hdr.length = htonl(UNIFIED2_PACKET_SIZE + pkt_len);
+    hdr.length = htonl(UNIFIED2_PACKET_SIZE + pkt_len + eth_offset);
 
     phdr.sensor_id = 0;
-    phdr.linktype = htonl(DLT_RAW);
     phdr.event_id = event_id;
     phdr.event_second = phdr.packet_second = htonl(p->ts.tv_sec);
     phdr.packet_microsecond = htonl(p->ts.tv_usec);
-    phdr.packet_length = htonl(pkt_len);
+    phdr.packet_length = htonl(pkt_len + eth_offset);
 
     memcpy(aun->data + aun->offset, &hdr, sizeof(Unified2AlertFileHeader));
 
     memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader),
             &phdr, UNIFIED2_PACKET_SIZE);
-    memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE,
+    if (p->datalink == DLT_EN10MB) {
+        memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE,
+            &ethhdr, eth_offset);
+    }
+    memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE + eth_offset,
             &fakehdr, sizeof(fakehdr));
-    memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE + sizeof(fakehdr),
+    memcpy(aun->data + aun->offset + sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE + sizeof(fakehdr) + eth_offset,
             stream_msg->data.data, stream_msg->data.data_len);
 
     ret = Unified2Write(aun);
@@ -539,8 +553,11 @@ static int Unified2PrintStreamSegmentCallback(Packet *p, void *data, uint8_t *bu
     }
 
     aun->hdr->length = htonl(UNIFIED2_PACKET_SIZE +
+                             ((p->datalink == DLT_EN10MB) ? 14 : 0) +
                              buflen + hdr_length);
-    aun->phdr->packet_length = htonl(buflen + hdr_length);
+    aun->phdr->packet_length = htonl(buflen + hdr_length +
+                                     ((p->datalink == DLT_EN10MB) ? 14 : 0)
+                                    );
 
     aun->length += buflen;
     if (aun->length > aun->datalen) {
@@ -611,10 +628,8 @@ int Unified2PacketTypeAlert (Unified2AlertThread *aun, Packet *p, void *stream, 
     int ret = 0;
     int len = aun->offset + (sizeof(Unified2AlertFileHeader) + UNIFIED2_PACKET_SIZE);
     int datalink = p->datalink;
-#ifdef HAVE_OLD_BARNYARD2
     int ethh_offset = 0;
     EthernetHdr ethhdr = { {0,0,0,0,0,0}, {0,0,0,0,0,0}, htons(ETHERNET_TYPE_IPV6) };
-#endif
 
     memset(hdr, 0, sizeof(Unified2AlertFileHeader));
     memset(phdr, 0, sizeof(Unified2Packet));
@@ -633,8 +648,10 @@ int Unified2PacketTypeAlert (Unified2AlertThread *aun, Packet *p, void *stream, 
         SCLogDebug("logging the state");
         uint8_t flag;
 
-        /* We have raw data here */
-        phdr->linktype = htonl(DLT_RAW);
+        if (p->datalink != DLT_EN10MB) {
+            /* We have raw data here */
+            phdr->linktype = htonl(DLT_RAW);
+        }
         aun->length = len;
 
         /* IDS mode reverse the data */
@@ -662,15 +679,51 @@ int Unified2PacketTypeAlert (Unified2AlertThread *aun, Packet *p, void *stream, 
         if (PKT_IS_IPV4(p)) {
             FakeIPv4Hdr fakehdr;
             uint32_t hdr_length = sizeof(FakeIPv4Hdr);
+
+            if (p->datalink == DLT_EN10MB) {
+                /* Fake this */
+                ethh_offset = 14;
+                datalink = DLT_EN10MB;
+                phdr->linktype = htonl(datalink);
+                aun->length += ethh_offset;
+                if (aun->length > aun->datalen) {
+                    SCLogError(SC_ERR_INVALID_VALUE, "len is too big for thread data: %d vs %d",
+                            len, aun->datalen - aun->offset);
+                    return -1;
+                }
+                ethhdr.eth_type = htons(ETHERNET_TYPE_IP);
+
+                memcpy(aun->data + aun->offset, &ethhdr, 14);
+                aun->offset += ethh_offset;
+            }
+
             memset(&fakehdr, 0, hdr_length);
             Unified2ForgeFakeIPv4Header(&fakehdr, p, hdr_length, 0);
             memcpy(aun->data + aun->offset, &fakehdr, hdr_length);
             aun->iphdr = (void *)(aun->data + aun->offset);
             aun->offset += hdr_length;
             aun->length += hdr_length;
-        } else {
+        } else { /* Implied IPv6 */
             FakeIPv6Hdr fakehdr;
             uint32_t hdr_length = sizeof(FakeIPv6Hdr);
+
+            if (p->datalink == DLT_EN10MB) {
+                /* Fake this */
+                ethh_offset = 14;
+                datalink = DLT_EN10MB;
+                phdr->linktype = htonl(datalink);
+                aun->length += ethh_offset;
+                if (aun->length > aun->datalen) {
+                    SCLogError(SC_ERR_INVALID_VALUE, "len is too big for thread data: %d vs %d",
+                            len, aun->datalen - aun->offset);
+                    return -1;
+                }
+                ethhdr.eth_type = htons(ETHERNET_TYPE_IPV6);
+
+                memcpy(aun->data + aun->offset, &ethhdr, 14);
+                aun->offset += ethh_offset;
+            }
+
             memset(&fakehdr, 0, hdr_length);
             Unified2ForgeFakeIPv6Header(&fakehdr, p, hdr_length, 1);
             aun->length += hdr_length;
@@ -1116,17 +1169,22 @@ OutputCtx *Unified2AlertInitCtx(ConfNode *conf)
     file_ctx->prefix = SCStrdup(filename);
 
     const char *s_limit = NULL;
-    uint64_t limit = DEFAULT_LIMIT;
+    file_ctx->size_limit = DEFAULT_LIMIT;
     if (conf != NULL) {
         s_limit = ConfNodeLookupChildValue(conf, "limit");
         if (s_limit != NULL) {
-            if (ByteExtractStringUint64(&limit, 10, 0, s_limit) == -1) {
+            if (ParseSizeStringU64(s_limit, &file_ctx->size_limit) < 0) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
                     "Failed to initialize unified2 output, invalid limit: %s",
                     s_limit);
                 exit(EXIT_FAILURE);
             }
-            if (limit < MIN_LIMIT) {
+            if (file_ctx->size_limit < 4096) {
+                SCLogInfo("unified2-alert \"limit\" value of %"PRIu64" assumed to be pre-1.2 "
+                        "style: setting limit to %"PRIu64"mb", file_ctx->size_limit, file_ctx->size_limit);
+                uint64_t size = file_ctx->size_limit * 1024 * 1024;
+                file_ctx->size_limit = size;
+            } else if (file_ctx->size_limit < MIN_LIMIT) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
                     "Failed to initialize unified2 output, limit less than "
                     "allowed minimum: %d.", MIN_LIMIT);
@@ -1134,7 +1192,6 @@ OutputCtx *Unified2AlertInitCtx(ConfNode *conf)
             }
         }
     }
-    file_ctx->size_limit = limit * 1024 * 1024;
 
     ret = Unified2AlertOpenFileCtx(file_ctx, filename);
     if (ret < 0)
@@ -1147,7 +1204,7 @@ OutputCtx *Unified2AlertInitCtx(ConfNode *conf)
     output_ctx->DeInit = Unified2AlertDeInitCtx;
 
     SCLogInfo("Unified2-alert initialized: filename %s, limit %"PRIu64" MB",
-       filename, limit);
+              filename, file_ctx->size_limit / (1024*1024));
 
     SC_ATOMIC_INIT(unified2_event_id);
 

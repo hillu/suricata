@@ -48,6 +48,7 @@
 #include "util-pidfile.h"
 #include "util-ioctl.h"
 #include "util-device.h"
+#include "util-misc.h"
 
 #include "detect-parse.h"
 #include "detect-engine.h"
@@ -57,6 +58,7 @@
 #include "detect-engine-dcepayload.h"
 #include "detect-engine-uri.h"
 #include "detect-engine-hcbd.h"
+#include "detect-engine-hsbd.h"
 #include "detect-engine-hhd.h"
 #include "detect-engine-hrhd.h"
 #include "detect-engine-hmd.h"
@@ -81,10 +83,11 @@
 #include "alert-prelude.h"
 #include "alert-syslog.h"
 #include "alert-pcapinfo.h"
-#include "log-droplog.h"
 
+#include "log-droplog.h"
 #include "log-httplog.h"
 #include "log-pcap.h"
+#include "log-file.h"
 
 #include "stream-tcp.h"
 
@@ -135,6 +138,9 @@
 #include "util-threshold-config.h"
 #include "util-reference-config.h"
 #include "util-profiling.h"
+#include "util-magic.h"
+
+#include "util-coredump-config.h"
 
 #include "defrag.h"
 
@@ -411,7 +417,8 @@ void usage(const char *progname)
 #ifdef IPFW
     printf("\t-d <divert port>             : run in inline ipfw divert mode\n");
 #endif /* IPFW */
-    printf("\t-s <path>                    : path to signature file (optional)\n");
+    printf("\t-s <path>                    : path to signature file loaded in addition to suricata.yaml settings (optional)\n");
+    printf("\t-S <path>                    : path to signature file loaded exclusively (optional)\n");
     printf("\t-l <dir>                     : default log directory\n");
 #ifndef OS_WIN32
     printf("\t-D                           : run as daemon\n");
@@ -472,6 +479,14 @@ void SCPrintBuildInfo(void) {
     char *endian = "<unknown>-endian";
     char features[2048] = "";
 
+#ifdef REVISION
+    SCLogInfo("This is %s version %s (rev %s)", PROG_NAME, PROG_VER, xstr(REVISION));
+#elif defined RELEASE
+    SCLogInfo("This is %s version %s RELEASE", PROG_NAME, PROG_VER);
+#else
+    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
+#endif
+
 #ifdef DEBUG
     strlcat(features, "DEBUG ", sizeof(features));
 #endif
@@ -515,6 +530,9 @@ void SCPrintBuildInfo(void) {
 #endif
 #ifdef HAVE_HTP_URI_NORMALIZE_HOOK
     strlcat(features, "HAVE_HTP_URI_NORMALIZE_HOOK ", sizeof(features));
+#endif
+#ifdef HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW
+    strlcat(features, "HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW ", sizeof(features));
 #endif
 #ifdef PCRE_HAVE_JIT
     strlcat(features, "PCRE_JIT ", sizeof(features));
@@ -576,6 +594,7 @@ int main(int argc, char **argv)
     int opt;
     char pcap_dev[128];
     char *sig_file = NULL;
+    int sig_file_exclusive = FALSE;
     char *conf_filename = NULL;
     char *pid_filename = NULL;
 #ifdef UNITTESTS
@@ -645,12 +664,6 @@ int main(int argc, char **argv)
 	}
 #endif /* OS_WIN32 */
 
-#ifdef REVISION
-    SCLogInfo("This is %s version %s (rev %s)", PROG_NAME, PROG_VER, xstr(REVISION));
-#else
-    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
-#endif
-
     /* Initialize the configuration module. */
     ConfInit();
 
@@ -688,7 +701,7 @@ int main(int argc, char **argv)
     /* getopt_long stores the option index here. */
     int option_index = 0;
 
-    char short_opts[] = "c:Dhi:l:q:d:r:us:U:VF:";
+    char short_opts[] = "c:Dhi:l:q:d:r:us:S:U:VF:";
 
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, &option_index)) != -1) {
         switch (opt) {
@@ -926,9 +939,20 @@ int main(int argc, char **argv)
             exit(EXIT_SUCCESS);
             break;
         case 'i':
+            memset(pcap_dev, 0, sizeof(pcap_dev));
+            strlcpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)+1) : (sizeof(pcap_dev))));
+            PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
+
+            if (strcmp(pcap_dev, optarg) != 0) {
+                SCLogInfo("translated %s to pcap device %s", optarg, pcap_dev);
+            } else if (strlen(pcap_dev) > 0 && isdigit(pcap_dev[0])) {
+                SCLogError(SC_ERR_PCAP_TRANSLATE, "failed to find a pcap device for IP %s", optarg);
+                exit(EXIT_FAILURE);
+            }
+
             if (run_mode == RUNMODE_UNKNOWN) {
                 run_mode = RUNMODE_PCAP_DEV;
-                LiveRegisterDevice(optarg);
+                LiveRegisterDevice(pcap_dev);
             } else if (run_mode == RUNMODE_PCAP_DEV) {
 #ifdef OS_WIN32
                 SCLogError(SC_ERR_PCAP_MULTI_DEV_NO_SUPPORT, "pcap multi dev "
@@ -937,7 +961,7 @@ int main(int argc, char **argv)
 #else
                 SCLogWarning(SC_WARN_PCAP_MULTI_DEV_EXPERIMENTAL, "using "
                         "multiple pcap devices to get packets is experimental.");
-                LiveRegisterDevice(optarg);
+                LiveRegisterDevice(pcap_dev);
 #endif
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
@@ -945,8 +969,6 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 exit(EXIT_FAILURE);
             }
-            memset(pcap_dev, 0, sizeof(pcap_dev));
-            strlcpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)+1) : (sizeof(pcap_dev))));
             break;
         case 'l':
             if (ConfSet("default-log-dir", optarg, 0) != 1) {
@@ -986,15 +1008,16 @@ int main(int argc, char **argv)
             if (run_mode == RUNMODE_UNKNOWN) {
                 run_mode = RUNMODE_IPFW;
                 SET_ENGINE_MODE_IPS(engine_mode);
+                if (IPFWRegisterQueue(optarg) == -1)
+                    exit(EXIT_FAILURE);
+            } else if (run_mode == RUNMODE_IPFW) {
+                if (IPFWRegisterQueue(optarg) == -1)
+                    exit(EXIT_FAILURE);
             } else {
                 SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
                                                      "has been specified");
                 usage(argv[0]);
                 exit(EXIT_SUCCESS);
-            }
-            if (ConfSet("ipfw.ipfw_divert_port", optarg, 0) != 1) {
-                fprintf(stderr, "ERROR: Failed to set ipfw_divert_port\n");
-                exit(EXIT_FAILURE);
             }
 #else
             SCLogError(SC_ERR_IPFW_NOSUPPORT,"IPFW not enabled. Make sure to pass --enable-ipfw to configure when building.");
@@ -1016,7 +1039,19 @@ int main(int argc, char **argv)
             }
             break;
         case 's':
+            if (sig_file != NULL) {
+                SCLogError(SC_ERR_CMD_LINE, "can't have multiple -s options or mix -s and -S.");
+                exit(EXIT_FAILURE);
+            }
             sig_file = optarg;
+            break;
+        case 'S':
+            if (sig_file != NULL) {
+                SCLogError(SC_ERR_CMD_LINE, "can't have multiple -S options or mix -s and -S.");
+                exit(EXIT_FAILURE);
+            }
+            sig_file = optarg;
+            sig_file_exclusive = TRUE;
             break;
         case 'u':
 #ifdef UNITTESTS
@@ -1043,9 +1078,11 @@ int main(int argc, char **argv)
             break;
         case 'V':
 #ifdef REVISION
-            printf("\nThis is %s version %s (rev %s)\n\n", PROG_NAME, PROG_VER, xstr(REVISION));
+            printf("This is %s version %s (rev %s)\n", PROG_NAME, PROG_VER, xstr(REVISION));
+#elif defined RELEASE
+            printf("This is %s version %s RELEASE\n", PROG_NAME, PROG_VER);
 #else
-            printf("\nThis is %s version %s\n\n", PROG_NAME, PROG_VER);
+            printf("This is %s version %s\n", PROG_NAME, PROG_VER);
 #endif
             exit(EXIT_SUCCESS);
         case 'F':
@@ -1056,6 +1093,20 @@ int main(int argc, char **argv)
             exit(EXIT_FAILURE);
         }
     }
+
+#ifdef REVISION
+    SCLogInfo("This is %s version %s (rev %s)", PROG_NAME, PROG_VER, xstr(REVISION));
+#elif defined RELEASE
+    SCLogInfo("This is %s version %s RELEASE", PROG_NAME, PROG_VER);
+#else
+    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
+#endif
+
+#ifndef HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW
+    SCLogWarning(SC_WARN_OUTDATED_LIBHTP, "libhtp < 0.2.7 detected. Keyword "
+        "http_raw_header will not be able to inspect response headers.");
+#endif
+
     SetBpfString(optind, argv);
 
     UtilCpuPrintSummary();
@@ -1126,7 +1177,8 @@ int main(int argc, char **argv)
 
     /* Pull the default packet size from the config, if not found fall
      * back on a sane default. */
-    if (ConfGetInt("default-packet-size", &default_packet_size) != 1) {
+    char *temp_default_packet_size;
+    if ((ConfGet("default-packet-size", &temp_default_packet_size)) != 1) {
         switch (run_mode) {
             case RUNMODE_PCAP_DEV:
             case RUNMODE_AFP_DEV:
@@ -1139,8 +1191,16 @@ int main(int argc, char **argv)
             default:
                 default_packet_size = DEFAULT_PACKET_SIZE;
         }
+    } else {
+        if (ParseSizeStringU32(temp_default_packet_size, &default_packet_size) < 0) {
+            SCLogError(SC_ERR_SIZE_PARSE, "Error parsing max-pending-packets "
+                       "from conf file - %s.  Killing engine",
+                       temp_default_packet_size);
+            exit(EXIT_FAILURE);
+        }
     }
-    SCLogDebug("Default packet size set to %"PRIiMAX, default_packet_size);
+
+    SCLogDebug("Default packet size set to %"PRIu32, default_packet_size);
 
 #ifdef NFQ
     if (run_mode == RUNMODE_NFQ)
@@ -1238,6 +1298,7 @@ int main(int argc, char **argv)
     TmModuleLogHttpLogIPv4Register();
     TmModuleLogHttpLogIPv6Register();
     TmModulePcapLogRegister();
+    TmModuleLogFileLogRegister();
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
     TmModuleCudaPacketBatcherRegister();
@@ -1247,6 +1308,8 @@ int main(int argc, char **argv)
     TmModuleReceiveErfDagRegister();
     TmModuleDecodeErfDagRegister();
     TmModuleDebugList();
+
+    AppLayerHtpNeedFileInspection();
 
     /** \todo we need an api for these */
     AppLayerDetectProtoThreadInit();
@@ -1265,6 +1328,7 @@ int main(int argc, char **argv)
         }
 
         AppLayerHtpEnableRequestBodyCallback();
+        AppLayerHtpNeedFileInspection();
         AppLayerHtpRegisterExtraCallbacks();
 
         UtInitialize();
@@ -1296,6 +1360,7 @@ int main(int argc, char **argv)
         DecodeICMPV4RegisterTests();
         DecodeICMPV6RegisterTests();
         DecodeIPV4RegisterTests();
+        DecodeIPV6RegisterTests();
         DecodeTCPRegisterTests();
         DecodeUDPV4RegisterTests();
         DecodeGRERegisterTests();
@@ -1331,6 +1396,7 @@ int main(int argc, char **argv)
         DetectRingBufferRegisterTests();
         MemcmpRegisterTests();
         DetectEngineHttpClientBodyRegisterTests();
+        DetectEngineHttpServerBodyRegisterTests();
         DetectEngineHttpHeaderRegisterTests();
         DetectEngineHttpRawHeaderRegisterTests();
         DetectEngineHttpMethodRegisterTests();
@@ -1339,6 +1405,8 @@ int main(int argc, char **argv)
         DetectEngineRegisterTests();
         SCLogRegisterTests();
         SMTPParserRegisterTests();
+        MagicRegisterTests();
+        UtilMiscRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
@@ -1367,8 +1435,15 @@ int main(int argc, char **argv)
     }
 #endif /* UNITTESTS */
 
+    TmModuleRunInit();
+
     if (daemon == 1) {
         Daemonize();
+        if (pid_filename == NULL) {
+            if (ConfGet("pid-file", &pid_filename) == 1) {
+                SCLogInfo("Use pid file %s from config file.", pid_filename);
+           }
+        }
         if (pid_filename != NULL) {
             if (SCPidfileCreate(pid_filename) != 0) {
                 pid_filename = NULL;
@@ -1387,6 +1462,8 @@ int main(int argc, char **argv)
     /* registering signals we use */
     SignalHandlerSetup(SIGINT, SignalHandlerSigint);
     SignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
+    SignalHandlerSetup(SIGPIPE, SIG_IGN);
+    SignalHandlerSetup(SIGSYS, SIG_IGN);
 
 #ifndef OS_WIN32
 	/* SIGHUP is not implemnetd on WIN32 */
@@ -1442,7 +1519,10 @@ int main(int argc, char **argv)
 
     ActionInitConfig();
 
-    if (SigLoadSignatures(de_ctx, sig_file) < 0) {
+    if (MagicInit() != 0)
+        exit(EXIT_FAILURE);
+
+    if (SigLoadSignatures(de_ctx, sig_file, sig_file_exclusive) < 0) {
         if (sig_file == NULL) {
             SCLogError(SC_ERR_OPENING_FILE, "Signature file has not been provided");
         } else {
@@ -1468,6 +1548,8 @@ int main(int argc, char **argv)
     SCThresholdConfInitContext(de_ctx,NULL);
     SCAsn1LoadConfig();
 
+    CoredumpLoadConfig();
+
     struct timeval start_time;
     memset(&start_time, 0, sizeof(start_time));
     gettimeofday(&start_time, NULL);
@@ -1478,14 +1560,8 @@ int main(int argc, char **argv)
 
     /* run the selected runmode */
     if (run_mode == RUNMODE_PCAP_DEV) {
-        if (strlen(pcap_dev)) {
-            PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
-            if (ConfSet("pcap.single_pcap_dev", pcap_dev, 0) != 1) {
-                fprintf(stderr, "ERROR: Failed to set pcap.single_pcap_dev\n");
-                exit(EXIT_FAILURE);
-            }
-        } else {
-            int ret = LiveBuildIfaceList("pcap");
+        if (strlen(pcap_dev) == 0) {
+            int ret = LiveBuildDeviceList("pcap");
             if (ret == 0) {
                 fprintf(stderr, "ERROR: No interface found in config for pcap\n");
                 exit(EXIT_FAILURE);
@@ -1502,7 +1578,7 @@ int main(int argc, char **argv)
             }
         } else {
             /* not an error condition if we have a 1.0 config */
-            LiveBuildIfaceList("pfring");
+            LiveBuildDeviceList("pfring");
         }
 #endif /* HAVE_PFRING */
     } else if (run_mode == RUNMODE_AFP_DEV) {
@@ -1513,7 +1589,7 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
             }
         } else {
-            int ret = LiveBuildIfaceList("af-packet");
+            int ret = LiveBuildDeviceList("af-packet");
             if (ret == 0) {
                 fprintf(stderr, "ERROR: No interface found in config for af-packet\n");
                 exit(EXIT_FAILURE);
@@ -1567,7 +1643,7 @@ int main(int argc, char **argv)
     int engine_retval = EXIT_SUCCESS;
     while(1) {
         if (suricata_ctl_flags != 0) {
-            SCLogInfo("signal received");
+            SCLogDebug("signal received");
 
             if (suricata_ctl_flags & SURICATA_STOP)  {
                 struct timeval ts_start;
@@ -1576,7 +1652,7 @@ int main(int argc, char **argv)
                 memset(&ts_start, 0x00, sizeof(ts_start));
                 gettimeofday(&ts_start, NULL);
 
-                SCLogInfo("EngineStop received");
+                SCLogInfo("stopping engine, waiting for outstanding packets");
 
                 /* Stop the engine so it quits after processing the pcap file
                  * but first make sure all packets are processed by all other
@@ -1638,7 +1714,9 @@ int main(int argc, char **argv)
     struct timeval end_time;
     memset(&end_time, 0, sizeof(end_time));
     gettimeofday(&end_time, NULL);
-    SCLogInfo("time elapsed %" PRIuMAX "s", (uintmax_t)(end_time.tv_sec - start_time.tv_sec));
+    uint64_t milliseconds = ((end_time.tv_sec - start_time.tv_sec) * 1000) +
+        (((1000000 + end_time.tv_usec - start_time.tv_usec) / 1000) - 1000);
+    SCLogInfo("time elapsed %.3fs", (float)milliseconds/(float)1000);
 
     TmThreadKillThreads();
     SCPerfReleaseResources();
@@ -1699,6 +1777,9 @@ int main(int argc, char **argv)
     SCProtoNameDeInit();
     DefragDestroy();
     TmqhPacketpoolDestroy();
+    MagicDeinit();
+
+    TmModuleRunDeInit();
 
 #ifdef PROFILING
     if (profiling_rules_enabled)

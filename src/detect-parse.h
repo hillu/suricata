@@ -60,6 +60,7 @@ void SigMatchReplaceContentToUricontent(Signature *, SigMatch *, SigMatch *);
 void SigMatchAppendPayload(Signature *, SigMatch *);
 void SigMatchAppendDcePayload(Signature *, SigMatch *);
 void SigMatchAppendPacket(Signature *, SigMatch *);
+void SigMatchAppendPostMatch(Signature *, SigMatch *);
 void SigMatchAppendUricontent(Signature *, SigMatch *);
 void SigMatchAppendAppLayer(Signature *, SigMatch *);
 void SigMatchAppendTag(Signature *, SigMatch *);
@@ -69,6 +70,8 @@ int SigMatchListSMBelongsTo(Signature *, SigMatch *);
 
 int DetectParseDupSigHashInit(DetectEngineCtx *);
 void DetectParseDupSigHashFree(DetectEngineCtx *);
+
+int DetectParseContentString (char *, uint8_t **, uint16_t *, uint32_t *);
 
 #endif /* __DETECT_PARSE_H__ */
 

@@ -17,7 +17,7 @@
 
 /** \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __DETECT_ENGINE_HHD_H__
@@ -25,7 +25,8 @@
 
 #include "app-layer-htp.h"
 
-int DetectEngineRunHttpHeaderMpm(DetectEngineThreadCtx *, Flow *, HtpState *);
+int DetectEngineRunHttpHeaderMpm(DetectEngineThreadCtx *, Flow *, HtpState *,
+                                 uint8_t);
 int DetectEngineInspectHttpHeader(DetectEngineCtx *, DetectEngineThreadCtx *,
                                   Signature *, Flow *, uint8_t, void *);
 void DetectEngineCleanHHDBuffers(DetectEngineThreadCtx *);

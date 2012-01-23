@@ -431,7 +431,6 @@ static int DetectSslVersionTestDetect01(void)
     f.alproto = ALPROTO_TLS;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -448,31 +447,31 @@ static int DetectSslVersionTestDetect01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
+    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    SSLState *app_state = f.aldata[AlpGetStateIdx(ALPROTO_TLS)];
+    SSLState *app_state = f.alstate;
     if (app_state == NULL) {
         printf("no ssl state: ");
         goto end;
@@ -507,7 +506,6 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
 
@@ -548,7 +546,6 @@ static int DetectSslVersionTestDetect02(void)
     f.alproto = ALPROTO_TLS;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -565,31 +562,31 @@ static int DetectSslVersionTestDetect02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
+    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    SSLState *app_state = f.aldata[AlpGetStateIdx(ALPROTO_TLS)];
+    SSLState *app_state = f.alstate;
     if (app_state == NULL) {
         printf("no ssl state: ");
         goto end;
@@ -620,7 +617,6 @@ end:
     SigCleanSignatures(de_ctx);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
@@ -663,7 +659,6 @@ static int DetectSslVersionTestDetect03(void)
     f.proto = p->proto;
 
     StreamTcpInitConfig(TRUE);
-    FlowL7DataPtrInit(&f);
 
     StreamMsg *stream_msg = StreamMsgGetFromPool();
     if (stream_msg == NULL) {
@@ -689,38 +684,34 @@ static int DetectSslVersionTestDetect03(void)
         goto end;
     }
 
-    if (s->flags & SIG_FLAG_PACKET) {
-        SCLogDebug("SIG_FLAG_PACKET flags");
-    }
-
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
+    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf1, ssllen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf2, ssllen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf3, ssllen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    r = AppLayerParse(&f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
+    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, sslbuf4, ssllen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         goto end;
     }
 
-    SSLState *app_state = f.aldata[AlpGetStateIdx(ALPROTO_TLS)];
+    SSLState *app_state = f.alstate;
     if (app_state == NULL) {
         printf("no ssl state: ");
         goto end;
@@ -754,7 +745,6 @@ end:
         DetectEngineCtxFree(de_ctx);
     }
 
-    FlowL7DataPtrFree(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);

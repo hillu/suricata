@@ -1023,7 +1023,7 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
     (*sgh)->init->sig_array[s->num / 8] |= 1 << (s->num % 8);
 
     /* update maxlen for mpm */
-    if (s->flags & SIG_FLAG_MPM) {
+    if (s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL) {
         /* check with the precalculated values from the sig */
         if (s->mpm_content_maxlen > 0) {
             if ((*sgh)->mpm_content_maxlen == 0)
@@ -1035,7 +1035,7 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
             SCLogDebug("(%p)->mpm_content_maxlen %u", *sgh, (*sgh)->mpm_content_maxlen);
         }
     }
-    if (s->flags & SIG_FLAG_MPM_URI) {
+    if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
         if (s->mpm_uricontent_maxlen > 0) {
             if ((*sgh)->mpm_uricontent_maxlen == 0)
                 (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
@@ -1317,9 +1317,6 @@ int SigGroupHeadLoadContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         if (s == NULL)
             continue;
 
-        if (!(s->flags & SIG_FLAG_MPM))
-            continue;
-
         if (s->alproto != ALPROTO_UNKNOWN)
             continue;
 
@@ -1399,9 +1396,6 @@ int SigGroupHeadLoadUricontent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         s = sgh->match_array[sig];
 
         if (s == NULL)
-            continue;
-
-        if (!(s->flags & SIG_FLAG_MPM_URI))
             continue;
 
         sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
@@ -1496,11 +1490,6 @@ int SigGroupHeadLoadStreamContent(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
             continue;
         }
 
-        if (!(s->flags & SIG_FLAG_MPM)) {
-            SCLogDebug("no mpm");
-            continue;
-        }
-
         sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
         if (sm == NULL)
             continue;
@@ -1583,6 +1572,59 @@ int SigGroupHeadBuildMatchArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
     }
 
     return 0;
+}
+
+/**
+ *  \brief Set the filestore_cnt in the sgh.
+ *
+ *  \param de_ctx detection engine ctx for the signatures
+ *  \param sgh sig group head to set the counter in
+ */
+void SigGroupHeadSetFilemagicFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+    Signature *s = NULL;
+    uint32_t sig = 0;
+
+    if (sgh == NULL)
+        return;
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        if (SignatureIsFilemagicInspecting(s)) {
+            sgh->flags |= SIG_GROUP_HEAD_HAVEFILEMAGIC;
+            break;
+        }
+    }
+
+    return;
+}
+
+/**
+ *  \brief Set the filestore_cnt in the sgh.
+ *
+ *  \param de_ctx detection engine ctx for the signatures
+ *  \param sgh sig group head to set the counter in
+ */
+void SigGroupHeadSetFilestoreCount(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+    Signature *s = NULL;
+    uint32_t sig = 0;
+
+    if (sgh == NULL)
+        return;
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        if (SignatureIsFilestoring(s)) {
+            sgh->filestore_cnt++;
+        }
+    }
+
+    return;
 }
 
 int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)

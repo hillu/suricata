@@ -24,6 +24,10 @@
 #ifndef __APP_LAYER_PARSER_H__
 #define __APP_LAYER_PARSER_H__
 
+#include "decode-events.h"
+
+#include "util-file.h"
+
 /** Mapping between local parser id's (e.g. HTTP_FIELD_REQUEST_URI) and
   * the dynamically assigned (at registration) global parser id. */
 typedef struct AppLayerLocalMap_ {
@@ -39,17 +43,19 @@ typedef struct AppLayerProto_ {
 
     uint16_t to_server;
     uint16_t to_client;
-    uint8_t storage_id;
+    uint16_t map_size;
+    char logger; /**< does this proto have a logger enabled? */
 
     AppLayerLocalMap **map;
-    uint16_t map_size;
 
     void *(*StateAlloc)(void);
     void (*StateFree)(void *);
     void (*StateUpdateTransactionId)(void *, uint16_t *);
     void (*StateTransactionFree)(void *, uint16_t);
+    void *(*LocalStorageAlloc)(void);
+    void (*LocalStorageFree)(void *);
+    FileContainer *(*StateGetFiles)(void *, uint8_t);
 
-    char logger; /**< does this proto have a logger enabled? */
 } AppLayerProto;
 
 /** flags for the result elmts */
@@ -120,19 +126,20 @@ typedef struct AppLayerParserStateStore_ {
 
     uint16_t version;       /**< state version, incremented for each update,
                              *   can wrap around */
+
+    /* Used to store decoder events */
+    AppLayerDecoderEvents *decoder_events;
 } AppLayerParserStateStore;
 
 typedef struct AppLayerParserTableElement_ {
-    char *name;
-    uint16_t proto;
-    uint16_t parser_local_id; /** local id of the parser in the parser itself. */
-    uint8_t flags;
     int (*AppLayerParser)(Flow *f, void *protocol_state, AppLayerParserState
                           *parser_state, uint8_t *input, uint32_t input_len,
-                          AppLayerParserResult *output);
-    uint16_t max_outputs; /* rationele is that if we know the max outputs of all
-                             parsers, we can statically define our output array
-                             to be a certain size */
+                          void *local_storage, AppLayerParserResult *output);
+
+    char *name;
+
+    uint16_t proto;
+    uint16_t parser_local_id; /**< local id of the parser in the parser itself. */
 } AppLayerParserTableElement;
 
 typedef struct AppLayerProbingParserElement_ {
@@ -211,24 +218,26 @@ AppLayerProbingParserInfo *AppLayerGetProbingParserInfo(AppLayerProbingParserInf
 
     return NULL;
 }
-extern uint16_t app_layer_sid;
-
 struct AlpProtoDetectCtx_;
-
-extern uint16_t app_layer_sid;
 
 /* prototypes */
 void AppLayerParsersInitPostProcess(void);
 void RegisterAppLayerParsers(void);
+void AppLayerParserRegisterTests(void);
 
+/* registration */
 int AppLayerRegisterProto(char *name, uint8_t proto, uint8_t flags,
                           int (*AppLayerParser)(Flow *f, void *protocol_state,
-                          AppLayerParserState *parser_state, uint8_t *input,
-                          uint32_t input_len, AppLayerParserResult *output));
+                                                AppLayerParserState *parser_state,
+                                                uint8_t *input, uint32_t input_len,
+                                                void *local_data,
+                                                AppLayerParserResult *output));
 int AppLayerRegisterParser(char *name, uint16_t proto, uint16_t parser_id,
                            int (*AppLayerParser)(Flow *f, void *protocol_state,
-                           AppLayerParserState *parser_state, uint8_t *input,
-                           uint32_t input_len, AppLayerParserResult *output),
+                                                 AppLayerParserState *parser_state,
+                                                 uint8_t *input, uint32_t input_len,
+                                                 void *local_data,
+                                                 AppLayerParserResult *output),
                            char *dependency);
 void AppLayerRegisterProbingParser(struct AlpProtoDetectCtx_ *, uint16_t, uint16_t,
                                    const char *, uint16_t,
@@ -240,10 +249,17 @@ void AppLayerRegisterStateFuncs(uint16_t proto, void *(*StateAlloc)(void),
 void AppLayerRegisterTransactionIdFuncs(uint16_t proto,
         void (*StateTransactionId)(void *, uint16_t *),
         void (*StateTransactionFree)(void *, uint16_t id));
+void AppLayerRegisterLocalStorageFunc(uint16_t proto,
+                                      void *(*LocalStorageAlloc)(void),
+                                      void (*LocalStorageFree)(void *));
+void *AppLayerGetProtocolParserLocalStorage(uint16_t);
+void AppLayerRegisterGetFilesFunc(uint16_t proto,
+        FileContainer *(*StateGetFile)(void *, uint8_t));
 void AppLayerRegisterLogger(uint16_t proto);
+uint16_t AppLayerGetProtoByName(const char *);
 
-int AppLayerParse(Flow *, uint8_t proto, uint8_t flags, uint8_t *input,
-                  uint32_t input_len);
+int AppLayerParse(void *, Flow *, uint8_t,
+                  uint8_t, uint8_t *, uint32_t);
 
 int AlpParseFieldBySize(AppLayerParserResult *, AppLayerParserState *, uint16_t,
                         uint32_t, uint8_t *, uint32_t, uint32_t *);
@@ -252,29 +268,29 @@ int AlpParseFieldByEOF(AppLayerParserResult *, AppLayerParserState *, uint16_t,
 int AlpParseFieldByDelimiter(AppLayerParserResult *, AppLayerParserState *,
                              uint16_t, const uint8_t *, uint8_t, uint8_t *,
                              uint32_t, uint32_t *);
-uint16_t AlpGetStateIdx(uint16_t);
-void AppLayerSetEOF(Flow *);
 
-uint16_t AppLayerGetProtoByName(const char *);
 
+/* transaction handling */
 int AppLayerTransactionUpdateInspectId(Flow *, char);
 void AppLayerTransactionUpdateLoggedId(Flow *);
-
 int AppLayerTransactionGetLoggableId(Flow *f);
 int AppLayerTransactionGetLoggedId(Flow *f);
 int AppLayerTransactionGetBaseId(Flow *f);
 int AppLayerTransactionGetInspectId(Flow *f);
+uint16_t AppLayerTransactionGetAvailId(Flow *f);
 
-void AppLayerParserRegisterTests(void);
+void AppLayerSetEOF(Flow *);
 
+/* cleanup */
 void AppLayerParserCleanupState(Flow *);
-
-uint8_t AppLayerRegisterModule(void);
-uint8_t AppLayerGetStorageSize(void);
 void AppLayerFreeProbingParsers(AppLayerProbingParser *);
 void AppLayerFreeProbingParsersInfo(AppLayerProbingParserInfo *);
 void AppLayerPrintProbingParsers(AppLayerProbingParser *);
 
 uint16_t AppLayerGetStateVersion(Flow *f);
+FileContainer *AppLayerGetFilesFromFlow(Flow *, uint8_t);
+AppLayerDecoderEvents *AppLayerGetDecoderEventsForFlow(Flow *);
+
+void AppLayerTriggerRawStreamReassembly(Flow *);
 
 #endif /* __APP_LAYER_PARSER_H__ */

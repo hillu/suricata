@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __ERROR_H__
@@ -222,6 +222,14 @@ typedef enum {
     SC_ERR_AFP_DISPATCH,
     SC_ERR_NO_AF_PACKET,
     SC_ERR_PCAP_FILE_DELETE_FAILED,
+    SC_ERR_CMD_LINE,
+    SC_ERR_MAGIC_OPEN,
+    SC_ERR_MAGIC_LOAD,
+    SC_ERR_SIZE_PARSE,
+    SC_ERR_RAWBYTES_FILE_DATA,
+    SC_ERR_SOCKET,
+    SC_ERR_PCAP_TRANSLATE,          /* failed to translate ip to dev */
+    SC_WARN_OUTDATED_LIBHTP,
 } SCError;
 
 const char *SCErrorToString(SCError);

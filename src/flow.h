@@ -77,19 +77,89 @@
 #define FLOW_ALPROTO_DETECT_DONE          0x00008000
 #define FLOW_NO_APPLAYER_INSPECTION       0x00010000
 
-/* Pattern matcher alproto detection done */
+/** Pattern matcher alproto detection done */
 #define FLOW_TS_PM_ALPROTO_DETECT_DONE    0x00020000
-/* Probing parser alproto detection done */
+/** Probing parser alproto detection done */
 #define FLOW_TS_PP_ALPROTO_DETECT_DONE    0x00040000
-/* Both pattern matcher and probing parser alproto detection done */
+/** Both pattern matcher and probing parser alproto detection done */
 #define FLOW_TS_PM_PP_ALPROTO_DETECT_DONE 0x00080000
-/* Pattern matcher alproto detection done */
+/** Pattern matcher alproto detection done */
 #define FLOW_TC_PM_ALPROTO_DETECT_DONE    0x00100000
-/* Probing parser alproto detection done */
+/** Probing parser alproto detection done */
 #define FLOW_TC_PP_ALPROTO_DETECT_DONE    0x00200000
-/* Both pattern matcher and probing parser alproto detection done */
+/** Both pattern matcher and probing parser alproto detection done */
 #define FLOW_TC_PM_PP_ALPROTO_DETECT_DONE 0x00400000
 #define FLOW_TIMEOUT_REASSEMBLY_DONE      0x00800000
+/** even if the flow has files, don't store 'm */
+#define FLOW_FILE_NO_STORE                0x01000000
+/** no magic on files in this flow */
+#define FLOW_FILE_NO_MAGIC                0x02000000
+
+/** flow is ipv4 */
+#define FLOW_IPV4                         0x04000000
+/** flow is ipv6 */
+#define FLOW_IPV6                         0x08000000
+
+#define FLOW_IS_IPV4(f) \
+    (((f)->flags & FLOW_IPV4) == FLOW_IPV4)
+#define FLOW_IS_IPV6(f) \
+    (((f)->flags & FLOW_IPV6) == FLOW_IPV6)
+
+#define FLOW_COPY_IPV4_ADDR_TO_PACKET(fa, pa) do {      \
+        (pa)->family = AF_INET;                         \
+        (pa)->addr_data32[0] = (fa)->addr_data32[0];    \
+    } while (0)
+
+#define FLOW_COPY_IPV6_ADDR_TO_PACKET(fa, pa) do {      \
+        (pa)->family = AF_INET;                         \
+        (pa)->addr_data32[0] = (fa)->addr_data32[0];    \
+        (pa)->addr_data32[1] = (fa)->addr_data32[1];    \
+        (pa)->addr_data32[2] = (fa)->addr_data32[2];    \
+        (pa)->addr_data32[3] = (fa)->addr_data32[3];    \
+    } while (0)
+
+/* Set the IPv4 addressesinto the Addrs of the Packet.
+ * Make sure p->ip4h is initialized and validated.
+ *
+ * We set the rest of the struct to 0 so we can
+ * prevent using memset. */
+#define FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, a) do {             \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_src.s_addr; \
+        (a)->addr_data32[1] = 0;                                  \
+        (a)->addr_data32[2] = 0;                                  \
+        (a)->addr_data32[3] = 0;                                  \
+    } while (0)
+
+#define FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(p, a) do {             \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_dst.s_addr; \
+        (a)->addr_data32[1] = 0;                                  \
+        (a)->addr_data32[2] = 0;                                  \
+        (a)->addr_data32[3] = 0;                                  \
+    } while (0)
+
+/* clear the address structure by setting all fields to 0 */
+#define FLOW_CLEAR_ADDR(a) do {  \
+        (a)->addr_data32[0] = 0; \
+        (a)->addr_data32[1] = 0; \
+        (a)->addr_data32[2] = 0; \
+        (a)->addr_data32[3] = 0; \
+    } while (0)
+
+/* Set the IPv6 addressesinto the Addrs of the Packet.
+ * Make sure p->ip6h is initialized and validated. */
+#define FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(p, a) do {   \
+        (a)->addr_data32[0] = (p)->ip6h->ip6_src[0];    \
+        (a)->addr_data32[1] = (p)->ip6h->ip6_src[1];    \
+        (a)->addr_data32[2] = (p)->ip6h->ip6_src[2];    \
+        (a)->addr_data32[3] = (p)->ip6h->ip6_src[3];    \
+    } while (0)
+
+#define FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(p, a) do {   \
+        (a)->addr_data32[0] = (p)->ip6h->ip6_dst[0];    \
+        (a)->addr_data32[1] = (p)->ip6h->ip6_dst[1];    \
+        (a)->addr_data32[2] = (p)->ip6h->ip6_dst[2];    \
+        (a)->addr_data32[3] = (p)->ip6h->ip6_dst[3];    \
+    } while (0)
 
 /* pkt flow flags */
 #define FLOW_PKT_TOSERVER               0x01
@@ -98,8 +168,10 @@
 #define FLOW_PKT_STATELESS              0x08
 #define FLOW_PKT_TOSERVER_IPONLY_SET    0x10
 #define FLOW_PKT_TOCLIENT_IPONLY_SET    0x20
+/** \todo only used by flow keyword internally. */
 #define FLOW_PKT_NOSTREAM               0x40
-#define FLOW_PKT_STREAMONLY             0x80
+/** \todo only used by flow keyword internally. */
+#define FLOW_PKT_ONLYSTREAM             0x80
 
 /* global flow config */
 typedef struct FlowCnf_
@@ -130,6 +202,18 @@ typedef struct FlowKey_
 
 } FlowKey;
 
+typedef struct FlowAddress_ {
+    union {
+        uint32_t       address_un_data32[4]; /* type-specific field */
+        uint16_t       address_un_data16[8]; /* type-specific field */
+        uint8_t        address_un_data8[16]; /* type-specific field */
+    } address;
+} FlowAddress;
+
+#define addr_data32 address.address_un_data32
+#define addr_data16 address.address_un_data16
+#define addr_data8  address.address_un_data8
+
 /**
  *  \brief Flow data structure.
  *
@@ -152,7 +236,7 @@ typedef struct Flow_
 {
     /* flow "header", used for hashing and flow lookup. Static after init,
      * so safe to look at without lock */
-    Address src, dst;
+    FlowAddress src, dst;
     union {
         Port sp;        /**< tcp/udp source port */
         uint8_t type;   /**< icmp type */
@@ -194,17 +278,12 @@ typedef struct Flow_
 
     uint16_t alproto; /**< \brief application level protocol */
 
-    /** \brief array of application level storage ptrs.
+    /** application level storage ptrs.
      *
-     * The size of array is ALPROTO_MAX and thus depends on the number of protocol
-     * supported. Regarding the memeber of the arrays, for an HTTP flow member
-     * can point to a ::HtpState.
-     *
-     * Use AppLayerGetProtoStateFromPacket() to get a pointer to the application
-     * layer the packet belongs to.
      */
+    void *alparser;     /**< parser internal state */
+    void *alstate;      /**< application layer state */
 
-    void **aldata;
     /** detection engine state */
     struct DetectEngineState_ *de_state;
 
@@ -290,8 +369,7 @@ static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *);
 
 int FlowGetPacketDirection(Flow *, Packet *);
 
-void FlowL7DataPtrInit(Flow *);
-void FlowL7DataPtrFree(Flow *);
+void FlowCleanupAppLayer(Flow *);
 
 /** ----- Inline functions ----- */
 

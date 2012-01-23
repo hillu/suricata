@@ -18,7 +18,7 @@
 /**
  * \file
  *
- * \author Anoop Saldanha <poonaatsoc@gmail.com>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __UTIL_DEBUG_H__
@@ -71,7 +71,11 @@ typedef enum {
 } SCLogOPIface;
 
 /* The default log_format, if it is not supplied by the user */
+#ifdef RELEASE
+#define SC_LOG_DEF_LOG_FORMAT "%t - <%d> - "
+#else
 #define SC_LOG_DEF_LOG_FORMAT "[%i] %t - (%f:%l) <%d> (%n) -- "
+#endif
 
 /* The maximum length of the log message */
 #define SC_LOG_MAX_LOG_MSG_LEN 2048
@@ -156,6 +160,7 @@ typedef struct SCLogConfig_ {
     SCLogLevel log_level;
     char *log_format;
 
+    char *op_filter;
     /* compiled pcre filter expression */
     pcre *op_filter_regex;
     pcre_extra *op_filter_regex_study;

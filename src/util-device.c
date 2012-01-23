@@ -1,4 +1,4 @@
-/* Copyright (C) 2011 Open Information Security Foundation
+/* Copyright (C) 2011-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -18,6 +18,14 @@
 #include "suricata-common.h"
 #include "conf.h"
 #include "util-device.h"
+
+/**
+ * \file
+ *
+ * \author Eric Leblond <eric@regit.org>
+ *
+ *  \brief Utility functions to handle device list
+ */
 
 /** private device list */
 static TAILQ_HEAD(, LiveDevice_) live_devices =
@@ -40,6 +48,9 @@ int LiveRegisterDevice(char *dev)
     }
 
     pd->dev = SCStrdup(dev);
+    SC_ATOMIC_INIT(pd->pkts);
+    SC_ATOMIC_INIT(pd->invalid_checksums);
+    pd->ignore_checksum = 0;
     TAILQ_INSERT_TAIL(&live_devices, pd, next);
 
     SCLogDebug("Pcap device \"%s\" registered.", dev);
@@ -63,14 +74,14 @@ int LiveGetDeviceCount(void) {
 }
 
 /**
- *  \brief Get a pointer to the device at idx
+ *  \brief Get a pointer to the device name at idx
  *
  *  \param number idx of the device in our list
  *
  *  \retval ptr pointer to the string containing the device
  *  \retval NULL on error
  */
-char *LiveGetDevice(int number) {
+char *LiveGetDeviceName(int number) {
     int i = 0;
     LiveDevice *pd;
 
@@ -85,9 +96,37 @@ char *LiveGetDevice(int number) {
     return NULL;
 }
 
+/**
+ *  \brief Get a pointer to the device at idx
+ *
+ *  \param number idx of the device in our list
+ *
+ *  \retval ptr pointer to the string containing the device
+ *  \retval NULL on error
+ */
+LiveDevice *LiveGetDevice(char *name) {
+    int i = 0;
+    LiveDevice *pd;
+
+    if (name == NULL) {
+        SCLogWarning(SC_ERR_INVALID_VALUE, "Name of device should not be null");
+        return NULL;
+    }
+
+    TAILQ_FOREACH(pd, &live_devices, next) {
+        if (!strcmp(name, pd->dev)) {
+            return pd;
+        }
+
+        i++;
+    }
+
+    return NULL;
+}
 
 
-int LiveBuildIfaceList(char * runmode)
+
+int LiveBuildDeviceList(char * runmode)
 {
     ConfNode *base = ConfGetNode(runmode);
     ConfNode *child;

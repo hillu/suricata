@@ -45,6 +45,7 @@
 #include "tmqh-packetpool.h"
 #include "tm-threads.h"
 #include "util-optimize.h"
+#include "flow-manager.h"
 
 extern uint8_t suricata_ctl_flags;
 extern int max_pending_packets;
@@ -274,7 +275,7 @@ void ReceivePcapFileThreadExitStats(ThreadVars *tv, void *data) {
     SCEnter();
     PcapFileThreadVars *ptv = (PcapFileThreadVars *)data;
 
-    SCLogInfo(" - (%s) Packets %" PRIu32 ", bytes %" PRIu64 ".", tv->name, ptv->pkts, ptv->bytes);
+    SCLogInfo("Pcap-file module read %" PRIu32 " packets, %" PRIu64 " bytes", ptv->pkts, ptv->bytes);
     return;
 }
 
@@ -282,6 +283,8 @@ TmEcode ReceivePcapFileThreadDeinit(ThreadVars *tv, void *data) {
     SCEnter();
     SCReturnInt(TM_ECODE_OK);
 }
+
+double prev_signaled_ts = 0;
 
 TmEcode DecodePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
 {
@@ -300,6 +303,12 @@ TmEcode DecodePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, P
 #endif
     SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+
+    double curr_ts = p->ts.tv_sec + p->ts.tv_usec / 1000.0;
+    if (curr_ts < prev_signaled_ts || (curr_ts - prev_signaled_ts) > 2.0) {
+        prev_signaled_ts = curr_ts;
+        FlowWakeupFlowManagerThread();
+    }
 
     /* update the engine time representation based on the timestamp
      * of the packet. */
