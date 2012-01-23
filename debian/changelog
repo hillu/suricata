@@ -1,3 +1,12 @@
+suricata (1.2.1-1) unstable; urgency=low
+
+  * Imported Upstream version 1.2.1
+  * Add libmagic-dev to build-deps
+  * Convert to DH version 9
+    - Switch from hardening-wrapper to dpkg-buildflags
+
+ -- Pierre Chifflier <pollux@debian.org>  Mon, 23 Jan 2012 21:47:26 +0100
+
 suricata (1.1.1-2) unstable; urgency=low
 
   * Add *.config files to default installation
