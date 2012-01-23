@@ -13,6 +13,7 @@ Build-Depends: debhelper (>= 7),
     libprelude-dev,
     zlib1g-dev | libz-dev,
     libcap-ng-dev,
+    libmagic-dev,
     hardening-wrapper
 Standards-Version: 3.9.2
 Homepage: http://www.openinfosecfoundation.org/
