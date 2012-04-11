@@ -1,3 +1,10 @@
+suricata (1.2.1-2) unstable; urgency=low
+
+  * Use override targets in rules files (Closes: #666330)
+  * Add support for parallel build in debian/rules
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 12 Apr 2012 01:56:48 +0200
+
 suricata (1.2.1-1) unstable; urgency=low
 
   * Imported Upstream version 1.2.1
