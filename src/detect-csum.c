@@ -239,7 +239,7 @@ int DetectIPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 
     if (p->ip4vars.comp_csum == -1)
         p->ip4vars.comp_csum = IPV4CalculateChecksum((uint16_t *)p->ip4h,
-                                                  IPV4_GET_RAW_HLEN(p->ip4h));
+                                                     IPV4_GET_HLEN(p));
 
     if (p->ip4vars.comp_csum == p->ip4h->ip_csum && cd->valid == 1)
         return 1;
@@ -283,7 +283,7 @@ static int DetectIPV4CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *csum
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -324,7 +324,7 @@ int DetectTCPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip4h == NULL || p->proto != IPPROTO_TCP || PKT_IS_PSEUDOPKT(p))
+    if (p->ip4h == NULL || p->tcph == NULL || p->proto != IPPROTO_TCP || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -332,7 +332,7 @@ int DetectTCPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     if (p->tcpvars.comp_csum == -1)
-        p->tcpvars.comp_csum = TCPCalculateChecksum((uint16_t *)&(p->ip4h->ip_src),
+        p->tcpvars.comp_csum = TCPCalculateChecksum(p->ip4h->s_ip_addrs,
                                                  (uint16_t *)p->tcph,
                                                  (p->payload_len + TCP_GET_HLEN(p)));
 
@@ -378,7 +378,7 @@ static int DetectTCPV4CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *csu
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -419,7 +419,7 @@ int DetectTCPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip6h == NULL || p->proto != IPPROTO_TCP || PKT_IS_PSEUDOPKT(p))
+    if (p->ip6h == NULL || p->tcph == NULL || p->proto != IPPROTO_TCP || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -427,7 +427,7 @@ int DetectTCPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     if (p->tcpvars.comp_csum == -1)
-        p->tcpvars.comp_csum = TCPV6CalculateChecksum((uint16_t *)&(p->ip6h->ip6_src),
+        p->tcpvars.comp_csum = TCPV6CalculateChecksum(p->ip6h->s_ip6_addrs,
                                                    (uint16_t *)p->tcph,
                                                    (p->payload_len + TCP_GET_HLEN(p)));
 
@@ -473,7 +473,7 @@ static int DetectTCPV6CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *csu
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -514,7 +514,7 @@ int DetectUDPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip4h == NULL || p->proto != IPPROTO_UDP || PKT_IS_PSEUDOPKT(p))
+    if (p->ip4h == NULL || p->udph == NULL || p->proto != IPPROTO_UDP || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -522,7 +522,7 @@ int DetectUDPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     if (p->udpvars.comp_csum == -1)
-        p->udpvars.comp_csum = UDPV4CalculateChecksum((uint16_t *)&(p->ip4h->ip_src),
+        p->udpvars.comp_csum = UDPV4CalculateChecksum(p->ip4h->s_ip_addrs,
                                                    (uint16_t *)p->udph,
                                                    (p->payload_len +
                                                     UDP_HEADER_LEN) );
@@ -569,7 +569,7 @@ static int DetectUDPV4CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *csu
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -610,7 +610,7 @@ int DetectUDPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip6h == NULL || p->proto != IPPROTO_UDP || PKT_IS_PSEUDOPKT(p))
+    if (p->ip6h == NULL || p->udph == NULL || p->proto != IPPROTO_UDP || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -618,7 +618,7 @@ int DetectUDPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     if (p->udpvars.comp_csum == -1)
-        p->udpvars.comp_csum = UDPV6CalculateChecksum((uint16_t *)&(p->ip6h->ip6_src),
+        p->udpvars.comp_csum = UDPV6CalculateChecksum(p->ip6h->s_ip6_addrs,
                                                    (uint16_t *)p->udph,
                                                    (p->payload_len +
                                                     UDP_HEADER_LEN) );
@@ -665,7 +665,7 @@ static int DetectUDPV6CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *csu
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -706,7 +706,7 @@ int DetectICMPV4CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip4h == NULL || p->proto != IPPROTO_ICMP || PKT_IS_PSEUDOPKT(p))
+    if (p->ip4h == NULL || p->icmpv4h == NULL || p->proto != IPPROTO_ICMP || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -760,7 +760,7 @@ static int DetectICMPV4CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *cs
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 
@@ -801,7 +801,7 @@ int DetectICMPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 {
     DetectCsumData *cd = (DetectCsumData *)m->ctx;
 
-    if (p->ip6h == NULL || p->proto != IPPROTO_ICMPV6 || PKT_IS_PSEUDOPKT(p))
+    if (p->ip6h == NULL || p->icmpv6h == NULL || p->proto != IPPROTO_ICMPV6 || PKT_IS_PSEUDOPKT(p))
         return 0;
 
     if (p->flags & PKT_IGNORE_CHECKSUM) {
@@ -809,7 +809,7 @@ int DetectICMPV6CsumMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     if (p->icmpv6vars.comp_csum == -1)
-        p->icmpv6vars.comp_csum = ICMPV6CalculateChecksum((uint16_t *)&(p->ip6h->ip6_src),
+        p->icmpv6vars.comp_csum = ICMPV6CalculateChecksum(p->ip6h->s_ip6_addrs,
                                                        (uint16_t *)p->icmpv6h,
                                                        IPV6_GET_PLEN(p));
 
@@ -853,7 +853,7 @@ static int DetectICMPV6CsumSetup(DetectEngineCtx *de_ctx, Signature *s, char *cs
 
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     return 0;
 

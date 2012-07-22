@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -125,7 +125,66 @@ Packet *PacketGetFromQueueOrAlloc(void)
 }
 
 /**
- *  \brief Setup a pseudo packet (tunnel or reassembled frags)
+ *  \brief Copy data to Packet payload at given offset
+ *
+ * This function copies data/payload to a Packet. It uses the
+ * space allocated at Packet creation (pointed by Packet::pkt)
+ * or allocate some memory (pointed by Packet::ext_pkt) if the
+ * data size is to big to fit in initial space (of size
+ * default_packet_size).
+ *
+ *  \param Pointer to the Packet to modify
+ *  \param Offset of the copy relatively to payload of Packet
+ *  \param Pointer to the data to copy
+ *  \param Length of the data to copy
+ */
+inline int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen)
+{
+    if (offset + datalen > MAX_PAYLOAD_SIZE) {
+        /* too big */
+        return -1;
+    }
+
+    /* Do we have already an packet with allocated data */
+    if (! p->ext_pkt) {
+        if (offset + datalen <= (int)default_packet_size) {
+            /* data will fit in memory allocated with packet */
+            memcpy(p->pkt + offset, data, datalen);
+        } else {
+            /* here we need a dynamic allocation */
+            p->ext_pkt = SCMalloc(MAX_PAYLOAD_SIZE);
+            if (p->ext_pkt == NULL) {
+                SET_PKT_LEN(p, 0);
+                return -1;
+            }
+            /* copy initial data */
+            memcpy(p->ext_pkt, GET_PKT_DIRECT_DATA(p), GET_PKT_DIRECT_MAX_SIZE(p));
+            /* copy data as asked */
+            memcpy(p->ext_pkt + offset, data, datalen);
+        }
+    } else {
+        memcpy(p->ext_pkt + offset, data, datalen);
+    }
+    return 0;
+}
+
+/**
+ *  \brief Copy data to Packet payload and set packet length
+ *
+ *  \param Pointer to the Packet to modify
+ *  \param Pointer to the data to copy
+ *  \param Length of the data to copy
+ */
+inline int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen)
+{
+    SET_PKT_LEN(p, (size_t)pktlen);
+    return PacketCopyDataOffset(p, 0, pktdata, pktlen);
+}
+
+
+
+/**
+ *  \brief Setup a pseudo packet (tunnel)
  *
  *  \param parent parent packet for this pseudo pkt
  *  \param pkt raw packet data
@@ -155,6 +214,60 @@ Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
     p->recursion_level = parent->recursion_level + 1;
     p->ts.tv_sec = parent->ts.tv_sec;
     p->ts.tv_usec = parent->ts.tv_usec;
+    p->datalink = DLT_RAW;
+
+    /* set tunnel flags */
+
+    /* tell new packet it's part of a tunnel */
+    SET_TUNNEL_PKT(p);
+    /* tell parent packet it's part of a tunnel */
+    SET_TUNNEL_PKT(parent);
+
+    /* increment tunnel packet refcnt in the root packet */
+    TUNNEL_INCR_PKT_TPR(p);
+
+    /* disable payload (not packet) inspection on the parent, as the payload
+     * is the packet we will now run through the system separately. We do
+     * check it against the ip/port/other header checks though */
+    DecodeSetNoPayloadInspectionFlag(parent);
+    SCReturnPtr(p, "Packet");
+}
+
+/**
+ *  \brief Setup a pseudo packet (reassembled frags)
+ *
+ *  Difference with PacketPseudoPktSetup is that this func doesn't increment
+ *  the recursion level. It needs to be on the same level as the frags because
+ *  we run the flow engine against this and we need to get the same flow.
+ *
+ *  \param parent parent packet for this pseudo pkt
+ *  \param pkt raw packet data
+ *  \param len packet data length
+ *  \param proto protocol of the tunneled packet
+ *
+ *  \retval p the pseudo packet or NULL if out of memory
+ */
+Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto) {
+    SCEnter();
+
+    /* get us a packet */
+    Packet *p = PacketGetFromQueueOrAlloc();
+    if (p == NULL) {
+        SCReturnPtr(NULL, "Packet");
+    }
+
+    /* set the root ptr to the lowest layer */
+    if (parent->root != NULL)
+        p->root = parent->root;
+    else
+        p->root = parent;
+
+    /* copy packet and set lenght, proto */
+    PacketCopyData(p, pkt, len);
+    p->recursion_level = parent->recursion_level; /* NOT incremented */
+    p->ts.tv_sec = parent->ts.tv_sec;
+    p->ts.tv_usec = parent->ts.tv_usec;
+    p->datalink = DLT_RAW;
 
     /* set tunnel flags */
 
@@ -289,62 +402,26 @@ DecodeThreadVars *DecodeThreadVarsAlloc() {
     return dtv;
 }
 
+
 /**
- *  \brief Copy data to Packet payload at given offset
- *
- * This function copies data/payload to a Packet. It uses the
- * space allocated at Packet creation (pointed by Packet::pkt)
- * or allocate some memory (pointed by Packet::ext_pkt) if the
- * data size is to big to fit in initial space (of size
- * default_packet_size).
+ * \brief Set data for Packet and set length when zeo copy is used
  *
  *  \param Pointer to the Packet to modify
- *  \param Offset of the copy relatively to payload of Packet
- *  \param Pointer to the data to copy
- *  \param Length of the data to copy
+ *  \param Pointer to the data
+ *  \param Length of the data
  */
-inline int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen)
+inline int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen)
 {
-    if (offset + datalen > MAX_PAYLOAD_SIZE) {
-        /* too big */
+    SET_PKT_LEN(p, (size_t)pktlen);
+    if (!pktdata) {
         return -1;
     }
+    p->ext_pkt = pktdata;
+    p->flags |= PKT_ZERO_COPY;
 
-    /* Do we have already an packet with allocated data */
-    if (! p->ext_pkt) {
-        if (offset + datalen <= (int)default_packet_size) {
-            /* data will fit in memory allocated with packet */
-            memcpy(p->pkt + offset, data, datalen);
-        } else {
-            /* here we need a dynamic allocation */
-            p->ext_pkt = SCMalloc(MAX_PAYLOAD_SIZE);
-            if (p->ext_pkt == NULL) {
-                SET_PKT_LEN(p, 0);
-                return -1;
-            }
-            /* copy initial data */
-            memcpy(p->ext_pkt, GET_PKT_DIRECT_DATA(p), GET_PKT_DIRECT_MAX_SIZE(p));
-            /* copy data as asked */
-            memcpy(p->ext_pkt + offset, data, datalen);
-        }
-    } else {
-        memcpy(p->ext_pkt + offset, data, datalen);
-    }
     return 0;
 }
 
-/**
- *  \brief Copy data to Packet payload and set packet length
- *
- *  \param Pointer to the Packet to modify
- *  \param Pointer to the data to copy
- *  \param Length of the data to copy
- */
-inline int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen)
-{
-    SET_PKT_LEN(p, (size_t)pktlen);
-    return PacketCopyDataOffset(p, 0, pktdata, pktlen);
-}
 /**
  * @}
  */

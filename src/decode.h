@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -100,7 +100,7 @@ typedef struct Address_ {
  * prevent using memset. */
 #define SET_IPV4_SRC_ADDR(p, a) do {                              \
         (a)->family = AF_INET;                                    \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_src.s_addr; \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_src.s_addr; \
         (a)->addr_data32[1] = 0;                                  \
         (a)->addr_data32[2] = 0;                                  \
         (a)->addr_data32[3] = 0;                                  \
@@ -108,7 +108,7 @@ typedef struct Address_ {
 
 #define SET_IPV4_DST_ADDR(p, a) do {                              \
         (a)->family = AF_INET;                                    \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_dst.s_addr; \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_dst.s_addr; \
         (a)->addr_data32[1] = 0;                                  \
         (a)->addr_data32[2] = 0;                                  \
         (a)->addr_data32[3] = 0;                                  \
@@ -125,20 +125,20 @@ typedef struct Address_ {
 
 /* Set the IPv6 addressesinto the Addrs of the Packet.
  * Make sure p->ip6h is initialized and validated. */
-#define SET_IPV6_SRC_ADDR(p, a) do {                 \
-        (a)->family = AF_INET6;                      \
-        (a)->addr_data32[0] = (p)->ip6h->ip6_src[0]; \
-        (a)->addr_data32[1] = (p)->ip6h->ip6_src[1]; \
-        (a)->addr_data32[2] = (p)->ip6h->ip6_src[2]; \
-        (a)->addr_data32[3] = (p)->ip6h->ip6_src[3]; \
+#define SET_IPV6_SRC_ADDR(p, a) do {                    \
+        (a)->family = AF_INET6;                         \
+        (a)->addr_data32[0] = (p)->ip6h->s_ip6_src[0];  \
+        (a)->addr_data32[1] = (p)->ip6h->s_ip6_src[1];  \
+        (a)->addr_data32[2] = (p)->ip6h->s_ip6_src[2];  \
+        (a)->addr_data32[3] = (p)->ip6h->s_ip6_src[3];  \
     } while (0)
 
-#define SET_IPV6_DST_ADDR(p, a) do {                 \
-        (a)->family = AF_INET6;                      \
-        (a)->addr_data32[0] = (p)->ip6h->ip6_dst[0]; \
-        (a)->addr_data32[1] = (p)->ip6h->ip6_dst[1]; \
-        (a)->addr_data32[2] = (p)->ip6h->ip6_dst[2]; \
-        (a)->addr_data32[3] = (p)->ip6h->ip6_dst[3]; \
+#define SET_IPV6_DST_ADDR(p, a) do {                    \
+        (a)->family = AF_INET6;                         \
+        (a)->addr_data32[0] = (p)->ip6h->s_ip6_dst[0];  \
+        (a)->addr_data32[1] = (p)->ip6h->s_ip6_dst[1];  \
+        (a)->addr_data32[2] = (p)->ip6h->s_ip6_dst[2];  \
+        (a)->addr_data32[3] = (p)->ip6h->s_ip6_dst[3];  \
     } while (0)
 
 /* Set the TCP ports into the Ports of the Packet.
@@ -222,7 +222,8 @@ typedef uint16_t Port;
 
 /* Retrieve proto regardless of IP version */
 #define IP_GET_IPPROTO(p) \
-    (PKT_IS_IPV4((p))? IPV4_GET_IPPROTO((p)) : (PKT_IS_IPV6((p))? IPV6_GET_NH((p)) : 0))
+    (p->proto ? p->proto : \
+    (PKT_IS_IPV4((p))? IPV4_GET_IPPROTO((p)) : (PKT_IS_IPV6((p))? IPV6_GET_L4PROTO((p)) : 0)))
 
 /* structure to store the sids/gids/etc the detection engine
  * found in this packet */
@@ -231,32 +232,23 @@ typedef struct PacketAlert_ {
     SigIntId order_id; /* Internal num, used for sorting */
     uint8_t action; /* Internal num, used for sorting */
     uint8_t flags;
-
-    /** Pointer to stream message this signature matched on, or
-     *  NULL if the sig didn't match on a smsg */
-    void *alert_msg;
-
     struct Signature_ *s;
 } PacketAlert;
 
 /** After processing an alert by the thresholding module, if at
  *  last it gets triggered, we might want to stick the drop action to
  *  the flow on IPS mode */
-#define PACKET_ALERT_FLAG_DROP_FLOW 0x01
-/** Signature matched (partly) in the state. Used in unified logger to
- *  know if it needs to log the stream or the packet. */
-#define PACKET_ALERT_FLAG_STATE_MATCH 0x02
+#define PACKET_ALERT_FLAG_DROP_FLOW     0x01
+/** alert was generated based on state */
+#define PACKET_ALERT_FLAG_STATE_MATCH   0x02
+/** alert was generated based on stream */
+#define PACKET_ALERT_FLAG_STREAM_MATCH  0x04
 
 #define PACKET_ALERT_MAX 15
 
 typedef struct PacketAlerts_ {
     uint16_t cnt;
     PacketAlert alerts[PACKET_ALERT_MAX];
-
-    /** pointer to (list of) stream message(s)
-     *  that one or more of the signatures
-     *  matched on */
-    void *alert_msgs;
 } PacketAlerts;
 
 /** number of decoder events we support per packet. Power of 2 minus 1
@@ -284,6 +276,20 @@ typedef struct PktVar_ {
 typedef struct PktProfilingTmmData_ {
     uint64_t ticks_start;
     uint64_t ticks_end;
+#ifdef PROFILE_LOCKING
+    uint64_t mutex_lock_cnt;
+    uint64_t mutex_lock_wait_ticks;
+    uint64_t mutex_lock_contention;
+    uint64_t spin_lock_cnt;
+    uint64_t spin_lock_wait_ticks;
+    uint64_t spin_lock_contention;
+    uint64_t rww_lock_cnt;
+    uint64_t rww_lock_wait_ticks;
+    uint64_t rww_lock_contention;
+    uint64_t rwr_lock_cnt;
+    uint64_t rwr_lock_wait_ticks;
+    uint64_t rwr_lock_contention;
+#endif
 } PktProfilingTmmData;
 
 typedef struct PktProfilingDetectData_ {
@@ -365,7 +371,6 @@ typedef struct Packet_
         IPFWPacketVars ipfw_v;
 #endif /* IPFW */
 
-
         /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
         PcapPacketVars pcap_v;
     };
@@ -375,6 +380,10 @@ typedef struct Packet_
 
     /* IPS action to take */
     uint8_t action;
+
+    /* used to hold flowbits only if debuglog is enabled */
+    int debuglog_flowbits_names_len;
+    const char **debuglog_flowbits_names;
 
     /* pkt vars */
     PktVar *pktvar;
@@ -774,9 +783,11 @@ typedef struct DecodeThreadVars_
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
 Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
+Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
 Packet *PacketGetFromQueueOrAlloc(void);
 Packet *PacketGetFromAlloc(void);
 int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen);
+int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen);
 
 DecodeThreadVars *DecodeThreadVarsAlloc();
@@ -894,6 +905,7 @@ void AddressDebugPrint(Address *);
 #define PKT_TUNNEL_VERDICTED            0x2000
 
 #define PKT_IGNORE_CHECKSUM             0x4000    /**< Packet checksum is not computed (TX packet for example) */
+#define PKT_ZERO_COPY                   0x8000    /**< Packet comes from zero copy (ext_pkt must not be freed) */
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)

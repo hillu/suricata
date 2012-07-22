@@ -33,6 +33,7 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 #include "util-privs.h"
+#include "util-signal.h"
 
 /** \todo Get the default log directory from some global resource. */
 #define SC_PERF_DEFAULT_LOG_FILENAME "stats.log"
@@ -433,12 +434,17 @@ static void SCPerfReleaseOPCtx()
  */
 static void *SCPerfMgmtThread(void *arg)
 {
+    /* block usr2.  usr2 to be handled by the main thread only */
+    UtilSignalBlock(SIGUSR2);
+
     ThreadVars *tv_local = (ThreadVars *)arg;
     uint8_t run = 1;
     struct timespec cond_time;
 
     /* Set the thread name */
-    SCSetThreadName(tv_local->name);
+    if (SCSetThreadName(tv_local->name) < 0) {
+        SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
+    }
 
     /* Set the threads capability */
     tv_local->cap_flags = 0;
@@ -448,6 +454,7 @@ static void *SCPerfMgmtThread(void *arg)
     if (sc_perf_op_ctx == NULL) {
         SCLogError(SC_ERR_PERF_STATS_NOT_INIT, "Perf Counter API not init"
                    "SCPerfInitCounterApi() has to be called first");
+        TmThreadsSetFlag(tv_local, THV_CLOSED | THV_RUNNING_DONE);
         return NULL;
     }
 
@@ -469,6 +476,7 @@ static void *SCPerfMgmtThread(void *arg)
         }
     }
 
+    TmThreadsSetFlag(tv_local, THV_RUNNING_DONE);
     TmThreadWaitForFlag(tv_local, THV_DEINIT);
 
     TmThreadsSetFlag(tv_local, THV_CLOSED);
@@ -485,6 +493,9 @@ static void *SCPerfMgmtThread(void *arg)
  */
 static void *SCPerfWakeupThread(void *arg)
 {
+    /* block usr2.  usr2 to be handled by the main thread only */
+    UtilSignalBlock(SIGUSR2);
+
     ThreadVars *tv_local = (ThreadVars *)arg;
     uint8_t run = 1;
     ThreadVars *tv = NULL;
@@ -492,7 +503,9 @@ static void *SCPerfWakeupThread(void *arg)
     struct timespec cond_time;
 
     /* Set the thread name */
-    SCSetThreadName(tv_local->name);
+    if (SCSetThreadName(tv_local->name) < 0) {
+        SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
+    }
 
     /* Set the threads capability */
     tv_local->cap_flags = 0;
@@ -502,6 +515,7 @@ static void *SCPerfWakeupThread(void *arg)
     if (sc_perf_op_ctx == NULL) {
         SCLogError(SC_ERR_PERF_STATS_NOT_INIT, "Perf Counter API not init"
                    "SCPerfInitCounterApi() has to be called first");
+        TmThreadsSetFlag(tv_local, THV_CLOSED | THV_RUNNING_DONE);
         return NULL;
     }
 
@@ -555,6 +569,7 @@ static void *SCPerfWakeupThread(void *arg)
         }
     }
 
+    TmThreadsSetFlag(tv_local, THV_RUNNING_DONE);
     TmThreadWaitForFlag(tv_local, THV_DEINIT);
 
     TmThreadsSetFlag(tv_local, THV_CLOSED);
@@ -1018,7 +1033,7 @@ static int SCPerfOutputCounterFileIface()
 
     gettimeofday(&tval, NULL);
     struct tm local_tm;
-    tms = (struct tm *)localtime_r(&tval.tv_sec, &local_tm);
+    tms = (struct tm *)SCLocalTime(tval.tv_sec, &local_tm);
 
     /* Calculate the Engine uptime */
     int up_time = (int)difftime(tval.tv_sec, sc_start_time);
@@ -1145,7 +1160,7 @@ static int SCPerfOutputCounterFileIface()
 
                     break;
                 case SC_PERF_TYPE_DOUBLE:
-                    fprintf(sc_perf_op_ctx->fp, "%-25s | %-25s | %-lf\n",
+                    fprintf(sc_perf_op_ctx->fp, "%-25s | %-25s | %0.0lf\n",
                             pc->name->cname, pctmi->tm_name, double_result);
 
                     break;
@@ -1478,14 +1493,18 @@ int SCPerfAddToClubbedTMTable(char *tm_name, SCPerfContext *pctx)
 
     /* get me the bugger who wrote this junk of a code :P */
     if (pctmi == NULL) {
-        if ( (temp = SCMalloc(sizeof(SCPerfClubTMInst))) == NULL)
+        if ( (temp = SCMalloc(sizeof(SCPerfClubTMInst))) == NULL) {
+            SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
             return 0;
+        }
         memset(temp, 0, sizeof(SCPerfClubTMInst));
 
         temp->size = 1;
         temp->head = SCMalloc(sizeof(SCPerfContext **));
-        if (temp->head == NULL)
+        if (temp->head == NULL) {
+            SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
             return 0;
+        }
         temp->head[0] = pctx;
         temp->tm_name = SCStrdup(tm_name);
 
@@ -1510,8 +1529,10 @@ int SCPerfAddToClubbedTMTable(char *tm_name, SCPerfContext *pctx)
 
     pctmi->head = SCRealloc(pctmi->head,
                           (pctmi->size + 1) * sizeof(SCPerfContext **));
-    if (pctmi->head == NULL)
+    if (pctmi->head == NULL) {
+        SCMutexUnlock(&sc_perf_op_ctx->pctmi_lock);
         return 0;
+    }
     hpctx = pctmi->head;
 
     hpctx[pctmi->size] = pctx;

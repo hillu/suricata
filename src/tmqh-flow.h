@@ -24,6 +24,25 @@
 #ifndef __TMQH_FLOW_H__
 #define __TMQH_FLOW_H__
 
+typedef struct TmqhFlowMode_ {
+    PacketQueue *q;
+
+    SC_ATOMIC_DECLARE(uint64_t, total_packets);
+    SC_ATOMIC_DECLARE(uint64_t, total_flows);
+} TmqhFlowMode;
+
+/** \brief Ctx for the flow queue handler
+ *  \param size number of queues to output to
+ *  \param queues array of queue id's this flow handler outputs to */
+typedef struct TmqhFlowCtx_ {
+    uint16_t size;
+    uint16_t last;
+
+    TmqhFlowMode *queues;
+
+    SC_ATOMIC_DECLARE(uint16_t, round_robin_idx);
+} TmqhFlowCtx;
+
 void TmqhFlowRegister (void);
 void TmqhFlowRegisterTests(void);
 

@@ -186,7 +186,7 @@ static inline SCACGfbsPattern *SCACGfbsInitHashLookup(SCACGfbsCtx *ctx, uint8_t 
 {
     uint32_t hash = SCACGfbsInitHashRaw(pat, patlen);
 
-    if (ctx->init_hash[hash] == NULL) {
+    if (ctx->init_hash == NULL || ctx->init_hash[hash] == NULL) {
         return NULL;
     }
 
@@ -286,6 +286,10 @@ static inline uint32_t SCACGfbsInitHash(SCACGfbsPattern *p)
 static inline int SCACGfbsInitHashAdd(SCACGfbsCtx *ctx, SCACGfbsPattern *p)
 {
     uint32_t hash = SCACGfbsInitHash(p);
+
+    if (ctx->init_hash == NULL) {
+        return 0;
+    }
 
     if (ctx->init_hash[hash] == NULL) {
         ctx->init_hash[hash] = p;
@@ -777,6 +781,7 @@ static inline void SCACGfbsCreateModGotoTable(MpmCtx *mpm_ctx)
             exit(EXIT_FAILURE);
         }
         memset(ctx->goto_table_mod, 0, size);
+        //printf("size- %d\n", size);
 
         mpm_ctx->memory_cnt++;
         mpm_ctx->memory_size += size;
@@ -1035,7 +1040,7 @@ int SCACGfbsPreparePatterns(MpmCtx *mpm_ctx)
 {
     SCACGfbsCtx *ctx = (SCACGfbsCtx *)mpm_ctx->ctx;
 
-    if (mpm_ctx->pattern_cnt == 0) {
+    if (mpm_ctx->pattern_cnt == 0 || ctx->init_hash == NULL) {
         SCLogDebug("No patterns supplied to this mpm_ctx");
         return 0;
     }
@@ -1253,6 +1258,25 @@ void SCACGfbsDestroyCtx(MpmCtx *mpm_ctx)
         ctx->goto_table_mod_pointers = NULL;
         mpm_ctx->memory_cnt--;
         mpm_ctx->memory_size -= ctx->state_count * sizeof(uint8_t *);
+    }
+
+    if (ctx->output_table != NULL) {
+        int32_t state_count;
+        for (state_count = 0; state_count < ctx->state_count; state_count++) {
+            if (ctx->output_table[state_count].pids != NULL) {
+                SCFree(ctx->output_table[state_count].pids);
+            }
+        }
+        SCFree(ctx->output_table);
+    }
+
+    if (ctx->pid_pat_list != NULL) {
+        int i;
+        for (i = 0; i < (ctx->max_pat_id + 1); i++) {
+            if (ctx->pid_pat_list[i].cs != NULL)
+                SCFree(ctx->pid_pat_list[i].cs);
+        }
+        SCFree(ctx->pid_pat_list);
     }
 
     SCFree(mpm_ctx->ctx);

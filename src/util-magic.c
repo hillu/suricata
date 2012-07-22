@@ -57,7 +57,7 @@ int MagicInit(void) {
         goto error;
     }
 
-    ConfGet("magic-file", &filename);
+    (void)ConfGet("magic-file", &filename);
     if (filename != NULL) {
         SCLogInfo("using magic-file %s", filename);
 
@@ -112,10 +112,13 @@ char *MagicLookup(uint8_t *buf, uint32_t buflen) {
 }
 
 void MagicDeinit(void) {
+    SCMutexLock(&g_magic_lock);
     if (g_magic_ctx != NULL) {
         magic_close(g_magic_ctx);
         g_magic_ctx = NULL;
     }
+    SCMutexUnlock(&g_magic_lock);
+    SCMutexDestroy(&g_magic_lock);
 }
 
 #ifdef UNITTESTS

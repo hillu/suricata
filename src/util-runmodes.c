@@ -792,10 +792,6 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
         }
         memset(tname, 0, sizeof(tname));
         snprintf(tname, sizeof(tname), "Recv-Q%s", cur_queue);
-        if (tname == NULL) {
-            printf("ERROR: Unable to build thread name\n");
-            exit(EXIT_FAILURE);
-        }
 
         char *thread_name = SCStrdup(tname);
         ThreadVars *tv_receivenfq =
@@ -904,10 +900,6 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
     for (int i = 0; i < nqueue; i++) {
         memset(tname, 0, sizeof(tname));
         snprintf(tname, sizeof(tname), "Verdict%"PRIu16, i);
-        if (tname == NULL) {
-            printf("ERROR: Unable to build thread name\n");
-            exit(EXIT_FAILURE);
-        }
 
         char *thread_name = SCStrdup(tname);
         ThreadVars *tv_verdict =
@@ -1007,10 +999,6 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
         }
         memset(tname, 0, sizeof(tname));
         snprintf(tname, sizeof(tname), "Recv-Q%s", cur_queue);
-        if (tname == NULL) {
-            printf("ERROR: Unable to build thread name\n");
-            exit(EXIT_FAILURE);
-        }
 
         char *thread_name = SCStrdup(tname);
 
@@ -1080,6 +1068,8 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
 
         TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
 
+        SetupOutputs(tv_detect_ncpu);
+
         char *thread_group_name = SCStrdup("Detect");
         if (thread_group_name == NULL) {
             SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
@@ -1097,16 +1087,12 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
     for (int i = 0; i < nqueue; i++) {
         memset(tname, 0, sizeof(tname));
         snprintf(tname, sizeof(tname), "Verdict%"PRIu16, i);
-        if (tname == NULL) {
-            printf("ERROR: Unable to build thread name\n");
-            exit(EXIT_FAILURE);
-        }
 
         char *thread_name = SCStrdup(tname);
         ThreadVars *tv_verdict =
             TmThreadCreatePacketHandler(thread_name,
                                         "verdict-queue", "simple",
-                                        "alert-queue", "simple",
+                                        "packetpool", "packetpool",
                                         "varslot");
         if (tv_verdict == NULL) {
             printf("ERROR: TmThreadsCreate failed\n");
@@ -1133,27 +1119,6 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
             exit(EXIT_FAILURE);
         }
     };
-
-    ThreadVars *tv_outputs =
-        TmThreadCreatePacketHandler("Outputs",
-                                    "alert-queue", "simple",
-                                    "packetpool", "packetpool",
-                                    "varslot");
-
-    if (tv_outputs == NULL) {
-        printf("ERROR: TmThreadCreatePacketHandler for Outputs failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    TmThreadSetCPU(tv_outputs, OUTPUT_CPU_SET);
-
-    SetupOutputs(tv_outputs);
-    if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
-        printf("ERROR: TmThreadSpawn failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-
     return 0;
 }
 
@@ -1179,10 +1144,6 @@ int RunModeSetIPSWorker(DetectEngineCtx *de_ctx,
         }
         memset(tname, 0, sizeof(tname));
         snprintf(tname, sizeof(tname), "Worker-Q%s", cur_queue);
-        if (tname == NULL) {
-            printf("ERROR: Unable to build thread name\n");
-            exit(EXIT_FAILURE);
-        }
 
         char *thread_name = SCStrdup(tname);
         tv = TmThreadCreatePacketHandler(thread_name,

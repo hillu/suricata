@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -49,15 +49,15 @@ Flow *FlowAlloc(void)
 {
     Flow *f;
 
-    if ((SC_ATOMIC_GET(flow_memuse) + sizeof(Flow)) > flow_config.memcap) {
+    if (!(FLOW_CHECK_MEMCAP(sizeof(Flow)))) {
         return NULL;
     }
 
-    SC_ATOMIC_ADD(flow_memuse, sizeof(Flow));
+    (void) SC_ATOMIC_ADD(flow_memuse, sizeof(Flow));
 
     f = SCMalloc(sizeof(Flow));
     if (f == NULL) {
-        SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
+        (void) SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
         return NULL;
     }
 
@@ -76,7 +76,7 @@ void FlowFree(Flow *f)
     FLOW_DESTROY(f);
     SCFree(f);
 
-    SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
+    (void) SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
 }
 
 /**

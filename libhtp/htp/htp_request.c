@@ -358,8 +358,8 @@ int htp_connp_REQ_BODY_DETERMINE(htp_connp_t *connp) {
             // There is no host information in the URI. Place the
             // hostname from the headers into the parsed_uri structure.
             htp_replace_hostname(connp, connp->in_tx->parsed_uri, h->value);
-        } else {
-            // The host information is present both in the
+        } else if (bstr_cmp_nocase(h->value, connp->in_tx->parsed_uri->hostname) != 0) {
+            // The host information is different in the
             // headers and the URI. The HTTP RFC states that
             // we should ignore the headers copy.
             connp->in_tx->flags |= HTP_AMBIGUOUS_HOST;
@@ -460,7 +460,8 @@ int htp_connp_REQ_HEADERS(htp_connp_t *connp) {
             }
 
             // Prepare line for consumption
-            int chomp_result = htp_chomp(connp->in_line, &connp->in_line_len);
+            size_t raw_in_line_len = connp->in_line_len;
+            htp_chomp(connp->in_line, &connp->in_line_len);
 
             // Check for header folding
             if (htp_connp_is_line_folded(connp->in_line, connp->in_line_len) == 0) {
@@ -491,11 +492,27 @@ int htp_connp_REQ_HEADERS(htp_connp_t *connp) {
             }
 
             // Add the raw header line to the list
-            connp->in_header_line->line = bstr_memdup((char *) connp->in_line, connp->in_line_len + chomp_result);
+            if (raw_in_line_len > connp->in_line_len) {
+                if (raw_in_line_len - connp->in_line_len == 2 &&
+                        connp->in_line[connp->in_line_len] == 0x0d &&
+                        connp->in_line[connp->in_line_len + 1] == 0x0a) {
+                    connp->in_header_line->terminators = NULL;
+                } else {
+                    connp->in_header_line->terminators =
+                        bstr_memdup((char *) connp->in_line + connp->in_line_len,
+                                raw_in_line_len - connp->in_line_len);
+                    if (connp->in_header_line->terminators == NULL) {
+                        return HTP_ERROR;
+                    }
+                }
+            } else {
+                connp->in_header_line->terminators = NULL;
+            }
+
+            connp->in_header_line->line = bstr_memdup((char *) connp->in_line, connp->in_line_len);
             if (connp->in_header_line->line == NULL) {
                 return HTP_ERROR;
             }
-            
             list_add(connp->in_tx->request_header_lines, connp->in_header_line);
             connp->in_header_line = NULL;
 
@@ -787,6 +804,7 @@ int htp_connp_req_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         #ifdef HTP_DEBUG
         fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_DATA (previous error)\n");
         #endif
+
         return STREAM_STATE_ERROR;
     }
 
@@ -800,6 +818,7 @@ int htp_connp_req_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         #ifdef HTP_DEBUG
         fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_DATA (zero-length chunk)\n");
         #endif
+
         return STREAM_STATE_ERROR;
     }
 
@@ -816,9 +835,9 @@ int htp_connp_req_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
     // mode (which it would be after an initial CONNECT transaction).
     if (connp->in_status == STREAM_STATE_TUNNEL) {
         #ifdef HTP_DEBUG
-        fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_DATA (tunnel)\n");
+        fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_TUNNEL\n");
         #endif
-        return STREAM_STATE_DATA;
+        return STREAM_STATE_TUNNEL;
     }
 
     // Invoke a processor, in a loop, until an error
@@ -837,12 +856,21 @@ int htp_connp_req_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         // on processors to add error messages, so we'll
         // keep quiet here.
         int rc = connp->in_state(connp);
-        if (rc != HTP_OK) {
+        if (rc == HTP_OK) {
+            if (connp->in_status == STREAM_STATE_TUNNEL) {
+                #ifdef HTP_DEBUG
+                fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_TUNNEL\n");
+                #endif
+
+                return STREAM_STATE_TUNNEL;
+            }
+        } else {
             // Do we need more data?
             if (rc == HTP_DATA) {
                 #ifdef HTP_DEBUG
                 fprintf(stderr, "htp_connp_req_data: returning STREAM_STATE_DATA\n");
                 #endif
+
                 return STREAM_STATE_DATA;
             }
 

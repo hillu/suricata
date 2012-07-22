@@ -77,7 +77,7 @@
 
 #define PARSE_REGEX "^"                                                  \
     "\\s*([0-9]+)\\s*"                                                   \
-    ",\\s*([0-9]+)\\s*"                                                  \
+    ",\\s*(-?[0-9]+)\\s*"                                               \
     ",\\s*([^\\s,]+)\\s*"                                                \
     "(?:(?:,\\s*([^\\s,]+)\\s*)|(?:,\\s*([^\\s,]+)\\s+([^\\s,]+)\\s*))?" \
     "(?:(?:,\\s*([^\\s,]+)\\s*)|(?:,\\s*([^\\s,]+)\\s+([^\\s,]+)\\s*))?" \
@@ -88,8 +88,6 @@
 
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
-
-int byte_extract_max_local_id = 0;
 
 int DetectByteExtractMatch(ThreadVars *, DetectEngineThreadCtx *,
                            Packet *, Signature *, SigMatch *);
@@ -152,11 +150,11 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, SigMatch *sm,
      * the packet from that point.
      */
     if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
-        SCLogDebug("relative, working with det_ctx->payload_offset %"PRIu32", "
-                   "data->offset %"PRIu32"", det_ctx->payload_offset, data->offset);
+        SCLogDebug("relative, working with det_ctx->buffer_offset %"PRIu32", "
+                   "data->offset %"PRIu32"", det_ctx->buffer_offset, data->offset);
 
-        ptr = payload + det_ctx->payload_offset;
-        len = payload_len - det_ctx->payload_offset;
+        ptr = payload + det_ctx->buffer_offset;
+        len = payload_len - det_ctx->buffer_offset;
 
         /* No match if there is no relative base */
         if (len == 0) {
@@ -175,7 +173,7 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, SigMatch *sm,
     }
 
     /* Validate that the to-be-extracted is within the packet */
-    if (data->nbytes > len) {
+    if (ptr < payload || data->nbytes > len) {
         SCLogDebug("Data not within payload pkt=%p, ptr=%p, len=%"PRIu32", nbytes=%d",
                     payload, ptr, len, data->nbytes);
         return 0;
@@ -217,7 +215,7 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, SigMatch *sm,
 
     ptr += extbytes;
 
-    det_ctx->payload_offset = ptr - payload;
+    det_ctx->buffer_offset = ptr - payload;
 
     *value = val;
 
@@ -568,8 +566,8 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     } else {
         bed->local_id = ((DetectByteExtractData *)prev_bed_sm->ctx)->local_id + 1;
     }
-    if (bed->local_id > byte_extract_max_local_id)
-        byte_extract_max_local_id = bed->local_id;
+    if (bed->local_id > de_ctx->byte_extract_max_local_id)
+        de_ctx->byte_extract_max_local_id = bed->local_id;
 
     /* check bytetest modifiers against the signature alproto.  In case they conflict
      * chuck out invalid signature */
@@ -584,7 +582,7 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
         if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
             SigMatch *prev_sm = NULL;
             prev_sm = SigMatchGetLastSMFromLists(s, 8,
-                    DETECT_AL_HTTP_SERVER_BODY, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
                     DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
                     DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
                     DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]);
@@ -615,19 +613,19 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
                                         DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_DMATCH]);
 
         if (pm == NULL) {
-            SigMatchAppendDcePayload(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
         } else if (dm == NULL) {
-            SigMatchAppendDcePayload(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
         } else if (pm->idx > dm->idx) {
-            SigMatchAppendPayload(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
         } else {
-            SigMatchAppendDcePayload(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
         }
     } else {
         if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
             SigMatch *pm =
                 SigMatchGetLastSMFromLists(s, 30,
-                                           DETECT_URICONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                           DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
@@ -649,11 +647,11 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
             }
             int list = SigMatchListSMBelongsTo(s, pm);
             if (list == DETECT_SM_LIST_UMATCH)
-                SigMatchAppendUricontent(s,sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_UMATCH);
             else
-                SigMatchAppendPayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
         } else {
-            SigMatchAppendPayload(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
         }
     }
 
@@ -666,9 +664,8 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     }
 
     SigMatch *prev_sm = NULL;
-    prev_sm = SigMatchGetLastSMFromLists(s, 8,
+    prev_sm = SigMatchGetLastSMFromLists(s, 6,
                                          DETECT_CONTENT, sm->prev,
-                                         DETECT_URICONTENT, sm->prev,
                                          DETECT_BYTEJUMP, sm->prev,
                                          DETECT_PCRE, sm->prev);
     if (prev_sm == NULL) {
@@ -684,7 +681,6 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     }
 
     DetectContentData *cd = NULL;
-    DetectContentData *ud = NULL;
     DetectPcreData *pe = NULL;
 
     switch (prev_sm->type) {
@@ -697,18 +693,6 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
                 return -1;
             }
             cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
-
-            break;
-
-        case DETECT_URICONTENT:
-            /* Set the relative next flag on the prev sigmatch */
-            ud = (DetectContentData *)prev_sm->ctx;
-            if (ud == NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
-                           "previous keyword!");
-                return -1;
-            }
-            ud->flags |= DETECT_CONTENT_RELATIVE_NEXT;
 
             break;
 
@@ -765,6 +749,9 @@ void DetectByteExtractFree(void *ptr)
 
 SigMatch *DetectByteExtractRetrieveSMVar(const char *arg, Signature *s, int list)
 {
+    if (list == -1)
+        return NULL;
+
     DetectByteExtractData *bed = NULL;
     SigMatch *sm = s->sm_lists[list];
 
@@ -1804,7 +1791,7 @@ int DetectByteExtractTest37(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -1917,7 +1904,7 @@ int DetectByteExtractTest38(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -2005,7 +1992,7 @@ int DetectByteExtractTest39(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -2118,7 +2105,7 @@ int DetectByteExtractTest40(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -2350,7 +2337,7 @@ int DetectByteExtractTest42(void)
         goto end;
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -3748,8 +3735,6 @@ int DetectByteExtractTest55(void)
     DetectContentData *cd = NULL;
     DetectByteExtractData *bed1 = NULL;
     DetectByteExtractData *bed2 = NULL;
-    DetectByteExtractData *bed3 = NULL;
-    DetectByteExtractData *bed4 = NULL;
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -3757,27 +3742,24 @@ int DetectByteExtractTest55(void)
 
     de_ctx->flags |= DE_QUIET;
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
-                                   "(msg:\"Testing bytejump_body\"; "
+                                   "(msg:\"Testing byte_extract\"; "
                                    "content:\"one\"; "
                                    "byte_extract:4,0,two,string,hex; "
                                    "byte_extract:4,0,three,string,hex; "
                                    "byte_extract:4,0,four,string,hex; "
                                    "byte_extract:4,0,five,string,hex; "
-                                   "content: \"four\"; within:two; distance:three; offset:four; depth:five; "
+                                   "content: \"four\"; within:two; distance:three; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
-        result = 0;
         goto end;
     }
 
     if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
-        result = 0;
         goto end;
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
     if (sm->type != DETECT_CONTENT) {
-        result = 0;
         goto end;
     }
     cd = (DetectContentData *)sm->ctx;
@@ -3789,14 +3771,12 @@ int DetectByteExtractTest55(void)
         cd->flags & DETECT_CONTENT_FAST_PATTERN ||
         !(cd->flags & DETECT_CONTENT_RELATIVE_NEXT) ||
         cd->flags & DETECT_CONTENT_NEGATED ) {
-        printf("one failed\n");
-        result = 0;
+        printf("one failed: ");
         goto end;
     }
 
     sm = sm->next;
     if (sm->type != DETECT_BYTE_EXTRACT) {
-        result = 0;
         goto end;
     }
     bed1 = (DetectByteExtractData *)sm->ctx;
@@ -3811,52 +3791,38 @@ int DetectByteExtractTest55(void)
         goto end;
     }
     if (bed1->local_id != 0) {
-        result = 0;
         goto end;
     }
 
     sm = sm->next;
     if (sm->type != DETECT_BYTE_EXTRACT) {
-        result = 0;
         goto end;
     }
     bed2 = (DetectByteExtractData *)sm->ctx;
 
     sm = sm->next;
     if (sm->type != DETECT_BYTE_EXTRACT) {
-        result = 0;
         goto end;
     }
-    bed3 = (DetectByteExtractData *)sm->ctx;
 
     sm = sm->next;
     if (sm->type != DETECT_BYTE_EXTRACT) {
-        result = 0;
         goto end;
     }
-    bed4 = (DetectByteExtractData *)sm->ctx;
 
     sm = sm->next;
     if (sm->type != DETECT_CONTENT) {
-        result = 0;
         goto end;
     }
     cd = (DetectContentData *)sm->ctx;
     if (strncmp((char *)cd->content, "four", cd->content_len) != 0 ||
         cd->flags != (DETECT_CONTENT_DISTANCE_BE |
-                      DETECT_CONTENT_DEPTH_BE |
-                      DETECT_CONTENT_OFFSET_BE |
                       DETECT_CONTENT_WITHIN_BE |
                       DETECT_CONTENT_DISTANCE |
-                      DETECT_CONTENT_DEPTH |
-                      DETECT_CONTENT_OFFSET |
                       DETECT_CONTENT_WITHIN) ||
         cd->within != bed1->local_id ||
-        cd->distance != bed2->local_id ||
-        cd->offset != bed3->local_id ||
-        cd->depth != bed4->local_id) {
-        printf("four failed\n");
-        result = 0;
+        cd->distance != bed2->local_id) {
+        printf("four failed: ");
         goto end;
     }
 
@@ -3883,8 +3849,6 @@ int DetectByteExtractTest56(void)
     DetectContentData *cd = NULL;
     DetectByteExtractData *bed1 = NULL;
     DetectByteExtractData *bed2 = NULL;
-    DetectByteExtractData *bed3 = NULL;
-    DetectByteExtractData *bed4 = NULL;
 
     de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
@@ -3899,7 +3863,7 @@ int DetectByteExtractTest56(void)
                                    "byte_extract:4,0,three,string,hex; "
                                    "byte_extract:4,0,four,string,hex; "
                                    "byte_extract:4,0,five,string,hex; "
-                                   "content: \"four\"; within:two; distance:three; offset:four; depth:five; "
+                                   "content: \"four\"; within:two; distance:three; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
@@ -3912,7 +3876,7 @@ int DetectByteExtractTest56(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -3985,14 +3949,12 @@ int DetectByteExtractTest56(void)
         result = 0;
         goto end;
     }
-    bed3 = (DetectByteExtractData *)sm->ctx;
 
     sm = sm->next;
     if (sm->type != DETECT_BYTE_EXTRACT) {
         result = 0;
         goto end;
     }
-    bed4 = (DetectByteExtractData *)sm->ctx;
 
     sm = sm->next;
     if (sm->type != DETECT_CONTENT) {
@@ -4002,17 +3964,11 @@ int DetectByteExtractTest56(void)
     cd = (DetectContentData *)sm->ctx;
     if (strncmp((char *)cd->content, "four", cd->content_len) != 0 ||
         cd->flags != (DETECT_CONTENT_DISTANCE_BE |
-                      DETECT_CONTENT_DEPTH_BE |
-                      DETECT_CONTENT_OFFSET_BE |
                       DETECT_CONTENT_WITHIN_BE |
                       DETECT_CONTENT_DISTANCE |
-                      DETECT_CONTENT_DEPTH |
-                      DETECT_CONTENT_OFFSET |
                       DETECT_CONTENT_WITHIN) ||
         cd->within != bed1->local_id ||
-        cd->distance != bed2->local_id ||
-        cd->offset != bed3->local_id ||
-        cd->depth != bed4->local_id) {
+        cd->distance != bed2->local_id ) {
         printf("four failed\n");
         result = 0;
         goto end;
@@ -4057,7 +4013,7 @@ int DetectByteExtractTest57(void)
                                    "byte_extract:4,0,three,string,hex,relative; "
                                    "byte_extract:4,0,four,string,hex,relative; "
                                    "byte_extract:4,0,five,string,hex,relative; "
-                                   "uricontent: \"four\"; within:two; distance:three; offset:four; depth:five; "
+                                   "uricontent: \"four\"; within:two; distance:three; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
         result = 0;
@@ -4092,7 +4048,7 @@ int DetectByteExtractTest57(void)
         goto end;
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -4166,24 +4122,18 @@ int DetectByteExtractTest57(void)
     }
 
     sm = sm->next;
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
     cd = (DetectContentData *)sm->ctx;
     if (strncmp((char *)cd->content, "four", cd->content_len) != 0 ||
         cd->flags != (DETECT_CONTENT_DISTANCE_BE |
-                      DETECT_CONTENT_DEPTH_BE |
-                      DETECT_CONTENT_OFFSET_BE |
                       DETECT_CONTENT_WITHIN_BE |
                       DETECT_CONTENT_DISTANCE |
-                      DETECT_CONTENT_DEPTH |
-                      DETECT_CONTENT_OFFSET |
                       DETECT_CONTENT_WITHIN) ||
         cd->within != bed1->local_id ||
-        cd->distance != bed2->local_id ||
-        cd->offset != bed3->local_id ||
-        cd->depth != bed4->local_id) {
+        cd->distance != bed2->local_id)  {
         printf("four failed\n");
         result = 0;
         goto end;
@@ -4566,7 +4516,7 @@ int DetectByteExtractTest60(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -4696,7 +4646,7 @@ int DetectByteExtractTest61(void)
     }
 
     sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type != DETECT_URICONTENT) {
+    if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
     }
@@ -4808,6 +4758,32 @@ static int DetectByteExtractTest62(void)
     return result;
 }
 
+int DetectByteExtractTest63(void)
+{
+    int result = 0;
+
+    DetectByteExtractData *bed = DetectByteExtractParse("4, -2, one");
+    if (bed == NULL)
+        goto end;
+
+    if (bed->nbytes != 4 ||
+        bed->offset != -2 ||
+        strcmp(bed->name, "one") != 0 ||
+        bed->flags != 0 ||
+        bed->endian != DETECT_BYTE_EXTRACT_ENDIAN_DEFAULT ||
+        bed->base != DETECT_BYTE_EXTRACT_BASE_NONE ||
+        bed->align_value != 0 ||
+        bed->multiplier_value != DETECT_BYTE_EXTRACT_MULTIPLIER_DEFAULT) {
+        goto end;
+    }
+
+    result = 1;
+ end:
+    if (bed != NULL)
+        DetectByteExtractFree(bed);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void DetectByteExtractRegisterTests(void)
@@ -4883,6 +4859,7 @@ void DetectByteExtractRegisterTests(void)
     UtRegisterTest("DetectByteExtractTest60", DetectByteExtractTest60, 1);
     UtRegisterTest("DetectByteExtractTest61", DetectByteExtractTest61, 1);
     UtRegisterTest("DetectByteExtractTest62", DetectByteExtractTest62, 1);
+    UtRegisterTest("DetectByteExtractTest63", DetectByteExtractTest63, 1);
 #endif /* UNITTESTS */
 
     return;

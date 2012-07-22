@@ -56,7 +56,7 @@ const char *RunModeIdsPfringGetDefaultMode(void)
 
 void RunModeIdsPfringRegister(void)
 {
-    default_mode_auto = "auto";
+    default_mode_auto = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_PFRING, "auto",
                               "Multi threaded pfring mode",
                               RunModeIdsPfringAuto);
@@ -114,13 +114,15 @@ void *OldParsePfringConfig(const char *iface)
     cluster_type default_ctype = CLUSTER_ROUND_ROBIN;
 #endif
 
-    if (iface == NULL) {
-        return NULL;
-    }
-
     if (pfconf == NULL) {
         return NULL;
     }
+
+    if (iface == NULL) {
+        SCFree(pfconf);
+        return NULL;
+    }
+
     strlcpy(pfconf->iface, iface, sizeof(pfconf->iface));
     pfconf->threads = 1;
     pfconf->cluster_id = 1;
@@ -130,7 +132,7 @@ void *OldParsePfringConfig(const char *iface)
     pfconf->DerefFunc = PfringDerefConfig;
     pfconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
     SC_ATOMIC_INIT(pfconf->ref);
-    SC_ATOMIC_ADD(pfconf->ref, 1);
+    (void) SC_ATOMIC_ADD(pfconf->ref, 1);
 
     /* Find initial node */
     if (ConfGet("pfring.threads", &threadsstr) != 1) {
@@ -145,7 +147,7 @@ void *OldParsePfringConfig(const char *iface)
     }
 
     SC_ATOMIC_RESET(pfconf->ref);
-    SC_ATOMIC_ADD(pfconf->ref, pfconf->threads);
+    (void) SC_ATOMIC_ADD(pfconf->ref, pfconf->threads);
 
     if (ConfGet("pfring.cluster-id", &tmpclusterid) != 1) {
         SCLogError(SC_ERR_INVALID_ARGUMENT,"Could not get cluster-id from config");
@@ -167,6 +169,7 @@ void *OldParsePfringConfig(const char *iface)
         pfconf->ctype = (cluster_type)tmpctype;
     } else {
         SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
+        SCFree(pfconf);
         return NULL;
     }
 #endif
@@ -203,13 +206,15 @@ void *ParsePfringConfig(const char *iface)
     char *bpf_filter = NULL;
 #endif /* HAVE_PFRING_SET_BPF_FILTER */
 
-    if (iface == NULL) {
-        return NULL;
-    }
-
     if (pfconf == NULL) {
         return NULL;
     }
+
+    if (iface == NULL) {
+        SCFree(pfconf);
+        return NULL;
+    }
+
     memset(pfconf, 0, sizeof(PfringIfaceConfig));
     strlcpy(pfconf->iface, iface, sizeof(pfconf->iface));
     pfconf->threads = 1;
@@ -219,7 +224,7 @@ void *ParsePfringConfig(const char *iface)
 #endif
     pfconf->DerefFunc = PfringDerefConfig;
     SC_ATOMIC_INIT(pfconf->ref);
-    SC_ATOMIC_ADD(pfconf->ref, 1);
+    (void) SC_ATOMIC_ADD(pfconf->ref, 1);
 
     /* Find initial node */
     pf_ring_node = ConfGetNode("pfring");
@@ -251,7 +256,7 @@ void *ParsePfringConfig(const char *iface)
     }
 
     SC_ATOMIC_RESET(pfconf->ref);
-    SC_ATOMIC_ADD(pfconf->ref, pfconf->threads);
+    (void) SC_ATOMIC_ADD(pfconf->ref, pfconf->threads);
 
     /* command line value has precedence */
     if (ConfGet("pfring.cluster-id", &tmpclusterid) == 1) {
@@ -312,6 +317,7 @@ void *ParsePfringConfig(const char *iface)
             SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,
                        "invalid cluster-type %s",
                        tmpctype);
+            SCFree(pfconf);
             return NULL;
         }
     }

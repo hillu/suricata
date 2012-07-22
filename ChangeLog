@@ -1,3 +1,92 @@
+1.3 -- 2012-07-06
+
+- make live rule reloads optional and disabled by default
+- fix a shutdown bug
+- fix several memory leaks (#492)
+- warn user if global and rule thresholding conflict (#455)
+- set thread names on FreeBSD (Nikolay Denev)
+- Fix PF_RING building on Ubuntu 12.04
+- rule analyzer updates
+- file inspection improvements when dealing with limits (#493)
+
+1.3rc1 -- 2012-06-29
+
+- experimental live rule reload by sending a USR2 signal (#279)
+- AF_PACKET BPF support (#449)
+- AF_PACKET live packet loss counters (#441)
+- Rule analyzer (#349)
+- add pcap workers runmode for use with libpcap wrappers that support load balancing, such as  Napatech's or Myricom's
+- negated filemd5 matching, allowing for md5 whitelisting
+- signatures with depth and/or offset are now checked against packets in addition to the stream (#404)
+- http_cookie keyword now also inspects "Set-Cookie" header (#479)
+- filemd5 keyword no longer depends on log-file output module (#447)
+- http_raw_header keyword inspects original header line terminators (#475)
+- deal with double encoded URI (#464)
+- improved SMB/SMB2/DCERPC robustness
+- ICMPv6 parsing fixes
+- improve HTTP body inspection
+- stream.inline accuracy issues fixed (#339)
+- general stability fixes (#482, #486)
+- missing unittests added (#471)
+- "threshold.conf not found" error made more clear (#446)
+- IPS mode segment logging for Unified2 improved
+
+1.3beta2 -- 2012-06-08
+
+- experimental support for matching on large lists of known file MD5 checksums
+- Improved performance for file_data, http_server_body and http_client_body keywords
+- Improvements to HTTP handling: multipart parsing, gzip decompression
+- Byte_extract can support negative offsets now (#445)
+- Support for PF_RING 5.4 added. Many thanks to Chris Wakelin (#459)
+- HOME_NET and EXTERNAL_NET and the other vars are now checked for common errors (#454)
+- Improved error reporting when using too long address strings (#451)
+- MD5 calculation improvements for daemon mode and other cases (#449)
+- File inspection scripts: Added Syslog action for logging to local syslog. Thanks to Martin Holste.
+- Rule parser is made more strict.
+- Unified2 output overhaul, logging individual segments in more cases.
+- detection_filter keyword accuracy problem was fixed (#453)
+- Don't inspect cookie header with http header (#461)
+- Crash with a rule with two byte_extract keywords (#456)
+- SSL parser fixes. Thanks to Chris Wakelin for testing the patches! (#476)
+- Accuracy issues in HTTP inspection fixed. Thanks to Rmkml (#452)
+- Improve escaping of some characters in logs (#418)
+- Checksum calculation bugs fixed
+- IPv6 parsing issues fixed. Thanks to Michel Saborde.
+- Endace DAG issues fixed. Thanks to Jason Ish from Endace.
+- Various OpenBSD related fixes.
+- Fixes for bugs found by Coverity source code analyzer.
+
+1.3beta1 -- 2012-04-04
+
+- TLS/SSL handshake parser, tls.subjectdn and tls.issuerdn keywords (#296, contributed by Pierre Chifflier)
+- Napatech capture card support (contributed by Randy Caldejon -- nPulse)
+- Scripts for looking up files / file md5's at Virus Total and others (contributed by Martin Holste)
+- Test mode: -T option to test the config (#271)
+- Ringbuffer and zero copy support for AF_PACKET
+- Commandline options to list supported app layer protocols and keywords (#344, #414)
+- File extraction for HTTP POST request that do not use multipart bodies
+- On the fly md5 checksum calculation of extracted files
+- Line based file log, in json format
+- Basic support for including other yaml files into the main yaml
+- New multi pattern engine: ac-bs
+- Profiling improvements, added lock profiling code
+- Improved HTTP CONNECT support in libhtp (#427, Brian Rectanus -- Qualys)
+- Unified yaml naming convention, including fallback support (by Nikolay Denev)
+- Improved Endace DAG support (#431, Jason Ish -- Endace)
+- New default runmode: "autofp" (#433)
+- Major rewrite of flow engine, improving scalability.
+- Improved http_stat_msg and http_stat_code keywords (#394)
+- Improved scalability for Tag and Threshold subsystems
+- Made the rule keyword parser much stricter in detecting syntax errors
+- Split "file" output into "file-store" and "file-log" outputs
+- Much improved file extraction
+- CUDA build fixes (#421)
+- Various FP's reported by Rmkml (#403, #405, #411)
+- IPv6 decoding and detection issues (reported by Michel Sarborde)
+- PCAP logging crash (#422)
+- Fixed many (potential) issues with the help of the Coverity source code analyzer
+- Fixed several (potential) issues with the help of the cppcheck and clang/scan-build source code analyzers
+
 1.2.1 -- 2012-01-20
 
 - fix malformed unified2 records when writing alerts trigger by stream inspection (#402)

@@ -67,7 +67,7 @@ void DetectUrilenRegister(void)
     sigmatch_table[DETECT_AL_URILEN].Setup = DetectUrilenSetup;
     sigmatch_table[DETECT_AL_URILEN].Free = DetectUrilenFree;
     sigmatch_table[DETECT_AL_URILEN].RegisterTests = DetectUrilenRegisterTests;
-    sigmatch_table[DETECT_AL_HTTP_METHOD].flags |= SIGMATCH_PAYLOAD;
+    sigmatch_table[DETECT_AL_URILEN].flags |= SIGMATCH_PAYLOAD;
 
     const char *eb;
     int eo;
@@ -119,7 +119,7 @@ int DetectUrilenMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
         SCReturnInt(ret);
     }
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_RDLOCK(f);
     htp_tx_t *tx = NULL;
 
     idx = AppLayerTransactionGetInspectId(f);
@@ -155,7 +155,7 @@ int DetectUrilenMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
         }
     }
 end:
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     SCReturnInt(ret);
 }
 
@@ -184,7 +184,7 @@ DetectUrilenData *DetectUrilenParse (char *urilenstr)
     ret = pcre_exec(parse_regex, parse_regex_study, urilenstr, strlen(urilenstr),
                     0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 3 || ret > 6) {
-        SCLogError(SC_ERR_PCRE_PARSE, "parse error, ret %" PRId32 "", ret);
+        SCLogError(SC_ERR_PCRE_PARSE, "urilen option pcre parse error: \"%s\"", urilenstr);
         goto error;
     }
     const char *str_ptr;
@@ -289,10 +289,8 @@ DetectUrilenData *DetectUrilenParse (char *urilenstr)
         }
     }
 
-    if (arg1 != NULL)
-        pcre_free_substring(arg1);
-    if (arg2 != NULL)
-        pcre_free_substring(arg2);
+    pcre_free_substring(arg1);
+    pcre_free_substring(arg2);
     if (arg3 != NULL)
         pcre_free_substring(arg3);
     if (arg4 != NULL)
@@ -342,7 +340,10 @@ static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, char *urile
     sm->type = DETECT_AL_URILEN;
     sm->ctx = (void *)urilend;
 
-    SigMatchAppendUricontent(s,sm);
+    if (urilend->raw_buffer)
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRUDMATCH);
+    else
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_UMATCH);
 
     /* Flagged the signature as to inspect the app layer data */
     s->flags |= SIG_FLAG_APPLAYER;

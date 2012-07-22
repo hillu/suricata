@@ -232,7 +232,7 @@ static int DetectIcmpIdSetup (DetectEngineCtx *de_ctx, Signature *s, char *icmpi
     sm->type = DETECT_ICMP_ID;
     sm->ctx = (void *)iid;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
@@ -426,8 +426,8 @@ int DetectIcmpIdMatchTest02 (void) {
     p->src.addr_data32[0] = 0x01020304;
     p->dst.addr_data32[0] = 0x04030201;
 
-    ip4h.ip_src.s_addr = p->src.addr_data32[0];
-    ip4h.ip_dst.s_addr = p->dst.addr_data32[0];
+    ip4h.s_ip_src.s_addr = p->src.addr_data32[0];
+    ip4h.s_ip_dst.s_addr = p->dst.addr_data32[0];
     p->ip4h = &ip4h;
 
     DecodeICMPV4(&th_v, &dtv, p, raw_icmpv4, sizeof(raw_icmpv4), NULL);

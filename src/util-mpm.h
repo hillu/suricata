@@ -77,6 +77,7 @@ enum {
     MPM_AC,
     /* aho-corasick-goto-failure state based */
     MPM_AC_GFBS,
+    MPM_AC_BS,
     /* table size */
     MPM_TABLE_SIZE,
 };
@@ -110,6 +111,10 @@ typedef struct MpmCtx_ {
     void *ctx;
     uint16_t mpm_type;
 
+    /* used uint16_t here to avoiding using a pad.  You can use a uint8_t
+     * here as well */
+    uint16_t global;
+
     uint32_t pattern_cnt;       /* unique patterns */
 
     uint16_t minlen;
@@ -127,7 +132,8 @@ typedef struct MpmCtx_ {
 
 typedef struct MpmCtxFactoryItem_ {
     char *name;
-    MpmCtx *mpm_ctx;
+    MpmCtx *mpm_ctx_ts;
+    MpmCtx *mpm_ctx_tc;
     int32_t id;
     uint8_t flags;
 } MpmCtxFactoryItem;
@@ -180,11 +186,13 @@ typedef struct MpmTableElmt_ {
 
 MpmTableElmt mpm_table[MPM_TABLE_SIZE];
 
-int32_t MpmFactoryRegisterMpmCtxProfile(const char *, uint8_t);
-void MpmFactoryReClaimMpmCtx(MpmCtx *);
-MpmCtx *MpmFactoryGetMpmCtxForProfile(int32_t);
-void MpmFactoryDeRegisterAllMpmCtxProfiles(void);
-int32_t MpmFactoryIsMpmCtxAvailable(MpmCtx *);
+struct DetectEngineCtx_;
+
+int32_t MpmFactoryRegisterMpmCtxProfile(struct DetectEngineCtx_ *, const char *, uint8_t);
+void MpmFactoryReClaimMpmCtx(struct DetectEngineCtx_ *, MpmCtx *);
+MpmCtx *MpmFactoryGetMpmCtxForProfile(struct DetectEngineCtx_ *, int32_t, int);
+void MpmFactoryDeRegisterAllMpmCtxProfiles(struct DetectEngineCtx_ *);
+int32_t MpmFactoryIsMpmCtxAvailable(struct DetectEngineCtx_ *, MpmCtx *);
 
 /* macros decides if cuda is enabled for the platform or not */
 #ifdef __SC_CUDA_SUPPORT__

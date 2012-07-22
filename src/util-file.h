@@ -25,10 +25,18 @@
 #ifndef __UTIL_FILE_H__
 #define __UTIL_FILE_H__
 
+#ifdef HAVE_NSS
+#include <sechash.h>
+#endif
+
 #define FILE_TRUNCATED  0x01
 #define FILE_NOSTORE    0x02
 #define FILE_NOMAGIC    0x04
 #define FILE_STORE      0x08
+#define FILE_MD5        0x10
+#define FILE_LOGGED     0x20
+#define FILE_STORED     0x40
+#define FILE_NOMD5      0x80
 
 typedef enum FileState_ {
     FILE_STATE_NONE = 0,    /**< no state */
@@ -37,7 +45,6 @@ typedef enum FileState_ {
                                      there will be no more data. */
     FILE_STATE_TRUNCATED,   /**< flow file is not complete, but
                                      there will be no more data. */
-    FILE_STATE_STORED,      /**< all fully written to disk */
     FILE_STATE_ERROR,       /**< file is in an error state */
     FILE_STATE_MAX
 } FileState;
@@ -63,6 +70,10 @@ typedef struct File_ {
     FileData *chunks_head;
     FileData *chunks_tail;
     struct File_ *next;
+#ifdef HAVE_NSS
+    HASHContext *md5_ctx;
+    uint8_t md5[MD5_LENGTH];
+#endif
 #ifdef DEBUG
     uint64_t chunks_cnt;
     uint64_t chunks_cnt_max;
@@ -153,13 +164,19 @@ void FileDisableStoring(struct Flow_ *, uint8_t);
  */
 void FileDisableStoringForTransaction(struct Flow_ *, uint8_t, uint16_t);
 
-void FileDisableMagic(Flow *f, uint8_t);
 void FlowFileDisableStoringForTransaction(struct Flow_ *f, uint16_t tx_id);
 void FilePrune(FileContainer *ffc);
 
 
+void FileDisableMagic(Flow *f, uint8_t);
 void FileForceMagicEnable(void);
 int FileForceMagic(void);
+
+void FileDisableMd5(Flow *f, uint8_t);
+void FileForceMd5Enable(void);
+int FileForceMd5(void);
+
+void FileForceTrackingEnable(void);
 
 void FileStoreAllFiles(FileContainer *);
 void FileStoreAllFilesForTx(FileContainer *, uint16_t);

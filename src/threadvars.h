@@ -42,6 +42,8 @@ struct TmSlot_;
 /* used to indicate the thread is going through de-init.  Introduced as more
  * of a hack for solving stream-timeout-shutdown.  Is set by the main thread. */
 #define THV_DEINIT    0x40
+#define THV_RUNNING_DONE 0x80 /** thread has completed running and is entering
+                              * the de-init phase */
 
 /** Thread flags set and read by threads, to control the threads, when they
  *  encounter certain conditions like failure */
@@ -73,6 +75,7 @@ typedef struct ThreadVars_ {
     Tmq *inq;
     Tmq *outq;
     void *outctx;
+    char *outqh_name;
 
     /** queue handlers */
     struct Packet_ * (*tmqh_in)(struct ThreadVars_ *);

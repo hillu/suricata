@@ -70,8 +70,7 @@
 #define SC_ATOMIC_DECL_AND_INIT(type, name) \
     type name ## _sc_atomic__ = 0; \
     SCSpinlock name ## _sc_lock__; \
-    SCSpinInit(&(name ## _sc_lock__), 0) \
-}
+    SCSpinInit(&(name ## _sc_lock__), 0)
 
 /**
  *  \brief Initialize the previously declared atomic variable and it's
@@ -193,6 +192,21 @@
     do { \
         SCSpinLock(&(name ## _sc_lock__)); \
         var = (name ## _sc_atomic__); \
+        SCSpinUnlock(&(name ## _sc_lock__)); \
+    } while (0); \
+    var; \
+})
+
+/**
+ *  \brief Set the value for the atomic variable.
+ *
+ *  \retval var value
+ */
+#define SC_ATOMIC_SET(name, val) ({       \
+    typeof(name ## _sc_atomic__) var; \
+    do { \
+        SCSpinLock(&(name ## _sc_lock__)); \
+        var = (name ## _sc_atomic__) = val; \
         SCSpinUnlock(&(name ## _sc_lock__)); \
     } while (0); \
     var; \
@@ -441,6 +455,19 @@
 #define SC_ATOMIC_GET(name) \
     (name ## _sc_atomic__)
 
+/**
+ *  \brief Set the value for the atomic variable.
+ *
+ *  \retval var value
+ */
+#define SC_ATOMIC_SET(name, val) ({       \
+    while (SC_ATOMIC_CAS(&name, SC_ATOMIC_GET(name), val) == 0) \
+        ;                                                       \
+        })
+
 #endif /* !no atomic operations */
+
+void SCAtomicRegisterTests(void);
+
 #endif /* __UTIL_ATOMIC_H__ */
 

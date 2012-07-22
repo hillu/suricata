@@ -71,7 +71,16 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "1.2.1"
+#define PROG_VER "1.3"
+
+/* workaround SPlint error (don't know __gnuc_va_list) */
+#ifdef S_SPLINT_S
+#  include <err.h>
+#  define CONFIG_DIR "/etc/suricata"
+#endif
+
+#define DEFAULT_CONF_FILE CONFIG_DIR "/suricata.yaml"
+
 
 /* runtime engine control flags */
 #define SURICATA_STOP    0x01   /**< gracefully stop the engine: process all
@@ -116,6 +125,8 @@ extern uint8_t suricata_ctl_flags;
 /* uppercase to lowercase conversion lookup table */
 uint8_t g_u8_lowercasetable[256];
 
+extern char *conf_filename;
+
 /* marco to do the actual lookup */
 //#define u8_tolower(c) g_u8_lowercasetable[(c)]
 // these 2 are slower:
@@ -128,6 +139,10 @@ uint8_t g_u8_lowercasetable[256];
 
 void EngineStop(void);
 void EngineKill(void);
+
+/* live rule swap required this to be made static */
+void SignalHandlerSigusr2(int);
+void SignalHandlerSigusr2EngineShutdown(int);
 
 int RunmodeIsUnittests(void);
 

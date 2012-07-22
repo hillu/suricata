@@ -52,15 +52,18 @@
 #define DETECT_CONTENT_HMD_MPM           0x00040000
 #define DETECT_CONTENT_HCD_MPM           0x00080000
 #define DETECT_CONTENT_HRUD_MPM          0x00100000
+#define DETECT_CONTENT_HSMD_MPM          0x00200000
+#define DETECT_CONTENT_HSCD_MPM          0x00400000
+#define DETECT_CONTENT_HUAD_MPM          0x00800000
 
 /* BE - byte extract */
-#define DETECT_CONTENT_OFFSET_BE         0x00200000
-#define DETECT_CONTENT_DEPTH_BE          0x00400000
-#define DETECT_CONTENT_DISTANCE_BE       0x00800000
-#define DETECT_CONTENT_WITHIN_BE         0x01000000
+#define DETECT_CONTENT_OFFSET_BE         0x01000000
+#define DETECT_CONTENT_DEPTH_BE          0x02000000
+#define DETECT_CONTENT_DISTANCE_BE       0x04000000
+#define DETECT_CONTENT_WITHIN_BE         0x08000000
 
 /* replace data */
-#define DETECT_CONTENT_REPLACE           0x02000000
+#define DETECT_CONTENT_REPLACE           0x10000000
 
 #define DETECT_CONTENT_IS_SINGLE(c) (!((c)->flags & DETECT_CONTENT_DISTANCE || \
                                        (c)->flags & DETECT_CONTENT_WITHIN || \
@@ -97,25 +100,10 @@ typedef struct DetectContentData_ {
 void DetectContentRegister (void);
 uint32_t DetectContentMaxId(DetectEngineCtx *);
 DetectContentData *DetectContentParse (char *contentstr);
-int DetectContentDataParse(char *contentstr, char** pstr, uint16_t *plen, int *flags);
+int DetectContentDataParse(char *keyword, char *contentstr, char** pstr, uint16_t *plen, int *flags);
 DetectContentData *DetectContentParseEncloseQuotes(char *);
 
 void DetectContentPrint(DetectContentData *);
-
-/** This function search backwards the first applicable SigMatch holding
- * a DETECT_CONTENT context (If it belongs to a chunk group, the first chunk
- * of the group will be returned). Modifiers must call this */
-SigMatch *DetectContentGetLastPattern(SigMatch *);
-
-/** This function search forwards the first applicable SigMatch holding
- * a DETECT_CONTENT context. The Match process call this */
-SigMatch *DetectContentFindNextApplicableSM(SigMatch *);
-
-/** This function search backwards if we have a SigMatch holding
- * a Pattern before the SigMatch passed as argument */
-SigMatch *DetectContentHasPrevSMPattern(SigMatch *);
-
-SigMatch *SigMatchGetLastPattern(Signature *s);
 
 void DetectContentFree(void *);
 

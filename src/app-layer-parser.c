@@ -58,10 +58,11 @@
 #include "util-debug.h"
 #include "decode-events.h"
 #include "util-unittest-helper.h"
+#include "util-validate.h"
 
-static AppLayerProto al_proto_table[ALPROTO_MAX];   /**< Application layer protocol
-                                                         table mapped to their
-                                                         corresponding parsers */
+AppLayerProto al_proto_table[ALPROTO_MAX];   /**< Application layer protocol
+                                                table mapped to their
+                                                corresponding parsers */
 
 #define MAX_PARSERS 100
 static AppLayerParserTableElement al_parser_table[MAX_PARSERS];
@@ -80,6 +81,8 @@ static uint32_t al_result_pool_elmts = 0;
  *  \retval NULL in case we have no state */
 FileContainer *AppLayerGetFilesFromFlow(Flow *f, uint8_t direction) {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     uint16_t alproto = f->alproto;
 
@@ -592,8 +595,6 @@ int AppLayerRegisterProto(char *name, uint8_t proto, uint8_t flags,
     al_parser_table[al_max_parsers].name = name;
     al_parser_table[al_max_parsers].AppLayerParser = AppLayerParser;
 
-    al_proto_table[proto].name = name;
-
     /* create proto, direction -- parser mapping */
     if (flags & STREAM_TOSERVER) {
         al_proto_table[proto].to_server = al_max_parsers;
@@ -708,6 +709,8 @@ static int AppLayerDoParse(void *local_data, Flow *f,
                            uint16_t proto)
 {
     SCEnter();
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     int retval = 0;
     AppLayerParserResult result = { NULL, NULL, 0 };
 
@@ -841,6 +844,8 @@ int AppLayerParse(void *local_data, Flow *f, uint8_t proto,
                   uint8_t flags, uint8_t *input, uint32_t input_len)
 {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     uint16_t parser_idx = 0;
     AppLayerProto *p = &al_proto_table[proto];
@@ -1013,6 +1018,8 @@ error:
 int AppLayerTransactionGetBaseId(Flow *f) {
     SCEnter();
 
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
 
@@ -1034,6 +1041,8 @@ error:
 int AppLayerTransactionGetInspectId(Flow *f) {
     SCEnter();
 
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
 
@@ -1051,6 +1060,8 @@ error:
 uint16_t AppLayerTransactionGetAvailId(Flow *f) {
     SCEnter();
 
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
 
@@ -1065,6 +1076,8 @@ uint16_t AppLayerTransactionGetAvailId(Flow *f) {
 /** \brief get the highest loggable transaction id */
 int AppLayerTransactionGetLoggableId(Flow *f) {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
@@ -1093,6 +1106,8 @@ error:
 void AppLayerTransactionUpdateLoggedId(Flow *f) {
     SCEnter();
 
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
 
@@ -1110,6 +1125,8 @@ error:
 /** \brief get the highest loggable transaction id */
 int AppLayerTransactionGetLoggedId(Flow *f) {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     AppLayerParserStateStore *parser_state_store =
         (AppLayerParserStateStore *)f->alparser;
@@ -1133,6 +1150,9 @@ error:
  */
 uint16_t AppLayerGetStateVersion(Flow *f) {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     uint16_t version = 0;
     AppLayerParserStateStore *parser_state_store = NULL;
 
@@ -1155,6 +1175,8 @@ uint16_t AppLayerGetStateVersion(Flow *f) {
 int AppLayerTransactionUpdateInspectId(Flow *f, char direction)
 {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     int r = 0;
     AppLayerParserStateStore *parser_state_store = NULL;
@@ -1204,8 +1226,45 @@ int AppLayerTransactionUpdateInspectId(Flow *f, char direction)
     SCReturnInt(r);
 }
 
+void AppLayerListSupportedProtocols(void)
+{
+    uint32_t i;
+    uint32_t temp_alprotos_buf[ALPROTO_MAX];
+    memset(temp_alprotos_buf, 0, sizeof(temp_alprotos_buf));
+
+    printf("=========Supported App Layer Protocols=========\n");
+
+    /* for each proto, alloc the map array */
+    for (i = 0; i < ALPROTO_MAX; i++) {
+        if (al_proto_table[i].name == NULL)
+            continue;
+
+        temp_alprotos_buf[i] = 1;
+        printf("%s\n", al_proto_table[i].name);
+    }
+
+    AppLayerProbingParserInfo *pinfo = alp_proto_ctx.probing_parsers_info;
+    while (pinfo != NULL) {
+        if (temp_alprotos_buf[pinfo->al_proto] == 1) {
+            pinfo = pinfo->next;
+            continue;
+        }
+
+        printf("%s\n", pinfo->al_proto_name);
+        temp_alprotos_buf[pinfo->al_proto] = 1;
+        pinfo = pinfo->next;
+    }
+
+    printf("=====\n");
+
+
+    return;
+}
+
 AppLayerDecoderEvents *AppLayerGetDecoderEventsForFlow(Flow *f)
 {
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
     /* Get the parser state (if any) */
     AppLayerParserStateStore *parser_state_store = NULL;
 
@@ -1232,6 +1291,8 @@ AppLayerDecoderEvents *AppLayerGetDecoderEventsForFlow(Flow *f)
  */
 void AppLayerTriggerRawStreamReassembly(Flow *f) {
     SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
 #ifdef DEBUG
     BUG_ON(f == NULL);
@@ -1266,11 +1327,11 @@ void RegisterAppLayerParsers(void)
 
     /** IMAP */
     //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_IMAP, "|2A 20|OK|20|", 5, 0, STREAM_TOCLIENT);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_IMAP, "1|20|capability", 12, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, "imap", IPPROTO_TCP, ALPROTO_IMAP, "1|20|capability", 12, 0, STREAM_TOSERVER);
 
     /** MSN Messenger */
     //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_MSN, "MSNP", 10, 6, STREAM_TOCLIENT);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_MSN, "MSNP", 10, 6, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, "msn", IPPROTO_TCP, ALPROTO_MSN, "MSNP", 10, 6, STREAM_TOSERVER);
 
     /** Jabber */
     //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_JABBER, "xmlns='jabber|3A|client'", 74, 53, STREAM_TOCLIENT);
@@ -1457,7 +1518,7 @@ static AppLayerProbingParserElement *
 AppLayerDuplicateAppLayerProbingParserElement(AppLayerProbingParserElement *pe)
 {
     AppLayerProbingParserElement *new_pe = SCMalloc(sizeof(AppLayerProbingParserElement));
-    if (pe == NULL) {
+    if (new_pe == NULL) {
         return NULL;
     }
 

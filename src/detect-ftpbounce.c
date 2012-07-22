@@ -176,14 +176,14 @@ int DetectFtpbounceALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
     int ret = 0;
-    SCMutexLock(&f->m);
+    FLOWLOCK_RDLOCK(f);
 
     if (ftp_state->command == FTP_COMMAND_PORT) {
         ret = DetectFtpbounceMatchArgs(ftp_state->port_line,
                   ftp_state->port_line_len, f->src.address.address_un_data32[0],
                   ftp_state->arg_offset);
     }
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
 
     SCReturnInt(ret);
 }
@@ -208,7 +208,8 @@ int DetectFtpbounceMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     if (!(PKT_IS_TCP(p)))
         return 0;
 
-    SigMatch *sm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_PMATCH], DETECT_CONTENT);
+    SigMatch *sm = SigMatchGetLastSMFromLists(s, 2,
+                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (sm == NULL)
         return 0;
 
@@ -265,7 +266,7 @@ int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, char *ftpbounces
     */
     sm->ctx = NULL;
 
-    SigMatchAppendAppLayer(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
 
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_FTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");

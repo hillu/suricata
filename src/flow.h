@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -42,12 +42,11 @@
 /** At least on packet from the destination address was seen */
 #define FLOW_TO_DST_SEEN                  0x00000002
 
-/** Flow lives in the flow-state-NEW list */
-#define FLOW_NEW_LIST                     0x00000004
-/** Flow lives in the flow-state-EST (established) list */
-#define FLOW_EST_LIST                     0x00000008
-/** Flow lives in the flow-state-CLOSED list */
-#define FLOW_CLOSED_LIST                  0x00000010
+// vacany 1x
+
+/** no magic on files in this flow */
+#define FLOW_FILE_NO_MAGIC_TS             0x00000008
+#define FLOW_FILE_NO_MAGIC_TC             0x00000010
 
 /** Flow was inspected against IP-Only sigs in the toserver direction */
 #define FLOW_TOSERVER_IPONLY_SET          0x00000020
@@ -91,14 +90,17 @@
 #define FLOW_TC_PM_PP_ALPROTO_DETECT_DONE 0x00400000
 #define FLOW_TIMEOUT_REASSEMBLY_DONE      0x00800000
 /** even if the flow has files, don't store 'm */
-#define FLOW_FILE_NO_STORE                0x01000000
-/** no magic on files in this flow */
-#define FLOW_FILE_NO_MAGIC                0x02000000
+#define FLOW_FILE_NO_STORE_TS             0x01000000
+#define FLOW_FILE_NO_STORE_TC             0x02000000
 
 /** flow is ipv4 */
 #define FLOW_IPV4                         0x04000000
 /** flow is ipv6 */
 #define FLOW_IPV6                         0x08000000
+
+/** no md5 on files in this flow */
+#define FLOW_FILE_NO_MD5_TS               0x10000000
+#define FLOW_FILE_NO_MD5_TC               0x20000000
 
 #define FLOW_IS_IPV4(f) \
     (((f)->flags & FLOW_IPV4) == FLOW_IPV4)
@@ -124,14 +126,14 @@
  * We set the rest of the struct to 0 so we can
  * prevent using memset. */
 #define FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, a) do {             \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_src.s_addr; \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_src.s_addr; \
         (a)->addr_data32[1] = 0;                                  \
         (a)->addr_data32[2] = 0;                                  \
         (a)->addr_data32[3] = 0;                                  \
     } while (0)
 
 #define FLOW_SET_IPV4_DST_ADDR_FROM_PACKET(p, a) do {             \
-        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->ip_dst.s_addr; \
+        (a)->addr_data32[0] = (uint32_t)(p)->ip4h->s_ip_dst.s_addr; \
         (a)->addr_data32[1] = 0;                                  \
         (a)->addr_data32[2] = 0;                                  \
         (a)->addr_data32[3] = 0;                                  \
@@ -148,17 +150,17 @@
 /* Set the IPv6 addressesinto the Addrs of the Packet.
  * Make sure p->ip6h is initialized and validated. */
 #define FLOW_SET_IPV6_SRC_ADDR_FROM_PACKET(p, a) do {   \
-        (a)->addr_data32[0] = (p)->ip6h->ip6_src[0];    \
-        (a)->addr_data32[1] = (p)->ip6h->ip6_src[1];    \
-        (a)->addr_data32[2] = (p)->ip6h->ip6_src[2];    \
-        (a)->addr_data32[3] = (p)->ip6h->ip6_src[3];    \
+        (a)->addr_data32[0] = (p)->ip6h->s_ip6_src[0];  \
+        (a)->addr_data32[1] = (p)->ip6h->s_ip6_src[1];  \
+        (a)->addr_data32[2] = (p)->ip6h->s_ip6_src[2];  \
+        (a)->addr_data32[3] = (p)->ip6h->s_ip6_src[3];  \
     } while (0)
 
 #define FLOW_SET_IPV6_DST_ADDR_FROM_PACKET(p, a) do {   \
-        (a)->addr_data32[0] = (p)->ip6h->ip6_dst[0];    \
-        (a)->addr_data32[1] = (p)->ip6h->ip6_dst[1];    \
-        (a)->addr_data32[2] = (p)->ip6h->ip6_dst[2];    \
-        (a)->addr_data32[3] = (p)->ip6h->ip6_dst[3];    \
+        (a)->addr_data32[0] = (p)->ip6h->s_ip6_dst[0];  \
+        (a)->addr_data32[1] = (p)->ip6h->s_ip6_dst[1];  \
+        (a)->addr_data32[2] = (p)->ip6h->s_ip6_dst[2];  \
+        (a)->addr_data32[3] = (p)->ip6h->s_ip6_dst[3];  \
     } while (0)
 
 /* pkt flow flags */
@@ -172,6 +174,36 @@
 #define FLOW_PKT_NOSTREAM               0x40
 /** \todo only used by flow keyword internally. */
 #define FLOW_PKT_ONLYSTREAM             0x80
+
+/** Mutex or RWLocks for the flow. */
+//#define FLOWLOCK_RWLOCK
+#define FLOWLOCK_MUTEX
+
+#ifdef FLOWLOCK_RWLOCK
+    #ifdef FLOWLOCK_MUTEX
+        #error Cannot enable both FLOWLOCK_RWLOCK and FLOWLOCK_MUTEX
+    #endif
+#endif
+
+#ifdef FLOWLOCK_RWLOCK
+    #define FLOWLOCK_INIT(fb) SCRWLockInit(&(fb)->r, NULL)
+    #define FLOWLOCK_DESTROY(fb) SCRWLockDestroy(&(fb)->r)
+    #define FLOWLOCK_RDLOCK(fb) SCRWLockRDLock(&(fb)->r)
+    #define FLOWLOCK_WRLOCK(fb) SCRWLockWRLock(&(fb)->r)
+    #define FLOWLOCK_TRYRDLOCK(fb) SCRWLockTryRDLock(&(fb)->r)
+    #define FLOWLOCK_TRYWRLOCK(fb) SCRWLockTryWRLock(&(fb)->r)
+    #define FLOWLOCK_UNLOCK(fb) SCRWLockUnlock(&(fb)->r)
+#elif defined FLOWLOCK_MUTEX
+    #define FLOWLOCK_INIT(fb) SCMutexInit(&(fb)->m, NULL)
+    #define FLOWLOCK_DESTROY(fb) SCMutexDestroy(&(fb)->m)
+    #define FLOWLOCK_RDLOCK(fb) SCMutexLock(&(fb)->m)
+    #define FLOWLOCK_WRLOCK(fb) SCMutexLock(&(fb)->m)
+    #define FLOWLOCK_TRYRDLOCK(fb) SCMutexTrylock(&(fb)->m)
+    #define FLOWLOCK_TRYWRLOCK(fb) SCMutexTrylock(&(fb)->m)
+    #define FLOWLOCK_UNLOCK(fb) SCMutexUnlock(&(fb)->m)
+#else
+    #error Enable FLOWLOCK_RWLOCK or FLOWLOCK_MUTEX
+#endif
 
 /* global flow config */
 typedef struct FlowCnf_
@@ -258,6 +290,9 @@ typedef struct Flow_
      */
     SC_ATOMIC_DECLARE(unsigned short, use_cnt);
 
+    /** flow queue id, used with autofp */
+    SC_ATOMIC_DECLARE(int, autofp_tmqh_flow_qid);
+
     uint32_t probing_parser_toserver_al_proto_masks;
     uint32_t probing_parser_toclient_al_proto_masks;
 
@@ -266,7 +301,13 @@ typedef struct Flow_
     /* ts of flow init and last update */
     int32_t lastts_sec;
 
+#ifdef FLOWLOCK_RWLOCK
+    SCRWLock r;
+#elif defined FLOWLOCK_MUTEX
     SCMutex m;
+#else
+    #error Enable FLOWLOCK_RWLOCK or FLOWLOCK_MUTEX
+#endif
 
     /** protocol specific data pointer, e.g. for TcpSession */
     void *protoctx;
@@ -277,6 +318,11 @@ typedef struct Flow_
     uint8_t pad0;
 
     uint16_t alproto; /**< \brief application level protocol */
+
+    /** detection engine ctx id used to inspect this flow. Set at initial
+     *  inspection. If it doesn't match the currently in use de_ctx, the
+     *  de_state and stored sgh ptrs are reset. */
+    uint32_t de_ctx_id;
 
     /** application level storage ptrs.
      *
@@ -295,22 +341,21 @@ typedef struct Flow_
     struct SigGroupHead_ *sgh_toserver;
 
     /** List of tags of this flow (from "tag" keyword of type "session") */
-    DetectTagDataEntryList *tag_list;
+    void *tag_list;
 
     /* pointer to the var list */
     GenericVar *flowvar;
 
     SCMutex de_state_m;          /**< mutex lock for the de_state object */
 
-    /* list flow ptrs
-     * NOTE!!! These are NOT protected by the
-     * above mutex, but by the FlowQ's */
+    /** hash list pointers, protected by fb->s */
     struct Flow_ *hnext; /* hash list */
     struct Flow_ *hprev;
     struct FlowBucket_ *fb;
+
+    /** queue list pointers, protected by queue mutex */
     struct Flow_ *lnext; /* list */
     struct Flow_ *lprev;
-
     struct timeval startts;
 #ifdef DEBUG
     uint32_t todstpktcnt;
@@ -346,9 +391,6 @@ void FlowSetIPOnlyFlagNoLock(Flow *, char);
 void FlowIncrUsecnt(Flow *);
 void FlowDecrUsecnt(Flow *);
 
-uint32_t FlowPruneFlowsCnt(struct timeval *, int);
-uint32_t FlowKillFlowsCnt(int);
-
 void FlowRegisterTests (void);
 int FlowSetProtoTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoEmergencyTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
@@ -359,7 +401,6 @@ void FlowUpdateQueue(Flow *);
 struct FlowQueue_;
 
 int FlowUpdateSpareFlows(void);
-uint32_t FlowPruneFlowQueue(struct FlowQueue_ *, struct timeval *);
 
 static inline void FlowLockSetNoPacketInspectionFlag(Flow *);
 static inline void FlowSetNoPacketInspectionFlag(Flow *);
@@ -381,9 +422,9 @@ static inline void FlowLockSetNoPacketInspectionFlag(Flow *f) {
     SCEnter();
 
     SCLogDebug("flow %p", f);
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     f->flags |= FLOW_NOPACKET_INSPECTION;
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
 
     SCReturn;
 }
@@ -409,9 +450,9 @@ static inline void FlowLockSetNoPayloadInspectionFlag(Flow *f) {
     SCEnter();
 
     SCLogDebug("flow %p", f);
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     f->flags |= FLOW_NOPAYLOAD_INSPECTION;
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
 
     SCReturn;
 }
@@ -437,6 +478,7 @@ static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *f) {
     f->flags |= FLOW_NO_APPLAYER_INSPECTION;
 }
 
+int FlowClearMemory(Flow *,uint8_t );
 
 #endif /* __FLOW_H__ */
 

@@ -44,7 +44,7 @@ int SigParse(DetectEngineCtx *,Signature *, char *, uint8_t);
 Signature *SigAlloc(void);
 void SigFree(Signature *s);
 Signature *SigInit(DetectEngineCtx *,char *sigstr);
-SigMatch *SigMatchGetLastSM(SigMatch *, uint8_t);
+Signature *SigInitReal(DetectEngineCtx *, char *);
 SigMatch *SigMatchGetLastSMFromLists(Signature *, int, ...);
 void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
                                          SigMatch **, SigMatch **s,
@@ -53,17 +53,6 @@ void SigParsePrepare(void);
 void SigParseRegisterTests(void);
 Signature *DetectEngineAppendSig(DetectEngineCtx *, char *);
 
-void SigMatchReplace(Signature *, SigMatch *, SigMatch *);
-void SigMatchReplaceContent(Signature *, SigMatch *, SigMatch *);
-void SigMatchReplaceContentToUricontent(Signature *, SigMatch *, SigMatch *);
-
-void SigMatchAppendPayload(Signature *, SigMatch *);
-void SigMatchAppendDcePayload(Signature *, SigMatch *);
-void SigMatchAppendPacket(Signature *, SigMatch *);
-void SigMatchAppendPostMatch(Signature *, SigMatch *);
-void SigMatchAppendUricontent(Signature *, SigMatch *);
-void SigMatchAppendAppLayer(Signature *, SigMatch *);
-void SigMatchAppendTag(Signature *, SigMatch *);
 void SigMatchAppendSMToList(Signature *, SigMatch *, int);
 void SigMatchRemoveSMFromList(Signature *, SigMatch *, int);
 int SigMatchListSMBelongsTo(Signature *, SigMatch *);

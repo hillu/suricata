@@ -28,6 +28,11 @@
 #include <signal.h>
 #include <pthread.h>
 
+#ifdef HAVE_NSS
+#include <prinit.h>
+#include <nss.h>
+#endif
+
 #include "suricata.h"
 #include "decode.h"
 #include "detect.h"
@@ -52,6 +57,9 @@
 
 #include "detect-parse.h"
 #include "detect-engine.h"
+#include "detect-engine-address.h"
+#include "detect-engine-proto.h"
+#include "detect-engine-port.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-sigorder.h"
 #include "detect-engine-payload.h"
@@ -64,6 +72,9 @@
 #include "detect-engine-hmd.h"
 #include "detect-engine-hcd.h"
 #include "detect-engine-hrud.h"
+#include "detect-engine-hsmd.h"
+#include "detect-engine-hscd.h"
+#include "detect-engine-hua.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
 #include "detect-fast-pattern.h"
@@ -88,6 +99,7 @@
 #include "log-httplog.h"
 #include "log-pcap.h"
 #include "log-file.h"
+#include "log-filestore.h"
 
 #include "stream-tcp.h"
 
@@ -103,6 +115,7 @@
 
 #include "source-erf-file.h"
 #include "source-erf-dag.h"
+#include "source-napatech.h"
 
 #include "source-af-packet.h"
 
@@ -115,6 +128,8 @@
 #include "flow-bit.h"
 #include "flow-alert-sid.h"
 #include "pkt-var.h"
+
+#include "host.h"
 
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
@@ -139,6 +154,7 @@
 #include "util-reference-config.h"
 #include "util-profiling.h"
 #include "util-magic.h"
+#include "util-signal.h"
 
 #include "util-coredump-config.h"
 
@@ -168,6 +184,7 @@
 #include "util-mem.h"
 #include "util-memcmp.h"
 #include "util-proto-name.h"
+#include "util-spm-bm.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -184,7 +201,7 @@ volatile sig_atomic_t sigterm_count = 0;
 SC_ATOMIC_DECLARE(unsigned int, engine_stage);
 
 /* Max packets processed simultaniously. */
-#define DEFAULT_MAX_PENDING_PACKETS 50
+#define DEFAULT_MAX_PENDING_PACKETS 1024
 
 /** suricata engine control flags */
 uint8_t suricata_ctl_flags = 0;
@@ -206,6 +223,8 @@ intmax_t max_pending_packets;
 /** set caps or not */
 int sc_set_caps;
 
+char *conf_filename = NULL;
+
 int RunmodeIsUnittests(void) {
     if (run_mode == RUNMODE_UNITTEST)
         return 1;
@@ -221,6 +240,53 @@ static void SignalHandlerSigterm(/*@unused@*/ int sig) {
     sigterm_count = 1;
     suricata_ctl_flags |= SURICATA_KILL;
 }
+
+void SignalHandlerSigusr2Disabled(int sig)
+{
+    SCLogInfo("Live rule reload not enabled in config.");
+
+    return;
+}
+
+void SignalHandlerSigusr2SigFileStartup(int sig)
+{
+    SCLogInfo("Live rule reload not possible if -s or -S option used at runtime.");
+
+    return;
+}
+
+static void SignalHandlerSigusr2Idle(int sig)
+{
+    if (run_mode == RUNMODE_UNKNOWN || run_mode == RUNMODE_UNITTEST) {
+        SCLogInfo("Ruleset load signal USR2 triggered for wrong runmode");
+        return;
+    }
+
+    SCLogInfo("Ruleset load in progress.  New ruleset load "
+              "allowed after current is done");
+
+    return;
+}
+
+void SignalHandlerSigusr2(int sig)
+{
+    if (run_mode == RUNMODE_UNKNOWN || run_mode == RUNMODE_UNITTEST) {
+        SCLogInfo("Ruleset load signal USR2 triggered for wrong runmode");
+        return;
+    }
+
+    if (suricata_ctl_flags != 0) {
+        SCLogInfo("Live rule swap no longer possible. Engine in shutdown mode.");
+        return;
+    }
+
+    UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2Idle);
+
+    DetectEngineSpawnLiveRuleSwapMgmtThread();
+
+    return;
+}
+
 #if 0
 static void SignalHandlerSighup(/*@unused@*/ int sig) {
     sighup_count = 1;
@@ -241,22 +307,6 @@ uint8_t print_mem_flag = 1;
 #endif
 #endif
 #endif
-
-static void
-SignalHandlerSetup(int sig, void (*handler)())
-{
-#if defined (OS_WIN32)
-	signal(sig, handler);
-#else
-    struct sigaction action;
-
-    action.sa_handler = handler;
-    sigemptyset(&(action.sa_mask));
-    sigaddset(&(action.sa_mask),sig);
-    action.sa_flags = 0;
-    sigaction(sig, &action, 0);
-#endif /* OS_WIN32 */
-}
 
 void GlobalInits()
 {
@@ -349,28 +399,27 @@ static void SetBpfStringFromFile(char *filename) {
         SCLogError(SC_ERR_FOPEN, "Failed to stat file %s", filename);
         exit(EXIT_FAILURE);
     }
-    bpf_len=st.st_size + 1;
+    bpf_len = st.st_size + 1;
 
-    bpf_filter = SCMalloc(bpf_len*sizeof(char));
-    if(bpf_filter == NULL) {
+    fp = fopen(filename,"r");
+    if (fp == NULL) {
+        SCLogError(SC_ERR_FOPEN, "Failed to open file %s", filename);
+        exit(EXIT_FAILURE);
+    }
+
+    bpf_filter = SCMalloc(bpf_len * sizeof(char));
+    if (bpf_filter == NULL) {
         SCLogError(SC_ERR_MEM_ALLOC,
-        "Failed to allocate buffer for bpf filter in file %s", filename);
+                "Failed to allocate buffer for bpf filter in file %s", filename);
         exit(EXIT_FAILURE);
     }
     memset(bpf_filter, 0x00, bpf_len);
 
-    fp = fopen(filename,"r");
-    if(fp == NULL) {
-        SCLogError(SC_ERR_FOPEN, "Failed to open file %s", filename);
-        SCFree(bpf_filter);
-        exit(EXIT_FAILURE);
-    }else {
-        nm = fread(bpf_filter, bpf_len - 1, 1, fp);
-        if((ferror(fp) != 0)||( nm != 1)) {
-           *bpf_filter='\0';
-        }
-        fclose(fp);
+    nm = fread(bpf_filter, bpf_len - 1, 1, fp);
+    if((ferror(fp) != 0)||( nm != 1)) {
+        *bpf_filter='\0';
     }
+    fclose(fp);
 
     if(strlen(bpf_filter) > 0) {
         /*replace comments with space*/
@@ -408,6 +457,7 @@ void usage(const char *progname)
 #endif
     printf("USAGE: %s\n\n", progname);
     printf("\t-c <path>                    : path to configuration file\n");
+    printf("\t-T                           : test configuration file (use with -c)\n");
     printf("\t-i <dev or ip>               : run in pcap live mode\n");
     printf("\t-F <bpf filter file>         : bpf filter file\n");
     printf("\t-r <path>                    : run in pcap file/offline mode\n");
@@ -430,7 +480,9 @@ void usage(const char *progname)
 #ifdef UNITTESTS
     printf("\t-u                           : run the unittests and exit\n");
     printf("\t-U, --unittest-filter=REGEX  : filter unittests with a regex\n");
+    printf("\t--list-app-layer-protos      : list supported app layer protocols\n");
     printf("\t--list-unittests             : list unit tests\n");
+    printf("\t--list-keywords              : list all keywords implemented by the engine\n");
     printf("\t--fatal-unittests            : enable fatal failure on unittest error\n");
 #endif /* UNITTESTS */
 #ifdef __SC_CUDA_SUPPORT__
@@ -465,7 +517,10 @@ void usage(const char *progname)
 #endif /* HAVE_LIBCAP_NG */
     printf("\t--erf-in <path>              : process an ERF file\n");
 #ifdef HAVE_DAG
-    printf("\t--dag <dag0,dag1,...>        : process ERF records from 0,1,...,n DAG input streams\n");
+    printf("\t--dag <dagX:Y>               : process ERF records from DAG interface X, stream Y\n");
+#endif
+#ifdef HAVE_NAPATECH
+    printf("\t--napatech <adapter>          : run Napatech feeds using <adapter>\n");
 #endif
     printf("\n");
     printf("\nTo run the engine with default configuration on "
@@ -519,6 +574,9 @@ void SCPrintBuildInfo(void) {
 #ifdef HAVE_AF_PACKET
     strlcat(features, "AF_PACKET ", sizeof(features));
 #endif
+#ifdef HAVE_PACKET_FANOUT
+    strlcat(features, "HAVE_PACKET_FANOUT ", sizeof(features));
+#endif
 #ifdef HAVE_DAG
     strlcat(features, "DAG ", sizeof(features));
 #endif
@@ -536,6 +594,15 @@ void SCPrintBuildInfo(void) {
 #endif
 #ifdef PCRE_HAVE_JIT
     strlcat(features, "PCRE_JIT ", sizeof(features));
+#endif
+#ifdef HAVE_NSS
+    strlcat(features, "HAVE_NSS ", sizeof(features));
+#endif
+#ifdef PROFILING
+    strlcat(features, "PROFILING ", sizeof(features));
+#endif
+#ifdef PROFILE_LOCKING
+    strlcat(features, "PROFILE_LOCKING ", sizeof(features));
 #endif
     if (strlen(features) == 0) {
         strlcat(features, "none", sizeof(features));
@@ -595,15 +662,17 @@ int main(int argc, char **argv)
     char pcap_dev[128];
     char *sig_file = NULL;
     int sig_file_exclusive = FALSE;
-    char *conf_filename = NULL;
+    int conf_test = 0;
     char *pid_filename = NULL;
 #ifdef UNITTESTS
     char *regex_arg = NULL;
 #endif
     int dump_config = 0;
+    int list_app_layer_protocols = 0;
     int list_unittests = 0;
     int list_cuda_cards = 0;
     int list_runmodes = 0;
+    int list_keywords = 0;
     const char *runmode_custom_mode = NULL;
     int daemon = 0;
 #ifndef OS_WIN32
@@ -615,6 +684,7 @@ int main(int argc, char **argv)
     uint32_t groupid = 0;
 #endif /* OS_WIN32 */
     int build_info = 0;
+    int rule_reload = 0;
 
     char *log_dir;
 #ifdef OS_WIN32
@@ -677,9 +747,11 @@ int main(int argc, char **argv)
         {"pcap", optional_argument, 0, 0},
         {"pcap-buffer-size", required_argument, 0, 0},
         {"unittest-filter", required_argument, 0, 'U'},
+        {"list-app-layer-protos", 0, &list_app_layer_protocols, 1},
         {"list-unittests", 0, &list_unittests, 1},
         {"list-cuda-cards", 0, &list_cuda_cards, 1},
         {"list-runmodes", 0, &list_runmodes, 1},
+        {"list-keywords", 0, &list_keywords, 1},
         {"runmode", required_argument, NULL, 0},
         {"engine-analysis", 0, &engine_analysis, 1},
 #ifdef OS_WIN32
@@ -694,6 +766,7 @@ int main(int argc, char **argv)
         {"group", required_argument, 0, 0},
         {"erf-in", required_argument, 0, 0},
         {"dag", required_argument, 0, 0},
+        {"napatech", required_argument, 0, 0},
         {"build-info", 0, &build_info, 1},
         {NULL, 0, NULL, 0}
     };
@@ -701,7 +774,7 @@ int main(int argc, char **argv)
     /* getopt_long stores the option index here. */
     int option_index = 0;
 
-    char short_opts[] = "c:Dhi:l:q:d:r:us:S:U:VF:";
+    char short_opts[] = "c:TDhi:l:q:d:r:us:S:U:VF:";
 
     while ((opt = getopt_long(argc, argv, short_opts, long_opts, &option_index)) != -1) {
         switch (opt) {
@@ -806,10 +879,13 @@ int main(int argc, char **argv)
                     exit(EXIT_FAILURE);
                 }
             } else if(strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
-                if (ConfSet("engine.init_failure_fatal", "1", 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set engine init_failure_fatal.\n");
+                if (ConfSet("engine.init-failure-fatal", "1", 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set engine init-failure-fatal.\n");
                     exit(EXIT_FAILURE);
                 }
+            }
+            else if(strcmp((long_opts[option_index]).name, "list-app-layer-protocols") == 0) {
+                /* listing all supported app layer protocols */
             }
             else if(strcmp((long_opts[option_index]).name, "list-unittests") == 0) {
 #ifdef UNITTESTS
@@ -828,6 +904,8 @@ int main(int argc, char **argv)
             } else if (strcmp((long_opts[option_index]).name, "list-runmodes") == 0) {
                 RunModeListRunmodes();
                 exit(EXIT_SUCCESS);
+            } else if (strcmp((long_opts[option_index]).name, "list-keywords") == 0) {
+                // do nothing
             } else if (strcmp((long_opts[option_index]).name, "runmode") == 0) {
                 runmode_custom_mode = optarg;
             } else if(strcmp((long_opts[option_index]).name, "engine-analysis") == 0) {
@@ -861,8 +939,8 @@ int main(int argc, char **argv)
             }
             else if(strcmp((long_opts[option_index]).name, "fatal-unittests") == 0) {
 #ifdef UNITTESTS
-                if (ConfSet("unittests.failure_fatal", "1", 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set unittests failure_fatal.\n");
+                if (ConfSet("unittests.failure-fatal", "1", 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set unittests failure-fatal.\n");
                     exit(EXIT_FAILURE);
                 }
 #else
@@ -892,23 +970,41 @@ int main(int argc, char **argv)
             }
             else if (strcmp((long_opts[option_index]).name, "erf-in") == 0) {
                 run_mode = RUNMODE_ERF_FILE;
-                if (ConfSet("erf_file.file", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set erf_file.file\n");
+                if (ConfSet("erf-file.file", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set erf-file.file\n");
                     exit(EXIT_FAILURE);
                 }
             }
-			else if (strcmp((long_opts[option_index]).name, "dag") == 0) {
+            else if (strcmp((long_opts[option_index]).name, "dag") == 0) {
 #ifdef HAVE_DAG
-				run_mode = RUNMODE_DAG;
-                if (ConfSet("erf_dag.iface", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set erf_dag.iface\n");
+                if (run_mode == RUNMODE_UNKNOWN) {
+                    run_mode = RUNMODE_DAG;
+                }
+                else if (run_mode != RUNMODE_DAG) {
+                    SCLogError(SC_ERR_MULTIPLE_RUN_MODE,
+                        "more than one run mode has been specified");
+                    usage(argv[0]);
+                    exit(EXIT_FAILURE);
+                }
+                LiveRegisterDevice(optarg);
+#else
+                SCLogError(SC_ERR_DAG_REQUIRED, "libdag and a DAG card are required"
+						" to receieve packets using --dag.");
+                exit(EXIT_FAILURE);
+#endif /* HAVE_DAG */
+		}
+                else if (strcmp((long_opts[option_index]).name, "napatech") == 0) {
+#ifdef HAVE_NAPATECH
+                run_mode = RUNMODE_NAPATECH;
+                if (ConfSet("napatech.adapter", optarg, 0) != 1) {
+                    fprintf(stderr, "ERROR: Failed to set napatech.adapter\n");
                     exit(EXIT_FAILURE);
                 }
 #else
-				SCLogError(SC_ERR_DAG_REQUIRED, "libdag and a DAG card are required"
-						" to receieve packets using --dag.");
-				exit(EXIT_FAILURE);
-#endif /* HAVE_DAG */
+                SCLogError(SC_ERR_NAPATECH_REQUIRED, "libntcommoninterface and a Napatech adapter are required"
+                                                    " to capture packets using --napatech.");
+                exit(EXIT_FAILURE);
+#endif /* HAVE_NAPATECH */
 			}
             else if(strcmp((long_opts[option_index]).name, "pcap-buffer-size") == 0) {
 #ifdef HAVE_PCAP_SET_BUFF
@@ -928,6 +1024,14 @@ int main(int argc, char **argv)
             break;
         case 'c':
             conf_filename = optarg;
+            break;
+        case 'T':
+            SCLogInfo("Running suricata under test mode");
+            conf_test = 1;
+            if (ConfSet("engine.init-failure-fatal", "1", 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set engine init-failure-fatal.\n");
+                exit(EXIT_FAILURE);
+            }
             break;
 #ifndef OS_WIN32
         case 'D':
@@ -1033,8 +1137,8 @@ int main(int argc, char **argv)
                 usage(argv[0]);
                 exit(EXIT_SUCCESS);
             }
-            if (ConfSet("pcap_file.file", optarg, 0) != 1) {
-                fprintf(stderr, "ERROR: Failed to set pcap_file.file\n");
+            if (ConfSet("pcap-file.file", optarg, 0) != 1) {
+                fprintf(stderr, "ERROR: Failed to set pcap-file.file\n");
                 exit(EXIT_FAILURE);
             }
             break;
@@ -1129,17 +1233,62 @@ int main(int argc, char **argv)
     TimeInit();
     SupportFastPatternForSigMatchTypes();
 
+    /* load the pattern matchers */
+    MpmTableSetup();
+
+    if (run_mode != RUNMODE_UNITTEST &&
+            !list_keywords &&
+            !list_app_layer_protocols) {
+        if (conf_filename == NULL)
+            conf_filename = DEFAULT_CONF_FILE;
+    }
+
+    /** \todo we need an api for these */
     /* Load yaml configuration file if provided. */
     if (conf_filename != NULL) {
+#ifdef UNITTESTS
+        if (run_mode == RUNMODE_UNITTEST) {
+            SCLogError(SC_ERR_CMD_LINE, "should not use a configuration file with unittests");
+            exit(EXIT_FAILURE);
+        }
+#endif
         if (ConfYamlLoadFile(conf_filename) != 0) {
             /* Error already displayed. */
             exit(EXIT_FAILURE);
         }
-    } else if (run_mode != RUNMODE_UNITTEST){
-        SCLogError(SC_ERR_OPENING_FILE, "Configuration file has not been provided");
-        usage(argv[0]);
-        exit(EXIT_FAILURE);
+
+        ConfNode *file;
+        ConfNode *includes = ConfGetNode("include");
+        if (includes != NULL) {
+            TAILQ_FOREACH(file, &includes->head, next) {
+                char *ifile = ConfLoadCompleteIncludePath(file->val);
+                SCLogInfo("Including: %s", ifile);
+
+                if (ConfYamlLoadFile(ifile) != 0) {
+                    /* Error already displayed. */
+                    exit(EXIT_FAILURE);
+                }
+            }
+        }
+
+        ConfNode *denode = NULL;
+        ConfNode *decnf = ConfGetNode("detect-engine");
+        if (decnf != NULL) {
+            TAILQ_FOREACH(denode, &decnf->head, next) {
+                if (strcmp(denode->val, "rule-reload") == 0) {
+                    (void)ConfGetChildValueBool(denode, "rule-reload", &rule_reload);
+                    SCLogInfo("Live rule reloads %s", rule_reload ? "enabled" : "disabled");
+                }
+            }
+        }
     }
+
+    AppLayerDetectProtoThreadInit();
+    if (list_app_layer_protocols) {
+        AppLayerListSupportedProtocols();
+        exit(EXIT_SUCCESS);
+    }
+    AppLayerParsersInitPostProcess();
 
     if (dump_config) {
         ConfDump();
@@ -1221,7 +1370,7 @@ int main(int argc, char **argv)
     DefragInit();
 
     if (run_mode == RUNMODE_UNKNOWN) {
-        if (!engine_analysis) {
+        if (!engine_analysis && !list_keywords && !conf_test) {
             usage(argv[0]);
             exit(EXIT_FAILURE);
         }
@@ -1250,8 +1399,11 @@ int main(int argc, char **argv)
     }
 
     /* hardcoded initialization code */
-    MpmTableSetup(); /* load the pattern matchers */
     SigTableSetup(); /* load the rule keywords */
+    if (list_keywords) {
+        SigTableList();
+        exit(EXIT_FAILURE);
+    }
     TmqhSetup();
 
     CIDRInit();
@@ -1265,6 +1417,18 @@ int main(int argc, char **argv)
     SCProtoNameInit();
 
     TagInitCtx();
+
+    if (DetectAddressTestConfVars() < 0) {
+        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,
+                "basic address vars test failed. Please check %s for errors", conf_filename);
+        exit(EXIT_FAILURE);
+    }
+    if (DetectPortTestConfVars() < 0) {
+        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,
+                "basic port vars test failed. Please check %s for errors", conf_filename);
+        exit(EXIT_FAILURE);
+    }
+
 
     TmModuleReceiveNFQRegister();
     TmModuleVerdictNFQRegister();
@@ -1299,6 +1463,7 @@ int main(int argc, char **argv)
     TmModuleLogHttpLogIPv6Register();
     TmModulePcapLogRegister();
     TmModuleLogFileLogRegister();
+    TmModuleLogFilestoreRegister();
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
     TmModuleCudaPacketBatcherRegister();
@@ -1307,13 +1472,20 @@ int main(int argc, char **argv)
     TmModuleDecodeErfFileRegister();
     TmModuleReceiveErfDagRegister();
     TmModuleDecodeErfDagRegister();
+    TmModuleNapatechFeedRegister();
+    TmModuleNapatechDecodeRegister();
     TmModuleDebugList();
 
     AppLayerHtpNeedFileInspection();
 
-    /** \todo we need an api for these */
-    AppLayerDetectProtoThreadInit();
-    AppLayerParsersInitPostProcess();
+    if (rule_reload) {
+        if (sig_file == NULL)
+            UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2Idle);
+        else
+            UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2SigFileStartup);
+    } else {
+        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2Disabled);
+    }
 
 #ifdef UNITTESTS
 
@@ -1402,11 +1574,18 @@ int main(int argc, char **argv)
         DetectEngineHttpMethodRegisterTests();
         DetectEngineHttpCookieRegisterTests();
         DetectEngineHttpRawUriRegisterTests();
+        DetectEngineHttpStatMsgRegisterTests();
+        DetectEngineHttpStatCodeRegisterTests();
+        DetectEngineHttpUARegisterTests();
         DetectEngineRegisterTests();
         SCLogRegisterTests();
         SMTPParserRegisterTests();
         MagicRegisterTests();
         UtilMiscRegisterTests();
+        DetectAddressTests();
+        DetectProtoTests();
+        DetectPortTests();
+        SCAtomicRegisterTests();
         if (list_unittests) {
             UtListTests(regex_arg);
         }
@@ -1459,15 +1638,21 @@ int main(int argc, char **argv)
         }
     }
 
+#ifdef HAVE_NSS
+    /* init NSS for md5 */
+    PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 0);
+    NSS_NoDB_Init(NULL);
+#endif
+
     /* registering signals we use */
-    SignalHandlerSetup(SIGINT, SignalHandlerSigint);
-    SignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
-    SignalHandlerSetup(SIGPIPE, SIG_IGN);
-    SignalHandlerSetup(SIGSYS, SIG_IGN);
+    UtilSignalHandlerSetup(SIGINT, SignalHandlerSigint);
+    UtilSignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
+    UtilSignalHandlerSetup(SIGPIPE, SIG_IGN);
+    UtilSignalHandlerSetup(SIGSYS, SIG_IGN);
 
 #ifndef OS_WIN32
 	/* SIGHUP is not implemnetd on WIN32 */
-    //SignalHandlerSetup(SIGHUP, SignalHandlerSighup);
+    //UtilSignalHandlerSetup(SIGHUP, SignalHandlerSighup);
 
     /* Get the suricata user ID to given user ID */
     if (do_setuid == TRUE) {
@@ -1488,23 +1673,8 @@ int main(int argc, char **argv)
     }
 #endif /* OS_WIN32 */
 
-    /* pre allocate packets */
-    SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)SIZE_OF_PACKET);
-    int i = 0;
-    for (i = 0; i < max_pending_packets; i++) {
-        /* XXX pkt alloc function */
-        Packet *p = SCMalloc(SIZE_OF_PACKET);
-        if (p == NULL) {
-            SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
-            exit(EXIT_FAILURE);
-        }
-        PACKET_INITIALIZE(p);
-
-        PacketPoolStorePacket(p);
-    }
-    SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
-        max_pending_packets, (uintmax_t)(max_pending_packets*SIZE_OF_PACKET));
-
+    PacketPoolInit(max_pending_packets);
+    HostInitConfig(HOST_VERBOSE);
     FlowInitConfig(FLOW_VERBOSE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
@@ -1517,7 +1687,9 @@ int main(int argc, char **argv)
     SCClassConfLoadClassficationConfigFile(de_ctx);
     SCRConfLoadReferenceConfigFile(de_ctx);
 
-    ActionInitConfig();
+    if (ActionInitConfig() < 0) {
+        exit(EXIT_FAILURE);
+    }
 
     if (MagicInit() != 0)
         exit(EXIT_FAILURE);
@@ -1535,6 +1707,11 @@ int main(int argc, char **argv)
     if (engine_analysis) {
         exit(EXIT_SUCCESS);
     }
+
+    /* registering singal handlers we use.  We register usr2 here, so that one
+     * can't call it during the first sig load phase */
+    if (sig_file == NULL && rule_reload == 1)
+        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
 
 #ifdef PROFILING
     SCProfilingInitRuleCounters(de_ctx);
@@ -1597,6 +1774,11 @@ int main(int argc, char **argv)
         }
     }
 
+    if(conf_test == 1){
+        SCLogInfo("Configuration provided was successfully loaded. Exiting.");
+        exit(EXIT_SUCCESS);
+    }
+
     RunModeDispatch(run_mode, runmode_custom_mode, de_ctx);
 
 #ifdef __SC_CUDA_SUPPORT__
@@ -1628,7 +1810,7 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
-    SC_ATOMIC_CAS(&engine_stage, SURICATA_INIT, SURICATA_RUNTIME);
+    (void) SC_ATOMIC_CAS(&engine_stage, SURICATA_INIT, SURICATA_RUNTIME);
 
     /* Un-pause all the paused threads */
     TmThreadContinueThreads();
@@ -1699,12 +1881,15 @@ int main(int argc, char **argv)
     }
 
     /* Update the engine stage/status flag */
-    SC_ATOMIC_CAS(&engine_stage, SURICATA_RUNTIME, SURICATA_DEINIT);
+    (void) SC_ATOMIC_CAS(&engine_stage, SURICATA_RUNTIME, SURICATA_DEINIT);
 
 
 #ifdef __SC_CUDA_SUPPORT__
     SCCudaPBKillBatchingPackets();
 #endif
+
+    /* First we need to kill the flow manager thread */
+    FlowKillFlowManagerThread();
 
     /* Disable packet acquire thread first */
     TmThreadDisableReceiveThreads();
@@ -1718,10 +1903,31 @@ int main(int argc, char **argv)
         (((1000000 + end_time.tv_usec - start_time.tv_usec) / 1000) - 1000);
     SCLogInfo("time elapsed %.3fs", (float)milliseconds/(float)1000);
 
+    if (rule_reload == 1) {
+        /* Disable detect threads first.  This is required by live rule swap */
+        TmThreadDisableUptoDetectThreads();
+
+        /* wait if live rule swap is in progress */
+        if (UtilSignalIsHandler(SIGUSR2, SignalHandlerSigusr2Idle)) {
+            SCLogInfo("Live rule swap in progress.  Waiting for it to end "
+                    "before we shut the engine/threads down");
+            while (UtilSignalIsHandler(SIGUSR2, SignalHandlerSigusr2Idle)) {
+                /* sleep for 0.5 seconds */
+                usleep(500000);
+            }
+            SCLogInfo("Received notification that live rule swap is done.  "
+                    "Continuing with engine/threads shutdown");
+        }
+    }
+
+    DetectEngineCtx *global_de_ctx = DetectEngineGetGlobalDeCtx();
+    BUG_ON(global_de_ctx == NULL);
+
     TmThreadKillThreads();
+
     SCPerfReleaseResources();
     FlowShutdown();
-    FlowPrintQueueInfo();
+    HostShutdown();
     StreamTcpFreeConfig(STREAM_VERBOSE);
     HTPFreeConfig();
     HTPAtExitPrintStats();
@@ -1747,7 +1953,6 @@ int main(int argc, char **argv)
         }
     }
 #endif
-    SigGroupCleanup(de_ctx);
 #ifdef __SC_CUDA_SUPPORT__
     if (PatternMatchDefaultMatcher() == MPM_B2G_CUDA) {
         /* pop the cuda context we just pushed before the call to SigGroupCleanup() */
@@ -1762,11 +1967,7 @@ int main(int argc, char **argv)
 
     AppLayerHtpPrintStats();
 
-    SigCleanSignatures(de_ctx);
-    if (de_ctx->sgh_mpm_context == ENGINE_SGH_MPM_FACTORY_CONTEXT_SINGLE) {
-        MpmFactoryDeRegisterAllMpmCtxProfiles();
-    }
-    DetectEngineCtxFree(de_ctx);
+    DetectEngineCtxFree(global_de_ctx);
     AlpProtoDestroy();
 
     TagDestroyCtx();
@@ -1776,9 +1977,9 @@ int main(int argc, char **argv)
     TimeDeinit();
     SCProtoNameDeInit();
     DefragDestroy();
-    TmqhPacketpoolDestroy();
+    PacketPoolDestroy();
     MagicDeinit();
-
+    TmqhCleanup();
     TmModuleRunDeInit();
 
 #ifdef PROFILING
@@ -1801,5 +2002,6 @@ int main(int argc, char **argv)
 #endif /* OS_WIN32 */
 
     SC_ATOMIC_DESTROY(engine_stage);
+
     exit(engine_retval);
 }

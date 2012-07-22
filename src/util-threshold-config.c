@@ -31,6 +31,9 @@
  */
 
 #include "suricata-common.h"
+
+#include "host.h"
+
 #include "detect.h"
 #include "detect-engine.h"
 #include "detect-engine-address.h"
@@ -72,7 +75,7 @@ typedef enum ThresholdRuleType {
 #define DETECT_SUPPRESS_REGEX "^,\\s*track\\s*(by_dst|by_src)\\s*,\\s*ip\\s*([\\d.:/]+)*\\s*$"
 
 /* Default path for the threshold.config file */
-#define THRESHOLD_CONF_DEF_CONF_FILEPATH "threshold.config"
+#define THRESHOLD_CONF_DEF_CONF_FILEPATH CONFIG_DIR "/threshold.config"
 
 static pcre *regex_base = NULL;
 static pcre_extra *regex_base_study = NULL;
@@ -205,8 +208,45 @@ error:
 void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
 {
 
-    if(fd != NULL)
+    if (fd != NULL)
         fclose(fd);
+
+    if (regex_base != NULL) {
+        pcre_free(regex_base);
+        regex_base = NULL;
+    }
+    if (regex_base_study != NULL) {
+        pcre_free(regex_base_study);
+        regex_base_study = NULL;
+    }
+
+    if (regex_threshold != NULL) {
+        pcre_free(regex_threshold);
+        regex_threshold = NULL;
+    }
+    if (regex_threshold_study != NULL) {
+        pcre_free(regex_threshold_study);
+        regex_threshold_study = NULL;
+    }
+
+    if (regex_rate != NULL) {
+        pcre_free(regex_rate);
+        regex_rate = NULL;
+    }
+    if (regex_rate_study != NULL) {
+        pcre_free(regex_rate_study);
+        regex_rate_study = NULL;
+    }
+
+    if (regex_suppress != NULL) {
+        pcre_free(regex_suppress);
+        regex_suppress = NULL;
+    }
+    if (regex_suppress_study != NULL) {
+        pcre_free(regex_suppress_study);
+        regex_suppress_study = NULL;
+    }
+
     return;
 }
 
@@ -478,6 +518,10 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
             if (ByteExtractStringUint32(&parsed_count, 10, strlen(th_count), th_count) <= 0) {
                 goto error;
             }
+            if (parsed_count == 0) {
+                SCLogError(SC_ERR_INVALID_VALUE, "rate filter count should be > 0");
+                goto error;
+            }
 
             if (ByteExtractStringUint32(&parsed_seconds, 10, strlen(th_seconds), th_seconds) <= 0) {
                 goto error;
@@ -513,15 +557,27 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
 
             ns = s->next;
 
-            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+            m = SigMatchGetLastSMFromLists(s, 2,
+                                           DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-            if(m != NULL)
+            if (m != NULL) {
+                SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                             "an event var set.  The signature event var is "
+                             "given precedence over the threshold.conf one.  "
+                             "We'll change this in the future though.", id);
                 goto end;
+            }
 
-            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+            m = SigMatchGetLastSMFromLists(s, 2,
+                                           DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-            if(m != NULL)
+            if (m != NULL) {
+                SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                             "an event var set.  The signature event var is "
+                             "given precedence over the threshold.conf one.  "
+                             "We'll change this in the future though.", id);
                 goto end;
+            }
 
             de = SCMalloc(sizeof(DetectThresholdData));
             if (de == NULL)
@@ -571,7 +627,7 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
                     de_ctx->ths_ctx.th_size++;
                 }
             }
-            SigMatchAppendPacket(s, sm);
+            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_THRESHOLD);
             s = ns;
         }
 
@@ -582,15 +638,27 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
 
             if(s->gid == gid)   {
 
-                m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+                m = SigMatchGetLastSMFromLists(s, 2,
+                                               DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-                if(m != NULL)
+                if (m != NULL) {
+                    SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                                 "an event var set.  The signature event var is "
+                                 "given precedence over the threshold.conf one.  "
+                                 "We'll change this in the future though.", id);
                     goto end;
+                }
 
-                m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+                m = SigMatchGetLastSMFromLists(s, 2,
+                                               DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-                if(m != NULL)
+                if (m != NULL) {
+                    SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                                 "an event var set.  The signature event var is "
+                                 "given precedence over the threshold.conf one.  "
+                                 "We'll change this in the future though.", id);
                     goto end;
+                }
 
                 de = SCMalloc(sizeof(DetectThresholdData));
                 if (de == NULL)
@@ -640,10 +708,15 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
                         de_ctx->ths_ctx.th_size++;
                     }
                 }
-                SigMatchAppendPacket(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_THRESHOLD);
             }
             s = ns;
         }
+    } else if (id > 0 && gid == 0) {
+        SCLogError(SC_ERR_INVALID_VALUE, "Can't use a event config that has "
+                   "sid > 0 and gid == 0.  Killing engine.  Please fix this "
+                   "in your threshold.conf file");
+        exit(EXIT_FAILURE);
     } else {
         sig = SigFindSignatureBySidGid(de_ctx,id,gid);
 
@@ -653,15 +726,27 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
                 goto end;
             }
 
-            m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+            m = SigMatchGetLastSMFromLists(sig, 2,
+                                           DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-            if(m != NULL)
+            if (m != NULL) {
+                SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                             "an event var set.  The signature event var is "
+                             "given precedence over the threshold.conf one.  "
+                             "We'll change this in the future though.", id);
                 goto end;
+            }
 
-            m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+            m = SigMatchGetLastSMFromLists(sig, 2,
+                                           DETECT_DETECTION_FILTER, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
-            if(m != NULL)
+            if (m != NULL) {
+                SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
+                             "an event var set.  The signature event var is "
+                             "given precedence over the threshold.conf one.  "
+                             "We'll change this in the future though.", id);
                 goto end;
+            }
 
             de = SCMalloc(sizeof(DetectThresholdData));
             if (de == NULL)
@@ -712,7 +797,7 @@ int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
                 }
             }
 
-            SigMatchAppendPacket(sig, sm);
+            SigMatchAppendSMToList(sig, sm, DETECT_SM_LIST_THRESHOLD);
         }
 
     }
@@ -806,9 +891,9 @@ int SCThresholdConfLineIsMultiline(char *line)
 int SCThresholdConfLineLength(FILE *fd) {
     long pos = ftell(fd);
     int len = 0;
-    char c;
+    int c;
 
-    while ( (c = fgetc(fd)) && c != '\n' && !feof(fd))
+    while ( (c = fgetc(fd)) && (char)c != '\n' && c != EOF && !feof(fd))
         len++;
 
     if (pos < 0)
@@ -1132,7 +1217,8 @@ int SCThresholdConfTest01(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1176,7 +1262,8 @@ int SCThresholdConfTest02(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1219,7 +1306,8 @@ int SCThresholdConfTest03(void)
     fd = SCThresholdConfGenerateValidDummyFD01();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1262,7 +1350,8 @@ int SCThresholdConfTest04(void)
     fd = SCThresholdConfGenerateInValidDummyFD02();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1323,7 +1412,8 @@ int SCThresholdConfTest05(void)
 
         if(s->id == 1 || s->id == 10 || s->id == 100) {
 
-            m = SigMatchGetLastSM(s->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+            m = SigMatchGetLastSMFromLists(s, 2,
+                                           DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
             if(m == NULL)   {
                 goto end;
@@ -1376,7 +1466,8 @@ int SCThresholdConfTest06(void)
     fd = SCThresholdConfGenerateValidDummyFD04();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1420,7 +1511,8 @@ int SCThresholdConfTest07(void)
     fd = SCThresholdConfGenerateValidDummyFD05();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_DETECTION_FILTER, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1465,7 +1557,8 @@ int SCThresholdConfTest08(void)
     fd = SCThresholdConfGenerateValidDummyFD06();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_DETECTION_FILTER, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1493,10 +1586,11 @@ int SCThresholdConfTest09(void)
     int result = 0;
     FILE *fd = NULL;
 
+    HostInitConfig(HOST_QUIET);
+
     Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
-    int alerts = 0;
 
     memset(&th_v, 0, sizeof(th_v));
 
@@ -1524,18 +1618,26 @@ int SCThresholdConfTest09(void)
 
     TimeGet(&p->ts);
 
+    p->alerts.cnt = 0;
+    p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts = PacketAlertCheck(p, 10);
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-    if (alerts > 0) {
-        goto end;
+    if (p->alerts.cnt != 1 || p->action & ACTION_DROP) {
         result = 0;
+        goto end;
     }
 
+    p->alerts.cnt = 0;
+    p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-    if (alerts != 1) {
+    if (p->alerts.cnt != 1 || p->action & ACTION_DROP) {
+        result = 0;
+        goto end;
+    }
+
+    p->alerts.cnt = 0;
+    p->action = 0;
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (p->alerts.cnt != 1 || p->action & ACTION_DROP) {
         result = 0;
         goto end;
     }
@@ -1543,9 +1645,21 @@ int SCThresholdConfTest09(void)
     TimeSetIncrementTime(2);
     TimeGet(&p->ts);
 
+    p->alerts.cnt = 0;
+    p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-    if (alerts != 2) {
+    if (p->alerts.cnt != 1 || !(p->action & ACTION_DROP)) {
+        result = 0;
+        goto end;
+    }
+
+    TimeSetIncrementTime(3);
+    TimeGet(&p->ts);
+
+    p->alerts.cnt = 0;
+    p->action = 0;
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (p->alerts.cnt != 1 || !(p->action & ACTION_DROP)) {
         result = 0;
         goto end;
     }
@@ -1553,13 +1667,23 @@ int SCThresholdConfTest09(void)
     TimeSetIncrementTime(10);
     TimeGet(&p->ts);
 
+    p->alerts.cnt = 0;
+    p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
+    if (p->alerts.cnt != 1 || p->action & ACTION_DROP) {
+        result = 0;
+        goto end;
+    }
 
-    if (alerts == 2)
-        result = 1;
+    p->alerts.cnt = 0;
+    p->action = 0;
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (p->alerts.cnt != 1 || p->action & ACTION_DROP) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
 
 end:
     UTHFreePacket(p);
@@ -1569,6 +1693,7 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    HostShutdown();
     return result;
 }
 
@@ -1583,6 +1708,8 @@ int SCThresholdConfTest10(void)
     Signature *sig = NULL;
     int result = 0;
     FILE *fd = NULL;
+
+    HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
     Packet *p2 = UTHBuildPacketSrcDst((uint8_t*)"lalala", 6, IPPROTO_TCP, "172.26.0.1", "172.26.0.10");
@@ -1622,8 +1749,8 @@ int SCThresholdConfTest10(void)
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
     alerts += PacketAlertCheck(p2, 10);
     if (alerts > 0) {
-        goto end;
         result = 0;
+        goto end;
     }
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1666,6 +1793,7 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    HostShutdown();
     return result;
 }
 
@@ -1680,6 +1808,8 @@ int SCThresholdConfTest11(void)
     Signature *sig = NULL;
     int result = 0;
     FILE *fd = NULL;
+
+    HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
     ThreadVars th_v;
@@ -1782,6 +1912,7 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    HostShutdown();
     return result;
 }
 
@@ -1796,6 +1927,8 @@ int SCThresholdConfTest12(void)
     Signature *sig = NULL;
     int result = 0;
     FILE *fd = NULL;
+
+    HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
     ThreadVars th_v;
@@ -1899,6 +2032,7 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    HostShutdown();
     return result;
 }
 
@@ -1917,6 +2051,8 @@ int SCThresholdConfTest13(void)
     int result = 0;
     FILE *fd = NULL;
 
+    HostInitConfig(HOST_QUIET);
+
     if (de_ctx == NULL)
         return result;
 
@@ -1930,7 +2066,8 @@ int SCThresholdConfTest13(void)
     fd = SCThresholdConfGenerateValidDummyFD11();
     SCThresholdConfInitContext(de_ctx,fd);
 
-    m = SigMatchGetLastSM(sig->sm_lists[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    m = SigMatchGetLastSMFromLists(sig, 2,
+                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
 
     if(m != NULL)   {
         de = (DetectThresholdData *)m->ctx;
@@ -1943,6 +2080,7 @@ end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
+    HostShutdown();
     return result;
 }
 
@@ -1957,6 +2095,8 @@ int SCThresholdConfTest14(void)
     Signature *sig = NULL;
     int result = 0;
     FILE *fd = NULL;
+
+    HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
                                     "192.168.0.100", 1234, 24);
@@ -2005,6 +2145,7 @@ end:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    HostShutdown();
     return result;
 }
 

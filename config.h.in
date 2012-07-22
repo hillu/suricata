@@ -28,6 +28,9 @@
 /* Define to 1 if you have the `cuda' library (-lcuda). */
 #undef HAVE_LIBCUDA
 
+/* Define to 1 if you have the `dag' library (-ldag). */
+#undef HAVE_LIBDAG
+
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
 
@@ -43,6 +46,12 @@
 
 /* Define to 1 if you have the `nfnetlink' library (-lnfnetlink). */
 #undef HAVE_LIBNFNETLINK
+
+/* Define to 1 if you have the `nspr4' library (-lnspr4). */
+#undef HAVE_LIBNSPR4
+
+/* Define to 1 if you have the `nss3' library (-lnss3). */
+#undef HAVE_LIBNSS3
 
 /* Define to 1 if you have the `pcap' library (-lpcap). */
 #undef HAVE_LIBPCAP
@@ -66,6 +75,9 @@
    to 0 otherwise. */
 #undef HAVE_MALLOC
 
+/* Define to 1 if you have the `memchr' function. */
+#undef HAVE_MEMCHR
+
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
@@ -87,6 +99,9 @@
 /* Found nfq_set_verdict2 function in netfilter_queue */
 #undef HAVE_NFQ_SET_VERDICT2
 
+/* libnss available for md5 */
+#undef HAVE_NSS
+
 /* Packet fanout support is available */
 #undef HAVE_PACKET_FANOUT
 
@@ -95,6 +110,9 @@
 
 /* PF_RING pfring_enable_ring is available */
 #undef HAVE_PFRING_ENABLE
+
+/* For post 5.4.0 version of pfring_open */
+#undef HAVE_PFRING_OPEN_NEW
 
 /* PF_RING pfring_recv buffer is u_char** */
 #undef HAVE_PFRING_RECV_UCHAR
@@ -153,6 +171,9 @@
 
 /* Define to 1 if you have the <sys/ioctl.h> header file. */
 #undef HAVE_SYS_IOCTL_H
+
+/* Define to 1 if you have the <sys/mman.h> header file. */
+#undef HAVE_SYS_MMAN_H
 
 /* Define to 1 if you have the <sys/prctl.h> header file. */
 #undef HAVE_SYS_PRCTL_H

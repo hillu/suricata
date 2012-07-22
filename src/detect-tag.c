@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -50,7 +50,6 @@
 #include "threads.h"
 
 SC_ATOMIC_EXTERN(unsigned int, num_tags);
-extern DetectTagHostCtx *tag_ctx;
 
 /* format: tag: <type>, <count>, <metric>, [direction]; */
 #define PARSE_REGEX  "^\\s*(host|session)\\s*(,\\s*(\\d+)\\s*,\\s*(packets|bytes|seconds)\\s*(,\\s*(src|dst))?\\s*)?$"
@@ -97,97 +96,6 @@ error:
     return;
 }
 
-DetectTagDataEntry *DetectTagDataCopy(DetectTagDataEntry *dtd) {
-    DetectTagDataEntry *tde = SCMalloc(sizeof(DetectTagDataEntry));
-    if (tde == NULL) {
-        return NULL;
-    }
-    memset(tde, 0, sizeof(DetectTagDataEntry));
-
-    tde->sid = dtd->sid;
-    tde->gid = dtd->gid;
-
-    tde->td = dtd->td;
-    tde->first_ts.tv_sec = dtd->first_ts.tv_sec;
-    tde->first_ts.tv_usec = dtd->first_ts.tv_usec;
-    tde->last_ts.tv_sec = dtd->last_ts.tv_sec;
-    tde->last_ts.tv_usec = dtd->last_ts.tv_usec;
-    return tde;
-}
-
-/**
- * \brief This function is used to add a tag to a session (type session)
- *        or update it if it's already installed. The number of times to
- *        allow an update is limited by DETECT_TAG_MATCH_LIMIT. This way
- *        repetitive matches to the same rule are limited of setting tags,
- *        to avoid DOS attacks
- *
- * \param p pointer to the current packet
- * \param tde pointer to the new DetectTagDataEntry
- *
- * \retval 0 if the tde was added succesfuly
- * \retval 1 if an entry of this sid/gid already exist and was updated
- */
-int DetectTagFlowAdd(Packet *p, DetectTagDataEntry *tde) {
-    uint8_t updated = 0;
-    uint16_t num_tags = 0;
-    DetectTagDataEntry *iter = NULL;
-
-    if (p->flow == NULL)
-        return 1;
-
-    SCMutexLock(&p->flow->m);
-
-    if (p->flow->tag_list == NULL) {
-        p->flow->tag_list = SCMalloc(sizeof(DetectTagDataEntryList));
-        if (p->flow->tag_list == NULL) {
-            goto error;
-        }
-        memset(p->flow->tag_list, 0, sizeof(DetectTagDataEntryList));
-    } else {
-        iter = p->flow->tag_list->header_entry;
-
-        /* First iterate installed entries searching a duplicated sid/gid */
-        for (; iter != NULL; iter = iter->next) {
-            num_tags++;
-
-            if (iter->sid == tde->sid && iter->gid == tde->gid) {
-                iter->cnt_match++;
-
-                /* If so, update data, unless the maximum MATCH limit is
-                 * reached. This prevents possible DOS attacks */
-                if (iter->cnt_match < DETECT_TAG_MATCH_LIMIT) {
-                    /* Reset time and counters */
-                    iter->first_ts.tv_sec = iter->last_ts.tv_sec = tde->first_ts.tv_sec;
-                    iter->packets = 0;
-                    iter->bytes = 0;
-                }
-                updated = 1;
-                break;
-            }
-        }
-    }
-
-    /* If there was no entry of this rule, prepend the new tde */
-    if (updated == 0 && num_tags < DETECT_TAG_MAX_TAGS) {
-        DetectTagDataEntry *new_tde = DetectTagDataCopy(tde);
-        if (new_tde != NULL) {
-            new_tde->next = p->flow->tag_list->header_entry;
-            p->flow->tag_list->header_entry = new_tde;
-            SC_ATOMIC_ADD(num_tags, 1);
-        }
-    } else if (num_tags == DETECT_TAG_MAX_TAGS) {
-        SCLogDebug("Max tags for sessions reached (%"PRIu16")", num_tags);
-    }
-
-    SCMutexUnlock(&p->flow->m);
-    return updated;
-
-error:
-    SCMutexUnlock(&p->flow->m);
-    return 1;
-}
-
 /**
  * \brief This function is used to setup a tag for session/host
  *
@@ -204,23 +112,36 @@ int DetectTagMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
     DetectTagData *td = (DetectTagData *) m->ctx;
     DetectTagDataEntry tde;
     memset(&tde, 0, sizeof(DetectTagDataEntry));
-    tde.sid = s->id;
-    tde.gid = s->gid;
-    tde.td = td;
-    tde.last_ts.tv_sec = tde.first_ts.tv_sec = p->ts.tv_usec;
 
     switch (td->type) {
         case DETECT_TAG_TYPE_HOST:
 #ifdef DEBUG
             BUG_ON(!(td->direction == DETECT_TAG_DIR_SRC || td->direction == DETECT_TAG_DIR_DST));
 #endif
+
+            tde.sid = s->id;
+            tde.gid = s->gid;
+            tde.last_ts = tde.first_ts = p->ts.tv_sec;
+            tde.metric = td->metric;
+            tde.count = td->count;
+            if (td->direction == DETECT_TAG_DIR_SRC)
+                tde.flags |= TAG_ENTRY_FLAG_DIR_SRC;
+            else if (td->direction == DETECT_TAG_DIR_DST)
+                tde.flags |= TAG_ENTRY_FLAG_DIR_DST;
+
             SCLogDebug("Tagging Host with sid %"PRIu32":%"PRIu32"", s->id, s->gid);
-            TagHashAddTag(tag_ctx, &tde, p);
+            TagHashAddTag(&tde, p);
             break;
         case DETECT_TAG_TYPE_SESSION:
             if (p->flow != NULL) {
                 /* If it already exists it will be updated */
-                DetectTagFlowAdd(p, &tde);
+                tde.sid = s->id;
+                tde.gid = s->gid;
+                tde.last_ts = tde.first_ts = p->ts.tv_usec;
+                tde.metric = td->metric;
+                tde.count = td->count;
+
+                TagFlowAdd(p, &tde);
             } else {
                 SCLogDebug("No flow to append the session tag");
             }
@@ -250,6 +171,7 @@ DetectTagData *DetectTagParse (char *tagstr)
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
+    const char *str_ptr = NULL;
 
     ret = pcre_exec(parse_regex, parse_regex_study, tagstr, strlen(tagstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret < 1) {
@@ -257,9 +179,8 @@ DetectTagData *DetectTagParse (char *tagstr)
         goto error;
     }
 
-    const char *str_ptr;
     res = pcre_get_substring((char *)tagstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-    if (res < 0) {
+    if (res < 0 || str_ptr == NULL) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
@@ -273,6 +194,8 @@ DetectTagData *DetectTagParse (char *tagstr)
         SCLogError(SC_ERR_INVALID_VALUE, "Invalid argument type. Must be session or host (%s)", tagstr);
         goto error;
     }
+    pcre_free_substring(str_ptr);
+    str_ptr = NULL;
 
     /* default tag is 256 packets from session or dst host */
     td.count = DETECT_TAG_MAX_PKTS;
@@ -281,7 +204,7 @@ DetectTagData *DetectTagParse (char *tagstr)
 
     if (ret > 4) {
         res = pcre_get_substring((char *)tagstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
-        if (res < 0) {
+        if (res < 0 || str_ptr == NULL) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
@@ -293,8 +216,11 @@ DetectTagData *DetectTagParse (char *tagstr)
             goto error;
         }
 
+        pcre_free_substring(str_ptr);
+        str_ptr = NULL;
+
         res = pcre_get_substring((char *)tagstr, ov, MAX_SUBSTRINGS, 4, &str_ptr);
-        if (res < 0) {
+        if (res < 0 || str_ptr == NULL) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
@@ -314,10 +240,13 @@ DetectTagData *DetectTagParse (char *tagstr)
             goto error;
         }
 
+        pcre_free_substring(str_ptr);
+        str_ptr = NULL;
+
         /* if specified, overwrite it */
         if (ret == 7) {
             res = pcre_get_substring((char *)tagstr, ov, MAX_SUBSTRINGS, 6, &str_ptr);
-            if (res < 0) {
+            if (res < 0 || str_ptr == NULL) {
                 SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
                 goto error;
             }
@@ -335,6 +264,9 @@ DetectTagData *DetectTagParse (char *tagstr)
             if (td.type != DETECT_TAG_TYPE_HOST) {
                 SCLogWarning(SC_ERR_INVALID_VALUE, "Argument direction doesn't make sense for type \"session\" (%s [%"PRIu8"])", tagstr, td.type);
             }
+
+            pcre_free_substring(str_ptr);
+            str_ptr = NULL;
         }
     }
 
@@ -348,6 +280,8 @@ DetectTagData *DetectTagParse (char *tagstr)
     return real_td;
 
 error:
+    if (str_ptr != NULL)
+        pcre_free_substring(str_ptr);
     return NULL;
 }
 
@@ -377,7 +311,7 @@ int DetectTagSetup (DetectEngineCtx *de_ctx, Signature *s, char *tagstr)
     sm->ctx = (void *)td;
 
     /* Append it to the list of tags */
-    SigMatchAppendTag(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_TMATCH);
 
     return 0;
 
@@ -386,6 +320,19 @@ error:
     if (sm != NULL) SCFree(sm);
     return -1;
 
+}
+
+/** \internal
+ *  \brief this function will free memory associated with
+ *        DetectTagDataEntry
+ *
+ *  \param td pointer to DetectTagDataEntry
+ */
+static void DetectTagDataEntryFree(void *ptr) {
+    if (ptr != NULL) {
+        DetectTagDataEntry *dte = (DetectTagDataEntry *)ptr;
+        SCFree(dte);
+    }
 }
 
 
@@ -397,28 +344,14 @@ error:
  */
 void DetectTagDataListFree(void *ptr) {
     if (ptr != NULL) {
-        DetectTagDataEntryList *list = (DetectTagDataEntryList *)ptr;
-        DetectTagDataEntry *entry = list->header_entry;
+        DetectTagDataEntry *entry = ptr;
 
         while (entry != NULL) {
             DetectTagDataEntry *next_entry = entry->next;
             DetectTagDataEntryFree(entry);
-            SC_ATOMIC_SUB(num_tags, 1);
+            (void) SC_ATOMIC_SUB(num_tags, 1);
             entry = next_entry;
         }
-        SCFree(list);
-    }
-}
-/**
- * \brief this function will free memory associated with
- *        DetectTagDataEntry
- *
- * \param td pointer to DetectTagDataEntry
- */
-void DetectTagDataEntryFree(void *ptr) {
-    if (ptr != NULL) {
-        DetectTagDataEntry *dte = (DetectTagDataEntry *)ptr;
-        SCFree(dte);
     }
 }
 
@@ -806,8 +739,10 @@ int DetectTagTestPacket04 (void) {
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.flags |= FLOW_IPV4;
-    inet_pton(AF_INET, "192.168.1.5", f.src.addr_data32);
-    inet_pton(AF_INET, "192.168.1.1", f.dst.addr_data32);
+    if (inet_pton(AF_INET, "192.168.1.5", f.src.addr_data32) != 1)
+        goto end;
+    if (inet_pton(AF_INET, "192.168.1.1", f.dst.addr_data32) != 1)
+        goto end;
 
     DecodeThreadVars dtv;
     ThreadVars th_v;

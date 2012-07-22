@@ -65,10 +65,10 @@ SC_ATOMIC_EXTERN(unsigned int, engine_stage);
     } \
     \
     global_mem += (a); \
-    if (print_mem_flag == 1) \
+    if (print_mem_flag == 1) {                               \
         SCLogInfo("SCMalloc return at %p of size %"PRIuMAX, \
             ptrmem, (uintmax_t)(a)); \
-    \
+    }                                \
     (void*)ptrmem; \
 })
 
@@ -88,10 +88,10 @@ SC_ATOMIC_EXTERN(unsigned int, engine_stage);
     } \
     \
     global_mem += (a); \
-    if (print_mem_flag == 1) \
+    if (print_mem_flag == 1) {                                         \
         SCLogInfo("SCRealloc return at %p (old:%p) of size %"PRIuMAX, \
             ptrmem, (x), (uintmax_t)(a)); \
-    \
+    }                                     \
     (void*)ptrmem; \
 })
 
@@ -111,10 +111,10 @@ SC_ATOMIC_EXTERN(unsigned int, engine_stage);
     } \
     \
     global_mem += (a)*(nm); \
-    if (print_mem_flag == 1) \
+    if (print_mem_flag == 1) {                                          \
         SCLogInfo("SCCalloc return at %p of size %"PRIuMAX" (nm) %"PRIuMAX, \
             ptrmem, (uintmax_t)(a), (uintmax_t)(nm)); \
-    \
+    }                                                 \
     (void*)ptrmem; \
 })
 
@@ -135,17 +135,18 @@ SC_ATOMIC_EXTERN(unsigned int, engine_stage);
     } \
     \
     global_mem += len; \
-    if (print_mem_flag == 1) \
+    if (print_mem_flag == 1) {                              \
         SCLogInfo("SCStrdup return at %p of size %"PRIuMAX, \
             ptrmem, (uintmax_t)len); \
-    \
+    }                                \
     (void*)ptrmem; \
 })
 
 #define SCFree(a) ({ \
     extern uint8_t print_mem_flag; \
-    if (print_mem_flag == 1) \
+    if (print_mem_flag == 1) {          \
         SCLogInfo("SCFree at %p", (a)); \
+    }                                   \
     free((a)); \
 })
 
@@ -157,8 +158,9 @@ SC_ATOMIC_EXTERN(unsigned int, engine_stage);
     ptrmem = malloc((a)); \
     if (ptrmem == NULL) { \
         if (SC_ATOMIC_GET(engine_stage) == SURICATA_INIT) {\
+            uintmax_t scmalloc_size_ = (uintmax_t)(a); \
             SCLogError(SC_ERR_MEM_ALLOC, "SCMalloc failed: %s, while trying " \
-                "to allocate %"PRIuMAX" bytes", strerror(errno), (uintmax_t)(a)); \
+                "to allocate %"PRIuMAX" bytes", strerror(errno), scmalloc_size_); \
             SCLogError(SC_ERR_FATAL, "Out of memory. The engine cannot be initialized. Exiting..."); \
             exit(EXIT_FAILURE); \
         } \

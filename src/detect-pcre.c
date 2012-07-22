@@ -64,10 +64,7 @@
 #define PARSE_CAPTURE_REGEX "\\(\\?P\\<([A-z]+)\\_([A-z0-9_]+)\\>"
 #define PARSE_REGEX         "(?<!\\\\)/(.*(?<!(?<!\\\\)\\\\))/([^\"]*)"
 
-#define DEFAULT_MATCH_LIMIT 10000000
-#define DEFAULT_MATCH_LIMIT_RECURSION 10000000
-
-#define SC_MATCH_LIMIT_DEFAULT 1500
+#define SC_MATCH_LIMIT_DEFAULT 3500
 #define SC_MATCH_LIMIT_RECURSION_DEFAULT 1500
 
 static int pcre_match_limit = 0;
@@ -95,24 +92,6 @@ void DetectPcreRegister (void) {
     sigmatch_table[DETECT_PCRE].RegisterTests  = DetectPcreRegisterTests;
 
     sigmatch_table[DETECT_PCRE].flags |= SIGMATCH_PAYLOAD;
-
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].name = "__pcre_http_cookie__"; /* not a real keyword */
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].Match = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].AppLayerMatch = DetectPcreALMatchCookie;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].alproto = ALPROTO_HTTP;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].Setup = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].Free  = DetectPcreFree;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].RegisterTests  = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPCOOKIE].flags |= SIGMATCH_PAYLOAD;
-
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].name = "__pcre_http_method__"; /* not a real keyword */
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].Match = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].AppLayerMatch = DetectPcreALMatchMethod;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].alproto = ALPROTO_HTTP;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].Setup = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].Free  = DetectPcreFree;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].RegisterTests  = NULL;
-    sigmatch_table[DETECT_PCRE_HTTPMETHOD].flags |= SIGMATCH_PAYLOAD;
 
     const char *eb;
     int eo;
@@ -211,9 +190,7 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
 
     DetectPcreData *pe = (DetectPcreData *)m->ctx;
 
-    /* define ptr & len */
-    SCMutexLock(&f->m);
-    SCLogDebug("got lock %p", &f->m);
+    FLOWLOCK_RDLOCK(f);
 
     HtpState *htp_state = (HtpState *)state;
     if (htp_state == NULL) {
@@ -291,8 +268,7 @@ int DetectPcreALDoMatchMethod(DetectEngineThreadCtx *det_ctx, Signature *s,
     }
 
 end:
-    SCMutexUnlock(&f->m);
-    SCLogDebug("released lock %p", &f->m);
+    FLOWLOCK_UNLOCK(f);
 
     SCReturnInt(toret);
 }
@@ -326,9 +302,7 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
 
     DetectPcreData *pe = (DetectPcreData *)m->ctx;
 
-    /* define ptr & len */
-    SCMutexLock(&f->m);
-    SCLogDebug("got lock %p", &f->m);
+    FLOWLOCK_RDLOCK(f);
 
     HtpState *htp_state = (HtpState *)state;
     if (htp_state == NULL) {
@@ -422,9 +396,7 @@ int DetectPcreALDoMatchCookie(DetectEngineThreadCtx *det_ctx, Signature *s,
     }
 
 end:
-    SCMutexUnlock(&f->m);
-    SCLogDebug("released lock %p", &f->m);
-
+    FLOWLOCK_UNLOCK(f);
     SCReturnInt(toret);
 }
 
@@ -493,12 +465,9 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
     //if (pe->flags & DETECT_PCRE_HTTP_BODY_AL)
     //    SCReturnInt(0);
 
-    if (s->flags & SIG_FLAG_RECURSIVE) {
-        ptr = payload + det_ctx->payload_offset;
-        len = payload_len - det_ctx->payload_offset;
-    } else if (pe->flags & DETECT_PCRE_RELATIVE) {
-        ptr = payload + det_ctx->payload_offset;
-        len = payload_len - det_ctx->payload_offset;
+    if (pe->flags & DETECT_PCRE_RELATIVE) {
+        ptr = payload + det_ctx->buffer_offset;
+        len = payload_len - det_ctx->buffer_offset;
     } else {
         ptr = payload;
         len = payload_len;
@@ -549,7 +518,7 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
 
             /* update offset for pcre RELATIVE */
-            det_ctx->payload_offset = (ptr + ov[1]) - payload;
+            det_ctx->buffer_offset = (ptr + ov[1]) - payload;
             det_ctx->pcre_match_start_offset = (ptr + ov[0] + 1) - payload;
 
             ret = 1;
@@ -590,12 +559,9 @@ int DetectPcrePacketPayloadMatch(DetectEngineThreadCtx *det_ctx, Packet *p, Sign
     if (pe->flags & DETECT_PCRE_HTTP_CLIENT_BODY)
         SCReturnInt(0);
 
-    if (s->flags & SIG_FLAG_RECURSIVE) {
-        ptr = p->payload + det_ctx->payload_offset;
-        len = p->payload_len - det_ctx->payload_offset;
-    } else if (pe->flags & DETECT_PCRE_RELATIVE) {
-        ptr = p->payload + det_ctx->payload_offset;
-        len = p->payload_len - det_ctx->payload_offset;
+    if (pe->flags & DETECT_PCRE_RELATIVE) {
+        ptr = p->payload + det_ctx->buffer_offset;
+        len = p->payload_len - det_ctx->buffer_offset;
         if (ptr == NULL || len == 0)
             SCReturnInt(0);
     } else {
@@ -638,7 +604,7 @@ int DetectPcrePacketPayloadMatch(DetectEngineThreadCtx *det_ctx, Packet *p, Sign
             }
 
             /* update offset for pcre RELATIVE */
-            det_ctx->payload_offset = (ptr+ov[1]) - p->payload;
+            det_ctx->buffer_offset = (ptr+ov[1]) - p->payload;
 
             ret = 1;
         }
@@ -683,12 +649,9 @@ int DetectPcrePayloadDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
     if (pe->flags & DETECT_PCRE_HTTP_CLIENT_BODY)
         SCReturnInt(0);
 
-    if (s->flags & SIG_FLAG_RECURSIVE) {
-        ptr = data + det_ctx->payload_offset;
-        len = data_len - det_ctx->payload_offset;
-    } else if (pe->flags & DETECT_PCRE_RELATIVE) {
-        ptr = data + det_ctx->payload_offset;
-        len = data_len - det_ctx->payload_offset;
+    if (pe->flags & DETECT_PCRE_RELATIVE) {
+        ptr = data + det_ctx->buffer_offset;
+        len = data_len - det_ctx->buffer_offset;
         if (ptr == NULL || len == 0)
             SCReturnInt(0);
     } else {
@@ -731,7 +694,7 @@ int DetectPcrePayloadDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
             }
 
             /* update offset for pcre RELATIVE */
-            det_ctx->payload_offset = (ptr + ov[1]) - data;
+            det_ctx->buffer_offset = (ptr + ov[1]) - data;
 
             ret = 1;
         }
@@ -764,7 +727,7 @@ int DetectPcreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
     SCReturnInt(r);
 }
 
-DetectPcreData *DetectPcreParse (char *regexstr)
+DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr)
 {
     int ec;
     const char *eb;
@@ -855,27 +818,86 @@ DetectPcreData *DetectPcreParse (char *regexstr)
                     break;
 
                 case 'B': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_URI) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'B' inconsistent with 'U'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_HEADER) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'B' inconsistent with 'H'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_COOKIE) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'B' inconsistent with 'C'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_METHOD) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'B' inconsistent with 'M'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_RAWBYTES;
                     break;
                 case 'R': /* snort's option */
                     pd->flags |= DETECT_PCRE_RELATIVE;
                     break;
                 case 'U': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_HTTP_RAW_URI) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'U' inconsistent with 'I'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'U' inconsistent with 'B'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_URI;
                     break;
+                case 'V':
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'V' inconsistent with 'B'");
+                        goto error;
+                    }
+                    pd->flags |= DETECT_PCRE_HTTP_USER_AGENT;
+                    break;
                 case 'H': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_RAW_HEADER) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'H' inconsistent with 'D'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'H' inconsistent with 'B'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_HEADER;
                     break;
                 case 'I': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_URI) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'I' inconsistent with 'U'");
+                        goto error;
+                    }
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'I' inconsistent with 'B'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_HTTP_RAW_URI;
                     break;
                 case 'D': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_HEADER) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'D' inconsistent with 'H'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_RAW_HEADER;
                     break;
                 case 'M': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'M' inconsistent with 'B'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_METHOD;
                     break;
                 case 'C': /* snort's option */
+                    if (pd->flags & DETECT_PCRE_RAWBYTES) {
+                        SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'C' inconsistent with 'B'");
+                        goto error;
+                    }
                     pd->flags |= DETECT_PCRE_COOKIE;
                     break;
                 case 'O':
@@ -885,9 +907,17 @@ DetectPcreData *DetectPcreParse (char *regexstr)
                     /* snort's option (http request body inspection) */
                     pd->flags |= DETECT_PCRE_HTTP_CLIENT_BODY;
                     break;
-                case 'S':
+                case 'Q':
                     /* suricata extension (http response body inspection) */
                     pd->flags |= DETECT_PCRE_HTTP_SERVER_BODY;
+                    break;
+                case 'Y':
+                    /* snort's option */
+                    pd->flags |= DETECT_PCRE_HTTP_STAT_MSG;
+                    break;
+                case 'S':
+                    /* snort's option */
+                    pd->flags |= DETECT_PCRE_HTTP_STAT_CODE;
                     break;
                 default:
                     SCLogError(SC_ERR_UNKNOWN_REGEX_MOD, "unknown regex modifier '%c'", *op);
@@ -923,7 +953,12 @@ DetectPcreData *DetectPcreParse (char *regexstr)
     int jit = 0;
     ret = pcre_fullinfo(pd->re, pd->sd, PCRE_INFO_JIT, &jit);
     if (ret != 0 || jit != 1) {
-        SCLogWarning(SC_ERR_PCRE_STUDY, "PCRE JIT compiler does not support: %s", regexstr);
+        /* warning, so we won't print the sig after this. Adding
+         * file and line to the message so the admin can figure
+         * out what sig this is about */
+        SCLogWarning(SC_ERR_PCRE_STUDY, "PCRE JIT compiler does not support: %s. "
+                "Falling back to regular PCRE handling (%s:%d)",
+                regexstr, de_ctx->rule_file, de_ctx->rule_line);
     }
 #else
     pd->sd = pcre_study(pd->re, 0, &eb);
@@ -1019,9 +1054,9 @@ DetectPcreData *DetectPcreParseCapture(char *regexstr, DetectEngineCtx *de_ctx, 
         }
         if (capture_str_ptr != NULL) {
             if (pd->flags & DETECT_PCRE_CAPTURE_PKT)
-                pd->capidx = VariableNameGetIdx((char *)capture_str_ptr,DETECT_PKTVAR);
+                pd->capidx = VariableNameGetIdx(de_ctx, (char *)capture_str_ptr, DETECT_PKTVAR);
             else if (pd->flags & DETECT_PCRE_CAPTURE_FLOW)
-                pd->capidx = VariableNameGetIdx((char *)capture_str_ptr,DETECT_FLOWVAR);
+                pd->capidx = VariableNameGetIdx(de_ctx, (char *)capture_str_ptr, DETECT_FLOWVAR);
         }
     }
     //printf("DetectPcreParseCapture: pd->capname %s\n", pd->capname ? pd->capname : "NULL");
@@ -1044,9 +1079,20 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     SigMatch *sm = NULL;
     SigMatch *prev_sm = NULL;
 
-    pd = DetectPcreParse(regexstr);
+    pd = DetectPcreParse(de_ctx, regexstr);
     if (pd == NULL)
         goto error;
+
+    if (pd->flags & DETECT_PCRE_HTTP_CLIENT_BODY && s->init_flags & SIG_FLAG_INIT_FLOW
+        && s->flags & SIG_FLAG_TOCLIENT && !(s->flags & SIG_FLAG_TOSERVER)) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "Can't use pcre /P with flow:from_server or flow:to_client");
+        goto error;
+    }
+    if ((pd->flags & DETECT_PCRE_URI || pd->flags & DETECT_PCRE_HTTP_RAW_URI)
+        && s->init_flags & SIG_FLAG_INIT_FLOW && s->flags & SIG_FLAG_TOCLIENT && !(s->flags & SIG_FLAG_TOSERVER)) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "Can't use pcre /U or /I with flow:from_server or flow:to_client");
+        goto error;
+    }
 
     /* check pcre modifiers against the signature alproto.  In case they conflict
      * chuck out invalid signature */
@@ -1057,9 +1103,12 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
                  (pd->flags & DETECT_PCRE_HEADER) ||
                  (pd->flags & DETECT_PCRE_RAW_HEADER) ||
                  (pd->flags & DETECT_PCRE_COOKIE) ||
+                 (pd->flags & DETECT_PCRE_HTTP_STAT_MSG) ||
+                 (pd->flags & DETECT_PCRE_HTTP_STAT_CODE) ||
                  (pd->flags & DETECT_PCRE_HTTP_CLIENT_BODY) ||
                  (pd->flags & DETECT_PCRE_HTTP_SERVER_BODY) ||
-                 (pd->flags & DETECT_PCRE_HTTP_RAW_URI) ) {
+                 (pd->flags & DETECT_PCRE_HTTP_RAW_URI) ||
+                 (pd->flags & DETECT_PCRE_HTTP_USER_AGENT) ) {
                 SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "Invalid option. "
                            "DCERPC rule has pcre keyword with http related modifier.");
                 goto error;
@@ -1084,36 +1133,53 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     if (pd->flags & DETECT_PCRE_HEADER) {
         SCLogDebug("Header inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
 
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HHDMATCH);
     } else if (pd->flags & DETECT_PCRE_RAW_HEADER) {
         SCLogDebug("Raw header inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
 
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRHDMATCH);
     } else if (pd->flags & DETECT_PCRE_COOKIE) {
-        sm->type = DETECT_PCRE_HTTPCOOKIE;
+        //sm->type = DETECT_PCRE_HTTPCOOKIE;
 
         SCLogDebug("Cookie inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
 
-        SigMatchAppendAppLayer(s, sm);
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HCDMATCH);
+    } else if (pd->flags & DETECT_PCRE_HTTP_USER_AGENT) {
+        SCLogDebug("User-Agent inspection modifier set on pcre");
+        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains "
+                       "conflicting keywords.");
+            goto error;
+        }
+        s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
+
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HUADMATCH);
     } else if (pd->flags & DETECT_PCRE_METHOD) {
-        sm->type = DETECT_PCRE_HTTPMETHOD;
+        //sm->type = DETECT_PCRE_HTTPMETHOD;
 
         SCLogDebug("Method inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
 
-        SigMatchAppendAppLayer(s, sm);
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HMDMATCH);
     } else if (pd->flags & DETECT_PCRE_HTTP_CLIENT_BODY) {
         SCLogDebug("Request body inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
         AppLayerHtpEnableRequestBodyCallback();
 
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HCBDMATCH);
     } else if (pd->flags & DETECT_PCRE_HTTP_SERVER_BODY) {
         SCLogDebug("Response body inspection modifier set");
         s->flags |= SIG_FLAG_APPLAYER;
+        s->alproto = ALPROTO_HTTP;
         AppLayerHtpEnableResponseBodyCallback();
 
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSBDMATCH);
@@ -1128,7 +1194,7 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
         s->alproto = ALPROTO_HTTP;
 
-        SigMatchAppendUricontent(s, sm);
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_UMATCH);
     } else if (pd->flags & DETECT_PCRE_HTTP_RAW_URI) {
         s->flags |= SIG_FLAG_APPLAYER;
         if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
@@ -1139,6 +1205,26 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         s->alproto = ALPROTO_HTTP;
 
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRUDMATCH);
+    } else if (pd->flags & DETECT_PCRE_HTTP_STAT_MSG) {
+        s->flags |= SIG_FLAG_APPLAYER;
+        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                       " keywords.");
+            goto error;
+        }
+        s->alproto = ALPROTO_HTTP;
+
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSMDMATCH);
+    } else if (pd->flags & DETECT_PCRE_HTTP_STAT_CODE) {
+        s->flags |= SIG_FLAG_APPLAYER;
+        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                       " keywords.");
+            goto error;
+        }
+        s->alproto = ALPROTO_HTTP;
+
+        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSCDMATCH);
     } else {
         if (s->alproto == ALPROTO_DCERPC && pd->flags & DETECT_PCRE_RELATIVE) {
             SigMatch *pm = NULL;
@@ -1154,13 +1240,13 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
                     DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
 
             if (pm == NULL) {
-                SigMatchAppendDcePayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
             } else if (dm == NULL) {
-                SigMatchAppendDcePayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
             } else if (pm->idx > dm->idx) {
-                SigMatchAppendPayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
             } else {
-                SigMatchAppendDcePayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
             }
         } else {
             if (s->init_flags & SIG_FLAG_INIT_FILE_DATA) {
@@ -1170,7 +1256,7 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
                 SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSBDMATCH);
             } else {
-                SigMatchAppendPayload(s, sm);
+                SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
             }
         }
     }
@@ -1179,15 +1265,9 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
         SCReturnInt(0);
     }
 
-    prev_sm = SigMatchGetLastSMFromLists(s, 16,
-            DETECT_CONTENT, sm->prev,
-            DETECT_URICONTENT, sm->prev,
-            DETECT_AL_HTTP_CLIENT_BODY, sm->prev,
-            DETECT_AL_HTTP_SERVER_BODY, sm->prev,
-            DETECT_AL_HTTP_HEADER, sm->prev,
-            DETECT_AL_HTTP_RAW_HEADER, sm->prev,
-            DETECT_AL_HTTP_RAW_URI, sm->prev,
-            DETECT_PCRE, sm->prev);
+    prev_sm = SigMatchGetLastSMFromLists(s, 4,
+                                         DETECT_CONTENT, sm->prev,
+                                         DETECT_PCRE, sm->prev);
     if (prev_sm == NULL) {
         if (s->alproto == ALPROTO_DCERPC) {
             SCLogDebug("No preceding content or pcre keyword.  Possible "
@@ -1211,12 +1291,6 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
     switch (prev_sm->type) {
         case DETECT_CONTENT:
-        case DETECT_URICONTENT:
-        case DETECT_AL_HTTP_CLIENT_BODY:
-        case DETECT_AL_HTTP_SERVER_BODY:
-        case DETECT_AL_HTTP_HEADER:
-        case DETECT_AL_HTTP_RAW_HEADER:
-        case DETECT_AL_HTTP_RAW_URI:
             /* Set the relative next flag on the prev sigmatch */
             cd = (DetectContentData *)prev_sm->ctx;
             if (cd == NULL) {
@@ -1279,13 +1353,18 @@ static int DetectPcreParseTest01 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/blah/7";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd != NULL) {
         printf("expected NULL: got %p", pd);
         result = 0;
         DetectPcreFree(pd);
     }
+
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1296,13 +1375,17 @@ static int DetectPcreParseTest02 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/blah/Ui$";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd != NULL) {
         printf("expected NULL: got %p", pd);
         result = 0;
         DetectPcreFree(pd);
     }
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1313,13 +1396,17 @@ static int DetectPcreParseTest03 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/blah/UZi";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd != NULL) {
         printf("expected NULL: got %p", pd);
         result = 0;
         DetectPcreFree(pd);
     }
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1330,14 +1417,18 @@ static int DetectPcreParseTest04 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/b\\\"lah/i";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1348,14 +1439,18 @@ static int DetectPcreParseTest05 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/b(l|a)h/";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1366,14 +1461,18 @@ static int DetectPcreParseTest06 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/b(l|a)h/smi";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1384,14 +1483,18 @@ static int DetectPcreParseTest07 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/blah/Ui";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1402,14 +1505,18 @@ static int DetectPcreParseTest08 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/b(l|a)h/O";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1421,14 +1528,18 @@ static int DetectPcreParseTest09 (void) {
     int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/lala\\\\/";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        return 0;
 
-    pd = DetectPcreParse(teststring);
+    pd = DetectPcreParse(de_ctx, teststring);
     if (pd == NULL) {
         printf("expected %p: got NULL", pd);
         result = 0;
     }
 
     DetectPcreFree(pd);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1717,6 +1828,335 @@ static int DetectPcreParseTest14(void)
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    return result;
+}
+
+/** \test Check a signature with pcre relative method */
+int DetectPcreParseTest15(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative http_method\"; "
+                               "content:\"GET\"; "
+                               "http_method; pcre:\"/abc/RM\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+
+/** \test Check a signature with pcre relative cookie */
+int DetectPcreParseTest16(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative http_cookie\"; "
+                               "content:\"test\"; "
+                               "http_cookie; pcre:\"/abc/RC\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative raw header */
+int DetectPcreParseTest17(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative http_raw_header\"; "
+                               "flow:to_server; content:\"test\"; "
+                               "http_raw_header; pcre:\"/abc/RD\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative header */
+int DetectPcreParseTest18(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative http_header\"; "
+                               "content:\"test\"; "
+                               "http_header; pcre:\"/abc/RH\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative client-body */
+int DetectPcreParseTest19(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relativie http_client_body\"; "
+                               "content:\"test\"; "
+                               "http_client_body; pcre:\"/abc/RP\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative raw uri */
+int DetectPcreParseTest20(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing http_raw_uri\"; "
+                               "content:\"test\"; "
+                               "http_raw_uri; pcre:\"/abc/RI\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative uricontent */
+int DetectPcreParseTest21(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative uricontent\"; "
+                               "uricontent:\"test\"; "
+                               "pcre:\"/abc/RU\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with pcre relative http_uri */
+int DetectPcreParseTest22(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing pcre relative http_uri\"; "
+                               "content:\"test\"; "
+                               "http_uri; pcre:\"/abc/RU\"; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    } else {
+        printf("sig parse failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with inconsistent pcre relative  */
+int DetectPcreParseTest23(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing inconsistent pcre relative\"; "
+                               "content:\"GET\"; "
+                               "http_cookie; pcre:\"/abc/RM\"; sid:1;)");
+
+    if (de_ctx->sig_list == NULL) {
+        result = 1;
+    } else {
+        printf("sig parse should have failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with inconsistent pcre modifiers  */
+int DetectPcreParseTest24(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing inconsistent pcre modifiers\"; "
+                               "pcre:\"/abc/UI\"; sid:1;)");
+
+    if (de_ctx->sig_list == NULL) {
+        result = 1;
+    } else {
+        printf("sig parse should have failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with inconsistent pcre modifiers  */
+int DetectPcreParseTest25(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing inconsistent pcre modifiers\"; "
+                               "pcre:\"/abc/DH\"; sid:1;)");
+
+    if (de_ctx->sig_list == NULL) {
+        result = 1;
+    } else {
+        printf("sig parse should have failed: ");
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -2795,6 +3235,184 @@ end:
     return result;
 }
 
+/** \test Check the signature working to alert when cookie and relative modifiers are
+ *       passed to pcre
+ */
+static int DetectPcreTestSig15(void) {
+    int result = 0;
+    Flow f;
+    uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
+        "Cookie: dummy 1234\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    Packet *p = NULL;
+    Signature *s = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
+                                   "\"pcre relative HTTP cookie\"; content:\"dummy\";"
+                                   " http_cookie; pcre:\"/1234/RC\"; "
+                                   " sid:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 failed to match: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    StreamTcpFreeConfig(TRUE);
+    UTHFreePackets(&p, 1);
+    return result;
+}
+
+/** \test Check the signature working to alert when method and relative modifiers are
+ *       passed to pcre
+ */
+static int DetectPcreTestSig16(void) {
+    int result = 0;
+    Flow f;
+    uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
+        "Cookie: dummy 1234\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    Packet *p = NULL;
+    Signature *s = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&p, 0, sizeof(p));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p->flow = &f;
+    p->flowflags |= FLOW_PKT_TOSERVER;
+    p->flowflags |= FLOW_PKT_ESTABLISHED;
+    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
+                                   "\"pcre relative HTTP method\"; content:\"PO\";"
+                                   " http_method; pcre:\"/ST/RM\"; "
+                                   " sid:1;)");
+    if (s == NULL) {
+        printf("sig parse failed: ");
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+
+    if (!PacketAlertCheck(p, 1)) {
+        printf("sig 1 failed to match: ");
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    StreamTcpFreeConfig(TRUE);
+    UTHFreePackets(&p, 1);
+    return result;
+}
+
 /** \test Test tracking of body chunks per transactions (on requests)
  */
 static int DetectPcreTxBodyChunksTest01(void) {
@@ -2906,7 +3524,7 @@ static int DetectPcreTxBodyChunksTest01(void) {
     }
 
     HtpBodyChunk *cur = htud->request_body.first;
-    if (htud->request_body.nchunks == 0) {
+    if (htud->request_body.first == NULL) {
         SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
         goto end;
     }
@@ -2919,7 +3537,7 @@ static int DetectPcreTxBodyChunksTest01(void) {
     htud = (HtpTxUserData *) htp_tx_get_user_data(t2);
 
     cur = htud->request_body.first;
-    if (htud->request_body.nchunks == 0) {
+    if (htud->request_body.first == NULL) {
         SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
         goto end;
     }
@@ -3123,7 +3741,7 @@ static int DetectPcreTxBodyChunksTest02(void) {
     HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(t1);
 
     HtpBodyChunk *cur = htud->request_body.first;
-    if (htud->request_body.nchunks == 0) {
+    if (htud->request_body.first == NULL) {
         SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
         goto end;
     }
@@ -3136,7 +3754,7 @@ static int DetectPcreTxBodyChunksTest02(void) {
     htud = (HtpTxUserData *) htp_tx_get_user_data(t2);
 
     cur = htud->request_body.first;
-    if (htud->request_body.nchunks == 0) {
+    if (htud->request_body.first == NULL) {
         SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
         goto end;
     }
@@ -3376,6 +3994,17 @@ void DetectPcreRegisterTests(void) {
     UtRegisterTest("DetectPcreParseTest12", DetectPcreParseTest12, 1);
     UtRegisterTest("DetectPcreParseTest13", DetectPcreParseTest13, 1);
     UtRegisterTest("DetectPcreParseTest14", DetectPcreParseTest14, 1);
+    UtRegisterTest("DetectPcreParseTest15", DetectPcreParseTest15, 1);
+    UtRegisterTest("DetectPcreParseTest16", DetectPcreParseTest16, 1);
+    UtRegisterTest("DetectPcreParseTest17", DetectPcreParseTest17, 1);
+    UtRegisterTest("DetectPcreParseTest18", DetectPcreParseTest18, 1);
+    UtRegisterTest("DetectPcreParseTest19", DetectPcreParseTest19, 1);
+    UtRegisterTest("DetectPcreParseTest20", DetectPcreParseTest20, 1);
+    UtRegisterTest("DetectPcreParseTest21", DetectPcreParseTest21, 1);
+    UtRegisterTest("DetectPcreParseTest22", DetectPcreParseTest22, 1);
+    UtRegisterTest("DetectPcreParseTest23", DetectPcreParseTest23, 1);
+    UtRegisterTest("DetectPcreParseTest24", DetectPcreParseTest24, 1);
+    UtRegisterTest("DetectPcreParseTest25", DetectPcreParseTest25, 1);
 
     UtRegisterTest("DetectPcreTestSig01B2g -- pcre test", DetectPcreTestSig01B2g, 1);
     UtRegisterTest("DetectPcreTestSig01B3g -- pcre test", DetectPcreTestSig01B3g, 1);
@@ -3386,6 +4015,7 @@ void DetectPcreRegisterTests(void) {
     UtRegisterTest("DetectPcreTestSig03B2g -- negated pcre test", DetectPcreTestSig03B2g, 1);
     UtRegisterTest("DetectPcreTestSig03B3g -- negated pcre test", DetectPcreTestSig03B3g, 1);
     UtRegisterTest("DetectPcreTestSig03Wm -- negated pcre test", DetectPcreTestSig03Wm, 1);
+
     UtRegisterTest("DetectPcreModifPTest04 -- Modifier P", DetectPcreModifPTest04, 1);
     UtRegisterTest("DetectPcreModifPTest05 -- Modifier P fragmented", DetectPcreModifPTest05, 1);
     UtRegisterTest("DetectPcreTestSig06", DetectPcreTestSig06, 1);
@@ -3397,6 +4027,9 @@ void DetectPcreRegisterTests(void) {
     UtRegisterTest("DetectPcreTestSig12 -- negated Method modifier", DetectPcreTestSig12, 1);
     UtRegisterTest("DetectPcreTestSig13 -- Header modifier", DetectPcreTestSig13, 1);
     UtRegisterTest("DetectPcreTestSig14 -- negated Header modifier", DetectPcreTestSig14, 1);
+    UtRegisterTest("DetectPcreTestSig15 -- relative Cookie modifier", DetectPcreTestSig15, 1);
+    UtRegisterTest("DetectPcreTestSig16 -- relative Method modifier", DetectPcreTestSig16, 1);
+
     UtRegisterTest("DetectPcreTxBodyChunksTest01", DetectPcreTxBodyChunksTest01, 1);
     UtRegisterTest("DetectPcreTxBodyChunksTest02 -- modifier P, body chunks per tx", DetectPcreTxBodyChunksTest02, 1);
     UtRegisterTest("DetectPcreTxBodyChunksTest03 -- modifier P, body chunks per tx", DetectPcreTxBodyChunksTest03, 1);

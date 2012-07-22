@@ -174,9 +174,7 @@ int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f
             if (!(filemagic->flags & DETECT_CONTENT_NEGATED)) {
                 ret = 1;
             }
-        }
-
-        if (ret == 0 && filemagic->flags & DETECT_CONTENT_NEGATED) {
+        } else if (filemagic->flags & DETECT_CONTENT_NEGATED) {
             SCLogDebug("negated match");
             ret = 1;
         }
@@ -299,6 +297,8 @@ void DetectFilemagicFree(void *ptr) {
         if (filemagic->bm_ctx != NULL) {
             BoyerMooreCtxDeInit(filemagic->bm_ctx);
         }
+        if (filemagic->name != NULL)
+            SCFree(filemagic->name);
         SCFree(filemagic);
     }
 }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -27,16 +27,28 @@
 #include "suricata.h"
 #include "debug.h"
 #include "flow.h"
+#include "stream.h"
 #include "util-hash.h"
 #include "util-debug.h"
 #include "util-memcmp.h"
 #include "util-print.h"
 #include "app-layer-parser.h"
+#include "util-validate.h"
 
 /** \brief switch to force magic checks on all files
  *         regardless of the rules.
  */
 static int g_file_force_magic = 0;
+
+/** \brief switch to force md5 calculation on all files
+ *         regardless of the rules.
+ */
+static int g_file_force_md5 = 0;
+
+/** \brief switch to force tracking off all files
+ *         regardless of the rules.
+ */
+static int g_file_force_tracking = 0;
 
 /* prototypes */
 static void FileFree(File *);
@@ -46,8 +58,20 @@ void FileForceMagicEnable(void) {
     g_file_force_magic = 1;
 }
 
+void FileForceMd5Enable(void) {
+    g_file_force_md5 = 1;
+}
+
 int FileForceMagic(void) {
     return g_file_force_magic;
+}
+
+int FileForceMd5(void) {
+    return g_file_force_md5;
+}
+
+void FileForceTrackingEnable(void) {
+    g_file_force_tracking = 1;
 }
 
 int FileMagicSize(void) {
@@ -79,6 +103,10 @@ static int FileAppendFileDataFilePtr(File *ff, FileData *ffd) {
         ff->chunks_cnt_max = ff->chunks_cnt;
 #endif
 
+#ifdef HAVE_NSS
+    if (ff->md5_ctx)
+        HASH_Update(ff->md5_ctx, ffd->data, ffd->len);
+#endif
     SCReturnInt(0);
 }
 
@@ -108,6 +136,10 @@ static void FilePruneFile(File *file) {
         /* need magic but haven't set it yet, bail out */
         if (file->magic == NULL)
             SCReturn;
+        else
+            SCLogDebug("file->magic %s", file->magic);
+    } else {
+        SCLogDebug("file->flags & FILE_NOMAGIC == true");
     }
 
     /* okay, we now know we can prune */
@@ -296,13 +328,17 @@ static void FileFree(File *ff) {
         }
     }
 
+#ifdef HAVE_NSS
+    if (ff->md5_ctx)
+        HASH_Destroy(ff->md5_ctx);
+#endif
     SCLogDebug("ff chunks_cnt %"PRIu64", chunks_cnt_max %"PRIu64,
             ff->chunks_cnt, ff->chunks_cnt_max);
     SCFree(ff);
 }
 
 void FileContainerAdd(FileContainer *ffc, File *ff) {
-    if (ffc->head == NULL) {
+    if (ffc->head == NULL || ffc->tail == NULL) {
         ffc->head = ffc->tail = ff;
     } else {
         ffc->tail->next = ff;
@@ -328,7 +364,8 @@ int FileStore(File *ff) {
  */
 int FileSetTx(File *ff, uint16_t txid) {
     SCLogDebug("ff %p txid %"PRIu16, ff, txid);
-    ff->txid = txid;
+    if (ff != NULL)
+        ff->txid = txid;
     SCReturnInt(0);
 }
 
@@ -386,8 +423,18 @@ int FileAppendData(FileContainer *ffc, uint8_t *data, uint32_t data_len) {
     }
 
     if (FileStoreNoStoreCheck(ffc->tail) == 1) {
-        ffc->tail->state = FILE_STATE_CLOSED;
-        SCLogDebug("flowfile state transitioned to FILE_STATE_CLOSED");
+#ifdef HAVE_NSS
+        /* no storage but forced md5 */
+        if (g_file_force_tracking || ffc->tail->md5_ctx) {
+            if (ffc->tail->md5_ctx)
+                HASH_Update(ffc->tail->md5_ctx, data, data_len);
+
+            ffc->tail->size += data_len;
+            SCReturnInt(0);
+        }
+#endif
+        ffc->tail->state = FILE_STATE_TRUNCATED;
+        SCLogDebug("flowfile state transitioned to FILE_STATE_TRUNCATED");
         SCReturnInt(-2);
     }
 
@@ -440,8 +487,22 @@ File *FileOpenFile(FileContainer *ffc, uint8_t *name,
         ff->store = -1;
     }
     if (flags & FILE_NOMAGIC) {
+        SCLogDebug("not doing magic for this file");
         ff->flags |= FILE_NOMAGIC;
     }
+    if (flags & FILE_NOMD5) {
+        SCLogDebug("not doing md5 for this file");
+        ff->flags |= FILE_NOMD5;
+    }
+
+#ifdef HAVE_NSS
+    if (!(ff->flags & FILE_NOMD5) || g_file_force_md5) {
+        ff->md5_ctx = HASH_Create(HASH_AlgMD5);
+        if (ff->md5_ctx != NULL) {
+            HASH_Begin(ff->md5_ctx);
+        }
+    }
+#endif
 
     ff->state = FILE_STATE_OPENED;
     SCLogDebug("flowfile state transitioned to FILE_STATE_OPENED");
@@ -484,17 +545,26 @@ static int FileCloseFilePtr(File *ff, uint8_t *data,
     if (data != NULL) {
         //PrintRawDataFp(stdout, data, data_len);
 
-        FileData *ffd = FileDataAlloc(data, data_len);
-        if (ffd == NULL) {
-            ff->state = FILE_STATE_ERROR;
-            SCReturnInt(-1);
-        }
+        if (ff->store == -1) {
+#ifdef HAVE_NSS
+            /* no storage but md5 */
+            if (ff->md5_ctx)
+                HASH_Update(ff->md5_ctx, data, data_len);
+#endif
+            ff->size += data_len;
+        } else {
+            FileData *ffd = FileDataAlloc(data, data_len);
+            if (ffd == NULL) {
+                ff->state = FILE_STATE_ERROR;
+                SCReturnInt(-1);
+            }
 
-        /* append the data */
-        if (FileAppendFileDataFilePtr(ff, ffd) < 0) {
-            ff->state = FILE_STATE_ERROR;
-            FileDataFree(ffd);
-            SCReturnInt(-1);
+            /* append the data */
+            if (FileAppendFileDataFilePtr(ff, ffd) < 0) {
+                ff->state = FILE_STATE_ERROR;
+                FileDataFree(ffd);
+                SCReturnInt(-1);
+            }
         }
     }
 
@@ -508,6 +578,14 @@ static int FileCloseFilePtr(File *ff, uint8_t *data,
     } else {
         ff->state = FILE_STATE_CLOSED;
         SCLogDebug("flowfile state transitioned to FILE_STATE_CLOSED");
+
+#ifdef HAVE_NSS
+        if (ff->md5_ctx) {
+            unsigned int len = 0;
+            HASH_End(ff->md5_ctx, ff->md5, &len, sizeof(ff->md5));
+            ff->flags |= FILE_MD5;
+        }
+#endif
     }
 
     SCReturnInt(0);
@@ -551,7 +629,12 @@ void FileDisableStoring(Flow *f, uint8_t direction) {
 
     SCEnter();
 
-    f->flags |= FLOW_FILE_NO_STORE;
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
+    if (direction == STREAM_TOSERVER)
+        f->flags |= FLOW_FILE_NO_STORE_TS;
+    else
+        f->flags |= FLOW_FILE_NO_STORE_TC;
 
     FileContainer *ffc = AppLayerGetFilesFromFlow(f, direction);
     if (ffc != NULL) {
@@ -575,12 +658,57 @@ void FileDisableMagic(Flow *f, uint8_t direction) {
 
     SCEnter();
 
-    f->flags |= FLOW_FILE_NO_MAGIC;
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
+    if (direction == STREAM_TOSERVER)
+        f->flags |= FLOW_FILE_NO_MAGIC_TS;
+    else
+        f->flags |= FLOW_FILE_NO_MAGIC_TC;
 
     FileContainer *ffc = AppLayerGetFilesFromFlow(f, direction);
     if (ffc != NULL) {
         for (ptr = ffc->head; ptr != NULL; ptr = ptr->next) {
+            SCLogDebug("disabling magic for file %p from direction %s",
+                    ptr, direction == STREAM_TOSERVER ? "toserver":"toclient");
             ptr->flags |= FILE_NOMAGIC;
+        }
+    }
+
+    SCReturn;
+}
+
+/**
+ *  \brief disable file md5 calc for this flow
+ *
+ *  \param f *LOCKED* flow
+ *  \param direction flow direction
+ */
+void FileDisableMd5(Flow *f, uint8_t direction) {
+    File *ptr = NULL;
+
+    SCEnter();
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
+
+    if (direction == STREAM_TOSERVER)
+        f->flags |= FLOW_FILE_NO_MD5_TS;
+    else
+        f->flags |= FLOW_FILE_NO_MD5_TC;
+
+    FileContainer *ffc = AppLayerGetFilesFromFlow(f, direction);
+    if (ffc != NULL) {
+        for (ptr = ffc->head; ptr != NULL; ptr = ptr->next) {
+            SCLogDebug("disabling md5 for file %p from direction %s",
+                    ptr, direction == STREAM_TOSERVER ? "toserver":"toclient");
+            ptr->flags |= FILE_NOMD5;
+
+#ifdef HAVE_NSS
+            /* destroy any ctx we may have so far */
+            if (ptr->md5_ctx != NULL) {
+                HASH_Destroy(ptr->md5_ctx);
+                ptr->md5_ctx = NULL;
+            }
+#endif
         }
     }
 
@@ -610,12 +738,14 @@ void FileDisableStoringForFile(File *ff) {
 /**
  *  \brief disable file storing for files in a transaction
  *
- *  \param f flow
+ *  \param f *LOCKED* flow
  *  \param direction flow direction
  *  \param tx_id transaction id
  */
 void FileDisableStoringForTransaction(Flow *f, uint8_t direction, uint16_t tx_id) {
     File *ptr = NULL;
+
+    DEBUG_ASSERT_FLOW_LOCKED(f);
 
     SCEnter();
 

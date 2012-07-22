@@ -155,33 +155,31 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
     mode = (char *)str_ptr;
     SCLogDebug("mode \"%s\"", mode);
 
-    if (ret >= 3) {
-        res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    if (res < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
+        goto error;
+    }
+    value1 = (char *)str_ptr;
+    SCLogDebug("value1 \"%s\"", value1);
+
+    if (ret > 3) {
+        res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
         if (res < 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
             goto error;
         }
-        value1 = (char *)str_ptr;
-        SCLogDebug("value1 \"%s\"", value1);
+        range = (char *)str_ptr;
+        SCLogDebug("range \"%s\"", range);
 
-        if (ret >= 4) {
-            res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
+        if (ret > 4) {
+            res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 4, &str_ptr);
             if (res < 0) {
                 SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
                 goto error;
             }
-            range = (char *)str_ptr;
-            SCLogDebug("range \"%s\"", range);
-
-            if (ret >= 5) {
-                res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 4, &str_ptr);
-                if (res < 0) {
-                    SCLogError(SC_ERR_PCRE_GET_SUBSTRING,"pcre_get_substring failed");
-                    goto error;
-                }
-                value2 = (char *)str_ptr;
-                SCLogDebug("value2 \"%s\"", value2);
-            }
+            value2 = (char *)str_ptr;
+            SCLogDebug("value2 \"%s\"", value2);
         }
     }
 
@@ -235,12 +233,11 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
 
     SCLogDebug("dsize parsed succesfully dsize: %"PRIu16" dsize2: %"PRIu16"",dd->dsize,dd->dsize2);
 
-    if (value1)
-        SCFree(value1);
+    SCFree(value1);
+    SCFree(mode);
+
     if (value2)
         SCFree(value2);
-    if (mode)
-        SCFree(mode);
     if (range)
         SCFree(range);
     return dd;
@@ -275,8 +272,9 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     DetectDsizeData *dd = NULL;
     SigMatch *sm = NULL;
 
-    if (SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH],
-                          DETECT_DSIZE) != NULL) {
+    if (SigMatchGetLastSMFromLists(s, 2,
+                                   DETECT_DSIZE,
+                                   s->sm_lists_tail[DETECT_SM_LIST_MATCH]) != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Can't use 2 or more dsizes in "
                    "the same sig.  Invalidating signature.");
         goto error;
@@ -302,7 +300,7 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     sm->type = DETECT_DSIZE;
     sm->ctx = (void *)dd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     SCLogDebug("dd->dsize %"PRIu16", dd->dsize2 %"PRIu16", dd->mode %"PRIu8"",
             dd->dsize, dd->dsize2, dd->mode);

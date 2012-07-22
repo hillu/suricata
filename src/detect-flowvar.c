@@ -88,7 +88,7 @@ int DetectFlowvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
     DetectFlowvarData *fd = (DetectFlowvarData *)m->ctx;
 
     /* we need a lock */
-    SCMutexLock(&p->flow->m);
+    FLOWLOCK_RDLOCK(p->flow);
 
     FlowVar *fv = FlowVarGet(p->flow, fd->idx);
     if (fv != NULL) {
@@ -98,7 +98,7 @@ int DetectFlowvarMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
         if (ptr != NULL)
             ret = 1;
     }
-    SCMutexUnlock(&p->flow->m);
+    FLOWLOCK_UNLOCK(p->flow);
 
     return ret;
 }
@@ -222,7 +222,7 @@ static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *raws
     }
 
     cd->name = SCStrdup(varname);
-    cd->idx = VariableNameGetIdx(varname,DETECT_FLOWVAR);
+    cd->idx = VariableNameGetIdx(de_ctx, varname, DETECT_FLOWVAR);
     memcpy(cd->content, str, len);
     cd->content_len = len;
     cd->flags = 0;
@@ -236,7 +236,7 @@ static int DetectFlowvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *raws
     sm->type = DETECT_FLOWVAR;
     sm->ctx = (void *)cd;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     if (dubbed) SCFree(str);
     return 0;

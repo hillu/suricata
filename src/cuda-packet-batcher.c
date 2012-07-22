@@ -323,13 +323,15 @@ void *SCCudaPBTmThreadsSlot1(void *td)
     SCLogDebug("%s starting", tv->name);
 
     if (s->SlotThreadInit != NULL) {
-        r = s->SlotThreadInit(tv, s->slot_initdata, &s->slot_data);
+        void *slot_data = NULL;
+        r = s->SlotThreadInit(tv, s->slot_initdata, &slot_data);
         if (r != TM_ECODE_OK) {
             EngineKill();
 
-            TmThreadsSetFlag(tv, THV_CLOSED);
+            TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
             pthread_exit((void *) -1);
         }
+        SC_ATOMIC_SET(s->slot_data, slot_data);
     }
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
@@ -352,9 +354,9 @@ void *SCCudaPBTmThreadsSlot1(void *td)
              * the Batcher TM(which is waiting on a cond from the previous
              * feeder TM).  Please handle the NULL packet case in the
              * function that you now call */
-            r = s->SlotFunc(tv, p, s->slot_data, NULL, NULL);
+            r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), NULL, NULL);
         } else {
-            r = s->SlotFunc(tv, p, s->slot_data, NULL, NULL);
+            r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), NULL, NULL);
             /* handle error */
             if (r == TM_ECODE_FAILED) {
                 TmqhOutputPacketpool(tv, p);
@@ -372,14 +374,15 @@ void *SCCudaPBTmThreadsSlot1(void *td)
         }
     }
 
+    TmThreadsSetFlag(tv, THV_RUNNING_DONE);
     TmThreadWaitForFlag(tv, THV_DEINIT);
 
     if (s->SlotThreadExitPrintStats != NULL) {
-        s->SlotThreadExitPrintStats(tv, s->slot_data);
+        s->SlotThreadExitPrintStats(tv, SC_ATOMIC_GET(s->slot_data));
     }
 
     if (s->SlotThreadDeinit != NULL) {
-        r = s->SlotThreadDeinit(tv, s->slot_data);
+        r = s->SlotThreadDeinit(tv, SC_ATOMIC_GET(s->slot_data));
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
@@ -708,9 +711,15 @@ TmEcode SCCudaPBBatchPackets(ThreadVars *tv, Packet *p, void *data, PacketQueue 
 
     MpmCtx *mpm_ctx = NULL;
     if (p->proto == IPPROTO_TCP) {
-        mpm_ctx = sgh->mpm_proto_tcp_ctx;
+        if (p->flowflags & FLOW_PKT_TOSERVER)
+            mpm_ctx = sgh->mpm_proto_tcp_ctx_ts;
+        else
+            mpm_ctx = sgh->mpm_proto_tcp_ctx_tc;
     } else if (p->proto == IPPROTO_UDP) {
-        mpm_ctx = sgh->mpm_proto_udp_ctx;
+        if (p->flowflags & FLOW_PKT_TOSERVER)
+            mpm_ctx = sgh->mpm_proto_udp_ctx_ts;
+        else
+            mpm_ctx = sgh->mpm_proto_udp_ctx_tc;
     } else {
         mpm_ctx = sgh->mpm_proto_other_ctx;
     }

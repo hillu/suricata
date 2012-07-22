@@ -96,14 +96,14 @@ static uint64_t htp_state_memcnt = 0;
 #endif
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */
-static uint8_t need_htp_request_body = 0;
+uint8_t need_htp_request_body = 0;
 /** part of the engine needs the request body multipart header (e.g. filename
  *  and / or fileext keywords) */
-static uint8_t need_htp_request_multipart_hdr = 0;
+uint8_t need_htp_request_multipart_hdr = 0;
 /** part of the engine needs the request file (e.g. log-file module) */
-static uint8_t need_htp_request_file = 0;
+uint8_t need_htp_request_file = 0;
 /** part of the engine needs the request body (e.g. file_data keyword) */
-static uint8_t need_htp_response_body = 0;
+uint8_t need_htp_response_body = 0;
 
 SCEnumCharMap http_decoder_event_table[ ] = {
     { "UNKNOWN_ERROR",
@@ -150,6 +150,15 @@ SCEnumCharMap http_decoder_event_table[ ] = {
         HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG},
     { "RESPONSE_FIELD_TOO_LONG",
         HTTP_DECODER_EVENT_RESPONSE_FIELD_TOO_LONG},
+
+    /* suricata warnings/errors */
+    { "MULTIPART_GENERIC_ERROR",
+        HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR},
+    { "MULTIPART_NO_FILEDATA",
+        HTTP_DECODER_EVENT_MULTIPART_NO_FILEDATA},
+    { "MULTIPART_INVALID_HEADER",
+        HTTP_DECODER_EVENT_MULTIPART_INVALID_HEADER},
+
     { NULL,                      -1 },
 };
 
@@ -443,6 +452,7 @@ struct {
  *  \retval id the id or 0 in case of not found
  */
 static int HTPHandleWarningGetId(const char *msg) {
+    SCLogDebug("received warning \"%s\"", msg);
     size_t idx;
     for (idx = 0; idx < HTP_WARNING_MAX; idx++) {
         if (strncmp(htp_warnings[idx].msg, msg,
@@ -465,6 +475,8 @@ static int HTPHandleWarningGetId(const char *msg) {
  *  \retval id the id or 0 in case of not found
  */
 static int HTPHandleErrorGetId(const char *msg) {
+    SCLogDebug("received error \"%s\"", msg);
+
     size_t idx;
     for (idx = 0; idx < HTP_ERROR_MAX; idx++) {
         if (strncmp(htp_errors[idx].msg, msg,
@@ -497,6 +509,8 @@ static void HTPHandleError(HtpState *s) {
         htp_log_t *log = list_get(s->connp->conn->messages, msg);
         if (log == NULL)
             continue;
+
+        SCLogDebug("message %s", log->msg);
 
         int id = HTPHandleErrorGetId(log->msg);
         if (id > 0) {
@@ -631,6 +645,8 @@ static int HTPHandleRequestData(Flow *f, void *htp_state,
         SCLogError(SC_ERR_ALPARSER, "Inbound parser is in error state, no"
                 " need to feed data to libhtp");
         SCReturnInt(-1);
+    } else if (hstate->connp->in_status == STREAM_STATE_TUNNEL) {
+        SCReturnInt(0);
     }
 
     /* Unset the body inspection (the callback should
@@ -673,12 +689,13 @@ static int HTPHandleRequestData(Flow *f, void *htp_state,
 
     /* if the TCP connection is closed, then close the HTTP connection */
     if ((pstate->flags & APP_LAYER_PARSER_EOF) &&
-            ! (hstate->flags & HTP_FLAG_STATE_CLOSED) &&
-            ! (hstate->flags & HTP_FLAG_STATE_DATA))
-    {
-        htp_connp_close(hstate->connp, 0);
-        hstate->flags |= HTP_FLAG_STATE_CLOSED;
-        SCLogDebug("stream eof encountered, closing htp handle");
+        !(hstate->flags & HTP_FLAG_STATE_CLOSED_TS)) {
+        hstate->connp->in_status = STREAM_STATE_CLOSED;
+        // Call the parsers one last time, which will allow them
+        // to process the events that depend on stream closure
+        htp_connp_req_data(hstate->connp, 0, NULL, 0);
+        hstate->flags |= HTP_FLAG_STATE_CLOSED_TS;
+        SCLogDebug("stream eof encountered, closing htp handle for ts");
     }
 
     SCLogDebug("hstate->connp %p", hstate->connp);
@@ -722,6 +739,8 @@ static int HTPHandleResponseData(Flow *f, void *htp_state,
         SCLogError(SC_ERR_ALPARSER, "Outbound parser is in error state, no"
                 " need to feed data to libhtp");
         SCReturnInt(-1);
+    } else if (hstate->connp->out_status == STREAM_STATE_TUNNEL) {
+        SCReturnInt(0);
     }
 
     /* Unset the body inspection (the callback should
@@ -751,11 +770,12 @@ static int HTPHandleResponseData(Flow *f, void *htp_state,
 
     /* if we the TCP connection is closed, then close the HTTP connection */
     if ((pstate->flags & APP_LAYER_PARSER_EOF) &&
-            ! (hstate->flags & HTP_FLAG_STATE_CLOSED) &&
-            ! (hstate->flags & HTP_FLAG_STATE_DATA))
-    {
-        htp_connp_close(hstate->connp, 0);
-        hstate->flags |= HTP_FLAG_STATE_CLOSED;
+        !(hstate->flags & HTP_FLAG_STATE_CLOSED_TC)) {
+        hstate->connp->out_status = STREAM_STATE_CLOSED;
+        // Call the parsers one last time, which will allow them
+        // to process the events that depend on stream closure
+        htp_connp_res_data(hstate->connp, 0, NULL, 0);
+        hstate->flags |= HTP_FLAG_STATE_CLOSED_TC;
     }
 
     SCLogDebug("hstate->connp %p", hstate->connp);
@@ -814,16 +834,34 @@ static int HTPCallbackRequestUriNormalize(htp_connp_t *c)
 {
     SCEnter();
 
-    if (c == NULL || c->in_tx == NULL || c->in_tx->parsed_uri == NULL ||
-        c->in_tx->parsed_uri->query == NULL)
+    if (c == NULL || c->in_tx == NULL || c->in_tx->parsed_uri == NULL)
     {
         SCReturnInt(HOOK_OK);
     }
 
-    /* uri normalize the query string as well */
-    htp_decode_path_inplace(c->cfg, c->in_tx,
-            c->in_tx->parsed_uri->query);
+    /* uri normalize the path string again -- while loop to unroll
+     * double+ encodings */
+    if (c->in_tx->parsed_uri->path != NULL) {
+        while (1) {
+            size_t origlen = bstr_len(c->in_tx->parsed_uri->path);
+            htp_decode_path_inplace(c->cfg, c->in_tx,
+                    c->in_tx->parsed_uri->path);
+            if (origlen == bstr_len(c->in_tx->parsed_uri->path))
+                break;
+        }
+    }
 
+    /* uri normalize the query string as well -- while loop to unroll
+     * double+ encodings */
+    if (c->in_tx->parsed_uri->query != NULL) {
+        while (1) {
+            size_t origlen = bstr_len(c->in_tx->parsed_uri->query);
+            htp_decode_path_inplace(c->cfg, c->in_tx,
+                    c->in_tx->parsed_uri->query);
+            if (origlen == bstr_len(c->in_tx->parsed_uri->query))
+                break;
+        }
+    }
     SCReturnInt(HOOK_OK);
 }
 #endif
@@ -1004,7 +1042,8 @@ static int HTTPParseContentTypeHeader(uint8_t *name, size_t name_len,
  *  \param d HTTP transaction
  *  \param htud transaction userdata
  *
- *  \retval 0 ok
+ *  \retval 1 ok, multipart set up
+ *  \retval 0 ok, not multipart though
  *  \retval -1 error: problem with the boundary
  *
  *  If the request contains a multipart message, this function will
@@ -1038,14 +1077,15 @@ static int HtpRequestBodySetupMultipart(htp_tx_data_t *d, HtpTxUserData *htud) {
                 htud->boundary_len = (uint8_t)boundary_len;
                 memcpy(htud->boundary, boundary, boundary_len);
 
-                htud->flags |= HTP_BOUNDARY_SET;
+                htud->tsflags |= HTP_BOUNDARY_SET;
             } else {
                 SCLogDebug("invalid boundary");
                 return -1;
             }
         }
+        SCReturnInt(1);
     }
-    return 0;
+    SCReturnInt(0);
 }
 
 /**
@@ -1096,7 +1136,8 @@ error:
 #define C_T_HDR "content-type:"
 #define C_T_HDR_LEN 13
 
-static void HtpRequestBodyMultipartParseHeader(uint8_t *header, uint32_t header_len,
+static void HtpRequestBodyMultipartParseHeader(HtpState *hstate,
+        uint8_t *header, uint32_t header_len,
         uint8_t **filename, uint16_t *filename_len,
         uint8_t **filetype, uint16_t *filetype_len)
 {
@@ -1120,6 +1161,18 @@ static void HtpRequestBodyMultipartParseHeader(uint8_t *header, uint32_t header_
             line_len = header_len;
         } else {
             line_len = next_line - header;
+        }
+
+        uint8_t *sc = (uint8_t *)memchr(line, ':', line_len);
+        if (sc == NULL) {
+            AppLayerDecoderEventsSetEvent(hstate->f,
+                    HTTP_DECODER_EVENT_MULTIPART_INVALID_HEADER);
+        } else {
+            /* if the : we found is the final char, it means we have
+             * no value */
+            if (line_len > 0 && sc == &line[line_len - 1])
+                AppLayerDecoderEventsSetEvent(hstate->f,
+                        HTTP_DECODER_EVENT_MULTIPART_INVALID_HEADER);
         }
 
 #ifdef PRINT
@@ -1253,8 +1306,8 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
             expected_boundary_end, expected_boundary_end_len);
 
     /* if we're in the file storage process, deal with that now */
-    if (htud->flags & HTP_FILENAME_SET) {
-        if (header_start != NULL || form_end != NULL || htud->flags & HTP_BODY_COMPLETE) {
+    if (htud->tsflags & HTP_FILENAME_SET) {
+        if (header_start != NULL || form_end != NULL || htud->tsflags & HTP_REQ_BODY_COMPLETE) {
             SCLogDebug("reached the end of the file");
 
             uint8_t *filedata = chunks_buffer;
@@ -1267,18 +1320,22 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                 filedata_len = form_end - filedata;
             } else if (form_end != NULL && form_end == header_start) {
                 filedata_len = form_end - filedata - 2; /* 0d 0a */
-            } else if (htud->flags & HTP_BODY_COMPLETE) {
+            } else if (htud->tsflags & HTP_REQ_BODY_COMPLETE) {
                 filedata_len = chunks_buffer_len;
                 flags = FILE_TRUNCATED;
             }
 
-            BUG_ON(filedata_len > chunks_buffer_len);
+            if (filedata_len > chunks_buffer_len) {
+                AppLayerDecoderEventsSetEvent(hstate->f,
+                        HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR);
+                goto end;
+            }
 #ifdef PRINT
             printf("FILEDATA (final chunk) START: \n");
             PrintRawDataFp(stdout, filedata, filedata_len);
             printf("FILEDATA (final chunk) END: \n");
 #endif
-            if (!(htud->flags & HTP_DONTSTORE)) {
+            if (!(htud->tsflags & HTP_DONTSTORE)) {
                 if (HTPFileClose(hstate, filedata, filedata_len, flags,
                             STREAM_TOSERVER) == -1)
                 {
@@ -1286,7 +1343,7 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                 }
             }
 
-            htud->flags &=~ HTP_FILENAME_SET;
+            htud->tsflags &=~ HTP_FILENAME_SET;
 
             /* fall through */
         } else {
@@ -1301,14 +1358,14 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                 printf("FILEDATA (part) END: \n");
 #endif
 
-                if (!(htud->flags & HTP_DONTSTORE)) {
+                if (!(htud->tsflags & HTP_DONTSTORE)) {
                     result = HTPFileStoreChunk(hstate, filedata,
                             filedata_len, STREAM_TOSERVER);
                     if (result == -1) {
                         goto end;
                     } else if (result == -2) {
                         /* we know for sure we're not storing the file */
-                        htud->flags |= HTP_DONTSTORE;
+                        htud->tsflags |= HTP_DONTSTORE;
                     }
                 }
 
@@ -1336,13 +1393,16 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
         SCLogDebug("header_len %u", header_len);
         uint8_t *header = header_start;
 
-        if ((uint32_t)(expected_boundary_len + 2) <= header_len) {
+        /* skip empty records */
+        if (expected_boundary_len == header_len) {
+            goto next;
+        } else if ((uint32_t)(expected_boundary_len + 2) <= header_len) {
             header_len -= (expected_boundary_len + 2);
             header = header_start + (expected_boundary_len + 2); // + for 0d 0a
         }
 
-        HtpRequestBodyMultipartParseHeader(header, header_len, &filename,
-                &filename_len, &filetype, &filetype_len);
+        HtpRequestBodyMultipartParseHeader(hstate, header, header_len,
+                &filename, &filename_len, &filetype, &filetype_len);
 
         if (filename != NULL) {
             uint8_t *filedata = NULL;
@@ -1350,8 +1410,8 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
 
             SCLogDebug("we have a filename");
 
-            htud->flags |= HTP_FILENAME_SET;
-            htud->flags &= ~HTP_DONTSTORE;
+            htud->tsflags |= HTP_FILENAME_SET;
+            htud->tsflags &= ~HTP_DONTSTORE;
 
             SCLogDebug("header_end %p", header_end);
             SCLogDebug("form_end %p", form_end);
@@ -1359,7 +1419,18 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
             /* everything until the final boundary is the file */
             if (form_end != NULL) {
                 filedata = header_end + 4;
+                if (form_end == filedata) {
+                    AppLayerDecoderEventsSetEvent(hstate->f,
+                            HTTP_DECODER_EVENT_MULTIPART_NO_FILEDATA);
+                    goto end;
+                } else if (form_end < filedata) {
+                    AppLayerDecoderEventsSetEvent(hstate->f,
+                            HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR);
+                    goto end;
+                }
+
                 filedata_len = form_end - (header_end + 4 + 2);
+                SCLogDebug("filedata_len %"PRIuMAX, (uintmax_t)filedata_len);
 
                 /* or is it? */
                 uint8_t *header_next = Bs2bmSearch(filedata, filedata_len,
@@ -1368,8 +1439,12 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                     filedata_len -= (form_end - header_next);
                 }
 
+                if (filedata_len > chunks_buffer_len) {
+                    AppLayerDecoderEventsSetEvent(hstate->f,
+                            HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR);
+                    goto end;
+                }
                 SCLogDebug("filedata_len %"PRIuMAX, (uintmax_t)filedata_len);
-
 #ifdef PRINT
                 printf("FILEDATA START: \n");
                 PrintRawDataFp(stdout, filedata, filedata_len);
@@ -1382,7 +1457,7 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                 if (result == -1) {
                     goto end;
                 } else if (result == -2) {
-                    htud->flags |= HTP_DONTSTORE;
+                    htud->tsflags |= HTP_DONTSTORE;
                 } else {
                     if (HTPFileClose(hstate, NULL, 0, 0, STREAM_TOSERVER) == -1) {
                         goto end;
@@ -1390,13 +1465,19 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                 }
 
                 htud->request_body.body_parsed += (header_end - chunks_buffer);
-                htud->flags &= ~HTP_FILENAME_SET;
+                htud->tsflags &= ~HTP_FILENAME_SET;
             } else {
                 SCLogDebug("chunk doesn't contain form end");
 
                 filedata = header_end + 4;
                 filedata_len = chunks_buffer_len - (filedata - chunks_buffer);
                 SCLogDebug("filedata_len %u (chunks_buffer_len %u)", filedata_len, chunks_buffer_len);
+
+                if (filedata_len > chunks_buffer_len) {
+                    AppLayerDecoderEventsSetEvent(hstate->f,
+                            HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR);
+                    goto end;
+                }
 
 #ifdef PRINT
                 printf("FILEDATA START: \n");
@@ -1424,7 +1505,7 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                     if (result == -1) {
                         goto end;
                     } else if (result == -2) {
-                        htud->flags |= HTP_DONTSTORE;
+                        htud->tsflags |= HTP_DONTSTORE;
                     }
                 } else {
                     filedata_len = header_next - filedata - 2;
@@ -1436,14 +1517,14 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
                     if (result == -1) {
                         goto end;
                     } else if (result == -2) {
-                        htud->flags |= HTP_DONTSTORE;
+                        htud->tsflags |= HTP_DONTSTORE;
                     } else {
                         if (HTPFileClose(hstate, NULL, 0, 0, STREAM_TOSERVER) == -1) {
                             goto end;
                         }
                     }
 
-                    htud->flags &= ~HTP_FILENAME_SET;
+                    htud->tsflags &= ~HTP_FILENAME_SET;
                     htud->request_body.body_parsed += (header_end - chunks_buffer);
                 }
             }
@@ -1451,7 +1532,7 @@ int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud,
         } else {
             htud->request_body.body_parsed += (header_end - chunks_buffer);
         }
-
+next:
         SCLogDebug("header_start %p, header_end %p, form_end %p",
                 header_start, header_end, form_end);
 
@@ -1490,16 +1571,19 @@ int HtpRequestBodySetupPUT(htp_tx_data_t *d, HtpTxUserData *htud) {
     return 0;
 }
 
-int HtpRequestBodyHandlePUT(HtpState *hstate, HtpTxUserData *htud,
+/** \internal
+ *  \brief Handle POST, no multipart body data
+ */
+static int HtpRequestBodyHandlePOST(HtpState *hstate, HtpTxUserData *htud,
         htp_tx_t *tx, uint8_t *data, uint32_t data_len)
 {
     int result = 0;
 
     /* see if we need to open the file */
-    if (!(htud->flags & HTP_FILENAME_SET))
+    if (!(htud->tsflags & HTP_FILENAME_SET))
     {
         uint8_t *filename = NULL;
-        uint32_t filename_len = 0;
+        size_t filename_len = 0;
 
         /* get the name */
         if (tx->parsed_uri != NULL && tx->parsed_uri->path != NULL) {
@@ -1507,28 +1591,83 @@ int HtpRequestBodyHandlePUT(HtpState *hstate, HtpTxUserData *htud,
             filename_len = bstr_len(tx->parsed_uri->path);
         }
 
-        result = HTPFileOpen(hstate, filename, filename_len, data, data_len,
-                hstate->transaction_cnt, STREAM_TOSERVER);
-        if (result == -1) {
-            goto end;
-        } else if (result == -2) {
-            htud->flags |= HTP_DONTSTORE;
-        } else {
-            htud->flags |= HTP_FILENAME_SET;
-            htud->flags &= ~HTP_DONTSTORE;
+        if (filename != NULL) {
+            result = HTPFileOpen(hstate, filename, (uint32_t)filename_len, data, data_len,
+                    hstate->transaction_cnt, STREAM_TOSERVER);
+            if (result == -1) {
+                goto end;
+            } else if (result == -2) {
+                htud->tsflags |= HTP_DONTSTORE;
+            } else {
+                htud->tsflags |= HTP_FILENAME_SET;
+                htud->tsflags &= ~HTP_DONTSTORE;
+            }
         }
     }
     else
     {
         /* otherwise, just store the data */
 
-        if (!(htud->flags & HTP_DONTSTORE)) {
+        if (!(htud->tsflags & HTP_DONTSTORE)) {
             result = HTPFileStoreChunk(hstate, data, data_len, STREAM_TOSERVER);
             if (result == -1) {
                 goto end;
             } else if (result == -2) {
                 /* we know for sure we're not storing the file */
-                htud->flags |= HTP_DONTSTORE;
+                htud->tsflags |= HTP_DONTSTORE;
+            }
+        }
+    }
+
+    return 0;
+end:
+    return -1;
+}
+
+/** \internal
+ *  \brief Handle PUT body data
+ */
+static int HtpRequestBodyHandlePUT(HtpState *hstate, HtpTxUserData *htud,
+        htp_tx_t *tx, uint8_t *data, uint32_t data_len)
+{
+    int result = 0;
+
+    /* see if we need to open the file */
+    if (!(htud->tsflags & HTP_FILENAME_SET))
+    {
+        uint8_t *filename = NULL;
+        size_t filename_len = 0;
+
+        /* get the name */
+        if (tx->parsed_uri != NULL && tx->parsed_uri->path != NULL) {
+            filename = (uint8_t *)bstr_ptr(tx->parsed_uri->path);
+            filename_len = bstr_len(tx->parsed_uri->path);
+        }
+
+        if (filename != NULL) {
+            result = HTPFileOpen(hstate, filename, (uint32_t)filename_len, data, data_len,
+                    hstate->transaction_cnt, STREAM_TOSERVER);
+            if (result == -1) {
+                goto end;
+            } else if (result == -2) {
+                htud->tsflags |= HTP_DONTSTORE;
+            } else {
+                htud->tsflags |= HTP_FILENAME_SET;
+                htud->tsflags &= ~HTP_DONTSTORE;
+            }
+        }
+    }
+    else
+    {
+        /* otherwise, just store the data */
+
+        if (!(htud->tsflags & HTP_DONTSTORE)) {
+            result = HTPFileStoreChunk(hstate, data, data_len, STREAM_TOSERVER);
+            if (result == -1) {
+                goto end;
+            } else if (result == -2) {
+                /* we know for sure we're not storing the file */
+                htud->tsflags |= HTP_DONTSTORE;
             }
         }
     }
@@ -1546,43 +1685,57 @@ int HtpResponseBodyHandle(HtpState *hstate, HtpTxUserData *htud,
     int result = 0;
 
     /* see if we need to open the file */
-    if (!(htud->flags & HTP_FILENAME_SET))
+    if (!(htud->tcflags & HTP_FILENAME_SET))
     {
         SCLogDebug("setting up file name");
 
         uint8_t *filename = NULL;
-        uint32_t filename_len = 0;
+        size_t filename_len = 0;
 
-        /* get the name */
-        if (tx->parsed_uri != NULL && tx->parsed_uri->path != NULL) {
-            filename = (uint8_t *)bstr_ptr(tx->parsed_uri->path);
-            filename_len = bstr_len(tx->parsed_uri->path);
+        /* try Content-Disposition header first */
+        htp_header_t *h = (htp_header_t *)table_getc(tx->response_headers,
+                "Content-Disposition");
+        if (h != NULL && bstr_len(h->value) > 0) {
+            /* parse content-disposition */
+            (void)HTTPParseContentDispositionHeader((uint8_t *)"filename=", 9,
+                    (uint8_t *) bstr_ptr(h->value), bstr_len(h->value), &filename, &filename_len);
         }
 
-        result = HTPFileOpen(hstate, filename, filename_len,
+        /* fall back to name from the uri */
+        if (filename == NULL) {
+            /* get the name */
+            if (tx->parsed_uri != NULL && tx->parsed_uri->path != NULL) {
+                filename = (uint8_t *)bstr_ptr(tx->parsed_uri->path);
+                filename_len = bstr_len(tx->parsed_uri->path);
+            }
+        }
+
+        if (filename != NULL) {
+            result = HTPFileOpen(hstate, filename, (uint32_t)filename_len,
                     data, data_len, hstate->transaction_cnt, STREAM_TOCLIENT);
-        SCLogDebug("result %d", result);
-        if (result == -1) {
-            goto end;
-        } else if (result == -2) {
-            htud->flags |= HTP_DONTSTORE;
-        } else {
-            htud->flags |= HTP_FILENAME_SET;
-            htud->flags &= ~HTP_DONTSTORE;
+            SCLogDebug("result %d", result);
+            if (result == -1) {
+                goto end;
+            } else if (result == -2) {
+                htud->tcflags |= HTP_DONTSTORE;
+            } else {
+                htud->tcflags |= HTP_FILENAME_SET;
+                htud->tcflags &= ~HTP_DONTSTORE;
+            }
         }
     }
     else
     {
         /* otherwise, just store the data */
 
-        if (!(htud->flags & HTP_DONTSTORE)) {
+        if (!(htud->tcflags & HTP_DONTSTORE)) {
             result = HTPFileStoreChunk(hstate, data, data_len, STREAM_TOCLIENT);
             SCLogDebug("result %d", result);
             if (result == -1) {
                 goto end;
             } else if (result == -2) {
                 /* we know for sure we're not storing the file */
-                htud->flags |= HTP_DONTSTORE;
+                htud->tcflags |= HTP_DONTSTORE;
             }
         }
     }
@@ -1625,12 +1778,17 @@ int HTPCallbackRequestBodyData(htp_tx_data_t *d)
         htud->operation = HTP_BODY_REQUEST;
 
         if (d->tx->request_method_number == M_POST) {
-            if (HtpRequestBodySetupMultipart(d, htud) == 0) {
-                htud->request_body.type = HTP_BODY_REQUEST_MULTIPART;
+            SCLogDebug("POST");
+            int r = HtpRequestBodySetupMultipart(d, htud);
+            if (r == 1) {
+                htud->request_body_type = HTP_BODY_REQUEST_MULTIPART;
+            } else if (r == 0) {
+                htud->request_body_type = HTP_BODY_REQUEST_POST;
+                SCLogDebug("not multipart");
             }
         } else if (d->tx->request_method_number == M_PUT) {
             if (HtpRequestBodySetupPUT(d, htud) == 0) {
-                htud->request_body.type = HTP_BODY_REQUEST_PUT;
+                htud->request_body_type = HTP_BODY_REQUEST_PUT;
             }
         }
 
@@ -1656,21 +1814,21 @@ int HTPCallbackRequestBodyData(htp_tx_data_t *d)
 
         int r = HtpBodyAppendChunk(htud, &htud->request_body, (uint8_t *)d->data, len);
         if (r < 0) {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tsflags |= HTP_REQ_BODY_COMPLETE;
         } else if (hstate->request_body_limit > 0 &&
             htud->request_body.content_len_so_far >= hstate->request_body_limit)
         {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tsflags |= HTP_REQ_BODY_COMPLETE;
         } else if (htud->request_body.content_len_so_far == htud->request_body.content_len) {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tsflags |= HTP_REQ_BODY_COMPLETE;
         }
 
         uint8_t *chunks_buffer = NULL;
         uint32_t chunks_buffer_len = 0;
 
-        if (htud->request_body.type == HTP_BODY_REQUEST_MULTIPART) {
+        if (htud->request_body_type == HTP_BODY_REQUEST_MULTIPART) {
             /* multi-part body handling starts here */
-            if (!(htud->flags & HTP_BOUNDARY_SET)) {
+            if (!(htud->tsflags & HTP_BOUNDARY_SET)) {
                 goto end;
             }
 
@@ -1679,9 +1837,9 @@ int HTPCallbackRequestBodyData(htp_tx_data_t *d)
                 goto end;
             }
 #ifdef PRINT
-    printf("REASSCHUNK START: \n");
-    PrintRawDataFp(stdout, chunks_buffer, chunks_buffer_len);
-    printf("REASSCHUNK END: \n");
+            printf("REASSCHUNK START: \n");
+            PrintRawDataFp(stdout, chunks_buffer, chunks_buffer_len);
+            printf("REASSCHUNK END: \n");
 #endif
 
             HtpRequestBodyHandleMultipart(hstate, htud, chunks_buffer, chunks_buffer_len);
@@ -1689,7 +1847,9 @@ int HTPCallbackRequestBodyData(htp_tx_data_t *d)
             if (chunks_buffer != NULL) {
                 SCFree(chunks_buffer);
             }
-        } else if (htud->request_body.type == HTP_BODY_REQUEST_PUT) {
+        } else if (htud->request_body_type == HTP_BODY_REQUEST_POST) {
+            HtpRequestBodyHandlePOST(hstate, htud, d->tx, (uint8_t *)d->data, (uint32_t)d->len);
+        } else if (htud->request_body_type == HTP_BODY_REQUEST_PUT) {
             HtpRequestBodyHandlePUT(hstate, htud, d->tx, (uint8_t *)d->data, (uint32_t)d->len);
         }
 
@@ -1731,6 +1891,10 @@ int HTPCallbackResponseBodyData(htp_tx_data_t *d)
         memset(htud, 0, sizeof(HtpTxUserData));
         htud->operation = HTP_BODY_RESPONSE;
 
+        htp_header_t *cl = table_getc(d->tx->response_headers, "content-length");
+        if (cl != NULL)
+            htud->response_body.content_len = htp_parse_content_length(cl->value);
+
         /* Set the user data for handling body chunks on this transaction */
         htp_tx_set_user_data(d->tx, htud);
     }
@@ -1753,13 +1917,13 @@ int HTPCallbackResponseBodyData(htp_tx_data_t *d)
 
         int r = HtpBodyAppendChunk(htud, &htud->response_body, (uint8_t *)d->data, len);
         if (r < 0) {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tcflags |= HTP_RES_BODY_COMPLETE;
         } else if (hstate->response_body_limit > 0 &&
             htud->response_body.content_len_so_far >= hstate->response_body_limit)
         {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tcflags |= HTP_RES_BODY_COMPLETE;
         } else if (htud->response_body.content_len_so_far == htud->response_body.content_len) {
-            htud->flags |= HTP_BODY_COMPLETE;
+            htud->tcflags |= HTP_RES_BODY_COMPLETE;
         }
 
         HtpResponseBodyHandle(hstate, htud, d->tx, (uint8_t *)d->data, (uint32_t)d->len);
@@ -1830,10 +1994,10 @@ static int HTPCallbackRequest(htp_connp_t *connp) {
     if (connp->in_tx != NULL) {
         HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(connp->in_tx);
         if (htud != NULL) {
-            if (htud->flags & HTP_FILENAME_SET) {
+            if (htud->tsflags & HTP_FILENAME_SET) {
                 SCLogDebug("closing file that was being stored");
                 (void)HTPFileClose(hstate, NULL, 0, 0, STREAM_TOSERVER);
-                htud->flags &= ~HTP_FILENAME_SET;
+                htud->tsflags &= ~HTP_FILENAME_SET;
             }
         }
     }
@@ -1867,10 +2031,10 @@ static int HTPCallbackResponse(htp_connp_t *connp) {
     if (connp->out_tx != NULL) {
         HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(connp->out_tx);
         if (htud != NULL) {
-            if (htud->flags & HTP_FILENAME_SET) {
+            if (htud->tcflags & HTP_FILENAME_SET) {
                 SCLogDebug("closing file that was being stored");
                 (void)HTPFileClose(hstate, NULL, 0, 0, STREAM_TOCLIENT);
-                htud->flags &= ~HTP_FILENAME_SET;
+                htud->tcflags &= ~HTP_FILENAME_SET;
             }
         }
     }
@@ -2066,6 +2230,10 @@ static void HTPConfigure(void)
             htprec->response_body_limit = HTP_CONFIG_DEFAULT_REQUEST_BODY_LIMIT;
             htp_config_register_request(htp, HTPCallbackRequest);
             htp_config_register_response(htp, HTPCallbackResponse);
+#ifdef HAVE_HTP_URI_NORMALIZE_HOOK
+            htp_config_register_request_uri_normalize(htp,
+                    HTPCallbackRequestUriNormalize);
+#endif
             htp_config_set_generate_request_uri_normalized(htp, 1);
 
             /* Server Parameters */
@@ -2209,21 +2377,23 @@ void RegisterHTPParsers(void)
 {
     SCEnter();
 
+    char *proto_name = "http";
+
     /** HTTP */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "GET|20|", 4, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "GET|09|", 4, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "PUT|20|", 4, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "PUT|09|", 4, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "POST|20|", 5, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "POST|09|", 5, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "HEAD|20|", 5, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "HEAD|09|", 5, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "TRACE|20|", 6, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "TRACE|09|", 6, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS|20|", 8, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS|09|", 8, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "CONNECT|20|", 8, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_HTTP, "CONNECT|09|", 8, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "GET|20|", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "GET|09|", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "PUT|20|", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "PUT|09|", 4, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "POST|20|", 5, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "POST|09|", 5, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "HEAD|20|", 5, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "HEAD|09|", 5, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "TRACE|20|", 6, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "TRACE|09|", 6, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS|20|", 8, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "OPTIONS|09|", 8, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "CONNECT|20|", 8, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_HTTP, "CONNECT|09|", 8, 0, STREAM_TOSERVER);
 
     AppLayerRegisterStateFuncs(ALPROTO_HTTP, HTPStateAlloc, HTPStateFree);
     AppLayerRegisterTransactionIdFuncs(ALPROTO_HTTP, HTPStateUpdateTransactionId, HTPStateTransactionFree);
@@ -2231,9 +2401,9 @@ void RegisterHTPParsers(void)
 
     AppLayerDecoderEventsModuleRegister(ALPROTO_HTTP, http_decoder_event_table);
 
-    AppLayerRegisterProto("http", ALPROTO_HTTP, STREAM_TOSERVER,
+    AppLayerRegisterProto(proto_name, ALPROTO_HTTP, STREAM_TOSERVER,
                           HTPHandleRequestData);
-    AppLayerRegisterProto("http", ALPROTO_HTTP, STREAM_TOCLIENT,
+    AppLayerRegisterProto(proto_name, ALPROTO_HTTP, STREAM_TOCLIENT,
                           HTPHandleResponseData);
 
     HTPConfigure();
@@ -2249,15 +2419,20 @@ void RegisterHTPParsers(void)
 void AppLayerHtpRegisterExtraCallbacks(void) {
     SCEnter();
     SCLogDebug("Registering extra htp callbacks");
-    if (need_htp_request_body == 1) {
-        SCLogDebug("Registering callback htp_config_register_request_body_data on htp");
-        htp_config_register_request_body_data(cfglist.cfg,
-                                              HTPCallbackRequestBodyData);
-    }
-    if (need_htp_response_body == 1) {
-        SCLogDebug("Registering callback htp_config_register_response_body_data on htp");
-        htp_config_register_response_body_data(cfglist.cfg,
-                                              HTPCallbackResponseBodyData);
+
+    HTPCfgRec *p_cfglist = &cfglist;
+    while (p_cfglist != NULL) {
+        if (need_htp_request_body == 1) {
+            SCLogDebug("Registering callback htp_config_register_request_body_data on htp");
+            htp_config_register_request_body_data(p_cfglist->cfg,
+                                                  HTPCallbackRequestBodyData);
+        }
+        if (need_htp_response_body == 1) {
+            SCLogDebug("Registering callback htp_config_register_response_body_data on htp");
+            htp_config_register_response_body_data(p_cfglist->cfg,
+                                                   HTPCallbackResponseBodyData);
+        }
+        p_cfglist = p_cfglist->next;
     }
     SCReturn;
 }
@@ -2338,7 +2513,7 @@ int HTPParserTest01(void) {
     table_iterator_reset(tx->request_headers);
     table_iterator_next(tx->request_headers, (void **) & h);
 
-    if (htp_state->connp == NULL || strcmp(bstr_tocstr(h->value), "Victor/1.0")
+    if (strcmp(bstr_tocstr(h->value), "Victor/1.0")
             || tx->request_method_number != M_POST ||
             tx->request_protocol_number != HTTP_1_0)
     {
@@ -2462,7 +2637,7 @@ int HTPParserTest03(void) {
     table_iterator_reset(tx->request_headers);
     table_iterator_next(tx->request_headers, (void **) & h);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_UNKNOWN ||
+    if (tx->request_method_number != M_UNKNOWN ||
              h != NULL || tx->request_protocol_number != HTTP_1_0)
     {
         printf("expected method M_UNKNOWN and got %s: , expected protocol "
@@ -2519,7 +2694,7 @@ int HTPParserTest04(void) {
     table_iterator_reset(tx->request_headers);
     table_iterator_next(tx->request_headers, (void **) & h);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_UNKNOWN ||
+    if (tx->request_method_number != M_UNKNOWN ||
             h != NULL || tx->request_protocol_number != PROTOCOL_UNKNOWN)
     {
         printf("expected method M_UNKNOWN and got %s: , expected protocol "
@@ -2626,7 +2801,7 @@ int HTPParserTest05(void) {
     table_iterator_reset(tx->request_headers);
     table_iterator_next(tx->request_headers, (void **) & h);
 
-    if (http_state->connp == NULL || tx->request_method_number != M_POST ||
+    if (tx->request_method_number != M_POST ||
             h == NULL || tx->request_protocol_number != HTTP_1_0)
     {
         printf("expected method M_POST and got %s: , expected protocol "
@@ -2740,7 +2915,7 @@ int HTPParserTest06(void) {
     table_iterator_reset(tx->request_headers);
     table_iterator_next(tx->request_headers, (void **) & h);
 
-    if (http_state->connp == NULL || tx->request_method_number != M_GET ||
+    if (tx->request_method_number != M_GET ||
             h == NULL || tx->request_protocol_number != HTTP_1_1)
     {
         printf("expected method M_GET and got %s: , expected protocol "
@@ -2995,6 +3170,329 @@ end:
     ConfDeInit();
     ConfRestoreContextBackup();
     HtpConfigRestoreBackup();
+    UTHFreeFlow(f);
+    return result;
+}
+
+/** \test Host:www.google.com <- missing space between name:value (rfc violation)
+ */
+int HTPParserTest10(void) {
+    int result = 0;
+    Flow *f = NULL;
+    uint8_t httpbuf1[] = "GET / HTTP/1.0\r\nHost:www.google.com\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    HtpState *htp_state =  NULL;
+    int r = 0;
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0)
+            flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1))
+            flags = STREAM_TOSERVER|STREAM_EOF;
+        else
+            flags = STREAM_TOSERVER;
+
+        r = AppLayerParse(NULL, f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
+        if (r != 0) {
+            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
+                    " 0: ", u, r);
+            goto end;
+        }
+    }
+
+    htp_state = f->alstate;
+    if (htp_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
+    htp_header_t *h = NULL;
+    table_iterator_reset(tx->request_headers);
+    table_iterator_next(tx->request_headers, (void **) & h);
+
+    if (h == NULL) {
+        goto end;
+    }
+
+    char *name = bstr_tocstr(h->name);
+    if (name == NULL) {
+        goto end;
+    }
+
+    if (strcmp(name, "Host") != 0) {
+        printf("header name not \"Host\", instead \"%s\": ", name);
+        free(name);
+        goto end;
+    }
+    free(name);
+
+    char *value = bstr_tocstr(h->value);
+    if (value == NULL) {
+        goto end;
+    }
+
+    if (strcmp(value, "www.google.com") != 0) {
+        printf("header value not \"www.google.com\", instead \"%s\": ", value);
+        free(value);
+        goto end;
+    }
+    free(value);
+
+    result = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
+    UTHFreeFlow(f);
+    return result;
+}
+
+/** \test double encoding in path
+ */
+static int HTPParserTest11(void) {
+    int result = 0;
+    Flow *f = NULL;
+    uint8_t httpbuf1[] = "GET /%2500 HTTP/1.0\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    HtpState *htp_state =  NULL;
+    int r = 0;
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0)
+            flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1))
+            flags = STREAM_TOSERVER|STREAM_EOF;
+        else
+            flags = STREAM_TOSERVER;
+
+        r = AppLayerParse(NULL, f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
+        if (r != 0) {
+            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
+                    " 0: ", u, r);
+            goto end;
+        }
+    }
+
+    htp_state = f->alstate;
+    if (htp_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
+    if (tx != NULL && tx->request_uri_normalized != NULL) {
+        if (2 != bstr_size(tx->request_uri_normalized)) {
+            printf("normalized uri len should be 2, is %"PRIuMAX,
+                (uintmax_t)bstr_size(tx->request_uri_normalized));
+            goto end;
+        }
+
+        if (bstr_ptr(tx->request_uri_normalized)[0] != '/' ||
+            bstr_ptr(tx->request_uri_normalized)[1] != '\0')
+        {
+            printf("normalized uri \"");
+            PrintRawUriFp(stdout, (uint8_t *)bstr_ptr(tx->request_uri_normalized), bstr_size(tx->request_uri_normalized));
+            printf("\": ");
+            goto end;
+        }
+    }
+
+    result = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
+    UTHFreeFlow(f);
+    return result;
+}
+
+/** \test double encoding in query
+ */
+static int HTPParserTest12(void) {
+    int result = 0;
+    Flow *f = NULL;
+    uint8_t httpbuf1[] = "GET /?a=%2500 HTTP/1.0\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    HtpState *htp_state =  NULL;
+    int r = 0;
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0)
+            flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1))
+            flags = STREAM_TOSERVER|STREAM_EOF;
+        else
+            flags = STREAM_TOSERVER;
+
+        r = AppLayerParse(NULL, f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
+        if (r != 0) {
+            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
+                    " 0: ", u, r);
+            goto end;
+        }
+    }
+
+    htp_state = f->alstate;
+    if (htp_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
+    if (tx != NULL && tx->request_uri_normalized != NULL) {
+        if (5 != bstr_size(tx->request_uri_normalized)) {
+            printf("normalized uri len should be 5, is %"PRIuMAX,
+                (uintmax_t)bstr_size(tx->request_uri_normalized));
+            goto end;
+        }
+
+        if (bstr_ptr(tx->request_uri_normalized)[0] != '/' ||
+            bstr_ptr(tx->request_uri_normalized)[1] != '?' ||
+            bstr_ptr(tx->request_uri_normalized)[2] != 'a' ||
+            bstr_ptr(tx->request_uri_normalized)[3] != '=' ||
+            bstr_ptr(tx->request_uri_normalized)[4] != '\0')
+        {
+            printf("normalized uri \"");
+            PrintRawUriFp(stdout, (uint8_t *)bstr_ptr(tx->request_uri_normalized), bstr_size(tx->request_uri_normalized));
+            printf("\": ");
+            goto end;
+        }
+    }
+
+    result = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
+    UTHFreeFlow(f);
+    return result;
+}
+
+/** \test Host:www.google.com0dName: Value0d0a <- missing space between name:value (rfc violation)
+ */
+int HTPParserTest13(void) {
+    int result = 0;
+    Flow *f = NULL;
+    uint8_t httpbuf1[] = "GET / HTTP/1.0\r\nHost:www.google.com\rName: Value\r\n\r\n";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+    TcpSession ssn;
+    HtpState *htp_state =  NULL;
+    int r = 0;
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    if (f == NULL)
+        goto end;
+    f->protoctx = &ssn;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0)
+            flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1))
+            flags = STREAM_TOSERVER|STREAM_EOF;
+        else
+            flags = STREAM_TOSERVER;
+
+        r = AppLayerParse(NULL, f, ALPROTO_HTTP, flags, &httpbuf1[u], 1);
+        if (r != 0) {
+            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
+                    " 0: ", u, r);
+            goto end;
+        }
+    }
+
+    htp_state = f->alstate;
+    if (htp_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
+    htp_header_t *h = NULL;
+    table_iterator_reset(tx->request_headers);
+    table_iterator_next(tx->request_headers, (void **) & h);
+
+    if (h == NULL) {
+        goto end;
+    }
+
+    char *name = bstr_tocstr(h->name);
+    if (name == NULL) {
+        goto end;
+    }
+
+    if (strcmp(name, "Host") != 0) {
+        printf("header name not \"Host\", instead \"%s\": ", name);
+        free(name);
+        goto end;
+    }
+    free(name);
+
+    char *value = bstr_tocstr(h->value);
+    if (value == NULL) {
+        goto end;
+    }
+
+    if (strcmp(value, "www.google.com\rName: Value") != 0) {
+        printf("header value not \"www.google.com\", instead \"");
+        PrintRawUriFp(stdout, (uint8_t *)value, strlen(value));
+        printf("\": ");
+        free(value);
+        goto end;
+    }
+    free(value);
+
+    result = 1;
+end:
+    StreamTcpFreeConfig(TRUE);
+    if (htp_state != NULL)
+        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -3406,6 +3904,10 @@ void HTPParserRegisterTests(void) {
     UtRegisterTest("HTPParserTest07", HTPParserTest07, 1);
     UtRegisterTest("HTPParserTest08", HTPParserTest08, 1);
     UtRegisterTest("HTPParserTest09", HTPParserTest09, 1);
+    UtRegisterTest("HTPParserTest10", HTPParserTest10, 1);
+    UtRegisterTest("HTPParserTest11", HTPParserTest11, 1);
+    UtRegisterTest("HTPParserTest12", HTPParserTest12, 1);
+    UtRegisterTest("HTPParserTest13", HTPParserTest13, 1);
     UtRegisterTest("HTPParserConfigTest01", HTPParserConfigTest01, 1);
     UtRegisterTest("HTPParserConfigTest02", HTPParserConfigTest02, 1);
     UtRegisterTest("HTPParserConfigTest03", HTPParserConfigTest03, 1);

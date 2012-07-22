@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -19,6 +19,7 @@
  * \file
  *
  * \author Anoop Saldanha <anoopsaldanha@gmail.com>
+ * \author Pierre Chifflier <pierre.chifflier@ssi.gouv.fr>
  *
  */
 
@@ -39,7 +40,10 @@
 #include "app-layer-parser.h"
 #include "app-layer-ssl.h"
 
+#include "app-layer-tls-handshake.h"
+
 #include "conf.h"
+#include "decode-events.h"
 
 #include "util-spm.h"
 #include "util-unittest.h"
@@ -48,6 +52,22 @@
 #include "flow-private.h"
 
 #include "util-byte.h"
+
+SCEnumCharMap tls_decoder_event_table[ ] = {
+    /* TLS protocol messages */
+    { "INVALID_SSLV2_HEADER",        TLS_DECODER_EVENT_INVALID_SSLV2_HEADER },
+    { "INVALID_TLS_HEADER",          TLS_DECODER_EVENT_INVALID_TLS_HEADER },
+    { "INVALID_RECORD_TYPE",         TLS_DECODER_EVENT_INVALID_RECORD_TYPE },
+    { "INVALID_HANDSHAKE_MESSAGE",   TLS_DECODER_EVENT_INVALID_HANDSHAKE_MESSAGE },
+    /* Certificates decoding messages */
+    { "INVALID_CERTIFICATE",         TLS_DECODER_EVENT_INVALID_CERTIFICATE },
+    { "CERTIFICATE_MISSING_ELEMENT", TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT },
+    { "CERTIFICATE_UNKNOWN_ELEMENT", TLS_DECODER_EVENT_CERTIFICATE_UNKNOWN_ELEMENT },
+    { "CERTIFICATE_INVALID_LENGTH",  TLS_DECODER_EVENT_CERTIFICATE_INVALID_LENGTH },
+    { "CERTIFICATE_INVALID_STRING",  TLS_DECODER_EVENT_CERTIFICATE_INVALID_STRING },
+    { "ERROR_MESSAGE_ENCOUNTERED",   TLS_DECODER_EVENT_ERROR_MSG_ENCOUNTERED },
+    { NULL,                          -1 },
+};
 
 typedef struct SslConfig_ {
     int no_reassemble;
@@ -87,10 +107,12 @@ SslConfig ssl_config;
 #define SSLV2_MT_CLIENT_CERTIFICATE   8
 
 #define SSLV3_RECORD_LEN 5
+#define SSLV3_MESSAGE_HDR_LEN 4
 
 static void SSLParserReset(SSLState *ssl_state)
 {
-    ssl_state->bytes_processed = 0;
+    ssl_state->curr_connp->bytes_processed = 0;
+    ssl_state->curr_connp->message_start = 0;
 }
 
 static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
@@ -98,44 +120,20 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
 {
     uint8_t *initial_input = input;
     uint32_t parsed = 0;
+    int rc;
 
     if (input_len == 0) {
         return 0;
     }
 
-    switch (ssl_state->handshake_type) {
+    switch (ssl_state->curr_connp->handshake_type) {
         case SSLV3_HS_CLIENT_HELLO:
             ssl_state->flags |= SSL_AL_FLAG_STATE_CLIENT_HELLO;
-
-            switch (ssl_state->bytes_processed) {
-                case 9:
-                    ssl_state->bytes_processed++;
-                    ssl_state->handshake_client_hello_ssl_version = *(input++) << 8;
-                    if (--input_len == 0)
-                        break;
-                case 10:
-                    ssl_state->bytes_processed++;
-                    ssl_state->handshake_client_hello_ssl_version |= *(input++);
-                    if (--input_len == 0)
-                        break;
-            }
             break;
 
         case SSLV3_HS_SERVER_HELLO:
             ssl_state->flags |= SSL_AL_FLAG_STATE_SERVER_HELLO;
 
-            switch (ssl_state->bytes_processed) {
-                case 9:
-                    ssl_state->bytes_processed++;
-                    ssl_state->handshake_server_hello_ssl_version = *(input++) << 8;
-                    if (--input_len == 0)
-                        break;
-                case 10:
-                    ssl_state->bytes_processed++;
-                    ssl_state->handshake_server_hello_ssl_version |= *(input++);
-                    if (--input_len == 0)
-                        break;
-            }
             break;
 
         case SSLV3_HS_SERVER_KEY_EXCHANGE:
@@ -146,8 +144,38 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
             ssl_state->flags |= SSL_AL_FLAG_STATE_CLIENT_KEYX;
             break;
 
-        case SSLV3_HS_HELLO_REQUEST:
         case SSLV3_HS_CERTIFICATE:
+            if (ssl_state->curr_connp->trec == NULL) {
+                ssl_state->curr_connp->trec_len = 2 * ssl_state->curr_connp->record_length + SSLV3_RECORD_LEN + 1;
+                ssl_state->curr_connp->trec = SCMalloc( ssl_state->curr_connp->trec_len );
+            }
+            if (ssl_state->curr_connp->trec_pos + input_len >= ssl_state->curr_connp->trec_len) {
+                ssl_state->curr_connp->trec_len = ssl_state->curr_connp->trec_len + 2 * input_len + 1;
+                ssl_state->curr_connp->trec = SCRealloc( ssl_state->curr_connp->trec, ssl_state->curr_connp->trec_len );
+            }
+            if (ssl_state->curr_connp->trec == NULL) {
+                ssl_state->curr_connp->trec_len = 0;
+                /* error, skip packet */
+                parsed += input_len;
+                ssl_state->curr_connp->bytes_processed += input_len;
+                break;
+            }
+            memcpy(ssl_state->curr_connp->trec + ssl_state->curr_connp->trec_pos, initial_input, input_len);
+            ssl_state->curr_connp->trec_pos += input_len;
+
+            rc = DecodeTLSHandshakeServerCertificate(ssl_state, ssl_state->curr_connp->trec, ssl_state->curr_connp->trec_pos);
+            if (rc > 0) {
+                /* do not return normally if the packet was fragmented:
+                 * we would return the size of the *entire* message,
+                 * while we expect only the number of bytes parsed bytes
+                 * from the *current* fragment
+                 */
+                uint32_t diff = input_len - (ssl_state->curr_connp->trec_pos - rc);
+                ssl_state->curr_connp->bytes_processed += diff;
+                return diff;
+            }
+            break;
+        case SSLV3_HS_HELLO_REQUEST:
         case SSLV3_HS_CERTIFICATE_REQUEST:
         case SSLV3_HS_CERTIFICATE_VERIFY:
         case SSLV3_HS_FINISHED:
@@ -158,73 +186,73 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
             break;
     }
 
-    /* looks like we have another record */
-    parsed += (input - initial_input);
-    if ((input_len + ssl_state->bytes_processed) >= ssl_state->record_length + SSLV3_RECORD_LEN) {
-        uint32_t diff = ssl_state->record_length + SSLV3_RECORD_LEN - ssl_state->bytes_processed;
-        parsed += diff;
-        ssl_state->bytes_processed += diff;
-        return parsed;
-
-        /* we still don't have the entire record for the one we are
-         * currently parsing */
-    } else {
+    /* skip the rest of the current message */
+    uint32_t next_msg_offset = ssl_state->curr_connp->message_start + SSLV3_MESSAGE_HDR_LEN + ssl_state->curr_connp->message_length;
+    if (ssl_state->curr_connp->bytes_processed + input_len < next_msg_offset) {
+        /* we don't have enough data */
         parsed += input_len;
-        ssl_state->bytes_processed += input_len;
+        ssl_state->curr_connp->bytes_processed += input_len;
         return parsed;
     }
+    uint32_t diff = next_msg_offset - ssl_state->curr_connp->bytes_processed;
+    parsed += diff;
+    ssl_state->curr_connp->bytes_processed += diff;
+    return parsed;
 }
 
 static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
                                        uint32_t input_len)
 {
     uint8_t *initial_input = input;
+    int retval;
 
     if (input_len == 0) {
         return 0;
     }
 
-    switch (ssl_state->bytes_processed) {
-        case 5:
-            if (input_len >= 4) {
-                ssl_state->handshake_type = *(input++);
-                input += 3;
-                input_len -= 4;
-                ssl_state->bytes_processed += 4;
-                break;
-            } else {
-                ssl_state->handshake_type = *(input++);
-                ssl_state->bytes_processed++;
-                if (--input_len == 0)
-                    break;
-            }
-        case 6:
-            ssl_state->bytes_processed++;
-            input++;
+    if (ssl_state->curr_connp->message_start == 0) {
+        ssl_state->curr_connp->message_start = SSLV3_RECORD_LEN;
+    }
+
+    switch (ssl_state->curr_connp->bytes_processed - ssl_state->curr_connp->message_start) {
+        case 0:
+            ssl_state->curr_connp->handshake_type = *(input++);
+            ssl_state->curr_connp->bytes_processed++;
             if (--input_len == 0)
                 break;
-        case 7:
-            ssl_state->bytes_processed++;
-            input++;
+        case 1:
+            ssl_state->curr_connp->message_length = *(input++) << 16;
+            ssl_state->curr_connp->bytes_processed++;
             if (--input_len == 0)
                 break;
-        case 8:
-            ssl_state->bytes_processed++;
-            input++;
+        case 2:
+            ssl_state->curr_connp->message_length |= *(input++) << 8;
+            ssl_state->curr_connp->bytes_processed++;
+            if (--input_len == 0)
+                break;
+        case 3:
+            ssl_state->curr_connp->message_length |= *(input++);
+            ssl_state->curr_connp->bytes_processed++;
             if (--input_len == 0)
                 break;
     }
 
-    if (input_len == 0)
-        return (input - initial_input);
-
-    int retval = SSLv3ParseHandshakeType(ssl_state, input, input_len);
-    if (retval == -1) {
-        SCReturnInt(-1);
-    } else {
-        input += retval;
-        return (input - initial_input);
+    retval = SSLv3ParseHandshakeType(ssl_state, input, input_len);
+    if (retval < 0) {
+        return retval;
     }
+    input += retval;
+
+    uint32_t next_msg_offset = ssl_state->curr_connp->message_start + SSLV3_MESSAGE_HDR_LEN + ssl_state->curr_connp->message_length;
+    if (ssl_state->curr_connp->bytes_processed == next_msg_offset) {
+        ssl_state->curr_connp->handshake_type = 0;
+        ssl_state->curr_connp->message_length = 0;
+        ssl_state->curr_connp->message_start = next_msg_offset;
+    } else if (ssl_state->curr_connp->bytes_processed > next_msg_offset) {
+        return -1;
+    }
+
+    return (input - initial_input);
 }
 
 static int SSLv3ParseRecord(uint8_t direction, SSLState *ssl_state,
@@ -236,65 +264,42 @@ static int SSLv3ParseRecord(uint8_t direction, SSLState *ssl_state,
         return 0;
     }
 
-    switch (ssl_state->bytes_processed) {
+    switch (ssl_state->curr_connp->bytes_processed) {
         case 0:
             if (input_len >= 5) {
-                /* toserver - 0 */
-                ssl_state->cur_content_type = input[0];
-                if (direction == 0) {
-                    ssl_state->client_content_type = input[0];
-                    ssl_state->client_version = input[1] << 8;
-                    ssl_state->client_version |= input[2];
-
-                    /* toclient - 1 */
-                } else {
-                    ssl_state->server_content_type = input[0];
-                    ssl_state->server_version = input[1] << 8;
-                    ssl_state->server_version |= input[2];
-                }
-                ssl_state->record_length = input[3] << 8;
-                ssl_state->record_length |= input[4];
-                ssl_state->bytes_processed += SSLV3_RECORD_LEN;
+                ssl_state->curr_connp->content_type = input[0];
+                ssl_state->curr_connp->version = input[1] << 8;
+                ssl_state->curr_connp->version |= input[2];
+                ssl_state->curr_connp->record_length = input[3] << 8;
+                ssl_state->curr_connp->record_length |= input[4];
+                ssl_state->curr_connp->bytes_processed += SSLV3_RECORD_LEN;
                 return SSLV3_RECORD_LEN;
             } else {
-                ssl_state->cur_content_type = *input;
-                if (direction == 0) {
-                    ssl_state->client_content_type = *(input++);
-                } else {
-                    ssl_state->server_content_type = *(input++);
-                }
+                ssl_state->curr_connp->content_type = *(input++);
                 if (--input_len == 0)
                     break;
             }
         case 1:
-            if (direction == 0) {
-                ssl_state->client_version = *(input++) << 8;
-            } else {
-                ssl_state->server_version = *(input++) << 8;
-            }
+            ssl_state->curr_connp->version = *(input++) << 8;
             if (--input_len == 0)
                 break;
         case 2:
-            if (direction == 0) {
-                ssl_state->client_version |= *(input++);
-            } else {
-                ssl_state->server_version |= *(input++);
-            }
+            ssl_state->curr_connp->version |= *(input++);
             if (--input_len == 0)
                 break;
         case 3:
-            ssl_state->record_length = *(input++) << 8;
+            ssl_state->curr_connp->record_length = *(input++) << 8;
             if (--input_len == 0)
                 break;
         case 4:
-            ssl_state->record_length |= *(input++);
-            if (ssl_state->record_length <= SSLV3_RECORD_LEN)
+            ssl_state->curr_connp->record_length |= *(input++);
+            if (ssl_state->curr_connp->record_length <= SSLV3_RECORD_LEN)
                 return -1;
             if (--input_len == 0)
                 break;
-    } /* switch (ssl_state->bytes_processed) */
+    } /* switch (ssl_state->curr_connp->bytes_processed) */
 
-    ssl_state->bytes_processed += (input - initial_input);
+    ssl_state->curr_connp->bytes_processed += (input - initial_input);
 
     return (input - initial_input);
 }
@@ -308,67 +313,49 @@ static int SSLv2ParseRecord(uint8_t direction, SSLState *ssl_state,
         return 0;
     }
 
-    if (ssl_state->record_lengths_length == 2) {
-        switch (ssl_state->bytes_processed) {
+    if (ssl_state->curr_connp->record_lengths_length == 2) {
+        switch (ssl_state->curr_connp->bytes_processed) {
             case 0:
-                if (input_len >= ssl_state->record_lengths_length + 1) {
-                    ssl_state->record_length = (0x7f & input[0]) << 8 | input[1];
-                    ssl_state->cur_content_type = input[2];
-                    if (direction == 0) {
-                        ssl_state->client_content_type = input[2];
-                        ssl_state->client_version = SSL_VERSION_2;
-                    } else {
-                        ssl_state->server_content_type = input[2];
-                        ssl_state->server_version = SSL_VERSION_2;
-                    }
-                    ssl_state->bytes_processed += 3;
+                if (input_len >= ssl_state->curr_connp->record_lengths_length + 1) {
+                    ssl_state->curr_connp->record_length = (0x7f & input[0]) << 8 | input[1];
+                    ssl_state->curr_connp->content_type = input[2];
+                    ssl_state->curr_connp->version = SSL_VERSION_2;
+                    ssl_state->curr_connp->bytes_processed += 3;
                     return 3;
                 } else {
-                    ssl_state->record_length = (0x7f & *(input++)) << 8;
+                    ssl_state->curr_connp->record_length = (0x7f & *(input++)) << 8;
                     if (--input_len == 0)
                         break;
                 }
 
             case 1:
-                ssl_state->record_length |= *(input++);
+                ssl_state->curr_connp->record_length |= *(input++);
                 if (--input_len == 0)
                     break;
             case 2:
-                ssl_state->cur_content_type = *input;
-                if (direction == 0) {
-                    ssl_state->client_content_type = *(input++);
-                    ssl_state->client_version = SSL_VERSION_2;
-                } else {
-                    ssl_state->server_content_type = *(input++);
-                    ssl_state->server_version = SSL_VERSION_2;
-                }
+                ssl_state->curr_connp->content_type = *(input++);
+                ssl_state->curr_connp->version = SSL_VERSION_2;
                 if (--input_len == 0)
                     break;
-        } /* switch (ssl_state->bytes_processed) */
+        } /* switch (ssl_state->curr_connp->bytes_processed) */
 
     } else {
-        switch (ssl_state->bytes_processed) {
+        switch (ssl_state->curr_connp->bytes_processed) {
             case 0:
-                if (input_len >= ssl_state->record_lengths_length + 1) {
-                    ssl_state->record_length = (0x3f & input[0]) << 8 | input[1];
-                    ssl_state->cur_content_type = input[3];
-                    if (direction == 0) {
-                        ssl_state->client_content_type = input[3];
-                        ssl_state->client_version = SSL_VERSION_2;
-                    } else {
-                        ssl_state->server_content_type = input[3];
-                        ssl_state->server_version = SSL_VERSION_2;
-                    }
-                    ssl_state->bytes_processed += 4;
+                if (input_len >= ssl_state->curr_connp->record_lengths_length + 1) {
+                    ssl_state->curr_connp->record_length = (0x3f & input[0]) << 8 | input[1];
+                    ssl_state->curr_connp->content_type = input[3];
+                    ssl_state->curr_connp->version = SSL_VERSION_2;
+                    ssl_state->curr_connp->bytes_processed += 4;
                     return 4;
                 } else {
-                    ssl_state->record_length = (0x3f & *(input++)) << 8;
+                    ssl_state->curr_connp->record_length = (0x3f & *(input++)) << 8;
                     if (--input_len == 0)
                         break;
                 }
 
             case 1:
-                ssl_state->record_length |= *(input++);
+                ssl_state->curr_connp->record_length |= *(input++);
                 if (--input_len == 0)
                     break;
 
@@ -379,20 +366,14 @@ static int SSLv2ParseRecord(uint8_t direction, SSLState *ssl_state,
                     break;
 
             case 3:
-                ssl_state->cur_content_type = *input;
-                if (direction == 0) {
-                    ssl_state->client_content_type = *(input++);
-                    ssl_state->client_version = SSL_VERSION_2;
-                } else {
-                    ssl_state->server_content_type = *(input++);
-                    ssl_state->server_version = SSL_VERSION_2;
-                }
+                ssl_state->curr_connp->content_type = *(input++);
+                ssl_state->curr_connp->version = SSL_VERSION_2;
                 if (--input_len == 0)
                     break;
-        } /* switch (ssl_state->bytes_processed) */
+        } /* switch (ssl_state->curr_connp->bytes_processed) */
     }
 
-    ssl_state->bytes_processed += (input - initial_input);
+    ssl_state->curr_connp->bytes_processed += (input - initial_input);
 
     return (input - initial_input);
 }
@@ -404,20 +385,20 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
     int retval = 0;
     uint8_t *initial_input = input;
 
-    if (ssl_state->bytes_processed == 0) {
+    if (ssl_state->curr_connp->bytes_processed == 0) {
         if (input[0] & 0x80) {
-            ssl_state->record_lengths_length = 2;
+            ssl_state->curr_connp->record_lengths_length = 2;
         } else {
-            ssl_state->record_lengths_length = 3;
+            ssl_state->curr_connp->record_lengths_length = 3;
         }
     }
 
     /* the + 1 because, we also read one extra byte inside SSLv2ParseRecord
      * to read the msg_type */
-    if (ssl_state->bytes_processed < (ssl_state->record_lengths_length + 1)) {
+    if (ssl_state->curr_connp->bytes_processed < (ssl_state->curr_connp->record_lengths_length + 1)) {
         retval = SSLv2ParseRecord(direction, ssl_state, input, input_len);
         if (retval == -1) {
-            SCLogDebug("Error parsing SSLv2Header");
+            AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_SSLV2_HEADER);
             return -1;
         } else {
             input += retval;
@@ -429,11 +410,12 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
         return (input - initial_input);
     }
 
-    switch (ssl_state->cur_content_type) {
+    switch (ssl_state->curr_connp->content_type) {
         case SSLV2_MT_ERROR:
-            SCLogWarning(SC_ERR_ALPARSER, "SSLV2_MT_ERROR msg_type recived.  "
-                         "Error encountered in establishing the sslv2 "
-                         "session, may be version");
+            SCLogDebug("SSLV2_MT_ERROR msg_type received.  "
+                       "Error encountered in establishing the sslv2 "
+                       "session, may be version");
+            AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_ERROR_MSG_ENCOUNTERED);
 
             break;
 
@@ -441,99 +423,99 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
             ssl_state->flags |= SSL_AL_FLAG_STATE_CLIENT_HELLO;
             ssl_state->flags |= SSL_AL_FLAG_SSL_CLIENT_HS;
 
-            if (ssl_state->record_lengths_length == 3) {
-                switch (ssl_state->bytes_processed) {
+            if (ssl_state->curr_connp->record_lengths_length == 3) {
+                switch (ssl_state->curr_connp->bytes_processed) {
                     case 4:
                         if (input_len >= 6) {
-                            ssl_state->session_id_length = input[4] << 8;
-                            ssl_state->session_id_length |= input[5];
+                            ssl_state->curr_connp->session_id_length = input[4] << 8;
+                            ssl_state->curr_connp->session_id_length |= input[5];
                             input += 6;
                             input_len -= 6;
-                            ssl_state->bytes_processed += 6;
-                            if (ssl_state->session_id_length == 0) {
+                            ssl_state->curr_connp->bytes_processed += 6;
+                            if (ssl_state->curr_connp->session_id_length == 0) {
                                 ssl_state->flags |= SSL_AL_FLAG_SSL_NO_SESSION_ID;
                             }
                             break;
                         } else {
                             input++;
-                            ssl_state->bytes_processed++;
+                            ssl_state->curr_connp->bytes_processed++;
                             if (--input_len == 0)
                                 break;
                         }
                     case 5:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 6:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 7:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 8:
-                        ssl_state->session_id_length = *(input++) << 8;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->session_id_length = *(input++) << 8;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 9:
-                        ssl_state->session_id_length |= *(input++);
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->session_id_length |= *(input++);
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
-                } /* switch (ssl_state->bytes_processed) */
+                } /* switch (ssl_state->curr_connp->bytes_processed) */
 
-                /* ssl_state->record_lengths_length is 3 */
+                /* ssl_state->curr_connp->record_lengths_length is 3 */
             } else {
-                switch (ssl_state->bytes_processed) {
+                switch (ssl_state->curr_connp->bytes_processed) {
                     case 3:
                         if (input_len >= 6) {
-                            ssl_state->session_id_length = input[4] << 8;
-                            ssl_state->session_id_length |= input[5];
+                            ssl_state->curr_connp->session_id_length = input[4] << 8;
+                            ssl_state->curr_connp->session_id_length |= input[5];
                             input += 6;
                             input_len -= 6;
-                            ssl_state->bytes_processed += 6;
-                            if (ssl_state->session_id_length == 0) {
+                            ssl_state->curr_connp->bytes_processed += 6;
+                            if (ssl_state->curr_connp->session_id_length == 0) {
                                 ssl_state->flags |= SSL_AL_FLAG_SSL_NO_SESSION_ID;
                             }
                             break;
                         } else {
                             input++;
-                            ssl_state->bytes_processed++;
+                            ssl_state->curr_connp->bytes_processed++;
                             if (--input_len == 0)
                                 break;
                         }
                     case 4:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 5:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 6:
                         input++;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 7:
-                        ssl_state->session_id_length = *(input++) << 8;
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->session_id_length = *(input++) << 8;
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
                     case 8:
-                        ssl_state->session_id_length |= *(input++);
-                        ssl_state->bytes_processed++;
+                        ssl_state->curr_connp->session_id_length |= *(input++);
+                        ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
-                } /* switch (ssl_state->bytes_processed) */
-            } /* else - if (ssl_state->record_lengths_length == 3) */
+                } /* switch (ssl_state->curr_connp->bytes_processed) */
+            } /* else - if (ssl_state->curr_connp->record_lengths_length == 3) */
 
             break;
 
@@ -556,7 +538,7 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
         case SSLV2_MT_SERVER_VERIFY:
         case SSLV2_MT_SERVER_FINISHED:
             if (direction == 0 &&
-                !(ssl_state->cur_content_type & SSLV2_MT_CLIENT_CERTIFICATE)) {
+                !(ssl_state->curr_connp->content_type & SSLV2_MT_CLIENT_CERTIFICATE)) {
                 SCLogDebug("Incorrect SSL Record type sent in the toserver "
                            "direction!");
             }
@@ -598,11 +580,11 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
             break;
     }
 
-    if (input_len + ssl_state->bytes_processed >=
-        (ssl_state->record_length + ssl_state->record_lengths_length)) {
+    if (input_len + ssl_state->curr_connp->bytes_processed >=
+        (ssl_state->curr_connp->record_length + ssl_state->curr_connp->record_lengths_length)) {
         /* looks like we have another record after this*/
-        uint32_t diff = ssl_state->record_length +
-            ssl_state->record_lengths_length + - ssl_state->bytes_processed;
+        uint32_t diff = ssl_state->curr_connp->record_length +
+            ssl_state->curr_connp->record_lengths_length + - ssl_state->curr_connp->bytes_processed;
         input += diff;
         SSLParserReset(ssl_state);
         return (input - initial_input);
@@ -611,7 +593,7 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
          * currently parsing */
     } else {
         input += input_len;
-        ssl_state->bytes_processed += input_len;
+        ssl_state->curr_connp->bytes_processed += input_len;
         return (input - initial_input);
     }
 }
@@ -623,10 +605,10 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
     int retval = 0;
     uint32_t parsed = 0;
 
-    if (ssl_state->bytes_processed < SSLV3_RECORD_LEN) {
+    if (ssl_state->curr_connp->bytes_processed < SSLV3_RECORD_LEN) {
         retval = SSLv3ParseRecord(direction, ssl_state, input, input_len);
-        if (retval == -1) {
-            SCLogDebug("Error parsing SSLv3Header");
+        if (retval < 0) {
+            AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_TLS_HEADER);
             return -1;
         } else {
             parsed += retval;
@@ -638,7 +620,7 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
         return parsed;
     }
 
-    switch (ssl_state->cur_content_type) {
+    switch (ssl_state->curr_connp->content_type) {
         /* we don't need any data from these types */
         case SSLV3_CHANGE_CIPHER_SPEC:
             ssl_state->flags |= SSL_AL_FLAG_CHANGE_CIPHER_SPEC;
@@ -662,18 +644,26 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
                     pstate->flags |= APP_LAYER_PARSER_NO_REASSEMBLY;
             }
 
+            break;
+
         case SSLV3_HANDSHAKE_PROTOCOL:
             if (ssl_state->flags & SSL_AL_FLAG_CHANGE_CIPHER_SPEC)
                 break;
 
             retval = SSLv3ParseHandshakeProtocol(ssl_state, input + parsed, input_len);
-            if (retval == -1) {
-                SCLogDebug("Error parsing SSLv3.x.  Let's get outta here");
+            if (retval < 0) {
+                AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_HANDSHAKE_MESSAGE);
                 return -1;
             } else {
+                if ((uint32_t)retval > input_len) {
+                    SCLogDebug("Error parsing SSLv3.x.  Reseting parser "
+                            "state.  Let's get outta here");
+                    SSLParserReset(ssl_state);
+                    return -1;
+                }
                 parsed += retval;
                 input_len -= retval;
-                if (ssl_state->bytes_processed == ssl_state->record_length + SSLV3_RECORD_LEN) {
+                if (ssl_state->curr_connp->bytes_processed == ssl_state->curr_connp->record_length + SSLV3_RECORD_LEN) {
                     SSLParserReset(ssl_state);
                 }
                 return parsed;
@@ -682,13 +672,15 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
             break;
 
         default:
-            SCLogDebug("Bad ssl record type");
-            return -1;
+            /* \todo fix the event from invalid rule to unknown rule */
+            AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_RECORD_TYPE);
+            /* we still need to parse the record */
+            break;
     }
 
-    if (input_len + ssl_state->bytes_processed >= ssl_state->record_length + SSLV3_RECORD_LEN) {
+    if (input_len + ssl_state->curr_connp->bytes_processed >= ssl_state->curr_connp->record_length + SSLV3_RECORD_LEN) {
         /* looks like we have another record */
-        uint32_t diff = ssl_state->record_length + SSLV3_RECORD_LEN - ssl_state->bytes_processed;
+        uint32_t diff = ssl_state->curr_connp->record_length + SSLV3_RECORD_LEN - ssl_state->curr_connp->bytes_processed;
         parsed += diff;
         SSLParserReset(ssl_state);
         return parsed;
@@ -697,7 +689,7 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
          * currently parsing */
     } else {
         parsed += input_len;
-        ssl_state->bytes_processed += input_len;
+        ssl_state->curr_connp->bytes_processed += input_len;
         return parsed;
     }
 
@@ -723,55 +715,72 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
  *
  * \retval >=0 On success.
  */
-static int SSLDecode(uint8_t direction, void *alstate, AppLayerParserState *pstate,
-                     uint8_t *input, uint32_t input_len)
+static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserState *pstate,
+                     uint8_t *input, uint32_t ilen)
 {
     SSLState *ssl_state = (SSLState *)alstate;
     int retval = 0;
     uint8_t counter = 0;
 
+    int32_t input_len = (int32_t)ilen;
+
+    ssl_state->f = f;
+
+    if (direction == 0)
+        ssl_state->curr_connp = &ssl_state->client_connp;
+    else
+        ssl_state->curr_connp = &ssl_state->server_connp;
+
     /* if we have more than one record */
-    while (input_len) {
+    while (input_len > 0) {
         if (counter++ == 30) {
             SCLogDebug("Looks like we have looped quite a bit.  Reset state "
                        "and get out of here");
             SSLParserReset(ssl_state);
-            return 0;
+            return -1;
         }
 
-        /* ssl_state->bytes_processed is either ways it is either 0 for a
+        /* ssl_state->bytes_processed is 0 for a
          * fresh record or positive to indicate a record currently being
          * parsed */
-        switch (ssl_state->bytes_processed) {
+        switch (ssl_state->curr_connp->bytes_processed) {
             /* fresh record */
             case 0:
                 /* only SSLv2, has one of the top 2 bits set */
                 if (input[0] & 0x80 || input[0] & 0x40) {
                     SCLogDebug("SSLv2 detected");
-                    ssl_state->cur_ssl_version = SSL_VERSION_2;
+                    ssl_state->curr_connp->version = SSL_VERSION_2;
                     retval = SSLv2Decode(direction, ssl_state, pstate, input,
                                          input_len);
-                    if (retval == -1) {
+                    if (retval < 0) {
                         SCLogDebug("Error parsing SSLv2.x.  Reseting parser "
                                    "state.  Let's get outta here");
                         SSLParserReset(ssl_state);
-                        return 0;
+                        return -1;
                     } else {
                         input_len -= retval;
                         input += retval;
                     }
                 } else {
                     SCLogDebug("SSLv3.x detected");
+                    /* we will keep it this way till our record parser tells
+                     * us what exact version it is */
+                    ssl_state->curr_connp->version = TLS_VERSION_UNKNOWN;
                     retval = SSLv3Decode(direction, ssl_state, pstate, input,
                                          input_len);
-                    if (retval == -1) {
+                    if (retval < 0) {
                         SCLogDebug("Error parsing SSLv3.x.  Reseting parser "
                                    "state.  Let's get outta here");
                         SSLParserReset(ssl_state);
-                        return 0;
+                        return -1;
                     } else {
                         input_len -= retval;
                         input += retval;
+                        if (ssl_state->curr_connp->bytes_processed == SSLV3_RECORD_LEN
+                                && ssl_state->curr_connp->record_length == 0) {
+                            /* empty record */
+                            SSLParserReset(ssl_state);
+                        }
                     }
                 }
 
@@ -780,7 +789,7 @@ static int SSLDecode(uint8_t direction, void *alstate, AppLayerParserState *psta
             default:
                 /* we would have established by now if we are dealing with
                  * SSLv2 or above */
-                if (ssl_state->cur_ssl_version == SSL_VERSION_2) {
+                if (ssl_state->curr_connp->version == SSL_VERSION_2) {
                     SCLogDebug("Continuing parsing SSLv2 record from where we "
                                "previously left off");
                     retval = SSLv2Decode(direction, ssl_state, pstate, input,
@@ -799,19 +808,29 @@ static int SSLDecode(uint8_t direction, void *alstate, AppLayerParserState *psta
                                "previously left off");
                     retval = SSLv3Decode(direction, ssl_state, pstate, input,
                                          input_len);
-                    if (retval == -1) {
+                    if (retval < 0) {
                         SCLogDebug("Error parsing SSLv3.x.  Reseting parser "
                                    "state.  Let's get outta here");
                         SSLParserReset(ssl_state);
                         return 0;
                     } else {
+                        if (retval > input_len) {
+                            SCLogDebug("Error parsing SSLv3.x.  Reseting parser "
+                                       "state.  Let's get outta here");
+                            SSLParserReset(ssl_state);
+                        }
                         input_len -= retval;
                         input += retval;
+                        if (ssl_state->curr_connp->bytes_processed == SSLV3_RECORD_LEN
+                            && ssl_state->curr_connp->record_length == 0) {
+                            /* empty record */
+                            SSLParserReset(ssl_state);
+                        }
                     }
                 }
 
                 break;
-        } /* switch (ssl_state->bytes_processed) */
+        } /* switch (ssl_state->curr_connp->bytes_processed) */
     } /* while (input_len) */
 
     return 1;
@@ -821,14 +840,14 @@ int SSLParseClientRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
                          uint8_t *input, uint32_t input_len,
                          void *local_data, AppLayerParserResult *output)
 {
-    return SSLDecode(0 /* toserver */, alstate, pstate, input, input_len);
+    return SSLDecode(f, 0 /* toserver */, alstate, pstate, input, input_len);
 }
 
 int SSLParseServerRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
                          uint8_t *input, uint32_t input_len,
                          void *local_data, AppLayerParserResult *output)
 {
-    return SSLDecode(1 /* toclient */, alstate, pstate, input, input_len);
+    return SSLDecode(f, 1 /* toclient */, alstate, pstate, input, input_len);
 }
 
 /**
@@ -851,9 +870,40 @@ void *SSLStateAlloc(void)
  */
 void SSLStateFree(void *p)
 {
-    SCFree(p);
+    SSLState *ssl_state = (SSLState *)p;
+
+    if (ssl_state->client_connp.trec)
+        SCFree(ssl_state->client_connp.trec);
+    if (ssl_state->client_connp.cert0_subject)
+        SCFree(ssl_state->client_connp.cert0_subject);
+    if (ssl_state->client_connp.cert0_issuerdn)
+        SCFree(ssl_state->client_connp.cert0_issuerdn);
+
+    if (ssl_state->server_connp.trec)
+        SCFree(ssl_state->server_connp.trec);
+    if (ssl_state->server_connp.cert0_subject)
+        SCFree(ssl_state->server_connp.cert0_subject);
+    if (ssl_state->server_connp.cert0_issuerdn)
+        SCFree(ssl_state->server_connp.cert0_issuerdn);
+
+    SCFree(ssl_state);
 
     return;
+}
+
+static uint16_t SSLProbingParser(uint8_t *input, uint32_t ilen)
+{
+    /* probably a rst/fin sending an eof */
+    if (ilen == 0)
+        return ALPROTO_UNKNOWN;
+
+    /* for now just the 3 byte header ones */
+    /* \todo Detect the 2 byte ones */
+    if ((input[0] & 0x80) && (input[2] == 0x01)) {
+        return ALPROTO_TLS;
+    }
+
+    return ALPROTO_FAILED;
 }
 
 /**
@@ -861,8 +911,10 @@ void SSLStateFree(void *p)
  */
 void RegisterSSLParsers(void)
 {
+    char *proto_name = "tls";
+
     /** SSLv2  and SSLv23*/
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 00 02|", 5, 2, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 00 02|", 5, 2, STREAM_TOSERVER);
     /* subsection - SSLv2 style record by client, but informing the server the max
      * version it supports */
     /* Updated by Anoop Saldanha.  Disabled it for now.  We'll get back to it
@@ -871,28 +923,39 @@ void RegisterSSLParsers(void)
     //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|00 02|", 7, 5, STREAM_TOCLIENT);
 
     /** SSLv3 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 00|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|16 03 00|", 3, 0, STREAM_TOSERVER); /* client hello */
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 00|", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 00|", 3, 0, STREAM_TOSERVER); /* client hello */
     /** TLSv1 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 01|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|16 03 01|", 3, 0, STREAM_TOSERVER); /* client hello */
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 01|", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 01|", 3, 0, STREAM_TOSERVER); /* client hello */
     /** TLSv1.1 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 02|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|16 03 02|", 3, 0, STREAM_TOSERVER); /* client hello */
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 02|", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 02|", 3, 0, STREAM_TOSERVER); /* client hello */
     /** TLSv1.2 */
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 03|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|16 03 03|", 3, 0, STREAM_TOSERVER); /* client hello */
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 03|", 3, 0, STREAM_TOSERVER);
+    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 03|", 3, 0, STREAM_TOSERVER); /* client hello */
 
-    AppLayerRegisterProto("tls", ALPROTO_TLS, STREAM_TOSERVER,
+    AppLayerRegisterProto(proto_name, ALPROTO_TLS, STREAM_TOSERVER,
                           SSLParseClientRecord);
 
-    AppLayerRegisterProto("tls", ALPROTO_TLS, STREAM_TOCLIENT,
+    AppLayerRegisterProto(proto_name, ALPROTO_TLS, STREAM_TOCLIENT,
                           SSLParseServerRecord);
+    AppLayerDecoderEventsModuleRegister(ALPROTO_TLS, tls_decoder_event_table);
 
     AppLayerRegisterStateFuncs(ALPROTO_TLS, SSLStateAlloc, SSLStateFree);
 
+    AppLayerRegisterProbingParser(&alp_proto_ctx,
+                                  443,
+                                  IPPROTO_TCP,
+                                  proto_name,
+                                  ALPROTO_TLS,
+                                  0, 3,
+                                  STREAM_TOSERVER,
+                                  APP_LAYER_PROBING_PARSER_PRIORITY_HIGH, 1,
+                                  SSLProbingParser);
+
     /* Get the value of no reassembly option from the config file */
-    if (ConfGetBool("tls.no_reassemble", &ssl_config.no_reassemble) != 1)
+    if (ConfGetBool("tls.no-reassemble", &ssl_config.no_reassemble) != 1)
         ssl_config.no_reassemble = 1;
 
     return;
@@ -933,16 +996,16 @@ static int SSLParserTest01(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -989,16 +1052,16 @@ static int SSLParserTest02(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1054,16 +1117,16 @@ static int SSLParserTest03(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1128,16 +1191,16 @@ static int SSLParserTest04(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1211,16 +1274,16 @@ static int SSLParserTest05(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x17) {
+    if (ssl_state->client_connp.content_type != 0x17) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.client_version);
         result = 0;
         goto end;
     }
@@ -1307,16 +1370,16 @@ static int SSLParserTest06(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x17) {
+    if (ssl_state->client_connp.content_type != 0x17) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp._content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+                TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1427,16 +1490,16 @@ static int SSLParserMultimsgTest01(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != TLS_VERSION_10) {
+    if (ssl_state->client_connp.version != TLS_VERSION_10) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                TLS_VERSION_10, ssl_state->client_version);
+               TLS_VERSION_10, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1501,16 +1564,16 @@ static int SSLParserMultimsgTest02(void)
         goto end;
     }
 
-    if (ssl_state->server_content_type != 0x16) {
+    if (ssl_state->server_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->server_content_type);
+                ssl_state->server_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->server_version != 0x0301) {
+    if (ssl_state->server_connp.version != 0x0301) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ", 0x0301,
-                ssl_state->server_version);
+                ssl_state->server_connp.version);
         result = 0;
         goto end;
     }
@@ -1564,16 +1627,16 @@ static int SSLParserTest07(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1648,16 +1711,16 @@ static int SSLParserTest08(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x17) {
+    if (ssl_state->client_connp.content_type != 0x17) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1746,23 +1809,16 @@ static int SSLParserTest09(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1831,23 +1887,16 @@ static int SSLParserTest10(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -1915,23 +1964,16 @@ static int SSLParserTest11(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -2011,23 +2053,16 @@ static int SSLParserTest12(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -2119,23 +2154,16 @@ static int SSLParserTest13(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x17,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -2524,15 +2552,15 @@ static int SSLParserTest21(void)
         goto end;
     }
 
-    if (app_state->client_content_type != SSLV2_MT_CLIENT_HELLO) {
+    if (app_state->client_connp.content_type != SSLV2_MT_CLIENT_HELLO) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV2_MT_SERVER_HELLO, app_state->client_content_type);
+               SSLV2_MT_SERVER_HELLO, app_state->client_connp.content_type);
         goto end;
     }
 
-    if (app_state->client_version != SSL_VERSION_2) {
+    if (app_state->client_connp.version != SSL_VERSION_2) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-               SSL_VERSION_2, app_state->client_version);
+               SSL_VERSION_2, app_state->client_connp.version);
         goto end;
     }
 
@@ -2584,16 +2612,16 @@ static int SSLParserTest22(void)
         goto end;
     }
 
-    if (app_state->server_content_type != SSLV2_MT_SERVER_HELLO) {
+    if (app_state->server_connp.content_type != SSLV2_MT_SERVER_HELLO) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV2_MT_SERVER_HELLO, app_state->server_content_type);
+               SSLV2_MT_SERVER_HELLO, app_state->server_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->server_version != SSL_VERSION_2) {
+    if (app_state->server_connp.version != SSL_VERSION_2) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_2, app_state->server_version);
+                SSL_VERSION_2, app_state->server_connp.version);
         result = 0;
         goto end;
     }
@@ -2881,16 +2909,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    if (app_state->client_content_type != SSLV2_MT_CLIENT_HELLO) {
+    if (app_state->client_connp.content_type != SSLV2_MT_CLIENT_HELLO) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV2_MT_CLIENT_HELLO, app_state->client_content_type);
+               SSLV2_MT_CLIENT_HELLO, app_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->client_version != SSL_VERSION_2) {
+    if (app_state->client_connp.version != SSL_VERSION_2) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_2, app_state->client_version);
+                SSL_VERSION_2, app_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -2912,16 +2940,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    if (app_state->server_content_type != SSLV3_HANDSHAKE_PROTOCOL) {
+    if (app_state->server_connp.content_type != SSLV3_HANDSHAKE_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV3_HANDSHAKE_PROTOCOL, app_state->server_content_type);
+               SSLV3_HANDSHAKE_PROTOCOL, app_state->server_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->server_version != SSL_VERSION_3) {
+    if (app_state->server_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, app_state->server_version);
+                SSL_VERSION_3, app_state->server_connp.version);
         result = 0;
         goto end;
     }
@@ -2944,16 +2972,16 @@ static int SSLParserTest23(void)
 
     /* with multiple records the client content type hold the type from the last
      * record */
-    if (app_state->client_content_type != SSLV3_HANDSHAKE_PROTOCOL) {
+    if (app_state->client_connp.content_type != SSLV3_HANDSHAKE_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV3_HANDSHAKE_PROTOCOL, app_state->client_content_type);
+               SSLV3_HANDSHAKE_PROTOCOL, app_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->client_version != SSL_VERSION_3) {
+    if (app_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, app_state->client_version);
+                SSL_VERSION_3, app_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -2978,16 +3006,16 @@ static int SSLParserTest23(void)
 
     /* with multiple records the serve content type hold the type from the last
      * record */
-    if (app_state->server_content_type != SSLV3_HANDSHAKE_PROTOCOL) {
+    if (app_state->server_connp.content_type != SSLV3_HANDSHAKE_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV3_HANDSHAKE_PROTOCOL, app_state->server_content_type);
+               SSLV3_HANDSHAKE_PROTOCOL, app_state->server_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->server_version != SSL_VERSION_3) {
+    if (app_state->server_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, app_state->server_version);
+                SSL_VERSION_3, app_state->server_connp.version);
         result = 0;
         goto end;
     }
@@ -3011,16 +3039,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    if (app_state->client_content_type != SSLV3_APPLICATION_PROTOCOL) {
+    if (app_state->client_connp.content_type != SSLV3_APPLICATION_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               SSLV3_APPLICATION_PROTOCOL, app_state->client_content_type);
+               SSLV3_APPLICATION_PROTOCOL, app_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (app_state->client_version != SSL_VERSION_3) {
+    if (app_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, app_state->client_version);
+                SSL_VERSION_3, app_state->client_connp.version);
         result = 0;
         goto end;
     }
@@ -3118,23 +3146,16 @@ static int SSLParserTest24(void)
         goto end;
     }
 
-    if (ssl_state->client_content_type != 0x16) {
+    if (ssl_state->client_connp.content_type != 0x16) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ", 0x16,
-                ssl_state->client_content_type);
+                ssl_state->client_connp.content_type);
         result = 0;
         goto end;
     }
 
-    if (ssl_state->client_version != SSL_VERSION_3) {
+    if (ssl_state->client_connp.version != SSL_VERSION_3) {
         printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->client_version);
-        result = 0;
-        goto end;
-    }
-
-    if (ssl_state->handshake_client_hello_ssl_version != SSL_VERSION_3) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-                SSL_VERSION_3, ssl_state->handshake_client_hello_ssl_version);
+                SSL_VERSION_3, ssl_state->client_connp.version);
         result = 0;
         goto end;
     }

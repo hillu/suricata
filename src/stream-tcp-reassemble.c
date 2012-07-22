@@ -93,10 +93,8 @@ static uint64_t segment_pool_cnt = 0;
 /* index to the right pool for all packet sizes. */
 static uint16_t segment_pool_idx[65536]; /* O(1) lookups of the pool */
 
-/* Memory use counters */
-static SCSpinlock stream_reassembly_memuse_spinlock;
-static uint64_t stream_reassembly_memuse;
-static uint64_t stream_reassembly_memuse_max;
+/* Memory use counter */
+SC_ATOMIC_DECLARE(uint64_t, ra_memuse);
 
 /* prototypes */
 static int HandleSegmentStartsBeforeListSegment(ThreadVars *, TcpReassemblyThreadCtx *,
@@ -118,14 +116,8 @@ void StreamTcpReassemblePseudoPacketCreate(TcpStream *, Packet *, PacketQueue *)
  *  \param  size Size of the TCP segment and its payload length memory allocated
  */
 void StreamTcpReassembleIncrMemuse(uint64_t size) {
-
-    SCSpinLock(&stream_reassembly_memuse_spinlock);
-    stream_reassembly_memuse += size;
-
-    if (stream_reassembly_memuse > stream_reassembly_memuse_max)
-        stream_reassembly_memuse_max = stream_reassembly_memuse;
-
-    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+    (void) SC_ATOMIC_ADD(ra_memuse, size);
+    return;
 }
 
 /**
@@ -135,25 +127,15 @@ void StreamTcpReassembleIncrMemuse(uint64_t size) {
  *  \param  size Size of the TCP segment and its payload length memory allocated
  */
 void StreamTcpReassembleDecrMemuse(uint64_t size) {
-    SCSpinLock(&stream_reassembly_memuse_spinlock);
-
-    if (size <= stream_reassembly_memuse) {
-        stream_reassembly_memuse -= size;
-    } else {
-        BUG_ON(size > stream_reassembly_memuse);
-        stream_reassembly_memuse = 0;
-    }
-
-    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+    (void) SC_ATOMIC_SUB(ra_memuse, size);
+    return;
 }
 
 void StreamTcpReassembleMemuseCounter(ThreadVars *tv, TcpReassemblyThreadCtx *rtv) {
-    if (tv != NULL && rtv != NULL) {
-        SCSpinLock(&stream_reassembly_memuse_spinlock);
-        SCPerfCounterSetUI64(rtv->counter_tcp_reass_memuse, tv->sc_perf_pca,
-                stream_reassembly_memuse);
-        SCSpinUnlock(&stream_reassembly_memuse_spinlock);
-    }
+    uint64_t smemuse = SC_ATOMIC_GET(ra_memuse);
+    if (tv != NULL && rtv != NULL)
+        SCPerfCounterSetUI64(rtv->counter_tcp_reass_memuse, tv->sc_perf_pca, smemuse);
+    return;
 }
 
 /**
@@ -165,15 +147,9 @@ void StreamTcpReassembleMemuseCounter(ThreadVars *tv, TcpReassemblyThreadCtx *rt
  * \retval 0 if not in bounds
  */
 int StreamTcpReassembleCheckMemcap(uint32_t size) {
-    SCEnter();
-
-    int ret = 0;
-    SCSpinLock(&stream_reassembly_memuse_spinlock);
-    if (stream_config.reassembly_memcap == 0 || size + stream_reassembly_memuse <= stream_config.reassembly_memcap)
-        ret = 1;
-    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
-
-    SCReturnInt(ret);
+    if (stream_config.reassembly_memcap == 0 || size + SC_ATOMIC_GET(ra_memuse) <= stream_config.reassembly_memcap)
+        return 1;
+    return 0;
 }
 
 /** \brief alloc a tcp segment pool entry */
@@ -287,12 +263,8 @@ int StreamTcpReassembleInit(char quiet)
 {
     StreamMsgQueuesInit();
 
-    /* init the memcap and it's lock */
-    SCSpinInit(&stream_reassembly_memuse_spinlock, PTHREAD_PROCESS_PRIVATE);
-    SCSpinLock(&stream_reassembly_memuse_spinlock);
-    stream_reassembly_memuse = 0;
-    stream_reassembly_memuse_max = 0;
-    SCSpinUnlock(&stream_reassembly_memuse_spinlock);
+    /* init the memcap/use tracker */
+    SC_ATOMIC_INIT(ra_memuse);
 
 #ifdef DEBUG
     SCMutexInit(&segment_pool_memuse_mutex, NULL);
@@ -300,12 +272,14 @@ int StreamTcpReassembleInit(char quiet)
     uint16_t u16 = 0;
     for (u16 = 0; u16 < segment_pool_num; u16++)
     {
+        SCMutexInit(&segment_pool_mutex[u16], NULL);
+        SCMutexLock(&segment_pool_mutex[u16]);
         segment_pool[u16] = PoolInit(segment_pool_poolsizes[u16],
                                      segment_pool_poolsizes_prealloc[u16],
                                      TcpSegmentPoolAlloc, (void *) &
                                      segment_pool_pktsizes[u16],
                                      TcpSegmentPoolFree);
-        SCMutexInit(&segment_pool_mutex[u16], NULL);
+        SCMutexUnlock(&segment_pool_mutex[u16]);
     }
 
     uint16_t idx = 0;
@@ -339,6 +313,7 @@ void StreamTcpReassembleFree(char quiet)
 {
     uint16_t u16 = 0;
     for (u16 = 0; u16 < segment_pool_num; u16++) {
+        SCMutexLock(&segment_pool_mutex[u16]);
         PoolPrintSaturation(segment_pool[u16]);
 
         if (quiet == FALSE) {
@@ -351,20 +326,11 @@ void StreamTcpReassembleFree(char quiet)
         }
         PoolFree(segment_pool[u16]);
 
+        SCMutexUnlock(&segment_pool_mutex[u16]);
         SCMutexDestroy(&segment_pool_mutex[u16]);
     }
 
     StreamMsgQueuesDeinit(quiet);
-
-    if (!quiet) {
-        SCSpinLock(&stream_reassembly_memuse_spinlock);
-        SCLogInfo("Max memuse of the stream reassembly engine %"PRIu64" (in use"
-                " %"PRIu64")", stream_reassembly_memuse_max,
-                stream_reassembly_memuse);
-        SCSpinUnlock(&stream_reassembly_memuse_spinlock);
-    }
-
-    SCSpinDestroy(&stream_reassembly_memuse_spinlock);
 
 #ifdef DEBUG
     SCLogDebug("segment_pool_cnt %"PRIu64"", segment_pool_cnt);
@@ -1532,6 +1498,30 @@ static int HandleSegmentStartsAfterListSegment(ThreadVars *tv, TcpReassemblyThre
 }
 
 /**
+ *  \brief check if stream in pkt direction has depth reached
+ *
+ *  \param p packet with *LOCKED* flow
+ *
+ *  \retval 1 stream has depth reached
+ *  \retval 0 stream does not have depth reached
+ */
+int StreamTcpReassembleDepthReached(Packet *p) {
+    if (p->flow != NULL && p->flow->protoctx != NULL) {
+        TcpSession *ssn = p->flow->protoctx;
+        TcpStream *stream;
+        if (p->flowflags & FLOW_PKT_TOSERVER) {
+            stream = &ssn->client;
+        } else {
+            stream = &ssn->server;
+        }
+
+        return (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ? 1 : 0;
+    }
+
+    return 0;
+}
+
+/**
  *  \internal
  *  \brief Function to Check the reassembly depth valuer against the
  *        allowed max depth of the stream reassmbly for TCP streams.
@@ -1658,7 +1648,7 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
     if (!(ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)) {\
         flag |= STREAM_START; \
     } \
-    if ((ssn)->state > TCP_ESTABLISHED) { \
+    if (stream->flags & STREAMTCP_STREAM_FLAG_CLOSE_INITIATED) {    \
         flag |= STREAM_EOF; \
     } \
     if ((p)->flowflags & FLOW_PKT_TOSERVER) { \
@@ -1673,7 +1663,7 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
     if (!(ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)) {\
         flag |= STREAM_START; \
     } \
-    if ((ssn)->state > TCP_ESTABLISHED) { \
+    if (stream->flags & STREAMTCP_STREAM_FLAG_CLOSE_INITIATED) {    \
         flag |= STREAM_EOF; \
     } \
     if ((p)->flowflags & FLOW_PKT_TOSERVER) { \
@@ -1694,7 +1684,7 @@ static void StreamTcpSetupMsg(TcpSession *ssn, TcpStream *stream, Packet *p,
         SCLogDebug("setting STREAM_START");
         smsg->flags = STREAM_START;
     }
-    if (ssn->state > TCP_ESTABLISHED) {
+    if (stream->flags & STREAMTCP_STREAM_FLAG_CLOSE_INITIATED) {
         SCLogDebug("setting STREAM_EOF");
         smsg->flags |= STREAM_EOF;
     }
@@ -1857,12 +1847,8 @@ static int StreamTcpReassembleInlineAppLayer (ThreadVars *tv,
             /* send EOF to app layer */
             STREAM_SET_INLINE_FLAGS(ssn, stream, p, flags);
             AppLayerHandleTCPData(&ra_ctx->dp_ctx, p->flow, ssn,
-                    NULL, 0, flags|STREAM_EOF);
+                    NULL, 0, flags);
             PACKET_PROFILING_APP_STORE(&ra_ctx->dp_ctx, p);
-
-            /* even if app layer detection failed, we will now move on to
-             * release reassembly for both directions. */
-            ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
         } else {
             SCLogDebug("no segments in the list to reassemble");
@@ -1983,8 +1969,6 @@ static int StreamTcpReassembleInlineAppLayer (ThreadVars *tv,
                 /* set a GAP flag and make sure not bothering this stream anymore */
                 SCLogDebug("set STREAMTCP_STREAM_FLAG_GAP flag");
                 stream->flags |= STREAMTCP_STREAM_FLAG_GAP;
-                /* flag reassembly as started, so the to_client part can start */
-                ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
                 StreamTcpSetEvent(p, STREAM_REASSEMBLY_SEQ_GAP);
                 SCPerfCounterIncr(ra_ctx->counter_tcp_reass_gap, tv->sc_perf_pca);
@@ -2145,24 +2129,13 @@ static int StreamTcpReassembleInlineAppLayer (ThreadVars *tv,
         data_sent += data_len;
     }
 
-    if (ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED) {
-        SCLogDebug("proto detection already completed");
-        ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
-    } else {
-        SCLogDebug("protocol detection not yet completed");
-    }
-
     if (data_sent == 0 && ssn->state > TCP_ESTABLISHED) {
         SCLogDebug("sending empty eof message");
         /* send EOF to app layer */
         STREAM_SET_INLINE_FLAGS(ssn, stream, p, flags);
         AppLayerHandleTCPData(&ra_ctx->dp_ctx, p->flow, ssn,
-                NULL, 0, flags|STREAM_EOF);
+                NULL, 0, flags);
         PACKET_PROFILING_APP_STORE(&ra_ctx->dp_ctx, p);
-
-        /* even if app layer detection failed, we will now move on to
-         * release reassembly for both directions. */
-        ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
     }
 
     /* store ra_base_seq in the stream */
@@ -2347,7 +2320,7 @@ static int StreamTcpReassembleInlineRaw (TcpReassemblyThreadCtx *ra_ctx,
 
                 StreamTcpSetupMsg(ssn, stream, p, smsg);
             }
-            smsg->data.seq = ra_base_seq;
+            smsg->data.seq = ra_base_seq+1;
 
             /* copy the data into the smsg */
             uint16_t copy_size = sizeof (smsg->data.data) - smsg_offset;
@@ -2410,7 +2383,7 @@ static int StreamTcpReassembleInlineRaw (TcpReassemblyThreadCtx *ra_ctx,
                     smsg_offset = 0;
 
                     StreamTcpSetupMsg(ssn, stream,p,smsg);
-                    smsg->data.seq = ra_base_seq;
+                    smsg->data.seq = ra_base_seq+1;
 
                     copy_size = sizeof(smsg->data.data) - smsg_offset;
                     if (copy_size > (seg->payload_len - payload_offset)) {
@@ -2501,6 +2474,98 @@ static int StreamTcpReassembleInlineRaw (TcpReassemblyThreadCtx *ra_ctx,
     SCReturnInt(0);
 }
 
+/** \internal
+ *  \brief check if we can remove a segment from our segment list
+ *
+ *  If a segment is entirely before the oldest smsg, we can discard it. Otherwise
+ *  we keep it around to be able to log it.
+ *
+ *  \retval 1 yes
+ *  \retval 0 no
+ */
+static inline int StreamTcpReturnSegmentCheck(TcpSession *ssn, TcpStream *stream, TcpSegment *seg) {
+    if (stream == &ssn->client && ssn->toserver_smsg_head != NULL) {
+        /* not (seg is entirely before first smsg, skip) */
+        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toserver_smsg_head->data.seq))) {
+            SCReturnInt(0);
+        }
+    } else if (stream == &ssn->server && ssn->toclient_smsg_head != NULL) {
+        /* not (seg is entirely before first smsg, skip) */
+        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toclient_smsg_head->data.seq))) {
+            SCReturnInt(0);
+        }
+    }
+    SCReturnInt(1);
+}
+
+/** \brief Remove idle TcpSegments from TcpSession
+ *
+ *  \param f flow
+ *  \param flags direction flags
+ */
+void StreamTcpPruneSession(Flow *f, uint8_t flags) {
+    if (f == NULL || f->protoctx == NULL)
+        return;
+
+    TcpSession *ssn = f->protoctx;
+    TcpStream *stream = NULL;
+
+    if (flags & STREAM_TOSERVER) {
+        stream = &ssn->client;
+    } else if (flags & STREAM_TOCLIENT) {
+        stream = &ssn->server;
+    } else {
+        return;
+    }
+
+    /* loop through the segments and fill one or more msgs */
+    TcpSegment *seg = stream->seg_list;
+    uint32_t ra_base_seq = stream->ra_app_base_seq;
+
+    for (; seg != NULL && SEQ_LT(seg->seq, stream->last_ack);)
+    {
+        SCLogDebug("seg %p, SEQ %"PRIu32", LEN %"PRIu16", SUM %"PRIu32,
+                seg, seg->seq, seg->payload_len,
+                (uint32_t)(seg->seq + seg->payload_len));
+
+        if (SEQ_LEQ((seg->seq + seg->payload_len), (ra_base_seq+1)) &&
+                   seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
+                   seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                seg = seg->next;
+                break;
+            }
+
+            SCLogDebug("removing pre ra_base_seq %"PRIu32" seg %p seq %"PRIu32
+                    " len %"PRIu16"", ra_base_seq, seg, seg->seq, seg->payload_len);
+
+            TcpSegment *next_seg = seg->next;
+            StreamTcpRemoveSegmentFromStream(stream, seg);
+            StreamTcpSegmentReturntoPool(seg);
+            seg = next_seg;
+            continue;
+
+        } else if ((ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED) &&
+                (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
+                (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED))
+        {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                seg = seg->next;
+                break;
+            }
+
+            SCLogDebug("segment(%p) of length %"PRIu16" has been processed,"
+                    " so return it to pool", seg, seg->payload_len);
+            TcpSegment *next_seg = seg->next;
+            seg = next_seg;
+            continue;
+        } else {
+            /* give up */
+            break;
+        }
+    }
+}
+
 /**
  *  \brief Update the stream reassembly upon receiving an ACK packet.
  *
@@ -2535,12 +2600,8 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
             /* send EOF to app layer */
             STREAM_SET_FLAGS(ssn, stream, p, flags);
             AppLayerHandleTCPData(&ra_ctx->dp_ctx, p->flow, ssn,
-                    NULL, 0, flags|STREAM_EOF);
+                    NULL, 0, flags);
             PACKET_PROFILING_APP_STORE(&ra_ctx->dp_ctx, p);
-
-            /* even if app layer detection failed, we will now move on to
-             * release reassembly for both directions. */
-            ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
             SCReturnInt(0);
         }
@@ -2604,6 +2665,11 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
         } else if (SEQ_LEQ((seg->seq + seg->payload_len), (ra_base_seq+1)) &&
                    seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
                    seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                seg = seg->next;
+                continue;
+            }
+
             SCLogDebug("removing pre ra_base_seq %"PRIu32" seg %p seq %"PRIu32
                     " len %"PRIu16"", ra_base_seq, seg, seg->seq, seg->payload_len);
 
@@ -2620,6 +2686,12 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
                 (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
                 (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED))
         {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                next_seq = seg->seq + seg->payload_len;
+                seg = seg->next;
+                continue;
+            }
+
             SCLogDebug("segment(%p) of length %"PRIu16" has been processed,"
                     " so return it to pool", seg, seg->payload_len);
             next_seq = seg->seq + seg->payload_len;
@@ -2672,8 +2744,6 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
                 /* set a GAP flag and make sure not bothering this stream anymore */
                 SCLogDebug("STREAMTCP_STREAM_FLAG_GAP set");
                 stream->flags |= STREAMTCP_STREAM_FLAG_GAP;
-                /* flag reassembly as started, so the to_client part can start */
-                ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
                 StreamTcpSetEvent(p, STREAM_REASSEMBLY_SEQ_GAP);
                 SCPerfCounterIncr(ra_ctx->counter_tcp_reass_gap, tv->sc_perf_pca);
@@ -2875,13 +2945,6 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
         PACKET_PROFILING_APP_STORE(&ra_ctx->dp_ctx, p);
     }
 
-    if (ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED) {
-        SCLogDebug("proto detection already completed");
-        ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
-    } else {
-        SCLogDebug("protocol detection not yet completed");
-    }
-
     /* store ra_base_seq in the stream */
     if ((ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED)) {
         stream->ra_app_base_seq = ra_base_seq;
@@ -2899,15 +2962,7 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
 {
     SCEnter();
     SCLogDebug("start p %p", p);
-#if 0
-    if (PKT_IS_TOSERVER(p) &&
-        !(ssn->flags & STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED))
-    {
-        SCLogDebug("toserver reassembling is not done yet, so "
-                "skipping reassembling at the moment for to_client");
-        SCReturnInt(0);
-    }
-#endif
+
     if (stream->seg_list == NULL) {
         /* send an empty EOF msg if we have no segments but TCP state
          * is beyond ESTABLISHED */
@@ -2919,10 +2974,6 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
             }
             StreamTcpSetupMsg(ssn, stream, p, smsg);
             StreamMsgPutInQueue(ra_ctx->stream_q,smsg);
-
-            /* even if app layer detection failed, we will now move on to
-             * release reassembly for both directions. */
-            ssn->flags |= STREAMTCP_FLAG_TOSERVER_REASSEMBLY_STARTED;
 
         } else {
             SCLogDebug("no segments in the list to reassemble");
@@ -2975,6 +3026,11 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
            As we are copying until the stream->last_ack only */
         if (SEQ_LEQ((seg->seq + seg->payload_len), ra_base_seq+1))
         {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                seg = seg->next;
+                continue;
+            }
+
             SCLogDebug("removing pre ra_base_seq %"PRIu32" seg %p seq %"PRIu32""
                         " len %"PRIu16"", ra_base_seq, seg, seg->seq,
                         seg->payload_len);
@@ -2995,6 +3051,11 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
                 (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED ||
                  stream->flags & STREAMTCP_STREAM_FLAG_GAP))
         {
+            if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
+                seg = seg->next;
+                continue;
+            }
+
             SCLogDebug("segment(%p) of length %"PRIu16" has been processed,"
                     " so return it to pool", seg, seg->payload_len);
             TcpSegment *next_seg = seg->next;
@@ -3114,7 +3175,7 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
 
                 StreamTcpSetupMsg(ssn, stream, p, smsg);
             }
-            smsg->data.seq = ra_base_seq;
+            smsg->data.seq = ra_base_seq+1;
 
 
             /* copy the data into the smsg */
@@ -3173,11 +3234,11 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
                     smsg_offset = 0;
 
                     StreamTcpSetupMsg(ssn, stream,p,smsg);
-                    smsg->data.seq = ra_base_seq;
+                    smsg->data.seq = ra_base_seq+1;
 
                     copy_size = sizeof(smsg->data.data) - smsg_offset;
-                    if (copy_size > (seg->payload_len - payload_offset)) {
-                        copy_size = (seg->payload_len - payload_offset);
+                    if (copy_size > payload_len) {
+                        copy_size = payload_len;
                     }
                     if (SCLogDebugEnabled()) {
                         BUG_ON(copy_size > sizeof(smsg->data.data));
@@ -3202,7 +3263,7 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
                     }
 
                     /* see if we have segment payload left to process */
-                    if ((copy_size + payload_offset) < seg->payload_len) {
+                    if (copy_size < payload_len) {
                         payload_offset += copy_size;
                         payload_len -= copy_size;
 
@@ -4844,7 +4905,7 @@ static int StreamTcpTestMissedPacket (TcpReassemblyThreadCtx *ra_ctx,
 {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (p == NULL)
-        return 0;
+        return -1;
     Flow f;
     TCPHdr tcph;
     Port sp;
@@ -4864,9 +4925,15 @@ static int StreamTcpTestMissedPacket (TcpReassemblyThreadCtx *ra_ctx,
     dp = 220;
 
     FLOW_INITIALIZE(&f);
-    inet_pton(AF_INET, "1.2.3.4", &in);
+    if (inet_pton(AF_INET, "1.2.3.4", &in) != 1) {
+        SCFree(p);
+        return -1;
+    }
     f.src.addr_data32[0] = in.s_addr;
-    inet_pton(AF_INET, "1.2.3.5", &in);
+    if (inet_pton(AF_INET, "1.2.3.5", &in) != 1) {
+        SCFree(p);
+        return -1;
+    }
     f.dst.addr_data32[0] = in.s_addr;
     f.flags |= FLOW_IPV4;
     f.sp = sp;
@@ -5947,9 +6014,11 @@ static int StreamTcpReassembleTest38 (void) {
     uint32_t httplen2 = sizeof(httpbuf2) - 1; /* minus the \0 */
 
     FLOW_INITIALIZE(&f);
-    inet_pton(AF_INET, "1.2.3.4", &in);
+    if (inet_pton(AF_INET, "1.2.3.4", &in) != 1)
+        goto end;
     f.src.addr_data32[0] = in.s_addr;
-    inet_pton(AF_INET, "1.2.3.5", &in);
+    if (inet_pton(AF_INET, "1.2.3.5", &in) != 1)
+        goto end;
     f.dst.addr_data32[0] = in.s_addr;
     sp = 200;
     dp = 220;
@@ -6251,6 +6320,8 @@ static int StreamTcpReassembleTest39 (void) {
         printf("segment list should not be empty (14): ");
         goto end;
     }
+
+    SCLogDebug("ssn.client.seg_list->flags %02x, seg %p", ssn.client.seg_list->flags, ssn.client.seg_list);
 
     if (!(ssn.client.seg_list->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED)) {
         printf("segment should have flags SEGMENTTCP_FLAG_APPLAYER_PROCESSED set (15): ");
@@ -7057,16 +7128,16 @@ static int StreamTcpReassembleTest44(void)
 {
     uint8_t ret = 0;
     StreamTcpInitConfig(TRUE);
-    uint32_t memuse = stream_reassembly_memuse;
+    uint32_t memuse = SC_ATOMIC_GET(ra_memuse);
 
     StreamTcpReassembleIncrMemuse(500);
-    if (stream_reassembly_memuse != (memuse+500)) {
+    if (SC_ATOMIC_GET(ra_memuse) != (memuse+500)) {
         printf("failed in incrementing the memory");
         goto end;
     }
 
     StreamTcpReassembleDecrMemuse(500);
-    if (stream_reassembly_memuse != memuse) {
+    if (SC_ATOMIC_GET(ra_memuse) != memuse) {
         printf("failed in decrementing the memory");
         goto end;
     }
@@ -7083,7 +7154,7 @@ static int StreamTcpReassembleTest44(void)
 
     StreamTcpFreeConfig(TRUE);
 
-    if (stream_reassembly_memuse != 0) {
+    if (SC_ATOMIC_GET(ra_memuse) != 0) {
         printf("failed in clearing the memory");
         goto end;
     }
