@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -27,7 +27,7 @@
  */
 
 #include "suricata-common.h"
-
+#include "decode.h"
 #include "detect.h"
 #include "counters.h"
 #include "conf.h"
@@ -37,6 +37,7 @@
 #include "util-unittest.h"
 #include "util-byte.h"
 #include "util-profiling.h"
+#include "util-profiling-locks.h"
 
 #ifdef PROFILING
 
@@ -66,8 +67,13 @@ static uint32_t profiling_rules_limit = UINT32_MAX;
 static SCPerfContext rules_ctx;
 static SCPerfCounterArray *rules_pca;
 
-static SCMutex packet_profile_lock;
+static pthread_mutex_t packet_profile_lock;
 static FILE *packet_profile_csv_fp = NULL;
+
+extern int profiling_locks_enabled;
+extern int profiling_locks_output_to_file;
+extern char *profiling_locks_file_name;
+extern char *profiling_locks_file_mode;
 
 /**
  * Extra data for rule profiling.
@@ -87,6 +93,15 @@ typedef struct SCProfilePacketData_ {
     uint64_t max;
     uint64_t tot;
     uint64_t cnt;
+#ifdef PROFILE_LOCKING
+    uint64_t lock;
+    uint64_t ticks;
+    uint64_t contention;
+
+    uint64_t slock;
+    uint64_t sticks;
+    uint64_t scontention;
+#endif
 } SCProfilePacketData;
 SCProfilePacketData packet_profile_data4[257]; /**< all proto's + tunnel */
 SCProfilePacketData packet_profile_data6[257]; /**< all proto's + tunnel */
@@ -157,7 +172,7 @@ SCProfilingInit(void)
             memset(rules_profile_data, 0, sizeof(rules_profile_data));
             memset(&rules_ctx, 0, sizeof(rules_ctx));
             rules_pca = SCPerfGetAllCountersArray(NULL);
-            if (SCMutexInit(&rules_ctx.m, NULL) != 0) {
+            if (pthread_mutex_init(&rules_ctx.m, NULL) != 0) {
                 SCLogError(SC_ERR_MUTEX,
                         "Failed to initialize hash table mutex.");
                 exit(EXIT_FAILURE);
@@ -233,7 +248,7 @@ SCProfilingInit(void)
         if (ConfNodeChildValueIsTrue(conf, "enabled")) {
             profiling_packets_enabled = 1;
 
-            if (SCMutexInit(&packet_profile_lock, NULL) != 0) {
+            if (pthread_mutex_init(&packet_profile_lock, NULL) != 0) {
                 SCLogError(SC_ERR_MUTEX,
                         "Failed to initialize packet profiling mutex.");
                 exit(EXIT_FAILURE);
@@ -310,6 +325,36 @@ SCProfilingInit(void)
             }
         }
     }
+
+    conf = ConfGetNode("profiling.locks");
+    if (conf != NULL) {
+        if (ConfNodeChildValueIsTrue(conf, "enabled")) {
+#ifndef PROFILE_LOCKING
+            SCLogWarning(SC_WARN_PROFILE, "lock profiling not compiled in. Add --enable-profiling-locks to configure.");
+#else
+            profiling_locks_enabled = 1;
+
+            LockRecordInitHash();
+
+            const char *filename = ConfNodeLookupChildValue(conf, "filename");
+            if (filename != NULL) {
+                char *log_dir;
+                if (ConfGet("default-log-dir", &log_dir) != 1)
+                    log_dir = DEFAULT_LOG_DIR;
+
+                profiling_locks_file_name = SCMalloc(PATH_MAX);
+                snprintf(profiling_locks_file_name, PATH_MAX, "%s/%s", log_dir, filename);
+
+                profiling_locks_file_mode = (char *)ConfNodeLookupChildValue(conf, "append");
+                if (profiling_locks_file_mode == NULL)
+                    profiling_locks_file_mode = DEFAULT_LOG_MODE_APPEND;
+
+                profiling_locks_output_to_file = 1;
+            }
+#endif
+        }
+    }
+
 }
 
 /**
@@ -321,11 +366,11 @@ SCProfilingDestroy(void)
     if (profiling_rules_enabled) {
         SCPerfReleasePerfCounterS(rules_ctx.head);
         SCPerfReleasePCA(rules_pca);
-        SCMutexDestroy(&rules_ctx.m);
+        pthread_mutex_destroy(&rules_ctx.m);
     }
 
     if (profiling_packets_enabled) {
-        SCMutexDestroy(&packet_profile_lock);
+        pthread_mutex_destroy(&packet_profile_lock);
     }
 
     if (profiling_packets_csv_enabled) {
@@ -338,6 +383,10 @@ SCProfilingDestroy(void)
 
     if (profiling_file_name != NULL)
         SCFree(profiling_file_name);
+
+#ifdef PROFILE_LOCKING
+    LockRecordFreeHash();
+#endif
 }
 
 /**
@@ -520,7 +569,7 @@ SCProfilingDump(void)
 
     gettimeofday(&tval, NULL);
     struct tm local_tm;
-    tms = (struct tm *)localtime_r(&tval.tv_sec, &local_tm);
+    tms = (struct tm *)SCLocalTime(tval.tv_sec, &local_tm);
 
     fprintf(fp, "  ----------------------------------------------"
             "----------------------------\n");
@@ -642,7 +691,7 @@ SCProfilingCounterAddUI64(uint16_t id, uint64_t val)
 void
 SCProfilingUpdateRuleCounter(uint16_t id, uint64_t ticks, int match)
 {
-    SCMutexLock(&rules_ctx.m);
+    pthread_mutex_lock(&rules_ctx.m);
     SCProfilingCounterAddUI64(id, ticks);
     rules_profile_data[id].matches += match;
     if (ticks > rules_profile_data[id].max)
@@ -652,7 +701,7 @@ SCProfilingUpdateRuleCounter(uint16_t id, uint64_t ticks, int match)
     else
         rules_profile_data[id].ticks_no_match += ticks;
 
-    SCMutexUnlock(&rules_ctx.m);
+    pthread_mutex_unlock(&rules_ctx.m);
 }
 
 void SCProfilingDumpPacketStats(void) {
@@ -710,10 +759,22 @@ void SCProfilingDumpPacketStats(void) {
 
     fprintf(fp, "\nPer Thread module stats:\n");
 
-    fprintf(fp, "\n%-24s   %-6s   %-5s   %-12s   %-12s   %-12s   %-12s\n",
+    fprintf(fp, "\n%-24s   %-6s   %-5s   %-12s   %-12s   %-12s   %-12s",
             "Thread Module", "IP ver", "Proto", "cnt", "min", "max", "avg");
-    fprintf(fp, "%-24s   %-6s   %-5s   %-12s   %-12s   %-12s   %-12s\n",
+#ifdef PROFILE_LOCKING
+    fprintf(fp, "   %-10s   %-10s   %-12s   %-12s   %-10s   %-10s   %-12s   %-12s\n",
+            "locks", "ticks", "cont.", "cont.avg", "slocks", "sticks", "scont.", "scont.avg");
+#else
+    fprintf(fp, "\n");
+#endif
+    fprintf(fp, "%-24s   %-6s   %-5s   %-12s   %-12s   %-12s   %-12s",
             "------------------------", "------", "-----", "----------", "------------", "------------", "-----------");
+#ifdef PROFILE_LOCKING
+    fprintf(fp, "   %-10s   %-10s   %-12s   %-12s   %-10s   %-10s   %-12s   %-12s\n",
+            "--------", "--------", "----------", "-----------", "--------", "--------", "------------", "-----------");
+#else
+    fprintf(fp, "\n");
+#endif
     int m;
     for (m = 0; m < TMM_SIZE; m++) {
         int p;
@@ -724,8 +785,14 @@ void SCProfilingDumpPacketStats(void) {
                 continue;
             }
 
-            fprintf(fp, "%-24s    IPv4     %3d  %12"PRIu64"     %12"PRIu64"   %12"PRIu64"  %12"PRIu64"\n",
+            fprintf(fp, "%-24s    IPv4     %3d  %12"PRIu64"     %12"PRIu64"   %12"PRIu64"  %12"PRIu64,
                     TmModuleTmmIdToString(m), p, pd->cnt, pd->min, pd->max, (uint64_t)(pd->tot / pd->cnt));
+#ifdef PROFILE_LOCKING
+            fprintf(fp, "  %10.2f  %12"PRIu64"  %12"PRIu64"  %10.2f  %10.2f  %12"PRIu64"  %12"PRIu64"  %10.2f\n",
+                    (float)pd->lock/pd->cnt, (uint64_t)pd->ticks/pd->cnt, pd->contention, (float)pd->contention/pd->cnt, (float)pd->slock/pd->cnt, (uint64_t)pd->sticks/pd->cnt, pd->scontention, (float)pd->scontention/pd->cnt);
+#else
+            fprintf(fp, "\n");
+#endif
         }
     }
 
@@ -1015,6 +1082,15 @@ void SCProfilingUpdatePacketTmmRecord(int module, uint8_t proto, PktProfilingTmm
 
     pd->tot += (uint64_t)delta;
     pd->cnt ++;
+
+#ifdef PROFILE_LOCKING
+    pd->lock += pdt->mutex_lock_cnt;
+    pd->ticks += pdt->mutex_lock_wait_ticks;
+    pd->contention += pdt->mutex_lock_contention;
+    pd->slock += pdt->spin_lock_cnt;
+    pd->sticks += pdt->spin_lock_wait_ticks;
+    pd->scontention += pdt->spin_lock_contention;
+#endif
 }
 
 void SCProfilingUpdatePacketTmmRecords(Packet *p) {
@@ -1038,7 +1114,7 @@ void SCProfilingAddPacket(Packet *p) {
     if (p->profile.ticks_start == 0 || p->profile.ticks_end == 0 || p->profile.ticks_start > p->profile.ticks_end)
         return;
 
-    SCMutexLock(&packet_profile_lock);
+    pthread_mutex_lock(&packet_profile_lock);
     {
 
         if (profiling_packets_csv_enabled)
@@ -1109,7 +1185,7 @@ void SCProfilingAddPacket(Packet *p) {
             SCProfilingUpdatePacketDetectRecords(p);
         }
     }
-    SCMutexUnlock(&packet_profile_lock);
+    pthread_mutex_unlock(&packet_profile_lock);
 }
 
 #define CASE_CODE(E)  case E: return #E
@@ -1148,6 +1224,9 @@ const char * PacketProfileDetectIdToString(PacketProfileDetectId id)
             return "UNKNOWN";
     }
 }
+
+
+
 #ifdef UNITTESTS
 
 static int
@@ -1268,6 +1347,20 @@ ProfilingGenericTicksTest01(void) {
     ticks_end = UtilCpuGetTicks();
     printf("SCSpinDestroy() %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
 
+    SC_ATOMIC_DECL_AND_INIT(unsigned int, test);
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        (void) SC_ATOMIC_ADD(test,1);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SC_ATOMIC_ADD %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
+
+    ticks_start = UtilCpuGetTicks();
+    for (i = 0; i < TEST_RUNS; i++) {
+        SC_ATOMIC_CAS(&test,i,i+1);
+    }
+    ticks_end = UtilCpuGetTicks();
+    printf("SC_ATOMIC_CAS %"PRIu64"\n", (ticks_end - ticks_start)/TEST_RUNS);
     return 1;
 }
 

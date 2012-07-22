@@ -102,7 +102,8 @@ int DetectHttpServerBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
         return -1;
     }
 
-    sm = DetectContentGetLastPattern(s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+    sm =  SigMatchGetLastSMFromLists(s, 2,
+                                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     /* if still we are unable to find any content previous keywords, it is an
      * invalid rule */
     if (sm == NULL) {
@@ -121,7 +122,10 @@ int DetectHttpServerBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
                    "be used with the rawbytes rule keyword");
         return -1;
     }
-
+    if (s->init_flags & SIG_FLAG_INIT_FLOW && s->flags & SIG_FLAG_TOSERVER && !(s->flags & SIG_FLAG_TOCLIENT)) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "http_server_body cannot be used with flow:to_server or from_client");
+        return -1;
+    }
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains a non http "
                    "alproto set");
@@ -147,7 +151,7 @@ int DetectHttpServerBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
 
         /* reassigning pm */
         pm = SigMatchGetLastSMFromLists(s, 4,
-                                        DETECT_AL_HTTP_SERVER_BODY, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                        DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
                                         DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]);
         if (pm == NULL) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "http_server_body seen with a "
@@ -163,8 +167,8 @@ int DetectHttpServerBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
             tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
         }
     }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_AL_HTTP_SERVER_BODY);
-    sm->type = DETECT_AL_HTTP_SERVER_BODY;
+    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_HSBDMATCH);
+    sm->type = DETECT_CONTENT;
 
     /* transfer the sm from the pmatch list to hsbdmatch list */
     SigMatchTransferSigMatchAcrossLists(sm,
@@ -251,7 +255,7 @@ static int DetectHttpServerBodyTest01(void)
         goto end;
     }
 
-    if (sm->type != DETECT_AL_HTTP_SERVER_BODY) {
+    if (sm->type != DETECT_CONTENT) {
         printf("sm type not DETECT_AL_HTTP_SERVER_BODY: ");
         goto end;
     }
@@ -561,14 +565,12 @@ static int DetectHttpServerBodyTest07(void)
     int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START|STREAM_EOF, http_buf1, http_len1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
         goto end;
     }
 
     r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOCLIENT|STREAM_START, http_buf2, http_len2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
         goto end;
     }
 
@@ -581,8 +583,8 @@ static int DetectHttpServerBodyTest07(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
-    if (!(PacketAlertCheck(p1, 1))) {
-        printf("sid 1 didn't match on p1 but should have: ");
+    if ((PacketAlertCheck(p1, 1))) {
+        printf("sid 1 matched on chunk2 but shouldn't have: ");
         goto end;
     }
 
@@ -594,8 +596,8 @@ static int DetectHttpServerBodyTest07(void)
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
-    if (PacketAlertCheck(p2, 1)) {
-        printf("sid 1 matched on p2 but shouldn't have: ");
+    if (!(PacketAlertCheck(p2, 1))) {
+        printf("sid 1 didn't match on p2 (chunk3) but should have: ");
         goto end;
     }
 
@@ -2163,7 +2165,7 @@ int DetectHttpServerBodyTest26(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
                                "(content:\"one\"; offset:10; http_server_body; pcre:/two/; "
-                               "content:\"three\"; distance:10; http_server_body; depth:10; "
+                               "content:\"three\"; distance:10; http_server_body; within:10; "
                                "content:\"four\"; distance:10; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -2189,7 +2191,7 @@ int DetectHttpServerBodyTest26(void)
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         hsbd1->flags != (DETECT_CONTENT_RELATIVE_NEXT | DETECT_CONTENT_OFFSET) ||
         memcmp(hsbd1->content, "one", hsbd1->content_len) != 0 ||
-        hsbd2->flags != (DETECT_CONTENT_DISTANCE | DETECT_CONTENT_DEPTH) ||
+        hsbd2->flags != (DETECT_CONTENT_DISTANCE | DETECT_CONTENT_WITHIN) ||
         memcmp(hsbd2->content, "three", hsbd1->content_len) != 0) {
         goto end;
     }
@@ -2208,6 +2210,7 @@ int DetectHttpServerBodyTest26(void)
     return result;
 }
 
+/** \test invalid combination for content: distance, depth, http_server_body */
 int DetectHttpServerBodyTest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
@@ -2222,7 +2225,7 @@ int DetectHttpServerBodyTest27(void)
                                "content:\"three\"; distance:10; http_server_body; depth:10; "
                                "content:\"four\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL) {
-        printf("de_ctx->sig_list != NULL\n");
+        printf("de_ctx->sig_list != NULL: ");
         goto end;
     }
 
@@ -2413,8 +2416,8 @@ int DetectHttpServerBodyTest32(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
                                "(content:\"one\"; http_server_body; within:5; sid:1;)");
-    if (de_ctx->sig_list != NULL) {
-        printf("de_ctx->sig_list != NULL\n");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
         goto end;
     }
 
@@ -2460,7 +2463,7 @@ int DetectHttpServerBodyTest34(void)
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(pcre:/one/S; "
+                               "(pcre:/one/Q; "
                                "content:\"two\"; within:5; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -2478,7 +2481,7 @@ int DetectHttpServerBodyTest34(void)
     }
 
     if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_AL_HTTP_SERVER_BODY ||
+        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_CONTENT ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev == NULL ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev->type != DETECT_PCRE) {
 
@@ -2512,7 +2515,7 @@ int DetectHttpServerBodyTest35(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
                                "(content:\"two\"; http_server_body; "
-                               "pcre:/one/SR; sid:1;)");
+                               "pcre:/one/QR; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
         goto end;
@@ -2531,7 +2534,7 @@ int DetectHttpServerBodyTest35(void)
     if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_PCRE ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev->type != DETECT_AL_HTTP_SERVER_BODY) {
+        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev->type != DETECT_CONTENT) {
 
         goto end;
     }
@@ -2562,7 +2565,7 @@ int DetectHttpServerBodyTest36(void)
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(pcre:/one/S; "
+                               "(pcre:/one/Q; "
                                "content:\"two\"; distance:5; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -2580,7 +2583,7 @@ int DetectHttpServerBodyTest36(void)
     }
 
     if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_AL_HTTP_SERVER_BODY ||
+        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_CONTENT ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev == NULL ||
         de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->prev->type != DETECT_PCRE) {
 
@@ -2803,8 +2806,8 @@ static int DetectHttpServerBodyFileDataTest02(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
-    if (!(PacketAlertCheck(p1, 1))) {
-        printf("sid 1 didn't match on p1 but should have: ");
+    if (PacketAlertCheck(p1, 1)) {
+        printf("sid 1 matched on p1 but should have: ");
         goto end;
     }
 
@@ -2816,8 +2819,8 @@ static int DetectHttpServerBodyFileDataTest02(void)
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
-    if (PacketAlertCheck(p2, 1)) {
-        printf("sid 1 matched on p2 but shouldn't have: ");
+    if (!(PacketAlertCheck(p2, 1))) {
+        printf("sid 1 didn't match on p2 but should have: ");
         goto end;
     }
 

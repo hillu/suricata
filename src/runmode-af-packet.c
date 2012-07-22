@@ -60,7 +60,7 @@ const char *RunModeAFPGetDefaultMode(void)
 
 void RunModeIdsAFPRegister(void)
 {
-    default_mode_auto = "auto";
+    default_mode_auto = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_AFP_DEV, "auto",
                               "Multi threaded af-packet mode",
                               RunModeIdsAFPAuto);
@@ -109,24 +109,37 @@ void *ParseAFPConfig(const char *iface)
     char *tmpctype;
     intmax_t value;
     int boolval;
-
-    if (iface == NULL) {
-        return NULL;
-    }
+    char *bpf_filter = NULL;
 
     if (aconf == NULL) {
         return NULL;
     }
+
+    if (iface == NULL) {
+        SCFree(aconf);
+        return NULL;
+    }
+
     strlcpy(aconf->iface, iface, sizeof(aconf->iface));
     aconf->threads = 1;
     SC_ATOMIC_INIT(aconf->ref);
-    SC_ATOMIC_ADD(aconf->ref, 1);
+    (void) SC_ATOMIC_ADD(aconf->ref, 1);
     aconf->buffer_size = 0;
     aconf->cluster_id = 1;
     aconf->cluster_type = PACKET_FANOUT_HASH;
     aconf->promisc = 1;
     aconf->checksum_mode = CHECKSUM_VALIDATION_KERNEL;
     aconf->DerefFunc = AFPDerefConfig;
+    aconf->flags = 0;
+    aconf->bpf_filter = NULL;
+
+    if (ConfGet("bpf-filter", &bpf_filter) == 1) {
+        if (strlen(bpf_filter) > 0) {
+            aconf->bpf_filter = bpf_filter;
+            SCLogInfo("Going to use command-line provided bpf filter '%s'",
+                       aconf->bpf_filter);
+        }
+    }
 
     /* Find initial node */
     af_packet_node = ConfGetNode("af-packet");
@@ -155,7 +168,7 @@ void *ParseAFPConfig(const char *iface)
     }
 
     SC_ATOMIC_RESET(aconf->ref);
-    SC_ATOMIC_ADD(aconf->ref, aconf->threads);
+    (void) SC_ATOMIC_ADD(aconf->ref, aconf->threads);
 
     if (ConfGetChildValue(if_root, "cluster-id", &tmpclusterid) != 1) {
         SCLogError(SC_ERR_INVALID_ARGUMENT,"Could not get cluster-id from config");
@@ -189,7 +202,19 @@ void *ParseAFPConfig(const char *iface)
         aconf->cluster_type = PACKET_FANOUT_CPU;
     } else {
         SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
+        SCFree(aconf);
         return NULL;
+    }
+
+    /*load af_packet bpf filter*/
+    /* command line value has precedence */
+    if (ConfGet("bpf-filter", &bpf_filter) != 1) {
+        if (ConfGetChildValue(if_root, "bpf-filter", &bpf_filter) == 1) {
+            if (strlen(bpf_filter) > 0) {
+                aconf->bpf_filter = bpf_filter;
+                SCLogInfo("Going to use bpf filter %s", aconf->bpf_filter);
+            }
+        }
     }
 
     if ((ConfGetChildValueInt(if_root, "buffer-size", &value)) == 1) {
@@ -198,12 +223,19 @@ void *ParseAFPConfig(const char *iface)
         aconf->buffer_size = 0;
     }
 
-    ConfGetChildValueBool(if_root, "disable-promisc", (int *)&boolval);
+    (void)ConfGetChildValueBool(if_root, "disable-promisc", (int *)&boolval);
     if (boolval) {
         SCLogInfo("Disabling promiscuous mode on iface %s",
                 aconf->iface);
         aconf->promisc = 0;
     }
+    (void)ConfGetChildValueBool(if_root, "use-mmap", (int *)&boolval);
+    if (boolval) {
+        SCLogInfo("Enabling mmaped capture on iface %s",
+                aconf->iface);
+        aconf->flags |= AFP_RING_MODE;
+    }
+
 
     if (ConfGetChildValue(if_root, "checksum-checks", &tmpctype) == 1) {
         if (strcmp(tmpctype, "auto") == 0) {
@@ -258,7 +290,7 @@ int RunModeIdsAFPAuto(DetectEngineCtx *de_ctx)
 
     TimeModeSetLive();
 
-    ConfGet("af-packet.live-interface", &live_dev);
+    (void)ConfGet("af-packet.live-interface", &live_dev);
 
     ret = RunModeSetLiveCaptureAuto(de_ctx,
                                     ParseAFPConfig,
@@ -289,7 +321,7 @@ int RunModeIdsAFPAutoFp(DetectEngineCtx *de_ctx)
 
     TimeModeSetLive();
 
-    ConfGet("af-packet.live-interface", &live_dev);
+    (void)ConfGet("af-packet.live-interface", &live_dev);
 
     SCLogDebug("live_dev %s", live_dev);
 
@@ -326,7 +358,7 @@ int RunModeIdsAFPSingle(DetectEngineCtx *de_ctx)
     RunModeInitialize();
     TimeModeSetLive();
 
-    ConfGet("af-packet.live-interface", &live_dev);
+    (void)ConfGet("af-packet.live-interface", &live_dev);
 
     ret = RunModeSetLiveCaptureSingle(de_ctx,
                                     ParseAFPConfig,
@@ -363,7 +395,7 @@ int RunModeIdsAFPWorkers(DetectEngineCtx *de_ctx)
     RunModeInitialize();
     TimeModeSetLive();
 
-    ConfGet("af-packet.live-interface", &live_dev);
+    (void)ConfGet("af-packet.live-interface", &live_dev);
 
     ret = RunModeSetLiveCaptureWorkers(de_ctx,
                                     ParseAFPConfig,

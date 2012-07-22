@@ -73,7 +73,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
             if (pm == NULL) {
-                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "offset needs"
+                SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
                            "preceeding content option for dcerpc sig");
                 if (dubbed)
                     SCFree(str);
@@ -83,21 +83,25 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
             break;
 
         default:
-            pm = SigMatchGetLastSMFromLists(s, 18,
+            pm = SigMatchGetLastSMFromLists(s, 24,
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                    DETECT_URICONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                    DETECT_AL_HTTP_CLIENT_BODY, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                    DETECT_AL_HTTP_SERVER_BODY, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                    DETECT_AL_HTTP_HEADER, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                    DETECT_AL_HTTP_RAW_HEADER, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                    DETECT_AL_HTTP_METHOD, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                    DETECT_AL_HTTP_COOKIE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                    DETECT_AL_HTTP_RAW_URI, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]);
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]);
             if (pm == NULL) {
-                SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "offset needs"
-                           "preceeding content or uricontent option, http_client_body "
+                SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
+                           "preceeding content or uricontent option, http_client_body, "
                            "http_header, http_raw_header, http_method, "
-                           "http_cookie or http_raw_uri option");
+                           "http_cookie, http_raw_uri, http_stat_msg, "
+                           "http_stat_code or http_user_agent option");
                 if (dubbed)
                     SCFree(str);
                 return -1;
@@ -107,60 +111,8 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
     }
 
     /* we can remove this switch now with the unified structure */
-    DetectContentData *ud = NULL;
     DetectContentData *cd = NULL;
     switch (pm->type) {
-        case DETECT_URICONTENT:
-            ud = (DetectContentData *)pm->ctx;
-            if (ud == NULL) {
-                SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid argument");
-                if (dubbed)
-                    SCFree(str);
-                return -1;
-            }
-
-            if (ud->flags & DETECT_CONTENT_NEGATED) {
-                if (ud->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                ud->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                ud->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                ud->offset = (uint32_t)atoi(str);
-                if (ud->depth != 0) {
-                    if (ud->depth < ud->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   ud->content_len);
-                        ud->depth = ud->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    ud->depth += ud->offset;
-                }
-            }
-
-            ud->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
         case DETECT_CONTENT:
             cd = (DetectContentData *)pm->ctx;
             if (cd == NULL) {
@@ -172,16 +124,27 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
 
             if (cd->flags & DETECT_CONTENT_NEGATED) {
                 if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't have a relative "
                                "negated keyword set along with a fast_pattern");
                     goto error;
                 }
             } else {
                 if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't have a relative "
                                "keyword set along with a fast_pattern:only;");
                     goto error;
                 }
+            }
+
+            if (cd->flags & DETECT_CONTENT_WITHIN || cd->flags & DETECT_CONTENT_DISTANCE) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use a relative keyword "
+                               "with a non-relative keyword for the same content." );
+                goto error;
+            }
+
+            if (cd->flags & DETECT_CONTENT_OFFSET) {
+                SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use multiple offsets for the same content. ");
+                goto error;
             }
 
             if (str[0] != '-' && isalpha(str[0])) {
@@ -189,315 +152,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                     DetectByteExtractRetrieveSMVar(str, s,
                                                    SigMatchListSMBelongsTo(s, pm));
                 if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_CLIENT_BODY:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_SERVER_BODY:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_HEADER:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_RAW_HEADER:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_METHOD:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_COOKIE:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in offset - %s\n", str);
-                    goto error;
-                }
-                cd->offset = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                cd->flags |= DETECT_CONTENT_OFFSET_BE;
-            } else {
-                cd->offset = (uint32_t)atoi(str);
-                if (cd->depth != 0) {
-                    if (cd->depth < cd->content_len) {
-                        SCLogDebug("depth increased to %"PRIu32" to match pattern len",
-                                   cd->content_len);
-                        cd->depth = cd->content_len;
-                    }
-                    /* Updating the depth as is relative to the offset */
-                    cd->depth += cd->offset;
-                }
-            }
-
-            cd->flags |= DETECT_CONTENT_OFFSET;
-
-            break;
-
-        case DETECT_AL_HTTP_RAW_URI:
-            cd = (DetectContentData *)pm->ctx;
-            if (cd->flags & DETECT_CONTENT_NEGATED) {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "negated keyword set along with a fast_pattern");
-                    goto error;
-                }
-            } else {
-                if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "You can't have a relative "
-                               "keyword set along with a fast_pattern:only;");
-                    goto error;
-                }
-            }
-
-            if (str[0] != '-' && isalpha(str[0])) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(str, s,
-                                                   SigMatchListSMBelongsTo(s, pm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "unknown byte_extract var "
                                "seen in offset - %s\n", str);
                     goto error;
                 }
@@ -522,7 +177,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
 
         default:
             SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs a preceeding"
-                    " content or uricontent option");
+                    " content keyword");
             goto error;
     }
 

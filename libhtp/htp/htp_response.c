@@ -238,6 +238,7 @@ int htp_connp_RES_BODY_IDENTITY(htp_connp_t *connp) {
                     return HTP_OK;
                 }
             } else {
+                d.len++;
                 // We don't know the length of the response body, which means
                 // that the body will consume all data until the connection
                 // is closed.
@@ -486,6 +487,7 @@ int htp_connp_RES_HEADERS(htp_connp_t *connp) {
             }
 
             // Prepare line for consumption
+            size_t raw_out_line_len = connp->out_line_len;
             htp_chomp(connp->out_line, &connp->out_line_len);
 
             // Check for header folding
@@ -516,6 +518,24 @@ int htp_connp_RES_HEADERS(htp_connp_t *connp) {
             }
 
             // Add the raw header line to the list
+
+            if (raw_out_line_len > connp->out_line_len) {
+                if (raw_out_line_len - connp->out_line_len == 2 &&
+                        connp->out_line[connp->out_line_len] == 0x0d &&
+                        connp->out_line[connp->out_line_len + 1] == 0x0a) {
+                    connp->out_header_line->terminators = NULL;
+                } else {
+                    connp->out_header_line->terminators =
+                        bstr_memdup((char *) connp->out_line + connp->out_line_len,
+                                raw_out_line_len - connp->out_line_len);
+                    if (connp->out_header_line->terminators == NULL) {
+                        return HTP_ERROR;
+                    }
+                }
+            } else {
+                connp->out_header_line->terminators = NULL;
+            }
+
             connp->out_header_line->line = bstr_memdup((char *) connp->out_line, connp->out_line_len);
             if (connp->out_header_line->line == NULL) {
                 return HTP_ERROR;
@@ -726,6 +746,7 @@ int htp_connp_res_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         #ifdef HTP_DEBUG
         fprintf(stderr, "htp_connp_res_data: returning STREAM_STATE_DATA (previous error)\n");
         #endif
+
         return STREAM_STATE_ERROR;
     }
 
@@ -739,6 +760,7 @@ int htp_connp_res_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         #ifdef HTP_DEBUG
         fprintf(stderr, "htp_connp_res_data: returning STREAM_STATE_DATA (zero-length chunk)\n");
         #endif
+
         return STREAM_STATE_ERROR;
     }
 
@@ -754,9 +776,9 @@ int htp_connp_res_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
     // mode (which it would be after an initial CONNECT transaction.
     if (connp->out_status == STREAM_STATE_TUNNEL) {
         #ifdef HTP_DEBUG
-        fprintf(stderr, "htp_connp_res_data: returning STREAM_STATE_DATA (tunnel)\n");
+        fprintf(stderr, "htp_connp_res_data: returning STREAM_STATE_TUNNEL\n");
         #endif
-        return STREAM_STATE_DATA;
+        return STREAM_STATE_TUNNEL;
     }
 
     // Invoke a processor, in a loop, until an error
@@ -774,7 +796,15 @@ int htp_connp_res_data(htp_connp_t *connp, htp_time_t timestamp, unsigned char *
         // on processors to add error messages, so we'll
         // keep quiet here.
         int rc = connp->out_state(connp);
-        if (rc != HTP_OK) {
+        if (rc == HTP_OK) {
+            if (connp->out_status == STREAM_STATE_TUNNEL) {
+                #ifdef HTP_DEBUG
+                fprintf(stderr, "htp_connp_res_data: returning STREAM_STATE_TUNNEL\n");
+                #endif
+
+                return STREAM_STATE_TUNNEL;
+            }
+        } else { 
             // Do we need more data?
             if (rc == HTP_DATA) {
                 return STREAM_STATE_DATA;

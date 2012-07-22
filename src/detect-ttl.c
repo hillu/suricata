@@ -219,8 +219,11 @@ DetectTtlData *DetectTtlParse (char *ttlstr) {
                 ttld->ttl1 = (uint8_t) atoi(arg1);
 
                 ttld->ttl2 = (uint8_t) atoi(arg3);
-                SCLogDebug("ttl is %"PRIu8" and %"PRIu8"",ttld->ttl1, ttld->ttl2);
-
+                SCLogDebug("ttl is %"PRIu8" to %"PRIu8"",ttld->ttl1, ttld->ttl2);
+                if (ttld->ttl1 >= ttld->ttl2) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid ttl range. ");
+                    goto error;
+                }
                 break;
             default:
                 ttld->mode = DETECT_TTL_EQ;
@@ -281,7 +284,7 @@ static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, char *ttlstr) 
     sm->type = DETECT_TTL;
     sm->ctx = (void *)ttld;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;

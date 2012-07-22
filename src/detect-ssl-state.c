@@ -141,7 +141,7 @@ int DetectSslStateMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
         return 0;
     }
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_RDLOCK(f);
 
     if (ssd->flags & SSL_AL_FLAG_STATE_CLIENT_HELLO &&
         !(ssl_state->flags & SSL_AL_FLAG_STATE_CLIENT_HELLO)) {
@@ -165,7 +165,7 @@ int DetectSslStateMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     }
 
  end:
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     return result;
 }
 
@@ -312,7 +312,7 @@ int DetectSslStateSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     }
     s->alproto = ALPROTO_TLS;
 
-    SigMatchAppendAppLayer(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
 
     return 0;
 

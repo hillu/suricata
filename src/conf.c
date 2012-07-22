@@ -42,6 +42,7 @@
 #include "conf.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+#include "util-path.h"
 
 static ConfNode *root = NULL;
 static ConfNode *root_backup = NULL;
@@ -368,10 +369,6 @@ int ConfGetChildValueBool(ConfNode *base, char *name, int *val)
 
     *val = ConfValIsTrue(strval);
 
-
-
-    *val = ConfValIsTrue(strval);
-
     return 1;
 }
 
@@ -542,6 +539,7 @@ void
 ConfRestoreContextBackup(void)
 {
     root = root_backup;
+    root_backup = NULL;
 
     return;
 }
@@ -552,8 +550,10 @@ ConfRestoreContextBackup(void)
 void
 ConfDeInit(void)
 {
-    if (root != NULL)
+    if (root != NULL) {
         ConfNodeFree(root);
+        root = NULL;
+    }
 
     SCLogDebug("configuration module de-initialized");
 }
@@ -670,7 +670,7 @@ ConfNode *ConfNodeLookupKeyValue(ConfNode *base, const char *key, const char *va
     ConfNode *child;
 
     TAILQ_FOREACH(child, &base->head, next) {
-        if (!strncmp(child->val, key, sizeof(child->val))) {
+        if (!strncmp(child->val, key, strlen(child->val))) {
             ConfNode *subchild;
             TAILQ_FOREACH(subchild, &child->head, next) {
                 if ((!strcmp(subchild->name, key)) && (!strcmp(subchild->val, value))) {
@@ -701,6 +701,41 @@ ConfNodeChildValueIsTrue(ConfNode *node, const char *key)
 
     return val != NULL ? ConfValIsTrue(val) : 0;
 }
+
+/**
+ *  \brief Create the path for an include entry
+ *  \param file The name of the file
+ *  \retval str Pointer to the string path + sig_file
+ */
+char *ConfLoadCompleteIncludePath(char *file)
+{
+    char *defaultpath = NULL;
+    char *path = NULL;
+
+    /* Path not specified */
+    if (PathIsRelative(file)) {
+        if (ConfGet("include-path", &defaultpath) == 1) {
+            SCLogDebug("Default path: %s", defaultpath);
+            size_t path_len = sizeof(char) * (strlen(defaultpath) +
+                          strlen(file) + 2);
+            path = SCMalloc(path_len);
+            if (path == NULL)
+                return NULL;
+            strlcpy(path, defaultpath, path_len);
+            if (path[strlen(path) - 1] != '/')
+                strlcat(path, "/", path_len);
+            strlcat(path, file, path_len);
+       } else {
+            path = SCStrdup(file);
+        }
+    } else {
+        path = SCStrdup(file);
+    }
+    return path;
+}
+
+
+
 
 #ifdef UNITTESTS
 
@@ -808,7 +843,7 @@ ConfTestGetInt(void)
         return 0;
     if (ConfGetInt(name, &val) != 1)
         return 0;
-    return 1;
+
     if (val != 0)
         return 0;
 

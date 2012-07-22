@@ -42,8 +42,8 @@ int32_t CoredumpLoadConfig (void)
     uint32_t unlimited = 0;
     size_t rlim_size = sizeof(rlim_t);
 
-    if (ConfGet ("coredump.max_dump", &dump_size_config) == 0) {
-        SCLogInfo ("Core dump size not specified.");
+    if (ConfGet ("coredump.max-dump", &dump_size_config) == 0) {
+        SCLogDebug ("core dump size not specified");
         return 1;
     }
     if (strcasecmp (dump_size_config, "unlimited") == 0) {

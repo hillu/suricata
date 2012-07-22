@@ -91,5 +91,8 @@ void StreamTcpSegmentReturntoPool(TcpSegment *);
 
 void StreamTcpReassembleTriggerRawReassembly(TcpSession *);
 
+void StreamTcpPruneSession(Flow *, uint8_t);
+int StreamTcpReassembleDepthReached(Packet *p);
+
 #endif /* __STREAM_TCP_REASSEMBLE_H__ */
 

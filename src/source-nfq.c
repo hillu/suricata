@@ -91,6 +91,7 @@ void TmModuleDecodeNFQRegister (void) {
     tmm_modules[TMM_DECODENFQ].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODENFQ].RegisterTests = NULL;
     tmm_modules[TMM_DECODENFQ].cap_flags = 0;
+    tmm_modules[TMM_DECODENFQ].flags = TM_FLAG_DECODE_TM;
 }
 
 TmEcode NoNFQSupportExit(ThreadVars *tv, void *initdata, void **data)
@@ -176,6 +177,7 @@ void TmModuleReceiveNFQRegister (void) {
     tmm_modules[TMM_RECEIVENFQ].ThreadExitPrintStats = ReceiveNFQThreadExitStats;
     tmm_modules[TMM_RECEIVENFQ].ThreadDeinit = ReceiveNFQThreadDeinit;
     tmm_modules[TMM_RECEIVENFQ].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVENFQ].flags = TM_FLAG_RECEIVE_TM;
 }
 
 void TmModuleVerdictNFQRegister (void) {
@@ -194,6 +196,7 @@ void TmModuleDecodeNFQRegister (void) {
     tmm_modules[TMM_DECODENFQ].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODENFQ].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODENFQ].RegisterTests = NULL;
+    tmm_modules[TMM_DECODENFQ].flags = TM_FLAG_DECODE_TM;
 }
 
 /** \brief          To initialize the NFQ global configuration data
@@ -225,15 +228,15 @@ void NFQInitConfig(char quiet)
         }
     }
 
-    if ((ConfGetInt("nfq.repeat_mark", &value)) == 1) {
+    if ((ConfGetInt("nfq.repeat-mark", &value)) == 1) {
         nfq_config.mark = (uint32_t)value;
     }
 
-    if ((ConfGetInt("nfq.repeat_mask", &value)) == 1) {
+    if ((ConfGetInt("nfq.repeat-mask", &value)) == 1) {
         nfq_config.mask = (uint32_t)value;
     }
 
-    if ((ConfGetInt("nfq.route_queue", &value)) == 1) {
+    if ((ConfGetInt("nfq.route-queue", &value)) == 1) {
         nfq_config.next_queue = ((uint32_t)value) << 16;
     }
 
@@ -259,9 +262,9 @@ static inline void NFQMutexInit(NFQQueueVars *nq)
 {
     char *active_runmode = RunmodeGetActive();
 
-    if (active_runmode && !strcmp("worker", active_runmode)) {
+    if (active_runmode && !strcmp("workers", active_runmode)) {
         nq->use_mutex = 0;
-        SCLogInfo("NFQ running in 'worker' runmode, will not use mutex.");
+        SCLogInfo("NFQ running in 'workers' runmode, will not use mutex.");
     } else {
         nq->use_mutex = 1;
     }
@@ -269,17 +272,15 @@ static inline void NFQMutexInit(NFQQueueVars *nq)
         SCMutexInit(&nq->mutex_qh, NULL);
 }
 
-static inline void NFQMutexLock(NFQQueueVars *nq)
-{
-    if (nq->use_mutex)
-        SCMutexLock(&nq->mutex_qh);
-}
+#define NFQMutexLock(nq) do {           \
+    if ((nq)->use_mutex)                \
+        SCMutexLock(&(nq)->mutex_qh);   \
+} while (0)
 
-static inline void NFQMutexUnlock(NFQQueueVars *nq)
-{
-    if (nq->use_mutex)
-        SCMutexUnlock(&nq->mutex_qh);
-}
+#define NFQMutexUnlock(nq) do {         \
+    if ((nq)->use_mutex)                \
+        SCMutexUnlock(&(nq)->mutex_qh); \
+} while (0)
 
 
 int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)

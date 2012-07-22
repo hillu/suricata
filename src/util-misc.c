@@ -28,6 +28,8 @@
 #include "util-debug.h"
 #include "util-unittest.h"
 
+/* size string parsing API */
+
 static int ParseSizeString(const char *size, double *res)
 {
 #define PARSE_REGEX "^\\s*(\\d+(?:.\\d+)?)\\s*([a-zA-Z]{2})?\\s*$"
@@ -252,7 +254,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240UL) {
         goto error;
     }
 
@@ -309,7 +311,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -365,7 +367,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -421,7 +423,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -480,7 +482,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -537,7 +539,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -593,7 +595,7 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
 
@@ -649,26 +651,9 @@ int UtilMiscParseSizeStringTest01(void)
     if (ParseSizeString(str, &result) > 0) {
         goto error;
     }
-    if (result != 10UL * 1024 * 1024 * 1024) {
+    if (result != 10737418240) {
         goto error;
     }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
     /* no space */
 
@@ -1122,7 +1107,6 @@ int UtilMiscParseSizeStringTest01(void)
     if (result != 10.5 * 1024 * 1024 * 1024) {
         goto error;
     }
-
 
     return 1;
  error:

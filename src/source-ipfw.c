@@ -83,6 +83,7 @@ void TmModuleDecodeIPFWRegister (void) {
     tmm_modules[TMM_DECODEIPFW].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEIPFW].RegisterTests = NULL;
     tmm_modules[TMM_DECODEIPFW].cap_flags = 0;
+    tmm_modules[TMM_DECODEIPFW].flags = TM_FLAG_DECODE_TM;
 }
 
 TmEcode NoIPFWSupportExit(ThreadVars *tv, void *initdata, void **data) {
@@ -156,6 +157,7 @@ void TmModuleReceiveIPFWRegister (void) {
                                              SC_CAP_NET_BIND_SERVICE |
                                              SC_CAP_NET_BROADCAST; /** \todo untested */
     tmm_modules[TMM_RECEIVEIPFW].RegisterTests = NULL;
+    tmm_modules[TMM_RECEIVEIPFW].flags = TM_FLAG_RECEIVE_TM;
 }
 
 /**
@@ -184,15 +186,16 @@ void TmModuleDecodeIPFWRegister (void) {
     tmm_modules[TMM_DECODEIPFW].ThreadExitPrintStats = NULL;
     tmm_modules[TMM_DECODEIPFW].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEIPFW].RegisterTests = NULL;
+    tmm_modules[TMM_DECODEIPFW].flags = TM_FLAG_DECODE_TM;
 }
 
 static inline void IPFWMutexInit(IPFWQueueVars *nq)
 {
     char *active_runmode = RunmodeGetActive();
 
-    if (active_runmode && !strcmp("worker", active_runmode)) {
+    if (active_runmode && !strcmp("workers", active_runmode)) {
         nq->use_mutex = 0;
-        SCLogInfo("IPFW running in 'worker' runmode, will not use mutex.");
+        SCLogInfo("IPFW running in 'workers' runmode, will not use mutex.");
     } else {
         nq->use_mutex = 1;
     }

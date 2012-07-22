@@ -55,7 +55,7 @@ const char *RunModeIpsNFQGetDefaultMode(void)
 
 void RunModeIpsNFQRegister(void)
 {
-    default_mode = "auto";
+    default_mode = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_NFQ, "auto",
                               "Multi threaded NFQ IPS mode",
                               RunModeIpsNFQAuto);
@@ -64,7 +64,7 @@ void RunModeIpsNFQRegister(void)
                               "Multi threaded NFQ IPS mode with respect to flow",
                               RunModeIpsNFQAutoFp);
 
-    RunModeRegisterNewRunMode(RUNMODE_NFQ, "worker",
+    RunModeRegisterNewRunMode(RUNMODE_NFQ, "workers",
                               "Multi queue NFQ IPS mode with one thread per queue",
                               RunModeIpsNFQWorker);
     return;

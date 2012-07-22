@@ -29,6 +29,8 @@
 #include "decode.h"
 #include "detect.h"
 
+#include "host.h"
+
 #include "detect-detection-filter.h"
 #include "detect-threshold.h"
 #include "detect-parse.h"
@@ -227,13 +229,15 @@ int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     SigMatch *tmpm = NULL;
 
     /* checks if there's a previous instance of threshold */
-    tmpm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH], DETECT_THRESHOLD);
+    tmpm = SigMatchGetLastSMFromLists(s, 2,
+                                      DETECT_THRESHOLD, s->sm_lists_tail[DETECT_SM_LIST_MATCH]);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and \"threshold\" are not allowed in the same rule");
         SCReturnInt(-1);
     }
     /* checks there's no previous instance of detection_filter */
-    tmpm = SigMatchGetLastSM(s->sm_lists_tail[DETECT_SM_LIST_MATCH], DETECT_DETECTION_FILTER);
+    tmpm = SigMatchGetLastSMFromLists(s, 2,
+                                      DETECT_DETECTION_FILTER, s->sm_lists_tail[DETECT_SM_LIST_MATCH]);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "At most one \"detection_filter\" is allowed per rule");
         SCReturnInt(-1);
@@ -250,7 +254,7 @@ int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     sm->type = DETECT_DETECTION_FILTER;
     sm->ctx = (void *)df;
 
-    SigMatchAppendPacket(s, sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_THRESHOLD);
 
     return 0;
 
@@ -402,6 +406,8 @@ static int DetectDetectionFilterTestSig1(void) {
     int result = 0;
     int alerts = 0;
 
+    HostInitConfig(HOST_QUIET);
+
     memset(&th_v, 0, sizeof(th_v));
 
     p = UTHBuildPacketReal(NULL, 0, IPPROTO_TCP, "1.1.1.1", "2.2.2.2", 1024, 80);
@@ -438,7 +444,7 @@ static int DetectDetectionFilterTestSig1(void) {
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     alerts += PacketAlertCheck(p, 1);
 
-    if(alerts == 5)
+    if(alerts == 4)
         result = 1;
 
     SigGroupCleanup(de_ctx);
@@ -449,6 +455,7 @@ static int DetectDetectionFilterTestSig1(void) {
 
 end:
     UTHFreePackets(&p, 1);
+    HostShutdown();
     return result;
 }
 
@@ -469,6 +476,8 @@ static int DetectDetectionFilterTestSig2(void) {
     int result = 0;
     int alerts = 0;
     struct timeval ts;
+
+    HostInitConfig(HOST_QUIET);
 
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
@@ -513,7 +522,7 @@ static int DetectDetectionFilterTestSig2(void) {
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     alerts += PacketAlertCheck(p, 10);
 
-    if (alerts == 1)
+    if (alerts == 0)
         result = 1;
 
     SigGroupCleanup(de_ctx);
@@ -523,6 +532,7 @@ static int DetectDetectionFilterTestSig2(void) {
     DetectEngineCtxFree(de_ctx);
 end:
     UTHFreePackets(&p, 1);
+    HostShutdown();
     return result;
 }
 

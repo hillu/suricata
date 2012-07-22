@@ -107,7 +107,8 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
         SCReturnInt(-1);
     }
 
-    SigMatch *sm = DetectContentGetLastPattern(s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+    SigMatch *sm =  SigMatchGetLastSMFromLists(s, 2,
+                                               DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (sm == NULL) {
         SCLogError(SC_ERR_HTTP_METHOD_NEEDS_PRECEEDING_CONTENT, "http_method "
                 "modifies preceeding \"content\", but none was found");
@@ -145,7 +146,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
 
         /* please note.  reassigning pm */
         pm = SigMatchGetLastSMFromLists(s, 4,
-                                        DETECT_AL_HTTP_METHOD,
+                                        DETECT_CONTENT,
                                         s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
                                         DETECT_PCRE,
                                         s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]);
@@ -163,8 +164,8 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
             tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
         }
     }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_AL_HTTP_METHOD);
-    sm->type = DETECT_AL_HTTP_METHOD;
+    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_HMDMATCH);
+    sm->type = DETECT_CONTENT;
 
     /* transfer the sm from the pmatch list to hmdmatch list */
     SigMatchTransferSigMatchAcrossLists(sm,
@@ -628,6 +629,92 @@ static int DetectHttpMethodTest12(void)
     return result;
 }
 
+/** \test Check a signature with method + within and pcre with /M (should work) */
+int DetectHttpMethodTest13(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing http_method\"; "
+                               "pcre:\"/HE/M\"; "
+                               "content:\"AD\"; "
+                               "within:2; http_method; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with method + within and pcre without /M (should fail) */
+int DetectHttpMethodTest14(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing http_method\"; "
+                               "pcre:\"/HE/\"; "
+                               "content:\"AD\"; "
+                               "http_method; within:2; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/** \test Check a signature with method + within and pcre with /M (should work) */
+int DetectHttpMethodTest15(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+
+    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"Testing http_method\"; "
+                               "pcre:\"/HE/M\"; "
+                               "content:\"AD\"; "
+                               "http_method; within:2; sid:1;)");
+
+    if (de_ctx->sig_list != NULL) {
+        result = 1;
+    }
+
+ end:
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
 /** \test Check a signature with an known request method */
 static int DetectHttpMethodSigTest01(void)
 {
@@ -1029,6 +1116,9 @@ void DetectHttpMethodRegisterTests(void) {
     UtRegisterTest("DetectHttpMethodTest10", DetectHttpMethodTest10, 1);
     UtRegisterTest("DetectHttpMethodTest11", DetectHttpMethodTest11, 1);
     UtRegisterTest("DetectHttpMethodTest12 -- nocase flag", DetectHttpMethodTest12, 1);
+    UtRegisterTest("DetectHttpMethodTest13", DetectHttpMethodTest13, 1);
+    UtRegisterTest("DetectHttpMethodTest14", DetectHttpMethodTest14, 1);
+    UtRegisterTest("DetectHttpMethodTest15", DetectHttpMethodTest15, 1);
     UtRegisterTest("DetectHttpMethodSigTest01", DetectHttpMethodSigTest01, 1);
     UtRegisterTest("DetectHttpMethodSigTest02", DetectHttpMethodSigTest02, 1);
     UtRegisterTest("DetectHttpMethodSigTest03", DetectHttpMethodSigTest03, 1);

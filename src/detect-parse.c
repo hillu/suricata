@@ -91,7 +91,7 @@ typedef struct SigDuplWrapper_ {
 #define CONFIG_OPTS   7
 
 //                    action       protocol       src                                      sp                        dir              dst                                    dp                            options
-#define CONFIG_PCRE "^([A-z]+)\\s+([A-z0-9]+)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/]+)\\s+([\\:A-z0-9_\\$\\!,]+)\\s+(-\\>|\\<\\>|\\<\\-)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,/]+)\\s+([\\:A-z0-9_\\$\\!,]+)(?:\\s+\\((.*)?(?:\\s*)\\))?(?:(?:\\s*)\\n)?\\s*$"
+#define CONFIG_PCRE "^([A-z]+)\\s+([A-z0-9\\-]+)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,\\/]+)\\s+([\\:A-z0-9_\\$\\!,]+)\\s+(-\\>|\\<\\>|\\<\\-)\\s+([\\[\\]A-z0-9\\.\\:_\\$\\!\\-,/]+)\\s+([\\:A-z0-9_\\$\\!,]+)(?:\\s+\\((.*)?(?:\\s*)\\))?(?:(?:\\s*)\\n)?\\s*$"
 #define OPTION_PARTS 3
 #define OPTION_PCRE "^\\s*([A-z_0-9-\\.]+)(?:\\s*\\:\\s*(.*)(?<!\\\\))?\\s*;\\s*(?:\\s*(.*))?\\s*$"
 
@@ -148,29 +148,6 @@ SigTableElmt *SigTableGet(char *name) {
 }
 
 /**
- * \brief append a app layer SigMatch to the Signature structure
- * \param s pointer to the Signature
- * \param new pointer to the SigMatch of type uricontent to be appended
- */
-void SigMatchAppendAppLayer(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_AMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_AMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_AMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists_tail[DETECT_SM_LIST_AMATCH];
-        cur->next = new;
-        new->prev = cur;
-        new->next = NULL;
-        s->sm_lists_tail[DETECT_SM_LIST_AMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-}
-
-/**
  * \brief Append a SigMatch to the list type.
  *
  * \param s    Signature.
@@ -196,95 +173,6 @@ void SigMatchAppendSMToList(Signature *s, SigMatch *new, int list)
     s->sm_cnt++;
 }
 
-/**
- * \brief append a SigMatch of type uricontent to the Signature structure
- * \param s pointer to the Signature
- * \param new pointer to the SigMatch of type uricontent to be appended
- */
-void SigMatchAppendUricontent(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_UMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_UMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists_tail[DETECT_SM_LIST_UMATCH];
-        cur->next = new;
-        new->prev = cur;
-        new->next = NULL;
-        s->sm_lists_tail[DETECT_SM_LIST_UMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-}
-
-void SigMatchAppendPayload(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_PMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists_tail[DETECT_SM_LIST_PMATCH];
-        cur->next = new;
-        new->prev = cur;
-        new->next = NULL;
-        s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-}
-
-void SigMatchAppendDcePayload(Signature *s, SigMatch *new) {
-    SCLogDebug("Append SigMatch against s->sm_lists[DETECT_SM_LIST_DMATCH](dce) list");
-    if (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_DMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_DMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists_tail[DETECT_SM_LIST_DMATCH];
-        cur->next = new;
-        new->prev = cur;
-        new->next = NULL;
-        s->sm_lists_tail[DETECT_SM_LIST_DMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-
-    return;
-}
-
-/** \brief Append a sig match to the signatures tag match list
- *         This is done on other list because the tag keyword
- *         should be always the last inspected (never ordered)
- *
- *  \param s signature
- *  \param new sigmatch to append
- */
-void SigMatchAppendTag(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_TMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_TMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_TMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists_tail[DETECT_SM_LIST_TMATCH];
-        cur->next = new;
-        new->prev = cur;
-        new->next = NULL;
-        s->sm_lists_tail[DETECT_SM_LIST_TMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-
-    return;
-}
-
 void SigMatchRemoveSMFromList(Signature *s, SigMatch *sm, int sm_list)
 {
     if (sm == s->sm_lists[sm_list]) {
@@ -301,215 +189,6 @@ void SigMatchRemoveSMFromList(Signature *s, SigMatch *sm, int sm_list)
     return;
 }
 
-/** \brief Append a sig match to the signatures non-payload match list
- *
- *  \param s signature
- *  \param new sigmatch to append
- */
-void SigMatchAppendPacket(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_MATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_MATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_MATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists[DETECT_SM_LIST_MATCH];
-
-        for ( ; cur->next != NULL; cur = cur->next);
-
-        cur->next = new;
-        new->next = NULL;
-        new->prev = cur;
-        s->sm_lists_tail[DETECT_SM_LIST_MATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-}
-
-/** \brief Append a sig match to the signatures post-match list
- *
- *  \param s signature
- *  \param new sigmatch to append
- */
-void SigMatchAppendPostMatch(Signature *s, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_POSTMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_POSTMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_POSTMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists[DETECT_SM_LIST_POSTMATCH];
-
-        for ( ; cur->next != NULL; cur = cur->next);
-
-        cur->next = new;
-        new->next = NULL;
-        new->prev = cur;
-        s->sm_lists_tail[DETECT_SM_LIST_POSTMATCH] = new;
-    }
-
-    new->idx = s->sm_cnt;
-    s->sm_cnt++;
-}
-
-/** \brief Pull a content 'old' from the pmatch list, append 'new' to amatch list.
-  * Used for replacing contents that have http_cookie, etc modifiers.
-  */
-void SigMatchReplaceContent(Signature *s, SigMatch *old, SigMatch *new) {
-    BUG_ON(old == NULL);
-
-    SigMatch *m = s->sm_lists[DETECT_SM_LIST_PMATCH];
-    SigMatch *pm = m;
-
-    for ( ; m != NULL; m = m->next) {
-        if (m == old) {
-            if (m == s->sm_lists[DETECT_SM_LIST_PMATCH]) {
-                s->sm_lists[DETECT_SM_LIST_PMATCH] = m->next;
-                if (m->next != NULL) {
-                    m->next->prev = NULL;
-                }
-            } else {
-                pm->next = m->next;
-                if (m->next != NULL) {
-                    m->next->prev = pm;
-                }
-            }
-
-            if (m == s->sm_lists_tail[DETECT_SM_LIST_PMATCH]) {
-                if (pm == m) {
-                    s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = NULL;
-                } else {
-                    s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = pm;
-                }
-            }
-
-            //printf("m %p  s->sm_lists[DETECT_SM_LIST_PMATCH] %p s->sm_lists_tail[DETECT_SM_LIST_PMATCH] %p\n", m, s->sm_lists[DETECT_SM_LIST_PMATCH], s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
-            break;
-        }
-
-        pm = m;
-    }
-
-    /* finally append the "new" sig match to the app layer list */
-    /** \todo if the app layer gets it's own list, adapt this code */
-    if (s->sm_lists[DETECT_SM_LIST_AMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_AMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_AMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists[DETECT_SM_LIST_AMATCH];
-
-        for ( ; cur->next != NULL; cur = cur->next);
-
-        cur->next = new;
-        new->next = NULL;
-        new->prev = cur;
-        s->sm_lists_tail[DETECT_SM_LIST_AMATCH] = new;
-    }
-
-    /* move over the idx */
-    if (pm != NULL)
-        new->idx = pm->idx;
-}
-
-/**
- *  \brief Pull a content 'old' from the pmatch list, append 'new' to umatch list.
- *
- *  Used for replacing contents that have the http_uri modifier that need to be
- *  moved to the uri inspection list.
- */
-void SigMatchReplaceContentToUricontent(Signature *s, SigMatch *old, SigMatch *new) {
-    BUG_ON(old == NULL);
-
-    SigMatch *m = s->sm_lists[DETECT_SM_LIST_PMATCH];
-    SigMatch *pm = m;
-
-    for ( ; m != NULL; m = m->next) {
-        if (m == old) {
-            if (m == s->sm_lists[DETECT_SM_LIST_PMATCH]) {
-                s->sm_lists[DETECT_SM_LIST_PMATCH] = m->next;
-                if (m->next != NULL) {
-                    m->next->prev = NULL;
-                }
-            } else {
-                pm->next = m->next;
-                if (m->next != NULL) {
-                    m->next->prev = pm;
-                }
-            }
-
-            if (m == s->sm_lists_tail[DETECT_SM_LIST_PMATCH]) {
-                if (pm == m) {
-                    s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = NULL;
-                } else {
-                    s->sm_lists_tail[DETECT_SM_LIST_PMATCH] = pm;
-                }
-            }
-
-            //printf("m %p  s->sm_lists[DETECT_SM_LIST_PMATCH] %p s->sm_lists_tail[DETECT_SM_LIST_PMATCH] %p\n", m, s->sm_lists[DETECT_SM_LIST_PMATCH], s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
-            break;
-        }
-
-        pm = m;
-    }
-
-    /* finally append the "new" sig match to the app layer list */
-    /** \todo if the app layer gets it's own list, adapt this code */
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_UMATCH] = new;
-        s->sm_lists_tail[DETECT_SM_LIST_UMATCH] = new;
-        new->next = NULL;
-        new->prev = NULL;
-    } else {
-        SigMatch *cur = s->sm_lists[DETECT_SM_LIST_UMATCH];
-
-        for ( ; cur->next != NULL; cur = cur->next);
-
-        cur->next = new;
-        new->next = NULL;
-        new->prev = cur;
-        s->sm_lists_tail[DETECT_SM_LIST_UMATCH] = new;
-    }
-
-    /* move over the idx */
-    if (pm != NULL)
-        new->idx = pm->idx;
-}
-
-/**
- * \brief Replaces the old sigmatch with the new sigmatch in the current
- *        signature.
- *
- * \param s     pointer to the current signature
- * \param m     pointer to the old sigmatch
- * \param new   pointer to the new sigmatch, which will replace m
- */
-void SigMatchReplace(Signature *s, SigMatch *m, SigMatch *new) {
-    if (s->sm_lists[DETECT_SM_LIST_MATCH] == NULL) {
-        s->sm_lists[DETECT_SM_LIST_MATCH] = new;
-        return;
-    }
-
-    if (m == NULL) {
-        s->sm_lists[DETECT_SM_LIST_MATCH] = new;
-    } else if (m->prev == NULL) {
-        if (m->next != NULL) {
-            m->next->prev = new;
-            new->next = m->next;
-        }
-        s->sm_lists[DETECT_SM_LIST_MATCH] = new;
-    } else {
-        m->prev->next = new;
-        new->prev = m->prev;
-        if (m->next != NULL) {
-            m->next->prev = new;
-            new->next = m->next;
-        }
-    }
-}
-
 /**
  * \brief Returns a pointer to the last SigMatch instance of a particular type
  *        in a Signature of the payload list.
@@ -519,7 +198,7 @@ void SigMatchReplace(Signature *s, SigMatch *m, SigMatch *new) {
  *
  * \retval match Pointer to the last SigMatch instance of type 'type'.
  */
-SigMatch *SigMatchGetLastSM(SigMatch *sm, uint8_t type)
+static inline SigMatch *SigMatchGetLastSM(SigMatch *sm, uint8_t type)
 {
     while (sm != NULL) {
         if (sm->type == type) {
@@ -538,7 +217,8 @@ SigMatch *SigMatchGetLastSMFromLists(Signature *s, int args, ...)
                    "(non zero as well) to this function, since we need a "
                    "SigMatch list for every SigMatch type(send a map of sm_type "
                    "and sm_list) sent");
-        return NULL;
+        /* as this is a bug we should abort to ease debugging */
+        BUG_ON(1);
     }
 
     SigMatch *sm_list[args / 2];
@@ -845,6 +525,8 @@ int SigParseProto(Signature *s, const char *protostr) {
         SCReturnInt(-1);
     }
 
+    /* if any of these flags are set they are set in a mutually exclusive
+     * manner */
     if (s->proto.flags & DETECT_PROTO_ONLY_PKT) {
         s->flags |= SIG_FLAG_REQUIRE_PACKET;
     } else if (s->proto.flags & DETECT_PROTO_ONLY_STREAM) {
@@ -1147,47 +829,20 @@ void SigFree(Signature *s) {
     if (s == NULL)
         return;
 
-    /* XXX GS there seems to be a bug in the IPOnlyCIDR list, which causes
-      system abort. */
-    /*if (s->CidrDst != NULL)
+    if (s->CidrDst != NULL)
         IPOnlyCIDRListFree(s->CidrDst);
 
     if (s->CidrSrc != NULL)
-        IPOnlyCIDRListFree(s->CidrSrc);*/
+        IPOnlyCIDRListFree(s->CidrSrc);
 
-    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_MATCH], *nsm;
-    while (sm != NULL) {
-        nsm = sm->next;
-        SigMatchFree(sm);
-        sm = nsm;
-    }
-
-    sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
-    while (sm != NULL) {
-        nsm = sm->next;
-        SigMatchFree(sm);
-        sm = nsm;
-    }
-
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
-    while (sm != NULL) {
-        nsm = sm->next;
-        SigMatchFree(sm);
-        sm = nsm;
-    }
-
-    sm = s->sm_lists[DETECT_SM_LIST_AMATCH];
-    while (sm != NULL) {
-        nsm = sm->next;
-        SigMatchFree(sm);
-        sm = nsm;
-    }
-
-    sm = s->sm_lists[DETECT_SM_LIST_TMATCH];
-    while (sm != NULL) {
-        nsm = sm->next;
-        SigMatchFree(sm);
-        sm = nsm;
+    int i;
+    for (i = 0; i < DETECT_SM_LIST_MAX; i++) {
+        SigMatch *sm = s->sm_lists[i], *nsm;
+        while (sm != NULL) {
+            nsm = sm->next;
+            SigMatchFree(sm);
+            sm = nsm;
+        }
     }
 
     DetectAddressHeadCleanup(&s->src);
@@ -1339,21 +994,39 @@ static int SigValidate(Signature *s) {
 
     if (s->flags & SIG_FLAG_REQUIRE_PACKET &&
         s->flags & SIG_FLAG_REQUIRE_STREAM) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't mix packet keywords with tcp-stream or flow:only_stream.");
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "can't mix packet keywords with "
+                   "tcp-stream or flow:only_stream.  Invalidating signature.");
         SCReturnInt(0);
     }
 
-    /* check for uricontent + from_server/to_client */
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
-        SigMatch *sm;
-        for (sm = s->sm_lists[DETECT_SM_LIST_MATCH]; sm != NULL; sm = sm->next) {
-            if (sm->type == DETECT_FLOW) {
-                DetectFlowData *fd = (DetectFlowData *)sm->ctx;
-                if (fd == NULL)
-                    continue;
+    SigMatch *sm;
+    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH]; sm != NULL; sm = sm->next) {
+        if (sm->type == DETECT_FLOW) {
+            DetectFlowData *fd = (DetectFlowData *)sm->ctx;
+            if (fd == NULL)
+                continue;
 
-                if (fd->flags & FLOW_PKT_TOCLIENT) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use uricontent / http_uri with flow:to_client or flow:from_server");
+            if (fd->flags & FLOW_PKT_TOCLIENT) {
+                /* check for uricontent + from_server/to_client */
+                if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HRUDMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HCBDMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HMDMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HUADMATCH] != NULL) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use uricontent "
+                               "/http_uri , raw_uri, http_client_body, "
+                               "http_method, http_user_agent keywords "
+                               "with flow:to_client or flow:from_server");
+                    SCReturnInt(0);
+                }
+            } else if (fd->flags & FLOW_PKT_TOSERVER) {
+                /* check for uricontent + from_server/to_client */
+                if (s->sm_lists[DETECT_SM_LIST_HSBDMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HSMDMATCH] != NULL ||
+                    s->sm_lists[DETECT_SM_LIST_HSCDMATCH] != NULL) {
+                    SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use http_"
+                               "server_body, http_stat_msg, http_stat_code "
+                               "with flow:to_server or flow:from_client");
                     SCReturnInt(0);
                 }
             }
@@ -1416,7 +1089,10 @@ static int SigValidate(Signature *s) {
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]);
+                DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]);
         if (pm != NULL) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature has"
                 " replace keyword linked with a modified content"
@@ -1432,13 +1108,30 @@ static int SigValidate(Signature *s) {
                 s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]  ||
                 s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH] ||
                 s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]  ||
-                s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH])
+                s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH] ||
+                s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH] ||
+                s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH] ||
+                s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH])
         {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature combines packet "
                     "specific matches (like dsize, flags, ttl) with stream / "
                     "state matching by matching on app layer proto (like using "
                     "http_* keywords).");
             SCReturnInt(0);
+        }
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_PACKET)) {
+        s->flags |= SIG_FLAG_REQUIRE_STREAM;
+        SigMatch *sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
+        while (sm != NULL) {
+            if (sm->type == DETECT_CONTENT &&
+                (((DetectContentData *)(sm->ctx))->flags &
+                 (DETECT_CONTENT_DEPTH | DETECT_CONTENT_OFFSET))) {
+                s->flags |= SIG_FLAG_REQUIRE_PACKET;
+                break;
+            }
+            sm = sm->next;
         }
     }
 
@@ -1459,19 +1152,12 @@ static int SigValidate(Signature *s) {
 }
 
 /**
- * \brief Parses a signature and adds it to the Detection Engine Context
- * This function is going to be deprecated. Should use DetectEngineAppendSig()
- * or SigInitReal() if you want to control the sig_list building.
- *
- * \param de_ctx Pointer to the Detection Engine Context
- * \param sigstr Pointer to a character string containing the signature to be
- *               parsed
- *
- * \retval Pointer to the Signature instance on success; NULL on failure
+ * \internal
+ * \brief Helper function for SigInit().
  */
-Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
-    SCEnter();
-
+static Signature *SigInitHelper(DetectEngineCtx *de_ctx, char *sigstr,
+                                uint8_t dir)
+{
     Signature *sig = SigAlloc();
     if (sig == NULL)
         goto error;
@@ -1479,7 +1165,7 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
     /* default gid to 1 */
     sig->gid = 1;
 
-    if (SigParse(de_ctx, sig, sigstr, SIG_DIREC_NORMAL) < 0)
+    if (SigParse(de_ctx, sig, sigstr, dir) < 0)
         goto error;
 
     /* signature priority hasn't been overwritten.  Using default priority */
@@ -1513,7 +1199,7 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->mpm_uricontent_maxlen = 0;
 
         for (sm = sig->sm_lists[DETECT_SM_LIST_UMATCH]; sm != NULL; sm = sm->next) {
-            if (sm->type == DETECT_URICONTENT) {
+            if (sm->type == DETECT_CONTENT) {
                 DetectContentData *ud = (DetectContentData *)sm->ctx;
                 if (ud == NULL)
                     continue;
@@ -1565,6 +1251,12 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
         sig->flags |= SIG_FLAG_STATE_MATCH;
     if (sig->sm_lists[DETECT_SM_LIST_FILEMATCH])
         sig->flags |= SIG_FLAG_STATE_MATCH;
+    if (sig->sm_lists[DETECT_SM_LIST_HSMDMATCH])
+        sig->flags |= SIG_FLAG_STATE_MATCH;
+    if (sig->sm_lists[DETECT_SM_LIST_HSCDMATCH])
+        sig->flags |= SIG_FLAG_STATE_MATCH;
+    if (sig->sm_lists[DETECT_SM_LIST_HUADMATCH])
+        sig->flags |= SIG_FLAG_STATE_MATCH;
 
     if (!(sig->init_flags & SIG_FLAG_INIT_FLOW)) {
         sig->flags |= SIG_FLAG_TOSERVER;
@@ -1580,6 +1272,49 @@ Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr) {
     /* validate signature, SigValidate will report the error reason */
     if (SigValidate(sig) == 0) {
         goto error;
+    }
+
+    return sig;
+
+error:
+    if (sig != NULL) {
+        SigFree(sig);
+    }
+
+    if (de_ctx->failure_fatal == 1) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature parsing failed: "
+                   "\"%s\"", sigstr);
+        exit(EXIT_FAILURE);
+    }
+    return NULL;
+}
+
+/**
+ * \brief Parses a signature and adds it to the Detection Engine Context.
+ *
+ * \param de_ctx Pointer to the Detection Engine Context.
+ * \param sigstr Pointer to a character string containing the signature to be
+ *               parsed.
+ *
+ * \retval Pointer to the Signature instance on success; NULL on failure.
+ */
+Signature *SigInit(DetectEngineCtx *de_ctx, char *sigstr)
+{
+    SCEnter();
+
+    uint32_t oldsignum = de_ctx->signum;
+
+    Signature *sig;
+
+    if ((sig = SigInitHelper(de_ctx, sigstr, SIG_DIREC_NORMAL)) == NULL) {
+        goto error;
+    }
+
+    if (sig->init_flags & SIG_FLAG_INIT_BIDIREC) {
+        sig->next = SigInitHelper(de_ctx, sigstr, SIG_DIREC_SWITCHED);
+        if (sig->next == NULL) {
+            goto error;
+        }
     }
 
     SCReturnPtr(sig, "Signature");
@@ -1590,207 +1325,16 @@ error:
     }
 
     if (de_ctx->failure_fatal == 1) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE,"Signature parsing failed: \"%s\"", sigstr);
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Signature parsing failed: "
+                   "\"%s\"", sigstr);
         exit(EXIT_FAILURE);
     }
-    SCReturnPtr(NULL,"Signature");
-}
 
-/**
- * \brief Parses a signature and assign a unique number from the Detection
- *        Engine Context. If the signature is bidirectional it should return
- *        two Signatures linked. Look if flag Bidirec is set and if the pointer
- *        sig->next is set (!= NULL).
- *
- * \param de_ctx Pointer to the Detection Engine Context
- * \param sigstr Pointer to a character string containing the signature to be
- *               parsed
- *
- * \retval Pointer to the Signature instance on success; NULL on failure
- */
-Signature *SigInitReal(DetectEngineCtx *de_ctx, char *sigstr) {
-    Signature *sig = SigAlloc();
-    uint32_t oldsignum = de_ctx->signum;
-
-    if (sig == NULL)
-        goto error;
-
-    /* default gid to 1 */
-    sig->gid = 1;
-
-    if (SigParse(de_ctx, sig, sigstr, SIG_DIREC_NORMAL) < 0)
-        goto error;
-
-    /* signature priority hasn't been overwritten.  Using default priority */
-    if (sig->prio == -1)
-        sig->prio = 3;
-
-    /* assign an unique id in this de_ctx */
-    sig->num = de_ctx->signum;
-    de_ctx->signum++;
-
-    SigMatch *sm;
-    /* set mpm_content_len */
-
-    /* determine the length of the longest pattern in the sig */
-    if (sig->sm_lists[DETECT_SM_LIST_PMATCH] != NULL) {
-        sig->mpm_content_maxlen = 0;
-
-        for (sm = sig->sm_lists[DETECT_SM_LIST_PMATCH]; sm != NULL; sm = sm->next) {
-            if (sm->type == DETECT_CONTENT) {
-                DetectContentData *cd = (DetectContentData *)sm->ctx;
-                if (cd == NULL)
-                    continue;
-
-                if (sig->mpm_content_maxlen == 0)
-                    sig->mpm_content_maxlen = cd->content_len;
-                if (sig->mpm_content_maxlen < cd->content_len)
-                    sig->mpm_content_maxlen = cd->content_len;
-            }
-        }
-    }
-    if (sig->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
-        sig->mpm_uricontent_maxlen = 0;
-
-        for (sm = sig->sm_lists[DETECT_SM_LIST_UMATCH]; sm != NULL; sm = sm->next) {
-            if (sm->type == DETECT_URICONTENT) {
-                DetectContentData *ud = (DetectContentData *)sm->ctx;
-                if (ud == NULL)
-                    continue;
-                if (sig->mpm_uricontent_maxlen == 0)
-                    sig->mpm_uricontent_maxlen = ud->content_len;
-                if (sig->mpm_uricontent_maxlen < ud->content_len)
-                    sig->mpm_uricontent_maxlen = ud->content_len;
-            }
-        }
-    }
-    if (sig->init_flags & SIG_FLAG_INIT_BIDIREC) {
-        /* Allocate a copy of this signature with the addresses siwtched
-           This copy will be installed at sig->next */
-        sig->next = SigAlloc();
-        sig->next->prio = sig->prio;
-        sig->next->gid = sig->gid;
-
-        if (sig->next == NULL)
-            goto error;
-
-        if (SigParse(de_ctx, sig->next, sigstr, SIG_DIREC_SWITCHED) < 0)
-            goto error;
-
-        /* assign an unique id in this de_ctx */
-        sig->next->num = de_ctx->signum;
-        de_ctx->signum++;
-
-        /* set mpm_content_len */
-
-        /* determine the length of the longest pattern in the sig */
-        if (sig->next->sm_lists[DETECT_SM_LIST_PMATCH] != NULL) {
-            sig->next->mpm_content_maxlen = 0;
-
-            SigMatch *sm;
-            for (sm = sig->next->sm_lists[DETECT_SM_LIST_PMATCH]; sm != NULL; sm = sm->next) {
-                if (sm->type == DETECT_CONTENT) {
-                    DetectContentData *cd = (DetectContentData *)sm->ctx;
-                    if (cd == NULL)
-                        continue;
-
-                    if (sig->next->mpm_content_maxlen == 0)
-                        sig->next->mpm_content_maxlen = cd->content_len;
-                    if (sig->next->mpm_content_maxlen < cd->content_len)
-                        sig->next->mpm_content_maxlen = cd->content_len;
-                }
-            }
-        }
-        if (sig->next->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
-            sig->next->mpm_uricontent_maxlen = 0;
-
-            for (sm = sig->next->sm_lists[DETECT_SM_LIST_UMATCH]; sm != NULL; sm = sm->next) {
-                if (sm->type == DETECT_URICONTENT) {
-                    DetectContentData *ud = (DetectContentData *)sm->ctx;
-                    if (ud == NULL)
-                        continue;
-
-                    if (sig->next->mpm_uricontent_maxlen == 0)
-                        sig->next->mpm_uricontent_maxlen = ud->content_len;
-                    if (sig->next->mpm_uricontent_maxlen < ud->content_len)
-                        sig->next->mpm_uricontent_maxlen = ud->content_len;
-                }
-            }
-        }
-    }
-
-    /* set the packet and app layer flags, but only if the
-     * app layer flag wasn't already set in which case we
-     * only consider the app layer */
-    if (!(sig->flags & SIG_FLAG_APPLAYER)) {
-        if (sig->sm_lists[DETECT_SM_LIST_MATCH] != NULL) {
-            SigMatch *sm = sig->sm_lists[DETECT_SM_LIST_MATCH];
-            for ( ; sm != NULL; sm = sm->next) {
-                if (sigmatch_table[sm->type].AppLayerMatch != NULL)
-                    sig->flags |= SIG_FLAG_APPLAYER;
-                if (sigmatch_table[sm->type].Match != NULL)
-                    sig->init_flags |= SIG_FLAG_INIT_PACKET;
-            }
-        } else {
-            sig->init_flags |= SIG_FLAG_INIT_PACKET;
-        }
-    }
-
-    if (sig->sm_lists[DETECT_SM_LIST_UMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_DMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_AMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HCBDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HSBDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HHDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HRHDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HMDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_HCDMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-    if (sig->sm_lists[DETECT_SM_LIST_FILEMATCH])
-        sig->flags |= SIG_FLAG_STATE_MATCH;
-
-    if (!(sig->init_flags & SIG_FLAG_INIT_FLOW)) {
-        sig->flags |= SIG_FLAG_TOSERVER;
-        sig->flags |= SIG_FLAG_TOCLIENT;
-    }
-
-    SigBuildAddressMatchArray(sig);
-
-    SCLogDebug("sig %"PRIu32" SIG_FLAG_APPLAYER: %s, SIG_FLAG_PACKET: %s",
-        sig->id, sig->flags & SIG_FLAG_APPLAYER ? "set" : "not set",
-        sig->init_flags & SIG_FLAG_INIT_PACKET ? "set" : "not set");
-
-    /* validate signature, SigValidate will report the error reason */
-    if (SigValidate(sig) == 0) {
-        goto error;
-    }
-
-    /**
-     * In SigInitReal, the signature returned will point from the ptr next
-     * to the cloned signatures with the switched addresses if it has
-     * the bidirectional operator set
-     */
-    return sig;
-
-error:
-    if (sig != NULL) {
-        if (sig->next != NULL) {
-            SigFree(sig->next);
-        }
-        SigFree(sig);
-    }
     /* if something failed, restore the old signum count
      * since we didn't install it */
     de_ctx->signum = oldsignum;
-    return NULL;
+
+    SCReturnPtr(NULL, "Signature");
 }
 
 /**
@@ -1880,7 +1424,7 @@ int DetectParseDupSigHashInit(DetectEngineCtx *de_ctx)
 void DetectParseDupSigHashFree(DetectEngineCtx *de_ctx)
 {
     if (de_ctx->dup_sig_hash_table != NULL)
-        SCFree(de_ctx->dup_sig_hash_table);
+        HashListTableFree(de_ctx->dup_sig_hash_table);
 
     de_ctx->dup_sig_hash_table = NULL;
 
@@ -2020,7 +1564,7 @@ end:
  *        (with the addresses switched) into the list.  Also handle duplicate
  *        signatures.  In case of duplicate sigs, use the ones that have the
  *        latest revision.  We use the sid and the msg to identifiy duplicate
- *        sigs.  If 2 sigs have the same sid and msg, they are duplicates.
+ *        sigs.  If 2 sigs have the same sid and gid, they are duplicates.
  *
  * \param de_ctx Pointer to the Detection Engine Context.
  * \param sigstr Pointer to a character string containing the signature to be
@@ -2034,7 +1578,7 @@ end:
  */
 Signature *DetectEngineAppendSig(DetectEngineCtx *de_ctx, char *sigstr)
 {
-    Signature *sig = SigInitReal(de_ctx, sigstr);
+    Signature *sig = SigInit(de_ctx, sigstr);
     if (sig == NULL) {
         return NULL;
     }
@@ -2408,8 +1952,10 @@ int SigParseTest06 (void) {
     }
 
 end:
-    if (sig != NULL) SigFree(sig);
-    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
+    if (sig != NULL)
+        SigFree(sig);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -2587,6 +2133,186 @@ static int SigParseTest12(void) {
     }
 
     result = 1;
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test packet/stream sig
+ */
+static int SigParseTest13(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; sid:1;)");
+    if (s == NULL) {
+        printf("sig 1 invalidated: failure");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_STREAM)) {
+        printf("sig doesn't have stream flag set\n");
+        goto end;
+    }
+
+    if (s->flags & SIG_FLAG_REQUIRE_PACKET) {
+        printf("sig has packet flag set\n");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test packet/stream sig
+ */
+static int SigParseTest14(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; dsize:>0; sid:1;)");
+    if (s == NULL) {
+        printf("sig 1 invalidated: failure");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_PACKET)) {
+        printf("sig doesn't have packet flag set\n");
+        goto end;
+    }
+
+    if (s->flags & SIG_FLAG_REQUIRE_STREAM) {
+        printf("sig has stream flag set\n");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test packet/stream sig
+ */
+static int SigParseTest15(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; offset:5; sid:1;)");
+    if (s == NULL) {
+        printf("sig 1 invalidated: failure");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_PACKET)) {
+        printf("sig doesn't have packet flag set\n");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_STREAM)) {
+        printf("sig doesn't have stream flag set\n");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test packet/stream sig
+ */
+static int SigParseTest16(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; depth:5; sid:1;)");
+    if (s == NULL) {
+        printf("sig 1 invalidated: failure");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_PACKET)) {
+        printf("sig doesn't have packet flag set\n");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_STREAM)) {
+        printf("sig doesn't have stream flag set\n");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
+/**
+ * \test packet/stream sig
+ */
+static int SigParseTest17(void) {
+    int result = 0;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    Signature *s = NULL;
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"abc\"; offset:1; depth:5; sid:1;)");
+    if (s == NULL) {
+        printf("sig 1 invalidated: failure");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_PACKET)) {
+        printf("sig doesn't have packet flag set\n");
+        goto end;
+    }
+
+    if (!(s->flags & SIG_FLAG_REQUIRE_STREAM)) {
+        printf("sig doesn't have stream flag set\n");
+        goto end;
+    }
+
+    result = 1;
+
 end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
@@ -3467,6 +3193,11 @@ void SigParseRegisterTests(void) {
     UtRegisterTest("SigParseTest10", SigParseTest10, 1);
     UtRegisterTest("SigParseTest11", SigParseTest11, 1);
     UtRegisterTest("SigParseTest12", SigParseTest12, 1);
+    UtRegisterTest("SigParseTest13", SigParseTest13, 1);
+    UtRegisterTest("SigParseTest14", SigParseTest14, 1);
+    UtRegisterTest("SigParseTest15", SigParseTest15, 1);
+    UtRegisterTest("SigParseTest16", SigParseTest16, 1);
+    UtRegisterTest("SigParseTest17", SigParseTest17, 1);
 
     UtRegisterTest("SigParseBidirecTest06", SigParseBidirecTest06, 1);
     UtRegisterTest("SigParseBidirecTest07", SigParseBidirecTest07, 1);

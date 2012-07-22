@@ -97,7 +97,8 @@ static int DetectHttpUriSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
         return -1;
     }
 
-    sm = DetectContentGetLastPattern(s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+    sm =  SigMatchGetLastSMFromLists(s, 2,
+                                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (sm == NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "\"http_uri\" keyword "
                    "found inside the rule without a content context.  "
@@ -139,7 +140,7 @@ static int DetectHttpUriSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
 
         /* reassigning pm */
         pm = SigMatchGetLastSMFromLists(s, 2,
-                                        DETECT_URICONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH]);
+                                        DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH]);
         if (pm == NULL) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "uricontent seen with a "
                        "distance or within without a previous http_uri "
@@ -149,8 +150,8 @@ static int DetectHttpUriSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
         DetectContentData *tmp_cd = (DetectContentData *)pm->ctx;
         tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
     }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_URICONTENT);
-    sm->type = DETECT_URICONTENT;
+    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_UMATCH);
+    sm->type = DETECT_CONTENT;
 
     /* transfer the sm from the pmatch list to hcbdmatch list */
     SigMatchTransferSigMatchAcrossLists(sm,
@@ -256,7 +257,7 @@ int DetectHttpUriTest03(void)
     }
 
     while (sm != NULL) {
-        if (sm->type == DETECT_URICONTENT) {
+        if (sm->type == DETECT_CONTENT) {
             result = 1;
         } else {
             printf("expected DETECT_AL_HTTP_URI, got %d: ", sm->type);
@@ -319,7 +320,7 @@ int DetectHttpUriTest05(void)
     }
     if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL)
         goto end;
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH]->type != DETECT_URICONTENT) {
+    if (s->sm_lists[DETECT_SM_LIST_UMATCH]->type != DETECT_CONTENT) {
         printf("wrong type\n");
         goto end;
     }
@@ -701,8 +702,19 @@ int DetectHttpUriTest15(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
                                "(content:\"one\"; http_uri; within:5; sid:1;)");
-    if (de_ctx->sig_list != NULL) {
-        printf("de_ctx->sig_list != NULL\n");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
+        goto end;
+    }
+
+    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL\n");
+        goto end;
+    }
+
+    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    if (memcmp(cd->content, "one", cd->content_len) != 0 ||
+        cd->flags != DETECT_CONTENT_WITHIN) {
         goto end;
     }
 
@@ -724,7 +736,7 @@ int DetectHttpUriTest16(void)
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; within:5; sid:1;)");
+                                "(content:\"one\"; within:5; sid:1;)");
     if (de_ctx->sig_list != NULL) {
         printf("de_ctx->sig_list != NULL\n");
         goto end;

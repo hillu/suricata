@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -19,11 +19,29 @@
  * \file
  *
  * \author Anoop Saldanha <anoopsaldanha@gmail.com>
+ * \author Pierre Chifflier <pierre.chifflier@ssi.gouv.fr>
  *
  */
 
 #ifndef __APP_LAYER_SSL_H__
 #define __APP_LAYER_SSL_H__
+
+#include "decode-events.h"
+
+enum {
+    /* TLS protocol messages */
+    TLS_DECODER_EVENT_INVALID_SSLV2_HEADER,
+    TLS_DECODER_EVENT_INVALID_TLS_HEADER,
+    TLS_DECODER_EVENT_INVALID_RECORD_TYPE,
+    TLS_DECODER_EVENT_INVALID_HANDSHAKE_MESSAGE,
+    /* Certificates decoding messages */
+    TLS_DECODER_EVENT_INVALID_CERTIFICATE,
+    TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT,
+    TLS_DECODER_EVENT_CERTIFICATE_UNKNOWN_ELEMENT,
+    TLS_DECODER_EVENT_CERTIFICATE_INVALID_LENGTH,
+    TLS_DECODER_EVENT_CERTIFICATE_INVALID_STRING,
+    TLS_DECODER_EVENT_ERROR_MSG_ENCOUNTERED,
+};
 
 /* Flag to indicate that server will now on send encrypted msgs */
 #define SSL_AL_FLAG_SERVER_CHANGE_CIPHER_SPEC   0x0001
@@ -58,40 +76,53 @@ enum {
     TLS_VERSION_12 = 0x0303,
 };
 
+typedef struct SSLStateConnp_ {
+    /* record length */
+    uint32_t record_length;
+    /* record length's length for SSLv2 */
+    uint32_t record_lengths_length;
+
+    /* offset of the beginning of the current message (including header) */
+    uint32_t message_start;
+    uint32_t message_length;
+
+    uint16_t version;
+    uint8_t content_type;
+
+    uint8_t handshake_type;
+    uint32_t handshake_length;
+
+    /* the no of bytes processed in the currently parsed record */
+    uint16_t bytes_processed;
+
+    /* sslv2 client hello session id length */
+    uint16_t session_id_length;
+
+    char *cert0_subject;
+    char *cert0_issuerdn;
+
+    /* buffer for the tls record.
+     * We use a malloced buffer, if the record is fragmented */
+    uint8_t *trec;
+    uint16_t trec_len;
+    uint16_t trec_pos;
+} SSLStateConnp;
+
 /**
  * \brief SSLv[2.0|3.[0|1|2|3]] state structure.
  *
  *        Structure to store the SSL state values.
  */
 typedef struct SSLState_ {
-    /* record length */
-    uint32_t record_length;
-    /* record length's length for SSLv2 */
-    uint32_t record_lengths_length;
+    Flow *f;
 
     /* holds some state flags we need */
     uint32_t flags;
 
-    uint16_t client_version;
-    uint16_t server_version;
-    uint8_t client_content_type;
-    uint8_t server_content_type;
+    SSLStateConnp *curr_connp;
 
-    /* dummy var.  You can replace this if you want to */
-    uint8_t pad0;
-
-    uint8_t cur_content_type;
-    uint32_t handshake_length;
-    uint16_t handshake_client_hello_ssl_version;
-    uint16_t handshake_server_hello_ssl_version;
-    /* the no of bytes processed in the currently parsed record */
-    uint16_t bytes_processed;
-
-    uint16_t cur_ssl_version;
-    uint8_t handshake_type;
-
-    /* sslv2 client hello session id length */
-    uint16_t session_id_length;
+    SSLStateConnp client_connp;
+    SSLStateConnp server_connp;
 } SSLState;
 
 void RegisterSSLParsers(void);

@@ -122,7 +122,8 @@ static int DetectHttpCookieSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
         return -1;
     }
 
-    sm = DetectContentGetLastPattern(s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+    sm =  SigMatchGetLastSMFromLists(s, 2,
+                                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (sm == NULL) {
         SCLogWarning(SC_ERR_HTTP_COOKIE_NEEDS_PRECEEDING_CONTENT, "http_cookie "
                 "found inside the rule, without a content context.  Please use a "
@@ -162,7 +163,7 @@ static int DetectHttpCookieSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
 
         /* please note.  reassigning pm */
         pm = SigMatchGetLastSMFromLists(s, 4,
-                                        DETECT_AL_HTTP_COOKIE,
+                                        DETECT_CONTENT,
                                         s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
                                         DETECT_PCRE,
                                         s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]);
@@ -180,8 +181,8 @@ static int DetectHttpCookieSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
             tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
         }
     }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_AL_HTTP_COOKIE);
-    sm->type = DETECT_AL_HTTP_COOKIE;
+    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_HCDMATCH);
+    sm->type = DETECT_CONTENT;
 
     /* transfer the sm from the pmatch list to hcdmatch list */
     SigMatchTransferSigMatchAcrossLists(sm,
@@ -219,7 +220,7 @@ int DetectHttpCookieTest01(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_cookie\"; http_cookie;sid:1;)");
     if (de_ctx->sig_list == NULL)
         result = 1;
@@ -243,7 +244,7 @@ int DetectHttpCookieTest02(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_cookie\"; content:\"me\"; "
                                "http_cookie:woo; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -268,7 +269,7 @@ int DetectHttpCookieTest03(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_cookie\"; content:\"one\"; "
                                "http_cookie; content:\"two\"; http_cookie; "
                                "content:\"two\"; http_cookie; "
@@ -286,10 +287,10 @@ int DetectHttpCookieTest03(void)
     }
 
     while (sm != NULL) {
-        if (sm->type == DETECT_AL_HTTP_COOKIE) {
+        if (sm->type == DETECT_CONTENT) {
             result = 1;
         } else {
-            printf("expected DETECT_AL_HTTP_COOKIE, got %d: ", sm->type);
+            printf("expected DETECT_CONTENT for http_cookie, got %d: ", sm->type);
             goto end;
         }
         sm = sm->next;
@@ -314,7 +315,7 @@ int DetectHttpCookieTest04(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_cookie\"; content:\"one\"; "
                                "fast_pattern; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -339,7 +340,7 @@ int DetectHttpCookieTest05(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(msg:\"Testing http_cookie\"; content:\"one\"; "
                                "rawbytes; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -374,7 +375,7 @@ int DetectHttpCookieTest06(void)
 
     BUG_ON(s->sm_lists[DETECT_SM_LIST_HCDMATCH] == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HCDMATCH]->type != DETECT_AL_HTTP_COOKIE)
+    if (s->sm_lists[DETECT_SM_LIST_HCDMATCH]->type != DETECT_CONTENT)
         goto end;
 
     if (s->sm_lists[DETECT_SM_LIST_UMATCH] == NULL) {
@@ -382,7 +383,7 @@ int DetectHttpCookieTest06(void)
         goto end;
     }
 
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH]->type != DETECT_URICONTENT) {
+    if (s->sm_lists[DETECT_SM_LIST_UMATCH]->type != DETECT_CONTENT) {
         goto end;
     }
 
@@ -403,7 +404,7 @@ int DetectHttpCookieTest07(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"one\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -442,7 +443,7 @@ int DetectHttpCookieTest08(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"one\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -481,7 +482,7 @@ int DetectHttpCookieTest09(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"one\"; content:\"one\"; http_cookie; content:\"one\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -520,7 +521,7 @@ int DetectHttpCookieTest10(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"one\"; content:\"one\"; content:\"one\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
         printf("de_ctx->sig_list == NULL\n");
@@ -559,7 +560,7 @@ int DetectHttpCookieTest11(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; "
                                "content:\"one\"; content:\"one\"; http_cookie; content:\"one\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -600,7 +601,7 @@ int DetectHttpCookieTest12(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; "
                                "content:\"one\"; content:\"one\"; http_cookie; content:\"two\"; sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -1243,6 +1244,253 @@ end:
     return result;
 }
 
+/**
+ * \test Check the signature working to alert against set-cookie
+ */
+static int DetectHttpCookieSigTest08(void)
+{
+    int result = 0;
+    Flow f;
+
+    uint8_t httpbuf_request[] =
+        "GET / HTTP/1.1\r\n"
+        "User-Agent: Mozilla/1.0\r\n"
+        "\r\n";
+    uint32_t httpbuf_request_len = sizeof(httpbuf_request) - 1; /* minus the \0 */
+
+    uint8_t httpbuf_response[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Set-Cookie: response_user_agent\r\n"
+        "\r\n";
+    uint32_t httpbuf_response_len = sizeof(httpbuf_response) - 1; /* minus the \0 */
+
+    TcpSession ssn;
+    Packet *p1 = NULL, *p2 = NULL;
+    Signature *s = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+    f.alproto = ALPROTO_HTTP;
+
+    p1 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p1->flow = &f;
+    p1->flowflags |= FLOW_PKT_TOSERVER;
+    p1->flowflags |= FLOW_PKT_ESTABLISHED;
+    p1->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+
+    p2 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p2->flow = &f;
+    p2->flowflags |= FLOW_PKT_TOCLIENT;
+    p2->flowflags |= FLOW_PKT_ESTABLISHED;
+    p2->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any "
+                                   "(flow:to_client; content:\"response_user_agent\"; "
+                                   "http_cookie; sid:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request */
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER,
+                          httpbuf_request, httpbuf_request_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    if (PacketAlertCheck(p1, 1)) {
+        goto end;
+    }
+
+    /* response */
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOCLIENT,
+                          httpbuf_response, httpbuf_response_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
+    if (!PacketAlertCheck(p2, 1)) {
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    StreamTcpFreeConfig(TRUE);
+    UTHFreePackets(&p1, 1);
+    UTHFreePackets(&p2, 1);
+    return result;
+}
+
+/**
+ * \test Check the signature working to alert against cookie/set-cookie
+ */
+static int DetectHttpCookieSigTest09(void)
+{
+    int result = 0;
+    Flow f;
+
+    uint8_t httpbuf_request[] =
+        "GET / HTTP/1.1\r\n"
+        "Cookie: request_user_agent\r\n"
+        "User-Agent: Mozilla/1.0\r\n"
+        "\r\n";
+    uint32_t httpbuf_request_len = sizeof(httpbuf_request) - 1; /* minus the \0 */
+
+    uint8_t httpbuf_response[] =
+        "HTTP/1.1 200 OK\r\n"
+        "Set-Cookie: response_user_agent\r\n"
+        "\r\n";
+    uint32_t httpbuf_response_len = sizeof(httpbuf_response) - 1; /* minus the \0 */
+
+    TcpSession ssn;
+    Packet *p1 = NULL, *p2 = NULL;
+    Signature *s = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    HtpState *http_state = NULL;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+    f.alproto = ALPROTO_HTTP;
+
+    p1 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p1->flow = &f;
+    p1->flowflags |= FLOW_PKT_TOSERVER;
+    p1->flowflags |= FLOW_PKT_ESTABLISHED;
+    p1->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+
+    p2 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p2->flow = &f;
+    p2->flowflags |= FLOW_PKT_TOCLIENT;
+    p2->flowflags |= FLOW_PKT_ESTABLISHED;
+    p2->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+
+    StreamTcpInitConfig(TRUE);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
+
+    de_ctx->flags |= DE_QUIET;
+
+    s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any "
+                                   "(flow:to_server; content:\"request_user_agent\"; "
+                                   "http_cookie; sid:1;)");
+    if (s == NULL) {
+        goto end;
+    }
+    s = de_ctx->sig_list->next = SigInit(de_ctx,"alert http any any -> any any "
+                                         "(flow:to_client; content:\"response_user_agent\"; "
+                                         "http_cookie; sid:2;)");
+    if (s == NULL) {
+        goto end;
+    }
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    /* request */
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER,
+                          httpbuf_request, httpbuf_request_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: ");
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    if (!PacketAlertCheck(p1, 1) || PacketAlertCheck(p1, 2)) {
+        goto end;
+    }
+
+    /* response */
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOCLIENT,
+                          httpbuf_response, httpbuf_response_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
+    if (PacketAlertCheck(p2, 1) || !PacketAlertCheck(p2, 2)) {
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (det_ctx != NULL) {
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    }
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    StreamTcpFreeConfig(TRUE);
+    UTHFreePackets(&p1, 1);
+    UTHFreePackets(&p2, 1);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 /**
@@ -1270,6 +1518,8 @@ void DetectHttpCookieRegisterTests (void)
     UtRegisterTest("DetectHttpCookieSigTest05", DetectHttpCookieSigTest05, 1);
     UtRegisterTest("DetectHttpCookieSigTest06", DetectHttpCookieSigTest06, 1);
     UtRegisterTest("DetectHttpCookieSigTest07", DetectHttpCookieSigTest07, 1);
+    UtRegisterTest("DetectHttpCookieSigTest08", DetectHttpCookieSigTest08, 1);
+    UtRegisterTest("DetectHttpCookieSigTest09", DetectHttpCookieSigTest09, 1);
 #endif /* UNITTESTS */
 
 }

@@ -50,6 +50,8 @@
 
 #include "source-pfring.h"
 
+int debuglog_enabled = 0;
+
 /**
  * \brief Holds description for a runmode.
  */
@@ -112,6 +114,8 @@ static const char *RunModeTranslateModeToName(int runmode)
             return "ERF_FILE";
         case RUNMODE_DAG:
             return "ERF_DAG";
+        case RUNMODE_NAPATECH:
+            return "NAPATECH";
         case RUNMODE_UNITTEST:
             return "UNITTEST";
         case RUNMODE_AFP_DEV:
@@ -170,6 +174,7 @@ void RunModeRegisterRunModes(void)
     RunModeIpsIPFWRegister();
     RunModeErfFileRegister();
     RunModeErfDagRegister();
+    RunModeNapatechRegister();
     RunModeIdsAFPRegister();
 #ifdef UNITTESTS
     UtRunModeRegister();
@@ -255,6 +260,9 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
             case RUNMODE_DAG:
                 custom_mode = RunModeErfDagGetDefaultMode();
                 break;
+            case RUNMODE_NAPATECH:
+                custom_mode = RunModeNapatechGetDefaultMode();
+                break;
             case RUNMODE_AFP_DEV:
                 custom_mode = RunModeAFPGetDefaultMode();
                 break;
@@ -262,7 +270,14 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
                 SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
                 exit(EXIT_FAILURE);
         }
-    } /* if (custom_mode == NULL) */
+    } else { /* if (custom_mode == NULL) */
+        /* Add compability with old 'worker' name */
+        if (!strcmp("worker", custom_mode)) {
+            SCLogWarning(SC_ERR_RUNMODE, "'worker' mode have been renamed "
+                         "to 'workers', please modify your setup.");
+            custom_mode = SCStrdup("workers");
+        }
+    }
 
     RunMode *mode = RunModeGetCustomMode(runmode, custom_mode);
     if (mode == NULL) {
@@ -374,6 +389,14 @@ void RunModeInitializeOutputs(void)
                     "(see https://redmine.openinfosecfoundation.org/issues/353"
                     " for an explanation)");
             continue;
+        } else if (strcmp(output->val, "alert-prelude") == 0) {
+#ifndef PRELUDE
+            SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+                    "Prelude support not compiled in. Reconfigure/"
+                    "recompile with --enable-prelude to add Prelude "
+                    "support.");
+            continue;
+#endif
         }
 
         OutputModule *module = OutputGetModuleByConfName(output->val);
@@ -398,6 +421,9 @@ void RunModeInitializeOutputs(void)
                     "TmModuleGetByName for %s failed", module->name);
             exit(EXIT_FAILURE);
         }
+        if (strcmp(tmm_modules[TMM_ALERTDEBUGLOG].name, tm_module->name) == 0)
+            debuglog_enabled = 1;
+
         RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
         if (runmode_output == NULL)
             return;
@@ -430,16 +456,16 @@ float threading_detect_ratio = 1;
 void RunModeInitialize(void)
 {
     threading_set_cpu_affinity = FALSE;
-    if ((ConfGetBool("threading.set_cpu_affinity", &threading_set_cpu_affinity)) == 0) {
+    if ((ConfGetBool("threading.set-cpu-affinity", &threading_set_cpu_affinity)) == 0) {
         threading_set_cpu_affinity = FALSE;
     }
     /* try to get custom cpu mask value if needed */
     if (threading_set_cpu_affinity == TRUE) {
         AffinitySetupLoadFromConfig();
     }
-    if ((ConfGetFloat("threading.detect_thread_ratio", &threading_detect_ratio)) != 1) {
+    if ((ConfGetFloat("threading.detect-thread-ratio", &threading_detect_ratio)) != 1) {
         threading_detect_ratio = 1;
     }
 
-    SCLogDebug("threading_detect_ratio %f", threading_detect_ratio);
+    SCLogDebug("threading.detect-thread-ratio %f", threading_detect_ratio);
 }

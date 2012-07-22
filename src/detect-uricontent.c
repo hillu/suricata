@@ -101,12 +101,9 @@ void DetectUricontentFree(void *ptr) {
     if (cd == NULL)
         SCReturn;
 
-    if (cd->content != NULL)
-        SCFree(cd->content);
-
     BoyerMooreCtxDeInit(cd->bm_ctx);
-
     SCFree(cd);
+
     SCReturn;
 }
 
@@ -154,214 +151,48 @@ void DetectUricontentPrint(DetectContentData *cd)
     SCLogDebug("-----------");
 }
 
-
-/**
- * \brief Search the first DETECT_URICONTENT
- * \retval pointer to the SigMatch holding the DetectUricontent
- * \param sm pointer to the current SigMatch of a parsing process
- * \retval null if no applicable DetectUricontent was found
- * \retval pointer to the SigMatch that has the previous SigMatch
- *                 of type DetectUricontent
- */
-SigMatch *DetectUricontentGetLastPattern(SigMatch *sm)
-{
-    if (sm == NULL)
-        return NULL;
-    while (sm != NULL && sm->type != DETECT_URICONTENT)
-        sm = sm->prev;
-
-    if (sm == NULL)
-        return NULL;
-
-    DetectContentData *cd = (DetectContentData*) sm->ctx;
-    if (cd == NULL)
-        return NULL;
-
-    return sm;
-}
-
 /**
  * \brief   Setup the detecturicontent keyword data from the string defined in
  *          the rule set.
  * \param   contentstr  Pointer to the string which has been defined in the rule
  */
-DetectContentData *DoDetectUricontentSetup (char * contentstr)
+DetectContentData *DoDetectUricontentSetup (char *contentstr)
 {
     DetectContentData *cd = NULL;
-    char *temp = NULL;
     char *str = NULL;
-    uint16_t len = 0;
-    uint16_t pos = 0;
-    uint16_t slen = 0;
+    uint16_t len;
+    int flags;
+    int ret;
 
-    if ((temp = SCStrdup(contentstr)) == NULL)
-        goto error;
-
-    if (strlen(temp) == 0) {
-        SCFree(temp);
+    ret = DetectContentDataParse("uricontent", contentstr, &str, &len, &flags);
+    if (ret == -1) {
         return NULL;
     }
 
-    cd = SCMalloc(sizeof(DetectContentData));
-    if (cd == NULL)
-        goto error;
-    memset(cd,0,sizeof(DetectContentData));
-
-    /* skip the first spaces */
-    slen = strlen(temp);
-    while (pos < slen && isspace(temp[pos])) {
-        pos++;
-    };
-
-    if (temp[pos] == '!') {
-        cd->flags |= DETECT_CONTENT_NEGATED;
-        pos++;
-    }
-
-    if (temp[pos] == '\"' && strlen(temp + pos) == 1)
-        goto error;
-
-    if (temp[pos] == '\"' && temp[pos + strlen(temp + pos) - 1] == '\"') {
-        if ((str = SCStrdup(temp + pos + 1)) == NULL)
-            goto error;
-        str[strlen(temp) - pos - 2] = '\0';
-    } else {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "uricontent keywords's argument "
-                   "should be always enclosed in double quotes.  Invalid "
-                   "content keyword passed in this rule - \"%s\"",
-                   contentstr);
-        goto error;
-    }
-    str[strlen(temp) - pos - 2] = '\0';
-
-    SCFree(temp);
-    temp = NULL;
-
-    len = strlen(str);
-    if (len == 0)
-        goto error;
-
-    SCLogDebug("\"%s\", len %" PRIu32 "", str, len);
-    char converted = 0;
-
-    {
-        uint8_t escape = 0;
-        uint16_t i, x;
-        uint8_t bin = 0, binstr[3] = "", binpos = 0;
-        uint16_t bin_count = 0;
-
-        for (i = 0, x = 0; i < len; i++) {
-            SCLogDebug("str[%02u]: %c", i, str[i]);
-            if (str[i] == '|') {
-                bin_count++;
-                if (bin) {
-                    bin = 0;
-                } else {
-                    bin = 1;
-                }
-            } else if(!escape && str[i] == '\\') {
-                escape = 1;
-            } else {
-                if (bin) {
-                    if (isdigit(str[i]) ||
-                        str[i] == 'A' || str[i] == 'a' ||
-                        str[i] == 'B' || str[i] == 'b' ||
-                        str[i] == 'C' || str[i] == 'c' ||
-                        str[i] == 'D' || str[i] == 'd' ||
-                        str[i] == 'E' || str[i] == 'e' ||
-                        str[i] == 'F' || str[i] == 'f') {
-                        SCLogDebug("part of binary: %c", str[i]);
-
-                        binstr[binpos] = (char)str[i];
-                        binpos++;
-
-                        if (binpos == 2) {
-                            uint8_t c = strtol((char *)binstr, (char **) NULL,
-                                                16) & 0xFF;
-                            binpos = 0;
-                            str[x] = c;
-                            x++;
-                            converted = 1;
-                        }
-                    } else if (str[i] == ' ') {
-                        SCLogDebug("space as part of binary string");
-                    }
-                } else if (escape) {
-                    if (str[i] == ':' ||
-                        str[i] == ';' ||
-                        str[i] == '\\' ||
-                        str[i] == '\"')
-                    {
-                        str[x] = str[i];
-                        x++;
-                    } else {
-                        //SCLogDebug("Can't escape %c", str[i]);
-                        goto error;
-                    }
-                    escape = 0;
-                    converted = 1;
-                } else {
-                    str[x] = str[i];
-                    x++;
-                }
-            }
-        }
-
-        if (bin_count % 2 != 0) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid hex code assembly in "
-                       "content - %s.  Invalidating signature", str);
-            goto error;
-        }
-
-#ifdef DEBUG
-        if (SCLogDebugEnabled()) {
-            char *prstr = SCMalloc(3 * x);
-            char onechar[3];
-            memset(prstr, 0, 3 * x);
-            if (prstr != NULL) {
-                for (i = 0; i < x; i++) {
-                    if (isprint(str[i]))
-                        snprintf(onechar, 3, "%c", str[i]);
-                    else
-                        snprintf(onechar, 3, "\\x%02u", str[i]);
-                    strlcat(prstr, onechar, 3 * x);
-                }
-                SCLogDebug("\"%s\"", prstr);
-                SCFree(prstr);
-            }
-        }
-#endif
-
-        if (converted)
-            len = x;
-    }
-
-    SCLogDebug("len %" PRIu32 "", len);
-
-    cd->content = SCMalloc(len);
-    if (cd->content == NULL) {
-        SCFree(cd);
+    cd = SCMalloc(sizeof(DetectContentData) + len);
+    if (cd == NULL) {
         SCFree(str);
-        return NULL;;
+        exit(EXIT_FAILURE);
     }
 
+    memset(cd, 0, sizeof(DetectContentData) + len);
+
+    if (flags == DETECT_CONTENT_NEGATED)
+        cd->flags |= DETECT_CONTENT_NEGATED;
+
+    cd->content = (uint8_t *)cd + sizeof(DetectContentData);
     memcpy(cd->content, str, len);
     cd->content_len = len;
+
+    /* Prepare Boyer Moore context for searching faster */
+    cd->bm_ctx = BoyerMooreCtxInit(cd->content, cd->content_len);
     cd->depth = 0;
     cd->offset = 0;
     cd->within = 0;
     cd->distance = 0;
 
-    /* Prepare Boyer Moore context for searching faster */
-    cd->bm_ctx = BoyerMooreCtxInit(cd->content, cd->content_len);
-
     SCFree(str);
     return cd;
-
-error:
-    SCFree(str);
-    if (cd) SCFree(cd);
-    return NULL;
 }
 
 /**
@@ -382,8 +213,9 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
     DetectContentData *cd = NULL;
     SigMatch *sm = NULL;
 
-    if (s->alproto == ALPROTO_DCERPC) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "uri content specified in a dcerpc sig");
+    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
+                " keywords.");
         goto error;
     }
 
@@ -397,7 +229,7 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
     if (sm == NULL)
         goto error;
 
-    sm->type = DETECT_URICONTENT;
+    sm->type = DETECT_CONTENT;
     sm->ctx = (void *)cd;
 
     cd->id = DetectUricontentGetId(de_ctx->mpm_pattern_id_store, cd);
@@ -405,21 +237,17 @@ int DetectUricontentSetup (DetectEngineCtx *de_ctx, Signature *s, char *contents
     /* Flagged the signature as to inspect the app layer data */
     s->flags |= SIG_FLAG_APPLAYER;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting"
-                " keywords.");
-        goto error;
-    }
-
     s->alproto = ALPROTO_HTTP;
 
-    SigMatchAppendUricontent(s,sm);
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_UMATCH);
 
     SCReturnInt(0);
 
 error:
-    if (cd) SCFree(cd);
-    if (sm != NULL) SCFree(sm);
+    if (cd != NULL)
+        SCFree(cd);
+    if (sm != NULL)
+        SCFree(sm);
     SCReturnInt(-1);
 }
 
@@ -436,7 +264,7 @@ error:
  * \retval 1 if the uri contents match; 0 no match
  */
 static inline int DoDetectAppLayerUricontentMatch (DetectEngineThreadCtx *det_ctx,
-                                     uint8_t *uri, uint16_t uri_len)
+                                                   uint8_t *uri, uint16_t uri_len, uint8_t flags)
 {
     int ret = 0;
     /* run the pattern matcher against the uri */
@@ -448,15 +276,7 @@ static inline int DoDetectAppLayerUricontentMatch (DetectEngineThreadCtx *det_ct
                 "%" PRIu32 ")", det_ctx->sgh, det_ctx->sgh->
                 mpm_uricontent_maxlen, det_ctx->sgh->sig_cnt);
 
-        det_ctx->uris++;
-
-        if (det_ctx->sgh->mpm_uricontent_maxlen == 1) det_ctx->pkts_uri_searched1++;
-        else if (det_ctx->sgh->mpm_uricontent_maxlen == 2) det_ctx->pkts_uri_searched2++;
-        else if (det_ctx->sgh->mpm_uricontent_maxlen == 3) det_ctx->pkts_uri_searched3++;
-        else if (det_ctx->sgh->mpm_uricontent_maxlen == 4) det_ctx->pkts_uri_searched4++;
-        else det_ctx->pkts_uri_searched++;
-
-        ret += UriPatternSearch(det_ctx, uri, uri_len);
+        ret += UriPatternSearch(det_ctx, uri, uri_len, flags);
 
         SCLogDebug("post search: cnt %" PRIu32, ret);
     }
@@ -476,7 +296,9 @@ static inline int DoDetectAppLayerUricontentMatch (DetectEngineThreadCtx *det_ct
  *  \warning Make sure the flow/state is locked
  *  \todo what should we return? Just the fact that we matched?
  */
-uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, HtpState *htp_state) {
+uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
+                                    HtpState *htp_state, uint8_t flags)
+{
     SCEnter();
 
     uint32_t cnt = 0;
@@ -484,11 +306,11 @@ uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, Htp
     htp_tx_t *tx = NULL;
 
     /* locking the flow, we will inspect the htp state */
-    SCMutexLock(&f->m);
+    FLOWLOCK_RDLOCK(f);
 
     if (htp_state == NULL || htp_state->connp == NULL) {
         SCLogDebug("no HTTP state / no connp");
-        SCMutexUnlock(&f->m);
+        FLOWLOCK_UNLOCK(f);
         SCReturnUInt(0U);
     }
 
@@ -505,11 +327,12 @@ uint32_t DetectUricontentInspectMpm(DetectEngineThreadCtx *det_ctx, Flow *f, Htp
             continue;
 
         cnt += DoDetectAppLayerUricontentMatch(det_ctx, (uint8_t *)
-                bstr_ptr(tx->request_uri_normalized),
-                bstr_len(tx->request_uri_normalized));
+                                               bstr_ptr(tx->request_uri_normalized),
+                                               bstr_len(tx->request_uri_normalized),
+                                               flags);
     }
 end:
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     SCReturnUInt(cnt);
 }
 
@@ -555,28 +378,21 @@ static int HTTPUriTest01(void) {
 
     htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_GET ||
+    if (tx->request_method_number != M_GET ||
             tx->request_protocol_number != HTTP_1_1)
     {
-        printf("expected method GET and got %s: , expected protocol "
-                "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
-                bstr_tocstr(tx->request_protocol));
         goto end;
     }
 
     if ((tx->parsed_uri->hostname == NULL) ||
             (bstr_cmpc(tx->parsed_uri->hostname, "www.example.com") != 0))
     {
-        printf("expected www.example.com as hostname, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->hostname));
         goto end;
     }
 
     if ((tx->parsed_uri->path == NULL) ||
             (bstr_cmpc(tx->parsed_uri->path, "/images.gif") != 0))
     {
-        printf("expected /images.gif as path, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->path));
         goto end;
     }
 
@@ -622,28 +438,21 @@ static int HTTPUriTest02(void) {
 
     htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_GET ||
+    if (tx->request_method_number != M_GET ||
             tx->request_protocol_number != HTTP_1_1)
     {
-        printf("expected method GET and got %s: , expected protocol "
-                "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
-                bstr_tocstr(tx->request_protocol));
         goto end;
     }
 
     if ((tx->parsed_uri->hostname == NULL) ||
             (bstr_cmpc(tx->parsed_uri->hostname, "www.example.com") != 0))
     {
-        printf("expected www.example.com as hostname, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->hostname));
         goto end;
     }
 
     if ((tx->parsed_uri->path == NULL) ||
             (bstr_cmpc(tx->parsed_uri->path, "/images.gif") != 0))
     {
-        printf("expected /images.gif as path, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->path));
         goto end;
     }
 
@@ -691,28 +500,21 @@ static int HTTPUriTest03(void) {
 
     htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_UNKNOWN ||
+    if (tx->request_method_number != M_UNKNOWN ||
             tx->request_protocol_number != HTTP_1_1)
     {
-        printf("expected method GET and got %s: , expected protocol "
-                "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
-                bstr_tocstr(tx->request_protocol));
         goto end;
     }
 
    if ((tx->parsed_uri->hostname == NULL) ||
             (bstr_cmpc(tx->parsed_uri->hostname, "www.example.com") != 0))
     {
-        printf("expected www.example.com as hostname, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->hostname));
         goto end;
     }
 
     if ((tx->parsed_uri->path == NULL) ||
             (bstr_cmpc(tx->parsed_uri->path, "/images.gif") != 0))
     {
-        printf("expected /images.gif as path, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->path));
         goto end;
     }
 
@@ -756,37 +558,26 @@ static int HTTPUriTest04(void) {
     htp_state = f.alstate;
     if (htp_state == NULL) {
         printf("no http state: ");
-        result = 0;
         goto end;
     }
 
     htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, 0);
 
-    if (htp_state->connp == NULL || tx->request_method_number != M_GET ||
+    if (tx->request_method_number != M_GET ||
             tx->request_protocol_number != HTTP_1_1)
     {
-        printf("expected method GET and got %s: , expected protocol "
-                "HTTP/1.1 and got %s \n", bstr_tocstr(tx->request_method),
-                bstr_tocstr(tx->request_protocol));
-        result = 0;
         goto end;
     }
 
     if ((tx->parsed_uri->hostname == NULL) ||
             (bstr_cmpc(tx->parsed_uri->hostname, "www.example.com") != 0))
     {
-        printf("expected www.example.com as hostname, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->hostname));
-        result = 0;
         goto end;
     }
 
     if ((tx->parsed_uri->path == NULL) ||
            (bstr_cmpc(tx->parsed_uri->path, "/images.gif") != 0))
     {
-        printf("expected /images.gif as path, but got: %s \n",
-                bstr_tocstr(tx->parsed_uri->path));
-        result = 0;
         goto end;
     }
 
@@ -831,7 +622,7 @@ int DetectUriSigTest01(void)
     BUG_ON(de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH] == NULL);
 
     sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
-    if (sm->type == DETECT_URICONTENT) {
+    if (sm->type == DETECT_CONTENT) {
         result = 1;
     } else {
         result = 0;
@@ -1084,8 +875,12 @@ end:
  */
 static int DetectUriSigTest04(void) {
     int result = 0;
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     Signature *s = NULL;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL) {
+        goto end;
+    }
 
     s = SigInit(de_ctx,"alert tcp any any -> any any (msg:"
                                    "\" Test uricontent\"; "
@@ -1270,8 +1065,8 @@ static int DetectUriSigTest04(void) {
 
     result = 1;
 end:
-    if (de_ctx != NULL) SigCleanSignatures(de_ctx);
-    if (de_ctx != NULL) SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1386,7 +1181,8 @@ end:
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, det_ctx);
-    if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
@@ -2119,6 +1915,35 @@ int DetectUriContentParseTest23(void)
     return result;
 }
 
+/**
+ * \test Parsing test
+ */
+int DetectUriContentParseTest24(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 1;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx,
+                               "alert tcp any any -> any any "
+                               "(msg:\"test\"; uricontent:\"\"; sid:1;)");
+    if (de_ctx->sig_list != NULL) {
+        result = 0;
+        goto end;
+    }
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
 int DetectUricontentSigTest08(void)
 {
     DetectEngineCtx *de_ctx = NULL;
@@ -2368,6 +2193,8 @@ void HttpUriRegisterTests(void) {
     UtRegisterTest("DetectUriContentParseTest21", DetectUriContentParseTest21, 1);
     UtRegisterTest("DetectUriContentParseTest22", DetectUriContentParseTest22, 1);
     UtRegisterTest("DetectUriContentParseTest23", DetectUriContentParseTest23, 1);
+    UtRegisterTest("DetectUriContentParseTest24", DetectUriContentParseTest24, 1);
+
     UtRegisterTest("DetectUricontentSigTest08", DetectUricontentSigTest08, 1);
     UtRegisterTest("DetectUricontentSigTest09", DetectUricontentSigTest09, 1);
     UtRegisterTest("DetectUricontentSigTest10", DetectUricontentSigTest10, 1);

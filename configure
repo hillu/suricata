@@ -609,6 +609,9 @@ enable_option_checking=no
 ac_subst_vars='am__EXEEXT_FALSE
 am__EXEEXT_TRUE
 LTLIBOBJS
+e_magic_file
+e_sysconfdir
+e_logdir
 BUILD_CUDA_FALSE
 BUILD_CUDA_TRUE
 pkgpyexecdir
@@ -629,8 +632,6 @@ LIBHTPMINVERSION_CFLAGS
 PKG_CONFIG_LIBDIR
 PKG_CONFIG_PATH
 PKG_CONFIG
-BUILD_UNITTESTS_FALSE
-BUILD_UNITTESTS_TRUE
 LIBPRELUDE_CONFIG_PREFIX
 LIBPRELUDE_PREFIX
 LIBPRELUDE_LIBS
@@ -638,6 +639,8 @@ LIBPRELUDE_LDFLAGS
 LIBPRELUDE_PTHREAD_CFLAGS
 LIBPRELUDE_CFLAGS
 LIBPRELUDE_CONFIG
+BUILD_UNITTESTS_FALSE
+BUILD_UNITTESTS_TRUE
 LIBOBJS
 HAVE_COCCINELLE_FALSE
 HAVE_COCCINELLE_TRUE
@@ -676,6 +679,7 @@ LIBTOOL
 am__fastdepCC_FALSE
 am__fastdepCC_TRUE
 CCDEPMODE
+am__nodep
 AMDEPBACKSLASH
 AMDEP_FALSE
 AMDEP_TRUE
@@ -765,6 +769,13 @@ enable_largefile
 enable_gccprotect
 enable_gccprofile
 enable_gccmarch_native
+enable_unittests
+enable_old_barnyard2
+enable_debug
+enable_debug_validation
+enable_profiling
+enable_profiling_locks
+enable_ipfw
 with_libpcre_includes
 with_libpcre_libraries
 with_libyaml_includes
@@ -777,7 +788,6 @@ with_libnfnetlink_libraries
 with_libnetfilter_queue_includes
 with_libnetfilter_queue_libraries
 with_netfilterforwin_includes
-enable_ipfw
 enable_prelude
 with_libprelude_prefix
 with_libnet_includes
@@ -787,11 +797,7 @@ with_libpfring_includes
 with_libpfring_libraries
 with_libpcap_includes
 with_libpcap_libraries
-enable_unittests
 enable_af_packet
-enable_old_barnyard2
-enable_debug
-enable_debug_validation
 enable_non_bundled_htp
 with_libhtp_includes
 with_libhtp_libraries
@@ -801,12 +807,18 @@ with_cuda_libraries
 with_cuda_nvcc
 with_libcap_ng_includes
 with_libcap_ng_libraries
-enable_profiling
 enable_dag
 with_dag_includes
 with_dag_libraries
+with_libnspr_includes
+with_libnspr_libraries
+with_libnss_includes
+with_libnss_libraries
 with_libmagic_includes
 with_libmagic_libraries
+enable_napatech
+with_napatech_includes
+with_napatech_libraries
 '
       ac_precious_vars='build_alias
 host_alias
@@ -821,7 +833,8 @@ PKG_CONFIG
 PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
 LIBHTPMINVERSION_CFLAGS
-LIBHTPMINVERSION_LIBS'
+LIBHTPMINVERSION_LIBS
+PYTHON'
 ac_subdirs_all='libhtp'
 
 # Initialize some variables set by options.
@@ -1452,27 +1465,30 @@ Optional Features:
   --enable-gccprofile     Enable gcc profile info i.e -pg flag is set
   --enable-gccmarch-native
                           Enable gcc march=native gcc 4.2 and later only
-  --enable-nfqueue        Enable NFQUEUE support for inline IDP
-  --enable-ipfw           Enable FreeBSD IPFW support for inline IDP
-  --enable-prelude        Enable Prelude support for alerts
-  --enable-pfring         Enable Native PF_RING support
   --enable-unittests      Enable compilation of the unit tests
-  --enable-af-packet      Enable AF_PACKET support
   --enable-old-barnyard2  Use workaround for old barnyard2 in unified2 output
   --enable-debug          Enable debug output
   --enable-debug-validation
                           Enable (debug) validation code output
+  --enable-profiling      Enable performance profiling
+  --enable-profiling-locks
+                          Enable performance profiling for locks
+  --enable-ipfw           Enable FreeBSD IPFW support for inline IDP
+  --enable-nfqueue        Enable NFQUEUE support for inline IDP
+  --enable-prelude        Enable Prelude support for alerts
+  --enable-pfring         Enable Native PF_RING support
+  --enable-af-packet      Enable AF_PACKET support [default=yes]
   --enable-non-bundled-htp
                           Enable the use of an already installed version of
                           htp
   --enable-cuda           Enable experimental CUDA pattern matching
-  --enable-profiling      Enable performance profiling
   --enable-dag  Enable DAG capture
+  --enable-napatech  Enable Napatech adapter
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
   --without-PACKAGE       do not use PACKAGE (same as --with-PACKAGE=no)
-  --with-pic              try to use only PIC/non-PIC objects [default=use
+  --with-pic[=PKGS]       try to use only PIC/non-PIC objects [default=use
                           both]
   --with-gnu-ld           assume the C compiler uses GNU ld [default=no]
   --with-sysroot=DIR Search for dependent libraries within DIR
@@ -1505,8 +1521,14 @@ Optional Packages:
   --with-libcap_ng-libraries=DIR    libcap_ng library directory
   --with-dag-includes=DIR  dagapi include directory
   --with-dag-libraries=DIR  dagapi library directory
+  --with-libnspr-includes=DIR  libnspr include directory
+  --with-libnspr-libraries=DIR    libnspr library directory
+  --with-libnss-includes=DIR  libnss include directory
+  --with-libnss-libraries=DIR    libnss library directory
   --with-libmagic-includes=DIR  libmagic include directory
   --with-libmagic-libraries=DIR    libmagic library directory
+  --with-napatech-includes=DIR  napatech include directory
+  --with-napatech-libraries=DIR  napatech library directory
 
 Some influential environment variables:
   CC          C compiler command
@@ -1526,6 +1548,7 @@ Some influential environment variables:
               C compiler flags for LIBHTPMINVERSION, overriding pkg-config
   LIBHTPMINVERSION_LIBS
               linker flags for LIBHTPMINVERSION, overriding pkg-config
+  PYTHON      the Python interpreter
 
 Use these variables to override the choices made by `configure' or to help
 it to find libraries and programs with nonstandard names/locations.
@@ -2876,7 +2899,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=1.2.1
+ VERSION=1.3
 
 
 cat >>confdefs.h <<_ACEOF
@@ -2906,18 +2929,17 @@ MAKEINFO=${MAKEINFO-"${am_missing_run}makeinfo"}
 
 # We need awk for the "check" target.  The system "awk" is bad on
 # some platforms.
-# Always define AMTAR for backward compatibility.
+# Always define AMTAR for backward compatibility.  Yes, it's still used
+# in the wild :-(  We should find a proper way to deprecate it ...
+AMTAR='$${TAR-tar}'
 
-AMTAR=${AMTAR-"${am_missing_run}tar"}
-
-am__tar='${AMTAR} chof - "$$tardir"'; am__untar='${AMTAR} xf -'
+am__tar='$${TAR-tar} chof - "$$tardir"' am__untar='$${TAR-tar} xf -'
 
 
 
 
 
     CFLAGS="$CFLAGS -DRELEASE"
-
     ac_ext=c
 ac_cpp='$CPP $CPPFLAGS'
 ac_compile='$CC -c $CFLAGS $CPPFLAGS conftest.$ac_ext >&5'
@@ -2976,6 +2998,7 @@ fi
 if test "x$enable_dependency_tracking" != xno; then
   am_depcomp="$ac_aux_dir/depcomp"
   AMDEPBACKSLASH='\'
+  am__nodep='_no'
 fi
  if test "x$enable_dependency_tracking" != xno; then
   AMDEP_TRUE=
@@ -3789,6 +3812,7 @@ else
   # instance it was reported that on HP-UX the gcc test will end up
   # making a dummy file named `D' -- because `-MD' means `put the output
   # in D'.
+  rm -rf conftest.dir
   mkdir conftest.dir
   # Copy depcomp to subdir because otherwise we won't find it if we're
   # using a relative directory.
@@ -3848,7 +3872,7 @@ else
 	break
       fi
       ;;
-    msvisualcpp | msvcmsys)
+    msvc7 | msvc7msys | msvisualcpp | msvcmsys)
       # This compiler won't grok `-c -o', but also, the minuso test has
       # not run yet.  These depmodes are late enough in the game, and
       # so weak that their functioning should not be impacted.
@@ -4088,8 +4112,8 @@ esac
 
 
 
-macro_version='2.4'
-macro_revision='1.3293'
+macro_version='2.4.2'
+macro_revision='1.3337'
 
 
 
@@ -4934,6 +4958,11 @@ else
     lt_cv_sys_max_cmd_len=196608
     ;;
 
+  os2*)
+    # The test takes a long time on OS/2.
+    lt_cv_sys_max_cmd_len=8192
+    ;;
+
   osf*)
     # Dr. Hans Ekkehard Plesser reports seeing a kernel panic running configure
     # due to this test when exec_disable_arg_limit is 1 on Tru64. It is not
@@ -4973,7 +5002,7 @@ else
       # If test is not a shell built-in, we'll probably end up computing a
       # maximum length that is only half of the actual maximum length, but
       # we can't tell.
-      while { test "X"`func_fallback_echo "$teststring$teststring" 2>/dev/null` \
+      while { test "X"`env echo "$teststring$teststring" 2>/dev/null` \
 	         = "X$teststring$teststring"; } >/dev/null 2>&1 &&
 	      test $i != 17 # 1/2 MB should be enough
       do
@@ -5402,7 +5431,7 @@ irix5* | irix6* | nonstopux*)
   lt_cv_deplibs_check_method=pass_all
   ;;
 
-# This must be Linux ELF.
+# This must be glibc/ELF.
 linux* | k*bsd*-gnu | kopensolaris*-gnu)
   lt_cv_deplibs_check_method=pass_all
   ;;
@@ -6043,13 +6072,13 @@ old_postuninstall_cmds=
 if test -n "$RANLIB"; then
   case $host_os in
   openbsd*)
-    old_postinstall_cmds="$old_postinstall_cmds~\$RANLIB -t \$oldlib"
+    old_postinstall_cmds="$old_postinstall_cmds~\$RANLIB -t \$tool_oldlib"
     ;;
   *)
-    old_postinstall_cmds="$old_postinstall_cmds~\$RANLIB \$oldlib"
+    old_postinstall_cmds="$old_postinstall_cmds~\$RANLIB \$tool_oldlib"
     ;;
   esac
-  old_archive_cmds="$old_archive_cmds~\$RANLIB \$oldlib"
+  old_archive_cmds="$old_archive_cmds~\$RANLIB \$tool_oldlib"
 fi
 
 case $host_os in
@@ -6196,6 +6225,7 @@ for ac_symprfx in "" "_"; do
     # which start with @ or ?.
     lt_cv_sys_global_symbol_pipe="$AWK '"\
 "     {last_section=section; section=\$ 3};"\
+"     /^COFF SYMBOL TABLE/{for(i in hide) delete hide[i]};"\
 "     /Section length .*#relocs.*(pick any)/{hide[last_section]=1};"\
 "     \$ 0!~/External *\|/{next};"\
 "     / 0+ UNDEF /{next}; / UNDEF \([^|]\)*()/{next};"\
@@ -6584,7 +6614,7 @@ $as_echo "$lt_cv_cc_needs_belf" >&6; }
     CFLAGS="$SAVE_CFLAGS"
   fi
   ;;
-sparc*-*solaris*)
+*-*solaris*)
   # Find out which ABI we are using.
   echo 'int i;' > conftest.$ac_ext
   if { { eval echo "\"\$as_me\":${as_lineno-$LINENO}: \"$ac_compile\""; } >&5
@@ -6595,7 +6625,20 @@ sparc*-*solaris*)
     case `/usr/bin/file conftest.o` in
     *64-bit*)
       case $lt_cv_prog_gnu_ld in
-      yes*) LD="${LD-ld} -m elf64_sparc" ;;
+      yes*)
+        case $host in
+        i?86-*-solaris*)
+          LD="${LD-ld} -m elf_x86_64"
+          ;;
+        sparc*-*-solaris*)
+          LD="${LD-ld} -m elf64_sparc"
+          ;;
+        esac
+        # GNU ld 2.21 introduced _sol2 emulations.  Use them if available.
+        if ${LD-ld} -V | grep _sol2 >/dev/null 2>&1; then
+          LD="${LD-ld}_sol2"
+        fi
+        ;;
       *)
 	if ${LD-ld} -64 -r -o conftest2.o conftest.o >/dev/null 2>&1; then
 	  LD="${LD-ld} -64"
@@ -7235,7 +7278,13 @@ else
 	$LTCC $LTCFLAGS $LDFLAGS -o libconftest.dylib \
 	  -dynamiclib -Wl,-single_module conftest.c 2>conftest.err
         _lt_result=$?
-	if test -f libconftest.dylib && test ! -s conftest.err && test $_lt_result = 0; then
+	# If there is a non-empty error log, and "single_module"
+	# appears in it, assume the flag caused a linker warning
+        if test -s conftest.err && $GREP single_module conftest.err; then
+	  cat conftest.err >&5
+	# Otherwise, if the output was created with a 0 exit code from
+	# the compiler, it worked.
+	elif test -f libconftest.dylib && test $_lt_result -eq 0; then
 	  lt_cv_apple_cc_single_mod=yes
 	else
 	  cat conftest.err >&5
@@ -7246,6 +7295,7 @@ else
 fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $lt_cv_apple_cc_single_mod" >&5
 $as_echo "$lt_cv_apple_cc_single_mod" >&6; }
+
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for -exported_symbols_list linker flag" >&5
 $as_echo_n "checking for -exported_symbols_list linker flag... " >&6; }
 if ${lt_cv_ld_exported_symbols_list+:} false; then :
@@ -7278,6 +7328,7 @@ rm -f core conftest.err conftest.$ac_objext \
 fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $lt_cv_ld_exported_symbols_list" >&5
 $as_echo "$lt_cv_ld_exported_symbols_list" >&6; }
+
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for -force_load linker flag" >&5
 $as_echo_n "checking for -force_load linker flag... " >&6; }
 if ${lt_cv_ld_force_load+:} false; then :
@@ -7299,7 +7350,9 @@ _LT_EOF
       echo "$LTCC $LTCFLAGS $LDFLAGS -o conftest conftest.c -Wl,-force_load,./libconftest.a" >&5
       $LTCC $LTCFLAGS $LDFLAGS -o conftest conftest.c -Wl,-force_load,./libconftest.a 2>conftest.err
       _lt_result=$?
-      if test -f conftest && test ! -s conftest.err && test $_lt_result = 0 && $GREP forced_load conftest 2>&1 >/dev/null; then
+      if test -s conftest.err && $GREP force_load conftest.err; then
+	cat conftest.err >&5
+      elif test -f conftest && test $_lt_result -eq 0 && $GREP forced_load conftest >/dev/null 2>&1 ; then
 	lt_cv_ld_force_load=yes
       else
 	cat conftest.err >&5
@@ -7704,7 +7757,22 @@ fi
 
 # Check whether --with-pic was given.
 if test "${with_pic+set}" = set; then :
-  withval=$with_pic; pic_mode="$withval"
+  withval=$with_pic; lt_p=${PACKAGE-default}
+    case $withval in
+    yes|no) pic_mode=$withval ;;
+    *)
+      pic_mode=default
+      # Look at the argument we got.  We use all the common list separators.
+      lt_save_ifs="$IFS"; IFS="${IFS}$PATH_SEPARATOR,"
+      for lt_pkg in $withval; do
+	IFS="$lt_save_ifs"
+	if test "X$lt_pkg" = "X$lt_p"; then
+	  pic_mode=yes
+	fi
+      done
+      IFS="$lt_save_ifs"
+      ;;
+    esac
 else
   pic_mode=default
 fi
@@ -7756,6 +7824,10 @@ LIBTOOL_DEPS="$ltmain"
 
 # Always use our own libtool.
 LIBTOOL='$(SHELL) $(top_builddir)/libtool'
+
+
+
+
 
 
 
@@ -8241,7 +8313,9 @@ lt_prog_compiler_static=
     case $cc_basename in
     nvcc*) # Cuda Compiler Driver 2.2
       lt_prog_compiler_wl='-Xlinker '
-      lt_prog_compiler_pic='-Xcompiler -fPIC'
+      if test -n "$lt_prog_compiler_pic"; then
+        lt_prog_compiler_pic="-Xcompiler $lt_prog_compiler_pic"
+      fi
       ;;
     esac
   else
@@ -8332,17 +8406,32 @@ lt_prog_compiler_static=
 	;;
       *)
 	case `$CC -V 2>&1 | sed 5q` in
-	*Sun\ F* | *Sun*Fortran*)
+	*Sun\ Ceres\ Fortran* | *Sun*Fortran*\ [1-7].* | *Sun*Fortran*\ 8.[0-3]*)
 	  # Sun Fortran 8.3 passes all unrecognized flags to the linker
 	  lt_prog_compiler_pic='-KPIC'
 	  lt_prog_compiler_static='-Bstatic'
 	  lt_prog_compiler_wl=''
+	  ;;
+	*Sun\ F* | *Sun*Fortran*)
+	  lt_prog_compiler_pic='-KPIC'
+	  lt_prog_compiler_static='-Bstatic'
+	  lt_prog_compiler_wl='-Qoption ld '
 	  ;;
 	*Sun\ C*)
 	  # Sun C 5.9
 	  lt_prog_compiler_pic='-KPIC'
 	  lt_prog_compiler_static='-Bstatic'
 	  lt_prog_compiler_wl='-Wl,'
+	  ;;
+        *Intel*\ [CF]*Compiler*)
+	  lt_prog_compiler_wl='-Wl,'
+	  lt_prog_compiler_pic='-fPIC'
+	  lt_prog_compiler_static='-static'
+	  ;;
+	*Portland\ Group*)
+	  lt_prog_compiler_wl='-Wl,'
+	  lt_prog_compiler_pic='-fpic'
+	  lt_prog_compiler_static='-Bstatic'
 	  ;;
 	esac
 	;;
@@ -8705,7 +8794,6 @@ $as_echo_n "checking whether the $compiler linker ($LD) supports shared librarie
   hardcode_direct=no
   hardcode_direct_absolute=no
   hardcode_libdir_flag_spec=
-  hardcode_libdir_flag_spec_ld=
   hardcode_libdir_separator=
   hardcode_minus_L=no
   hardcode_shlibpath_var=unsupported
@@ -8958,8 +9046,7 @@ _LT_EOF
 	xlf* | bgf* | bgxlf* | mpixlf*)
 	  # IBM XL Fortran 10.1 on PPC cannot create shared libs itself
 	  whole_archive_flag_spec='--whole-archive$convenience --no-whole-archive'
-	  hardcode_libdir_flag_spec=
-	  hardcode_libdir_flag_spec_ld='-rpath $libdir'
+	  hardcode_libdir_flag_spec='${wl}-rpath ${wl}$libdir'
 	  archive_cmds='$LD -shared $libobjs $deplibs $linker_flags -soname $soname -o $lib'
 	  if test "x$supports_anon_versioning" = xyes; then
 	    archive_expsym_cmds='echo "{ global:" > $output_objdir/$libname.ver~
@@ -9339,6 +9426,7 @@ fi
 	# The linker will not automatically build a static lib if we build a DLL.
 	# _LT_TAGVAR(old_archive_from_new_cmds, )='true'
 	enable_shared_with_static_runtimes=yes
+	exclude_expsyms='_NULL_IMPORT_DESCRIPTOR|_IMPORT_DESCRIPTOR_.*'
 	export_symbols_cmds='$NM $libobjs $convenience | $global_symbol_pipe | $SED -e '\''/^[BCDGRS][ ]/s/.*[ ]\([^ ]*\)/\1,DATA/'\'' | $SED -e '\''/^[AITW][ ]/s/.*[ ]//'\'' | sort | uniq > $export_symbols'
 	# Don't use ranlib
 	old_postinstall_cmds='chmod 644 $oldlib'
@@ -9384,6 +9472,7 @@ fi
   hardcode_shlibpath_var=unsupported
   if test "$lt_cv_ld_force_load" = "yes"; then
     whole_archive_flag_spec='`for conv in $convenience\"\"; do test  -n \"$conv\" && new_convenience=\"$new_convenience ${wl}-force_load,$conv\"; done; func_echo_all \"$new_convenience\"`'
+
   else
     whole_archive_flag_spec=''
   fi
@@ -9412,10 +9501,6 @@ fi
       hardcode_shlibpath_var=no
       ;;
 
-    freebsd1*)
-      ld_shlibs=no
-      ;;
-
     # FreeBSD 2.2.[012] allows us to include c++rt0.o to get C++ constructor
     # support.  Future versions do this automatically, but an explicit c++rt0.o
     # does not break anything, and helps significantly (at the cost of a little
@@ -9428,7 +9513,7 @@ fi
       ;;
 
     # Unfortunately, older versions of FreeBSD 2 do not have this feature.
-    freebsd2*)
+    freebsd2.*)
       archive_cmds='$LD -Bshareable -o $lib $libobjs $deplibs $linker_flags'
       hardcode_direct=yes
       hardcode_minus_L=yes
@@ -9467,7 +9552,6 @@ fi
       fi
       if test "$with_gnu_ld" = no; then
 	hardcode_libdir_flag_spec='${wl}+b ${wl}$libdir'
-	hardcode_libdir_flag_spec_ld='+b $libdir'
 	hardcode_libdir_separator=:
 	hardcode_direct=yes
 	hardcode_direct_absolute=yes
@@ -10091,11 +10175,6 @@ esac
 
 
 
-
-
-
-
-
   { $as_echo "$as_me:${as_lineno-$LINENO}: checking dynamic linker characteristics" >&5
 $as_echo_n "checking dynamic linker characteristics... " >&6; }
 
@@ -10185,7 +10264,7 @@ need_version=unknown
 
 case $host_os in
 aix3*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   library_names_spec='${libname}${release}${shared_ext}$versuffix $libname.a'
   shlibpath_var=LIBPATH
 
@@ -10194,7 +10273,7 @@ aix3*)
   ;;
 
 aix[4-9]*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   hardcode_into_libs=yes
@@ -10259,7 +10338,7 @@ beos*)
   ;;
 
 bsdi[45]*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
   soname_spec='${libname}${release}${shared_ext}$major'
@@ -10398,16 +10477,12 @@ darwin* | rhapsody*)
   ;;
 
 dgux*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname$shared_ext'
   soname_spec='${libname}${release}${shared_ext}$major'
   shlibpath_var=LD_LIBRARY_PATH
-  ;;
-
-freebsd1*)
-  dynamic_linker=no
   ;;
 
 freebsd* | dragonfly*)
@@ -10417,7 +10492,7 @@ freebsd* | dragonfly*)
     objformat=`/usr/bin/objformat`
   else
     case $host_os in
-    freebsd[123]*) objformat=aout ;;
+    freebsd[23].*) objformat=aout ;;
     *) objformat=elf ;;
     esac
   fi
@@ -10435,7 +10510,7 @@ freebsd* | dragonfly*)
   esac
   shlibpath_var=LD_LIBRARY_PATH
   case $host_os in
-  freebsd2*)
+  freebsd2.*)
     shlibpath_overrides_runpath=yes
     ;;
   freebsd3.[01]* | freebsdelf3.[01]*)
@@ -10455,7 +10530,7 @@ freebsd* | dragonfly*)
   ;;
 
 gnu*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}${major} ${libname}${shared_ext}'
@@ -10466,7 +10541,7 @@ gnu*)
   ;;
 
 haiku*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   dynamic_linker="$host_os runtime_loader"
@@ -10527,7 +10602,7 @@ hpux9* | hpux10* | hpux11*)
   ;;
 
 interix[3-9]*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major ${libname}${shared_ext}'
@@ -10543,7 +10618,7 @@ irix5* | irix6* | nonstopux*)
     nonstopux*) version_type=nonstopux ;;
     *)
 	if test "$lt_cv_prog_gnu_ld" = yes; then
-		version_type=linux
+		version_type=linux # correct to gnu/linux during the next big refactor
 	else
 		version_type=irix
 	fi ;;
@@ -10580,9 +10655,9 @@ linux*oldld* | linux*aout* | linux*coff*)
   dynamic_linker=no
   ;;
 
-# This must be Linux ELF.
+# This must be glibc/ELF.
 linux* | k*bsd*-gnu | kopensolaris*-gnu)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
@@ -10676,7 +10751,7 @@ netbsd*)
   ;;
 
 newsos6)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
   shlibpath_var=LD_LIBRARY_PATH
   shlibpath_overrides_runpath=yes
@@ -10745,7 +10820,7 @@ rdos*)
   ;;
 
 solaris*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
@@ -10770,7 +10845,7 @@ sunos4*)
   ;;
 
 sysv4 | sysv4.3*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
   soname_spec='${libname}${release}${shared_ext}$major'
   shlibpath_var=LD_LIBRARY_PATH
@@ -10794,7 +10869,7 @@ sysv4 | sysv4.3*)
 
 sysv4*MP*)
   if test -d /usr/nec ;then
-    version_type=linux
+    version_type=linux # correct to gnu/linux during the next big refactor
     library_names_spec='$libname${shared_ext}.$versuffix $libname${shared_ext}.$major $libname${shared_ext}'
     soname_spec='$libname${shared_ext}.$major'
     shlibpath_var=LD_LIBRARY_PATH
@@ -10825,7 +10900,7 @@ sysv5* | sco3.2v5* | sco5v6* | unixware* | OpenUNIX* | sysv4*uw2*)
 
 tpf*)
   # TPF is a cross-target only.  Preferred cross-host = GNU/Linux.
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   need_lib_prefix=no
   need_version=no
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
@@ -10835,7 +10910,7 @@ tpf*)
   ;;
 
 uts4*)
-  version_type=linux
+  version_type=linux # correct to gnu/linux during the next big refactor
   library_names_spec='${libname}${release}${shared_ext}$versuffix ${libname}${release}${shared_ext}$major $libname${shared_ext}'
   soname_spec='${libname}${release}${shared_ext}$major'
   shlibpath_var=LD_LIBRARY_PATH
@@ -11617,6 +11692,8 @@ CC="$lt_save_CC"
 
 
 
+
+
         ac_config_commands="$ac_config_commands libtool"
 
 
@@ -11651,7 +11728,7 @@ $as_echo "$gccver" >&6; }
     CFLAGS="$CFLAGS -Wno-unused-parameter"
     CFLAGS="$CFLAGS -std=gnu99"
 
-# Checks for programs.
+    # Checks for programs.
     for ac_prog in gawk mawk nawk awk
 do
   # Extract the first word of "$ac_prog", so it can be a program name with args.
@@ -12247,6 +12324,7 @@ else
   # instance it was reported that on HP-UX the gcc test will end up
   # making a dummy file named `D' -- because `-MD' means `put the output
   # in D'.
+  rm -rf conftest.dir
   mkdir conftest.dir
   # Copy depcomp to subdir because otherwise we won't find it if we're
   # using a relative directory.
@@ -12306,7 +12384,7 @@ else
 	break
       fi
       ;;
-    msvisualcpp | msvcmsys)
+    msvc7 | msvc7msys | msvisualcpp | msvcmsys)
       # This compiler won't grok `-c -o', but also, the minuso test has
       # not run yet.  These depmodes are late enough in the game, and
       # so weak that their functioning should not be impacted.
@@ -12584,12 +12662,12 @@ fi
 
 
     if test "$HAVE_PKG_CONFIG" = "no"; then
-    echo
-    echo "   ERROR! pkg-config not found, go get it  "
-    echo "   http://pkg-config.freedesktop.org/wiki/ "
-    echo "   or install from your distribution       "
-    echo
-    exit 1
+        echo
+        echo "   ERROR! pkg-config not found, go get it  "
+        echo "   http://pkg-config.freedesktop.org/wiki/ "
+        echo "   or install from your distribution       "
+        echo
+        exit 1
     fi
 
     # Extract the first word of "spatch", so it can be a program name with args.
@@ -12634,12 +12712,12 @@ fi
 
 
     if test "$HAVE_COCCINELLE_CONFIG" = "no"; then
-    echo
-    echo "   Warning! spatch not found, you will not be  "
-    echo "   able to run code checking with coccinelle "
-    echo "   get it from http://coccinelle.lip6.fr       "
-    echo "   or install from your distribution           "
-    echo
+        echo
+        echo "   Warning! spatch not found, you will not be "
+        echo "   able to run code checking with coccinelle  "
+        echo "   get it from http://coccinelle.lip6.fr      "
+        echo "   or install from your distribution          "
+        echo
     fi
      if test "$HAVE_COCCINELLE_CONFIG" != "no"; then
   HAVE_COCCINELLE_TRUE=
@@ -12651,10 +12729,9 @@ fi
 
 
 
+    # Checks for libraries.
 
-# Checks for libraries.
-
-# Checks for header files.
+    # Checks for header files.
     for ac_header in arpa/inet.h inttypes.h limits.h netdb.h poll.h signal.h stdint.h stdlib.h string.h syslog.h sys/ioctl.h sys/prctl.h sys/socket.h sys/syscall.h netinet/in.h sys/time.h unistd.h windows.h winsock2.h ws2tcpip.h
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
@@ -12668,10 +12745,11 @@ fi
 
 done
 
-   for ac_header in sys/socket.h net/if.h
+    for ac_header in sys/socket.h net/if.h sys/mman.h
 do :
   as_ac_Header=`$as_echo "ac_cv_header_$ac_header" | $as_tr_sh`
 ac_fn_c_check_header_compile "$LINENO" "$ac_header" "$as_ac_Header" "#ifdef HAVE_SYS_SOCKET_H
+#include <sys/types.h>
 #include <sys/socket.h>
 #endif
 
@@ -12687,7 +12765,7 @@ done
 
 
 
-# Checks for typedefs, structures, and compiler characteristics.
+    # Checks for typedefs, structures, and compiler characteristics.
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for inline" >&5
 $as_echo_n "checking for inline... " >&6; }
 if ${ac_cv_c_inline+:} false; then :
@@ -13099,7 +13177,7 @@ $as_echo "#define HAVE_STDBOOL_H 1" >>confdefs.h
 fi
 
 
-# Checks for library functions.
+    # Checks for library functions.
     for ac_header in stdlib.h
 do :
   ac_fn_c_check_header_mongrel "$LINENO" "stdlib.h" "ac_cv_header_stdlib_h" "$ac_includes_default"
@@ -13234,7 +13312,7 @@ $as_echo "#define realloc rpl_realloc" >>confdefs.h
 fi
 
 
-    for ac_func in gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul
+    for ac_func in gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul memchr
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
 ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
@@ -13247,7 +13325,7 @@ fi
 done
 
 
-# Add large file support
+    # Add large file support
     # Check whether --enable-largefile was given.
 if test "${enable_largefile+set}" = set; then :
   enableval=$enable_largefile;
@@ -13447,16 +13525,17 @@ rm -rf conftest*
 fi
 
 
-#check for os
+    #check for os
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking host os" >&5
 $as_echo_n "checking host os... " >&6; }
 
     # If no host os was detected, try with uname
-	if test -z "$host" ; then
+    if test -z "$host" ; then
 	    host="`uname`"
     fi
     echo -n "installation for $host OS... \c"
 
+    e_magic_file="/usr/share/file/magic"
     case "$host" in
 	    *-*-*freebsd*)
 		    CFLAGS="${CFLAGS} -DOS_FREEBSD"
@@ -13464,21 +13543,26 @@ $as_echo_n "checking host os... " >&6; }
                     LDFLAGS="${LDFLAGS} -L/usr/local/lib -L/usr/local/lib/libnet11"
                     ;;
            *-*-openbsd*)
-                    CFLAGS="${CFLAGS} -D__OpenBSD__"
+                    CFLAGS="${CFLAGS} -D__OpenBSD__ -fgnu89-inline"
                     CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet-1.1"
                     LDFLAGS="${LDFLAGS} -L/usr/local/lib -I/usr/local/lib/libnet-1.1"
+		    e_magic_file="/usr/local/share/file/magic.mgc"
                     ;;
-	   *darwin*|*Darwin*)
+    	   *darwin*|*Darwin*)
                     CFLAGS="${CFLAGS} -DOS_DARWIN"
                     CPPFLAGS="${CPPFLAGS} -I/opt/local/include"
                     LDFLAGS="${LDFLAGS} -L/opt/local/lib"
-		    ;;
+        		    ;;
            *-*-linux*)
                     #for now do nothing
                     ;;
            *-*-mingw32*)
                     CFLAGS="${CFLAGS} -DOS_WIN32"
                     LDFLAGS="${LDFLAGS} -lws2_32"
+          		    WINDOWS_PATH="yes"
+                    ;;
+           *-*-cygwin)
+		              WINDOWS_PATH="yes"
                     ;;
 	   *)
 		{ $as_echo "$as_me:${as_lineno-$LINENO}: WARNING: unsupported OS this may or may not work" >&5
@@ -13488,10 +13572,10 @@ $as_echo "$as_me: WARNING: unsupported OS this may or may not work" >&2;}
     { $as_echo "$as_me:${as_lineno-$LINENO}: result: ok" >&5
 $as_echo "ok" >&6; }
 
-#Enable support for gcc compile time security options. There is no great way to do detection of valid cflags that I have found
-#AX_CFLAGS_GCC_OPTION don't seem to do a better job than the code below and are a pain because of extra m4 files etc.
-#These flags seem to be supported on CentOS 5+, Ubuntu 8.04+, and FedoreCore 11+
-#Options are taken from https://wiki.ubuntu.com/CompilerFlags
+    #Enable support for gcc compile time security options. There is no great way to do detection of valid cflags that I have found
+    #AX_CFLAGS_GCC_OPTION don't seem to do a better job than the code below and are a pain because of extra m4 files etc.
+    #These flags seem to be supported on CentOS 5+, Ubuntu 8.04+, and FedoreCore 11+
+    #Options are taken from https://wiki.ubuntu.com/CompilerFlags
     # Check whether --enable-gccprotect was given.
 if test "${enable_gccprotect+set}" = set; then :
   enableval=$enable_gccprotect;
@@ -13645,7 +13729,7 @@ rm -f core conftest.err conftest.$ac_objext \
 
 fi
 
-#enable profile generation
+    #enable profile generation
     # Check whether --enable-gccprofile was given.
 if test "${enable_gccprofile+set}" = set; then :
   enableval=$enable_gccprofile;
@@ -13659,7 +13743,7 @@ fi
 
 fi
 
-#enable gcc march=native gcc 4.2 or later
+    #enable gcc march=native gcc 4.2 or later
     # Check whether --enable-gccmarch_native was given.
 if test "${enable_gccmarch_native+set}" = set; then :
   enableval=$enable_gccmarch_native;
@@ -13686,7 +13770,119 @@ fi
 
 fi
 
-#libpcre
+# options
+
+  # enable the running of unit tests
+    # Check whether --enable-unittests was given.
+if test "${enable_unittests+set}" = set; then :
+  enableval=$enable_unittests;
+else
+  enable_unittests=no
+fi
+
+    if test "x$enable_unittests" = "xyes"; then :
+
+        UT_ENABLED="yes"
+        CFLAGS="${CFLAGS} -DUNITTESTS"
+
+fi
+
+     if test "x$enable_unittests" = "xyes"; then
+  BUILD_UNITTESTS_TRUE=
+  BUILD_UNITTESTS_FALSE='#'
+else
+  BUILD_UNITTESTS_TRUE='#'
+  BUILD_UNITTESTS_FALSE=
+fi
+
+
+  # enable workaround for old barnyard2 for unified alert output
+    # Check whether --enable-old-barnyard2 was given.
+if test "${enable_old_barnyard2+set}" = set; then :
+  enableval=$enable_old_barnyard2;
+else
+  enable_old_barnyard2=no
+fi
+
+    if test "x$enable_old_barnyard2" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DHAVE_OLD_BARNYARD2"
+
+fi
+
+  # enable debug output
+    # Check whether --enable-debug was given.
+if test "${enable_debug+set}" = set; then :
+  enableval=$enable_debug;
+else
+  enable_debug=no
+fi
+
+    if test "x$enable_debug" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DDEBUG"
+
+fi
+
+  # enable debug validation functions & macro's output
+    # Check whether --enable-debug-validation was given.
+if test "${enable_debug_validation+set}" = set; then :
+  enableval=$enable_debug_validation;
+else
+  enable_debug_validation=no
+fi
+
+    if test "x$enable_debug_validation" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DDEBUG_VALIDATION"
+
+fi
+
+  # profiling support
+    # Check whether --enable-profiling was given.
+if test "${enable_profiling+set}" = set; then :
+  enableval=$enable_profiling;
+else
+  enable_profiling=no
+fi
+
+    if test "x$enable_profiling" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DPROFILING"
+
+fi
+
+  # profiling support, locking
+    # Check whether --enable-profiling-locks was given.
+if test "${enable_profiling_locks+set}" = set; then :
+  enableval=$enable_profiling_locks;
+else
+  enable_profiling_locks=no
+fi
+
+    if test "x$enable_profiling_locks" = "xyes"; then :
+
+        CFLAGS="${CFLAGS} -DPROFILING -DPROFILE_LOCKING"
+
+fi
+
+  # enable support for IPFW
+    # Check whether --enable-ipfw was given.
+if test "${enable_ipfw+set}" = set; then :
+  enableval=$enable_ipfw;
+else
+  enable_ipfw=no
+fi
+
+    if test "x$enable_ipfw" = "xyes"; then :
+
+        CFLAGS="$CFLAGS -DIPFW"
+
+fi
+
+# libraries
+
+  #libpcre
 
 # Check whether --with-libpcre_includes was given.
 if test "${with_libpcre_includes+set}" = set; then :
@@ -13946,9 +14142,12 @@ $as_echo "no" >&6; }
            { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
 $as_echo "yes" >&6; }
        fi
+    else
+       { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
     fi
 
-#libyaml
+  # libyaml
 
 # Check whether --with-libyaml_includes was given.
 if test "${with_libyaml_includes+set}" = set; then :
@@ -14033,15 +14232,18 @@ fi
 
 
     if test "$LIBYAML" = "no"; then
-    echo
-    echo "   ERROR!  libyaml library not found, go get it"
-    echo "   from http://pyyaml.org/wiki/LibYAML."
-    echo "   or check your package manager."
-    echo
-    exit 1
+        echo
+        echo "   ERROR!  libyaml library not found, go get it"
+        echo "   from http://pyyaml.org/wiki/LibYAML "
+        echo "   or your distribution:"
+        echo
+        echo "   Ubuntu: apt-get install libyaml-dev"
+        echo "   Fedora: yum install libyaml-devel"
+        echo
+        exit 1
     fi
 
-#libpthread
+  # libpthread
 
 # Check whether --with-libpthread_includes was given.
 if test "${with_libpthread_includes+set}" = set; then :
@@ -14124,7 +14326,7 @@ fi
     exit 1
     fi
 
-#enable support for NFQUEUE
+    #enable support for NFQUEUE
     # Check whether --enable-nfqueue was given.
 if test "${enable_nfqueue+set}" = set; then :
   enableval=$enable_nfqueue;
@@ -14136,11 +14338,11 @@ fi
 
         CFLAGS="$CFLAGS -DNFQ"
 
-#libnfnetlink
-case $host in
-*-*-mingw32*)
-;;
-*)
+  # libnfnetlink
+    case $host in
+    *-*-mingw32*)
+        ;;
+    *)
 
 # Check whether --with-libnfnetlink_includes was given.
 if test "${with_libnfnetlink_includes+set}" = set; then :
@@ -14158,11 +14360,11 @@ else
 fi
 
 
-    if test "$with_libnfnetlink_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libnfnetlink_includes}"
-    fi
+        if test "$with_libnfnetlink_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_libnfnetlink_includes}"
+        fi
 
-    ac_fn_c_check_header_mongrel "$LINENO" "libnfnetlink/libnfnetlink.h" "ac_cv_header_libnfnetlink_libnfnetlink_h" "$ac_includes_default"
+        ac_fn_c_check_header_mongrel "$LINENO" "libnfnetlink/libnfnetlink.h" "ac_cv_header_libnfnetlink_libnfnetlink_h" "$ac_includes_default"
 if test "x$ac_cv_header_libnfnetlink_libnfnetlink_h" = xyes; then :
 
 else
@@ -14171,12 +14373,12 @@ fi
 
 
 
-    if test "$with_libnfnetlink_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libnfnetlink_libraries}"
-    fi
+        if test "$with_libnfnetlink_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS}  -L${with_libnfnetlink_libraries}"
+        fi
 
-    NFNL=""
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfnl_fd in -lnfnetlink" >&5
+        NFNL=""
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfnl_fd in -lnfnetlink" >&5
 $as_echo_n "checking for nfnl_fd in -lnfnetlink... " >&6; }
 if ${ac_cv_lib_nfnetlink_nfnl_fd+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -14224,20 +14426,20 @@ else
 fi
 
 
-    if test "$NFNL" = "no"; then
-    echo
-    echo "   ERROR!  nfnetlink library not found, go get it"
-    echo "   from www.netfilter.org."
-    echo "   we automatically append libnetfilter_queue/ when searching"
-    echo "   for headers etc. when the --with-libnfnetlink-inlcudes directive"
-    echo "   is used"
-    echo
-    exit
-    fi
-;;
-esac
+        if test "$NFNL" = "no"; then
+            echo
+            echo "   ERROR!  nfnetlink library not found, go get it"
+            echo "   from www.netfilter.org."
+            echo "   we automatically append libnetfilter_queue/ when searching"
+            echo "   for headers etc. when the --with-libnfnetlink-inlcudes directive"
+            echo "   is used"
+            echo
+            exit 1
+        fi
+        ;;
+    esac
 
-#libnetfilter_queue
+  #libnetfilter_queue
 
 # Check whether --with-libnetfilter_queue_includes was given.
 if test "${with_libnetfilter_queue_includes+set}" = set; then :
@@ -14256,7 +14458,7 @@ fi
 
 
     if test "$with_libnetfilter_queue_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libnetfilter_queue_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libnetfilter_queue_includes}"
     fi
 
     ac_fn_c_check_header_mongrel "$LINENO" "libnetfilter_queue/libnetfilter_queue.h" "ac_cv_header_libnetfilter_queue_libnetfilter_queue_h" "$ac_includes_default"
@@ -14269,16 +14471,15 @@ fi
 
 
     if test "$with_libnetfilter_queue_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libnetfilter_queue_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libnetfilter_queue_libraries}"
     fi
 
-#LDFLAGS="${LDFLAGS} -lnetfilter_queue"
+    #LDFLAGS="${LDFLAGS} -lnetfilter_queue"
 
     NFQ=""
-
-case $host in
-*-*-mingw32*)
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_open in -lnetfilter_queue" >&5
+    case $host in
+    *-*-mingw32*)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_open in -lnetfilter_queue" >&5
 $as_echo_n "checking for nfq_open in -lnetfilter_queue... " >&6; }
 if ${ac_cv_lib_netfilter_queue_nfq_open+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -14335,14 +14536,14 @@ else
 fi
 
 
-    if test "$with_netfilterforwin_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_netfilterforwin_includes}"
-    else
-    CPPFLAGS="${CPPFLAGS} -I../../netfilterforwin"
-    fi
-;;
-*)
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_open in -lnetfilter_queue" >&5
+        if test "$with_netfilterforwin_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_netfilterforwin_includes}"
+        else
+            CPPFLAGS="${CPPFLAGS} -I../../netfilterforwin"
+        fi
+        ;;
+    *)
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_open in -lnetfilter_queue" >&5
 $as_echo_n "checking for nfq_open in -lnetfilter_queue... " >&6; }
 if ${ac_cv_lib_netfilter_queue_nfq_open+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -14389,7 +14590,7 @@ else
   NFQ="no"
 fi
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_set_queue_maxlen in -lnetfilter_queue" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_set_queue_maxlen in -lnetfilter_queue" >&5
 $as_echo_n "checking for nfq_set_queue_maxlen in -lnetfilter_queue... " >&6; }
 if ${ac_cv_lib_netfilter_queue_nfq_set_queue_maxlen+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -14433,7 +14634,7 @@ _ACEOF
 
 fi
 
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_set_verdict2 in -lnetfilter_queue" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for nfq_set_verdict2 in -lnetfilter_queue" >&5
 $as_echo_n "checking for nfq_set_verdict2 in -lnetfilter_queue... " >&6; }
 if ${ac_cv_lib_netfilter_queue_nfq_set_verdict2+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -14478,12 +14679,12 @@ _ACEOF
 fi
 
 
-    # check if the argument to nfq_get_payload is signed or unsigned
-    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for signed nfq_get_payload payload argument" >&5
+        # check if the argument to nfq_get_payload is signed or unsigned
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for signed nfq_get_payload payload argument" >&5
 $as_echo_n "checking for signed nfq_get_payload payload argument... " >&6; }
-    STORECFLAGS="${CFLAGS}"
-    CFLAGS="${CFLAGS} -Werror"
-    cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+        STORECFLAGS="${CFLAGS}"
+        CFLAGS="${CFLAGS} -Werror"
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
                 #include <libnetfilter_queue/libnetfilter_queue.h>
@@ -14505,44 +14706,31 @@ else
   libnetfilter_queue_nfq_get_payload_signed="no"
 fi
 rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
-    { $as_echo "$as_me:${as_lineno-$LINENO}: result: $libnetfilter_queue_nfq_get_payload_signed" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $libnetfilter_queue_nfq_get_payload_signed" >&5
 $as_echo "$libnetfilter_queue_nfq_get_payload_signed" >&6; }
-    if test "x$libnetfilter_queue_nfq_get_payload_signed" = "xyes"; then
+        if test "x$libnetfilter_queue_nfq_get_payload_signed" = "xyes"; then
 
 $as_echo "#define NFQ_GET_PAYLOAD_SIGNED /**/" >>confdefs.h
 
-    fi
-    CFLAGS="${STORECFLAGS}"
-;;
-esac
+        fi
+        CFLAGS="${STORECFLAGS}"
+    ;;
+    esac
 
     if test "$NFQ" = "no"; then
-    echo
-    echo "   ERROR!  libnetfilter_queue library not found, go get it"
-    echo "   from www.netfilter.org."
-    echo "   we automatically append libnetfilter_queue/ when searching"
-    echo "   for headers etc. when the --with-libnfq-includes directive"
-    echo "   is used"
-    echo
-    exit 1
+        echo
+        echo "   ERROR!  libnetfilter_queue library not found, go get it"
+        echo "   from www.netfilter.org."
+        echo "   we automatically append libnetfilter_queue/ when searching"
+        echo "   for headers etc. when the --with-libnfq-includes directive"
+        echo "   is used"
+        echo
+        exit 1
     fi
 
 fi
-#enable support for IPFW
-    # Check whether --enable-ipfw was given.
-if test "${enable_ipfw+set}" = set; then :
-  enableval=$enable_ipfw;
-else
-  enable_ipfw=no
-fi
 
-    if test "x$enable_ipfw" = "xyes"; then :
-
-        CFLAGS="$CFLAGS -DIPFW"
-
-fi
-
-#prelude
+  # prelude
     # Check whether --enable-prelude was given.
 if test "${enable_prelude+set}" = set; then :
   enableval=$enable_prelude;
@@ -14811,7 +14999,7 @@ $as_echo "#define PRELUDE_APPLICATION_USE_LIBTOOL2 /**/" >>confdefs.h
 
 fi
 
-#libnet
+  # libnet
 
 # Check whether --with-libnet_includes was given.
 if test "${with_libnet_includes+set}" = set; then :
@@ -15019,8 +15207,8 @@ fi
             echo
 
     fi
-# libpfring (currently only supported for libpcap enabled pfring)
-# Error on the side of caution. If libpfring enabled pcap is being used and we don't link against -lpfring compilation will fail.
+    # libpfring (currently only supported for libpcap enabled pfring)
+    # Error on the side of caution. If libpfring enabled pcap is being used and we don't link against -lpfring compilation will fail.
     # Check whether --enable-pfring was given.
 if test "${enable_pfring+set}" = set; then :
   enableval=$enable_pfring;
@@ -15032,7 +15220,7 @@ fi
 
         CFLAGS="$CFLAGS -DHAVE_PFRING"
 
-#We have to set CFLAGS for AC_TRY_COMPILE as it doesn't pay attention to CPPFLAGS
+        #We have to set CFLAGS for AC_TRY_COMPILE as it doesn't pay attention to CPPFLAGS
 
 # Check whether --with-libpfring_includes was given.
 if test "${with_libpfring_includes+set}" = set; then :
@@ -15340,10 +15528,7 @@ main ()
 {
 
                     u_char *buffer;
-                    struct pfring_pkthdr hdr;
-                    pfring *pd; memset(&hdr, 0, sizeof(hdr));
-                    pd = pfring_open("eth1", 1,  1515, 1);
-                    pfring_recv(pd, &buffer, 0, &hdr, 1);
+                    pfring_recv(NULL, &buffer, 0, NULL, 1);
 
   ;
   return 0;
@@ -15369,10 +15554,46 @@ $as_echo "yes" >&6; }
 $as_echo "no" >&6; }
         fi
 
+        # check if the argument to nfq_get_payload is signed or unsigned
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for post 5.4.0 pfring_open function" >&5
+$as_echo_n "checking for post 5.4.0 pfring_open function... " >&6; }
+        STORECFLAGS="${CFLAGS}"
+        CFLAGS="${CFLAGS} -Werror"
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+                #include <pfring.h>
+
+int
+main ()
+{
+
+                pfring_open(NULL, 0, 0);
+
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_compile "$LINENO"; then :
+  pfring_new_open="yes"
+else
+  pfring_new_open="no"
+fi
+rm -f core conftest.err conftest.$ac_objext conftest.$ac_ext
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: $pfring_new_open" >&5
+$as_echo "$pfring_new_open" >&6; }
+        if test "x$pfring_new_open" = "xyes"; then
+
+$as_echo "#define HAVE_PFRING_OPEN_NEW 1" >>confdefs.h
+
+        fi
+        CFLAGS="${STORECFLAGS}"
+
+
 fi
 
 
-# libpcap
+  # libpcap
 
 # Check whether --with-libpcap_includes was given.
 if test "${with_libpcap_includes+set}" = set; then :
@@ -15391,10 +15612,10 @@ fi
 
 
     if test "$with_libpcap_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libpcap_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libpcap_includes}"
     fi
 
-ac_fn_c_check_header_mongrel "$LINENO" "pcap.h" "ac_cv_header_pcap_h" "$ac_includes_default"
+    ac_fn_c_check_header_mongrel "$LINENO" "pcap.h" "ac_cv_header_pcap_h" "$ac_includes_default"
 if test "x$ac_cv_header_pcap_h" = xyes; then :
 
 else
@@ -15404,7 +15625,7 @@ fi
 
 
     if test "$with_libpcap_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libpcap_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libpcap_libraries}"
     fi
 
     LIBPCAP=""
@@ -15414,7 +15635,7 @@ if ${ac_cv_lib_pcap_pcap_open_live+:} false; then :
   $as_echo_n "(cached) " >&6
 else
   ac_check_lib_save_LIBS=$LIBS
-LIBS="-lpcap  $LIBS"
+LIBS="-lpcap -lpthread $LIBS"
 cat confdefs.h - <<_ACEOF >conftest.$ac_ext
 /* end confdefs.h.  */
 
@@ -15456,17 +15677,20 @@ else
 fi
 
     if test "$LIBPCAP" = "no"; then
-    echo
-    echo "   ERROR!  libpcap library not found, go get it"
-    echo "   from http://www.tcpdump.org."
-    echo
-    exit 1
+        echo
+        echo "   ERROR!  libpcap library not found, go get it"
+        echo "   from http://www.tcpdump.org or your distribution:"
+        echo
+        echo "   Ubuntu: apt-get install libpcap-dev"
+        echo "   Fedora: yum install libpcap-devel"
+        echo
+        exit 1
     fi
 
-# pcap_activate and pcap_create only exists in libpcap >= 1.0
+    # pcap_activate and pcap_create only exists in libpcap >= 1.0
     LIBPCAPVTEST=""
-#To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
-#see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+    #To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+    #see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
     TMPLIBS="${LIBS}"
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_activate in -lpcap" >&5
 $as_echo_n "checking for pcap_activate in -lpcap... " >&6; }
@@ -15516,16 +15740,16 @@ else
 fi
 
     if test "$LPCAPVTEST" != "no"; then
-    CFLAGS="${CFLAGS} `pcap-config --defines` `pcap-config --cflags` -DLIBPCAP_VERSION_MAJOR=1"
+        CFLAGS="${CFLAGS} `pcap-config --defines` `pcap-config --cflags` -DLIBPCAP_VERSION_MAJOR=1"
     else
-    CFLAGS="${CFLAGS} -DLIBPCAP_VERSION_MAJOR=0"
+        CFLAGS="${CFLAGS} -DLIBPCAP_VERSION_MAJOR=0"
     fi
     LIBS="${TMPLIBS}"
 
-#Appears as if pcap_set_buffer_size is linux only?
+    #Appears as if pcap_set_buffer_size is linux only?
     LIBPCAPSBUFF=""
-#To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
-#see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+    #To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+    #see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
     TMPLIBS="${LIBS}"
     { $as_echo "$as_me:${as_lineno-$LINENO}: checking for pcap_set_buffer_size in -lpcap" >&5
 $as_echo_n "checking for pcap_set_buffer_size in -lpcap... " >&6; }
@@ -15575,52 +15799,29 @@ else
 fi
 
     if test "$LPCAPSBUFF" != "no"; then
-    CFLAGS="${CFLAGS} -DHAVE_PCAP_SET_BUFF"
+        CFLAGS="${CFLAGS} -DHAVE_PCAP_SET_BUFF"
     fi
     LIBS="${TMPLIBS}"
 
-# enable the running of unit tests
-    # Check whether --enable-unittests was given.
-if test "${enable_unittests+set}" = set; then :
-  enableval=$enable_unittests;
-else
-  enable_unittests=no
-fi
-
-    if test "x$enable_unittests" = "xyes"; then :
-
-        UT_ENABLED="yes"
-        CFLAGS="${CFLAGS} -DUNITTESTS"
-
-fi
-
-     if test "x$enable_unittests" = "xyes"; then
-  BUILD_UNITTESTS_TRUE=
-  BUILD_UNITTESTS_FALSE='#'
-else
-  BUILD_UNITTESTS_TRUE='#'
-  BUILD_UNITTESTS_FALSE=
-fi
-
-
-# AF_PACKET support
+  # AF_PACKET support
     # Check whether --enable-af-packet was given.
 if test "${enable_af_packet+set}" = set; then :
   enableval=$enable_af_packet;
 else
-  enable_af_packet=no
+  enable_af_packet=yes
 fi
 
     if test "x$enable_af_packet" = "xyes"; then :
 
-        ac_fn_c_check_decl "$LINENO" "AF_PACKET" "ac_cv_have_decl_AF_PACKET" "#include <sys/socket.h>
+        ac_fn_c_check_decl "$LINENO" "TPACKET_V2" "ac_cv_have_decl_TPACKET_V2" "#include <sys/socket.h>
+              #include <linux/if_packet.h>
 "
-if test "x$ac_cv_have_decl_AF_PACKET" = xyes; then :
+if test "x$ac_cv_have_decl_TPACKET_V2" = xyes; then :
 
 $as_echo "#define HAVE_AF_PACKET 1" >>confdefs.h
 
 else
-  enable_af_packet=no
+  enable_af_packet="no"
 fi
 
         ac_fn_c_check_decl "$LINENO" "PACKET_FANOUT" "ac_cv_have_decl_PACKET_FANOUT" "#include <linux/if_packet.h>
@@ -15631,54 +15832,11 @@ $as_echo "#define HAVE_PACKET_FANOUT 1" >>confdefs.h
 
 fi
 
-        CFLAGS="${CFLAGS} -DUNITTESTS"
 
 fi
 
 
-# enable workaround for old barnyard2 for unified alert output
-    # Check whether --enable-old-barnyard2 was given.
-if test "${enable_old_barnyard2+set}" = set; then :
-  enableval=$enable_old_barnyard2;
-else
-  enable_old_barnyard2=no
-fi
-
-    if test "x$enable_old_barnyard2" = "xyes"; then :
-
-        CFLAGS="${CFLAGS} -DHAVE_OLD_BARNYARD2"
-
-fi
-
-# enable debug output
-    # Check whether --enable-debug was given.
-if test "${enable_debug+set}" = set; then :
-  enableval=$enable_debug;
-else
-  enable_debug=no
-fi
-
-    if test "x$enable_debug" = "xyes"; then :
-
-        CFLAGS="${CFLAGS} -DDEBUG"
-
-fi
-
-# enable debug validation functions & macro's output
-    # Check whether --enable-debug-validation was given.
-if test "${enable_debug_validation+set}" = set; then :
-  enableval=$enable_debug_validation;
-else
-  enable_debug_validation=no
-fi
-
-    if test "x$enable_debug_validation" = "xyes"; then :
-
-        CFLAGS="${CFLAGS} -DDEBUG_VALIDATION"
-
-fi
-
-#libhtp
+  # libhtp
     # Check whether --enable-non-bundled-htp was given.
 if test "${enable_non_bundled_htp+set}" = set; then :
   enableval=$enable_non_bundled_htp;
@@ -15826,11 +15984,11 @@ fi
 
 
         if test "$with_libhtp_includes" != "no"; then
-        CPPFLAGS="${CPPFLAGS} -I${with_libhtp_includes}"
+            CPPFLAGS="${CPPFLAGS} -I${with_libhtp_includes}"
         fi
 
         if test "$with_libhtp_libraries" != "no"; then
-        LDFLAGS="${LDFLAGS} -L${with_libhtp_libraries}"
+            LDFLAGS="${LDFLAGS} -L${with_libhtp_libraries}"
         fi
 
         ac_fn_c_check_header_mongrel "$LINENO" "htp/htp.h" "ac_cv_header_htp_htp_h" "$ac_includes_default"
@@ -15891,10 +16049,10 @@ else
 fi
 
         if test "$LIBHTP" = "no"; then
-        echo
-        echo "   ERROR! libhtp library not found"
-        echo
-        exit 1
+            echo
+            echo "   ERROR! libhtp library not found"
+            echo
+            exit 1
         fi
 
 pkg_failed=no
@@ -15968,10 +16126,10 @@ $as_echo "yes" >&6; }
 	libhtp_minver_found="yes"
 fi
         if test "$libhtp_minver_found" = "no"; then
-        echo
-        echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
-        echo
-        exit 1
+            echo
+            echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
+            echo
+            exit 1
         fi
 
         { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_config_register_request_uri_normalize in -lhtp" >&5
@@ -16067,7 +16225,7 @@ fi
 
 fi
 
-    #even if we are using an installed htp lib we still need to gen Makefiles inside of htp
+    # even if we are using an installed htp lib we still need to gen Makefiles inside of htp
 
 
 subdirs="$subdirs libhtp"
@@ -16096,7 +16254,7 @@ _ACEOF
 fi
 
 
-# enable CUDA output
+  # enable CUDA output
     # Check whether --enable-cuda was given.
 if test "${enable_cuda+set}" = set; then :
   enableval=$enable_cuda;
@@ -16279,9 +16437,11 @@ $as_echo "$NVCCVER" >&6; }
 
 
 
+
+
         # Find any Python interpreter.
     if test -z "$PYTHON"; then
-      for ac_prog in python python2 python3 python3.2 python3.1 python3.0 python2.7 python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0
+      for ac_prog in python python2 python3 python3.2 python3.1 python3.0 python2.7  python2.6 python2.5 python2.4 python2.3 python2.2 python2.1 python2.0
 do
   # Extract the first word of "$ac_prog", so it can be a program name with args.
 set dummy $ac_prog; ac_word=$2
@@ -16369,7 +16529,7 @@ $as_echo "$am_cv_python_platform" >&6; }
 
 
 
-                { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON script directory" >&5
+            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON script directory" >&5
 $as_echo_n "checking for $am_display_PYTHON script directory... " >&6; }
 if ${am_cv_python_pythondir+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -16380,8 +16540,7 @@ else
      else
        am_py_prefix=$prefix
      fi
-     am_cv_python_pythondir=`$PYTHON -c "import sys; from distutils import sysconfig; sys.stdout.write(sysconfig.get_python_lib(0,0,prefix='$am_py_prefix'))" 2>/dev/null ||
-     echo "$PYTHON_PREFIX/lib/python$PYTHON_VERSION/site-packages"`
+     am_cv_python_pythondir=`$PYTHON -c "import sys; from distutils import sysconfig; sys.stdout.write(sysconfig.get_python_lib(0,0,prefix='$am_py_prefix'))" 2>/dev/null`
      case $am_cv_python_pythondir in
      $am_py_prefix*)
        am__strip_prefix=`echo "$am_py_prefix" | sed 's|.|.|g'`
@@ -16407,7 +16566,7 @@ $as_echo "$am_cv_python_pythondir" >&6; }
   pkgpythondir=\${pythondir}/$PACKAGE
 
 
-            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON extension module directory" >&5
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for $am_display_PYTHON extension module directory" >&5
 $as_echo_n "checking for $am_display_PYTHON extension module directory... " >&6; }
 if ${am_cv_python_pyexecdir+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -16418,8 +16577,7 @@ else
      else
        am_py_exec_prefix=$exec_prefix
      fi
-     am_cv_python_pyexecdir=`$PYTHON -c "import sys; from distutils import sysconfig; sys.stdout.write(sysconfig.get_python_lib(1,0,prefix='$am_py_exec_prefix'))" 2>/dev/null ||
-     echo "$PYTHON_EXEC_PREFIX/lib/python$PYTHON_VERSION/site-packages"`
+     am_cv_python_pyexecdir=`$PYTHON -c "import sys; from distutils import sysconfig; sys.stdout.write(sysconfig.get_python_lib(1,0,prefix='$am_py_exec_prefix'))" 2>/dev/null`
      case $am_cv_python_pyexecdir in
      $am_py_exec_prefix*)
        am__strip_prefix=`echo "$am_py_exec_prefix" | sed 's|.|.|g'`
@@ -16466,8 +16624,8 @@ else
 fi
 
 
-# Check for libcap-ng
 
+  # Check for libcap-ng
 
 # Check whether --with-libcap_ng_includes was given.
 if test "${with_libcap_ng_includes+set}" = set; then :
@@ -16486,11 +16644,11 @@ fi
 
 
     if test "$with_libcap_ng_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libcap_ng_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libcap_ng_includes}"
     fi
 
     if test "$with_libcap_ng_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libcap_ng_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libcap_ng_libraries}"
     fi
 
     ac_fn_c_check_header_mongrel "$LINENO" "cap-ng.h" "ac_cv_header_cap_ng_h" "$ac_includes_default"
@@ -16557,30 +16715,20 @@ fi
     fi
 
     if test "$LIBCAP_NG" = "no"; then
-    echo
-    echo "   WARNING!  libcap-ng library not found, go get it"
-    echo "   from http://people.redhat.com/sgrubb/libcap-ng/"
-    echo "   or check your package manager."
-    echo
-    echo "   Suricata will be built without support for dropping privs."
-    echo
+        echo
+        echo "   WARNING!  libcap-ng library not found, go get it"
+        echo "   from http://people.redhat.com/sgrubb/libcap-ng/"
+        echo "   or your distribution:"
+        echo
+        echo "   Ubuntu: apt-get install libcap-ng-dev"
+        echo "   Fedora: yum install libcap-ng-devel"
+        echo
+        echo "   Suricata will be built without support for dropping privs."
+        echo
     fi
 
-    # Check whether --enable-profiling was given.
-if test "${enable_profiling+set}" = set; then :
-  enableval=$enable_profiling;
-else
-  enable_profiling=no
-fi
 
-    if test "x$enable_profiling" = "xyes"; then :
-
-        CFLAGS="${CFLAGS} -DPROFILING"
-
-fi
-
-# Check for DAG support.
-
+  # Check for DAG support.
     # Check whether --enable-dag was given.
 if test "${enable_dag+set}" = set; then :
   enableval=$enable_dag;  enable_dag=yes
@@ -16607,12 +16755,12 @@ fi
 
     if test "$enable_dag" = "yes"; then
 
-	    if test "$with_dag_includes" != "no"; then
+	if test "$with_dag_includes" != "no"; then
             CPPFLAGS="${CPPFLAGS} -I${with_dag_includes}"
         fi
 
         if test "$with_dag_libraries" != "no"; then
-            LDFLAGS="${LDFLAGS} -I${with_dag_libraries}"
+            LDFLAGS="${LDFLAGS} -L${with_dag_libraries}"
         fi
 
         ac_fn_c_check_header_mongrel "$LINENO" "dagapi.h" "ac_cv_header_dagapi_h" "$ac_includes_default"
@@ -16625,7 +16773,7 @@ fi
 
         if test "$DAG" != "no"; then
             DAG=""
-	        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dag_open in -ldag" >&5
+	    { $as_echo "$as_me:${as_lineno-$LINENO}: checking for dag_open in -ldag" >&5
 $as_echo_n "checking for dag_open in -ldag... " >&6; }
 if ${ac_cv_lib_dag_dag_open+:} false; then :
   $as_echo_n "(cached) " >&6
@@ -16662,7 +16810,12 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_dag_dag_open" >&5
 $as_echo "$ac_cv_lib_dag_dag_open" >&6; }
 if test "x$ac_cv_lib_dag_dag_open" = xyes; then :
-  DAG="yes"
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBDAG 1
+_ACEOF
+
+  LIBS="-ldag $LIBS"
+
 else
   DAG="no"
 fi
@@ -16681,7 +16834,205 @@ fi
         fi
     fi
 
-#libmagic
+  # libnspr
+    enable_nspr="no"
+
+# Check whether --with-libnspr_includes was given.
+if test "${with_libnspr_includes+set}" = set; then :
+  withval=$with_libnspr_includes; with_libnspr_includes="$withval"
+else
+  with_libnspr_includes=no
+fi
+
+
+# Check whether --with-libnspr_libraries was given.
+if test "${with_libnspr_libraries+set}" = set; then :
+  withval=$with_libnspr_libraries; with_libnspr_libraries="$withval"
+else
+  with_libnspr_libraries="no"
+fi
+
+
+    if test "$with_libnspr_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libnspr_includes}"
+    fi
+
+    ac_fn_c_check_header_mongrel "$LINENO" "nspr.h" "ac_cv_header_nspr_h" "$ac_includes_default"
+if test "x$ac_cv_header_nspr_h" = xyes; then :
+  NSPR="yes"
+else
+  NSPR="no"
+fi
+
+
+    if test "$NSPR" = "yes"; then
+        if test "$with_libnspr_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS}  -L${with_libnspr_libraries}"
+        fi
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for PR_GetCurrentThread in -lnspr4" >&5
+$as_echo_n "checking for PR_GetCurrentThread in -lnspr4... " >&6; }
+if ${ac_cv_lib_nspr4_PR_GetCurrentThread+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnspr4  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char PR_GetCurrentThread ();
+int
+main ()
+{
+return PR_GetCurrentThread ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nspr4_PR_GetCurrentThread=yes
+else
+  ac_cv_lib_nspr4_PR_GetCurrentThread=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nspr4_PR_GetCurrentThread" >&5
+$as_echo "$ac_cv_lib_nspr4_PR_GetCurrentThread" >&6; }
+if test "x$ac_cv_lib_nspr4_PR_GetCurrentThread" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSPR4 1
+_ACEOF
+
+  LIBS="-lnspr4 $LIBS"
+
+else
+  NSPR="no"
+fi
+
+
+        if test "$NSPR" = "no"; then
+            echo
+            echo "   ERROR!  libnspr library not found, go get it"
+            echo "   from Mozilla or your distribution:"
+            echo
+            echo "   Ubuntu: apt-get install libnspr4-dev"
+            echo "   Fedora: yum install nspr-devel"
+            echo
+            exit 1
+        fi
+        enable_nspr="yes"
+    fi
+
+  # libnss
+    enable_nss="no"
+
+# Check whether --with-libnss_includes was given.
+if test "${with_libnss_includes+set}" = set; then :
+  withval=$with_libnss_includes; with_libnss_includes="$withval"
+else
+  with_libnss_includes=no
+fi
+
+
+# Check whether --with-libnss_libraries was given.
+if test "${with_libnss_libraries+set}" = set; then :
+  withval=$with_libnss_libraries; with_libnss_libraries="$withval"
+else
+  with_libnss_libraries="no"
+fi
+
+
+    if test "$with_libnss_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libnss_includes}"
+    fi
+
+    ac_fn_c_check_header_mongrel "$LINENO" "sechash.h" "ac_cv_header_sechash_h" "$ac_includes_default"
+if test "x$ac_cv_header_sechash_h" = xyes; then :
+  NSS="yes"
+else
+  NSS="no"
+fi
+
+
+    if test "$NSS" = "yes"; then
+        if test "$with_libnss_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS}  -L${with_libnss_libraries}"
+        fi
+
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for HASH_Begin in -lnss3" >&5
+$as_echo_n "checking for HASH_Begin in -lnss3... " >&6; }
+if ${ac_cv_lib_nss3_HASH_Begin+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lnss3  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char HASH_Begin ();
+int
+main ()
+{
+return HASH_Begin ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_nss3_HASH_Begin=yes
+else
+  ac_cv_lib_nss3_HASH_Begin=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_nss3_HASH_Begin" >&5
+$as_echo "$ac_cv_lib_nss3_HASH_Begin" >&6; }
+if test "x$ac_cv_lib_nss3_HASH_Begin" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBNSS3 1
+_ACEOF
+
+  LIBS="-lnss3 $LIBS"
+
+else
+  NSS="no"
+fi
+
+
+        if test "$NSS" = "no"; then
+            echo
+            echo "   ERROR!  libnss library not found, go get it"
+            echo "   from Mozilla or your distribution:"
+            echo
+            echo "   Ubuntu: apt-get install libnss3-dev"
+            echo "   Fedora: yum install nss-devel"
+            echo
+            exit 1
+        fi
+
+
+$as_echo "#define HAVE_NSS 1" >>confdefs.h
+
+        enable_nss="yes"
+    fi
+
+  # libmagic
 
 # Check whether --with-libmagic_includes was given.
 if test "${with_libmagic_includes+set}" = set; then :
@@ -16768,9 +17119,114 @@ fi
     if test "$MAGIC" = "no"; then
         echo
         echo "   ERROR!  magic library not found, go get it"
-        echo "   from http://www.darwinsys.com/file/."
+        echo "   from http://www.darwinsys.com/file/ or your distribution:"
+        echo
+        echo "   Ubuntu: apt-get install libmagic-dev"
+        echo "   Fedora: yum install file-devel"
         echo
         exit 1
+    fi
+
+  # Check for Napatech support.
+    # Check whether --enable-napatech was given.
+if test "${enable_napatech+set}" = set; then :
+  enableval=$enable_napatech;  enable_napatech=yes
+else
+   enable_napatech=no
+fi
+
+
+# Check whether --with-napatech_includes was given.
+if test "${with_napatech_includes+set}" = set; then :
+  withval=$with_napatech_includes; with_napatech_includes="$withval"
+else
+  with_napatech_includes="no"
+fi
+
+
+# Check whether --with-napatech_libraries was given.
+if test "${with_napatech_libraries+set}" = set; then :
+  withval=$with_napatech_libraries; with_napatech_libraries="$withval"
+else
+  with_napatech_libraries="no"
+fi
+
+
+    if test "$enable_napatech" = "yes"; then
+
+        if test "$with_napatech_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_napatech_includes}"
+        fi
+
+        if test "$with_napatech_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS} -L${with_napatech_libraries} -lntfeeds -lntcommoninterface"
+        fi
+
+        ac_fn_c_check_header_mongrel "$LINENO" "ntfeeds.h" "ac_cv_header_ntfeeds_h" "$ac_includes_default"
+if test "x$ac_cv_header_ntfeeds_h" = xyes; then :
+  NAPATECH="yes"
+else
+  NAPATECH="no"
+fi
+
+
+        if test "$NAPATECH" != "no"; then
+            NAPATECH=""
+            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for NTCI_OpenCard in -lntcommoninterface" >&5
+$as_echo_n "checking for NTCI_OpenCard in -lntcommoninterface... " >&6; }
+if ${ac_cv_lib_ntcommoninterface_NTCI_OpenCard+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lntcommoninterface  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char NTCI_OpenCard ();
+int
+main ()
+{
+return NTCI_OpenCard ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_ntcommoninterface_NTCI_OpenCard=yes
+else
+  ac_cv_lib_ntcommoninterface_NTCI_OpenCard=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_ntcommoninterface_NTCI_OpenCard" >&5
+$as_echo "$ac_cv_lib_ntcommoninterface_NTCI_OpenCard" >&6; }
+if test "x$ac_cv_lib_ntcommoninterface_NTCI_OpenCard" = xyes; then :
+  NAPATECH="yes"
+else
+  NAPATECH="no"
+fi
+
+            #AC_CHECK_LIB(ntfeeds,napatech_open,NAPATECH="yes",NAPATECH="no")
+        fi
+
+        if test "$NAPATECH" != "no"; then
+            CFLAGS="${CFLAGS} -DHAVE_NAPATECH"
+        fi
+
+        if test "$NAPATECH" = "no"; then
+            echo
+            echo "  ERROR! libntfeeds (and libntcommoninterface) library not found"
+            echo
+            exit 1
+        fi
     fi
 
 # get revision
@@ -16798,7 +17254,53 @@ $as_echo "no" >&6; }
 
 
 
-ac_config_files="$ac_config_files Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile"
+
+# suricata log dir
+if test "$WINDOWS_PATH" = "yes"; then
+  systemtype="`systeminfo | grep \"System Type\"`"
+  case $systemtype in
+    *x64*)
+      e_logdir="C:\\Program Files (x86)\\Suricata\\log\\"
+      e_sysconfdir="C:\\Program Files (x86)\\Suricata\\"
+      e_magic_file="C:\\Program Files (x86)\\Suricata\\magic.mgc"
+      ;;
+    *)
+      e_logdir="C:\\Program Files\\Suricata\\log\\"
+      e_sysconfdir="C:\\Program Files\\Suricata\\"
+      e_magic_file="C:\\Program Files\\Suricata\\magic.mgc"
+      ;;
+  esac
+else
+  e_logdir=$localstatedir
+if test $prefix = 'NONE'; then
+	prefix="/usr/local"
+fi
+while true; do
+  case "$e_logdir" in
+    *\$* ) eval "e_logdir=$e_logdir" ;;
+    *) break ;;
+  esac
+done
+eval "e_logdir=$e_logdir"/log/suricata/""
+
+  e_sysconfdir=$sysconfdir
+if test $prefix = 'NONE'; then
+	prefix="/usr/local"
+fi
+while true; do
+  case "$e_sysconfdir" in
+    *\$* ) eval "e_sysconfdir=$e_sysconfdir" ;;
+    *) break ;;
+  esac
+done
+eval "e_sysconfdir=$e_sysconfdir"/suricata/""
+
+fi
+
+
+
+
+ac_config_files="$ac_config_files Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile suricata.yaml"
 
 cat >confcache <<\_ACEOF
 # This file is a shell script that caches the results of configure
@@ -17555,6 +18057,7 @@ pic_mode='`$ECHO "$pic_mode" | $SED "$delay_single_quote_subst"`'
 enable_fast_install='`$ECHO "$enable_fast_install" | $SED "$delay_single_quote_subst"`'
 SHELL='`$ECHO "$SHELL" | $SED "$delay_single_quote_subst"`'
 ECHO='`$ECHO "$ECHO" | $SED "$delay_single_quote_subst"`'
+PATH_SEPARATOR='`$ECHO "$PATH_SEPARATOR" | $SED "$delay_single_quote_subst"`'
 host_alias='`$ECHO "$host_alias" | $SED "$delay_single_quote_subst"`'
 host='`$ECHO "$host" | $SED "$delay_single_quote_subst"`'
 host_os='`$ECHO "$host_os" | $SED "$delay_single_quote_subst"`'
@@ -17637,7 +18140,6 @@ with_gnu_ld='`$ECHO "$with_gnu_ld" | $SED "$delay_single_quote_subst"`'
 allow_undefined_flag='`$ECHO "$allow_undefined_flag" | $SED "$delay_single_quote_subst"`'
 no_undefined_flag='`$ECHO "$no_undefined_flag" | $SED "$delay_single_quote_subst"`'
 hardcode_libdir_flag_spec='`$ECHO "$hardcode_libdir_flag_spec" | $SED "$delay_single_quote_subst"`'
-hardcode_libdir_flag_spec_ld='`$ECHO "$hardcode_libdir_flag_spec_ld" | $SED "$delay_single_quote_subst"`'
 hardcode_libdir_separator='`$ECHO "$hardcode_libdir_separator" | $SED "$delay_single_quote_subst"`'
 hardcode_direct='`$ECHO "$hardcode_direct" | $SED "$delay_single_quote_subst"`'
 hardcode_direct_absolute='`$ECHO "$hardcode_direct_absolute" | $SED "$delay_single_quote_subst"`'
@@ -17693,6 +18195,7 @@ _LTECHO_EOF'
 # Quote evaled strings.
 for var in SHELL \
 ECHO \
+PATH_SEPARATOR \
 SED \
 GREP \
 EGREP \
@@ -17743,7 +18246,6 @@ with_gnu_ld \
 allow_undefined_flag \
 no_undefined_flag \
 hardcode_libdir_flag_spec \
-hardcode_libdir_flag_spec_ld \
 hardcode_libdir_separator \
 exclude_expsyms \
 include_expsyms \
@@ -17833,6 +18335,7 @@ do
     "qa/coccinelle/Makefile") CONFIG_FILES="$CONFIG_FILES qa/coccinelle/Makefile" ;;
     "rules/Makefile") CONFIG_FILES="$CONFIG_FILES rules/Makefile" ;;
     "doc/Makefile") CONFIG_FILES="$CONFIG_FILES doc/Makefile" ;;
+    "suricata.yaml") CONFIG_FILES="$CONFIG_FILES suricata.yaml" ;;
 
   *) as_fn_error $? "invalid argument: \`$ac_config_target'" "$LINENO" 5;;
   esac
@@ -18544,8 +19047,8 @@ $as_echo X"$file" |
 # NOTE: Changes made to this file will be lost: look at ltmain.sh.
 #
 #   Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2003, 2004, 2005,
-#                 2006, 2007, 2008, 2009, 2010 Free Software Foundation,
-#                 Inc.
+#                 2006, 2007, 2008, 2009, 2010, 2011 Free Software
+#                 Foundation, Inc.
 #   Written by Gordon Matzigkeit, 1996
 #
 #   This file is part of GNU Libtool.
@@ -18598,6 +19101,9 @@ SHELL=$lt_SHELL
 
 # An echo program that protects backslashes.
 ECHO=$lt_ECHO
+
+# The PATH separator for the build system.
+PATH_SEPARATOR=$lt_PATH_SEPARATOR
 
 # The host system.
 host_alias=$host_alias
@@ -18899,10 +19405,6 @@ no_undefined_flag=$lt_no_undefined_flag
 # Flag to hardcode \$libdir into a binary during linking.
 # This must work even if \$libdir does not exist
 hardcode_libdir_flag_spec=$lt_hardcode_libdir_flag_spec
-
-# If ld is used when linking, flag to hardcode \$libdir into a binary
-# during linking.  This must work even if \$libdir does not exist.
-hardcode_libdir_flag_spec_ld=$lt_hardcode_libdir_flag_spec_ld
 
 # Whether we need a single "-rpath" flag with a separated argument.
 hardcode_libdir_separator=$lt_hardcode_libdir_separator
@@ -19340,21 +19842,46 @@ fi
 
 echo "
 Suricata Configuration:
-  NFQueue support:          ${enable_nfqueue}
-  IPFW support:             ${enable_ipfw}
-  PF_RING support:          ${enable_pfring}
-  AF_PACKET support:        ${enable_af_packet}
-  Prelude support:          ${enable_prelude}
-  Unit tests enabled:       ${enable_unittests}
-  Debug output enabled:     ${enable_debug}
-  Debug validation enabled: ${enable_debug_validation}
-  CUDA enabled:             ${enable_cuda}
-  DAG enabled:              ${enable_dag}
-  Profiling enabled:        ${enable_profiling}
-  GCC Protect enabled:      ${enable_gccprotect}
-  GCC march native enabled: ${enable_gccmarch_native}
-  GCC Profile enabled:      ${enable_gccprofile}
-  Old barnyard2 support:    ${enable_old_barnyard2}
-  Non-bundled htp:          ${enable_non_bundled_htp}
-  PCRE jit:                 ${pcre_jit_available}
-"
+  AF_PACKET support:                       ${enable_af_packet}
+  PF_RING support:                         ${enable_pfring}
+  NFQueue support:                         ${enable_nfqueue}
+  IPFW support:                            ${enable_ipfw}
+  DAG enabled:                             ${enable_dag}
+  Napatech enabled:                        ${enable_napatech}
+
+  libnss support:                          ${enable_nss}
+  libnspr support:                         ${enable_nspr}
+  Prelude support:                         ${enable_prelude}
+  PCRE jit:                                ${pcre_jit_available}
+  Non-bundled htp:                         ${enable_non_bundled_htp}
+  Old barnyard2 support:                   ${enable_old_barnyard2}
+  CUDA enabled:                            ${enable_cuda}
+
+  Unit tests enabled:                      ${enable_unittests}
+  Debug output enabled:                    ${enable_debug}
+  Debug validation enabled:                ${enable_debug_validation}
+  Profiling enabled:                       ${enable_profiling}
+  Profiling locks enabled:                 ${enable_profiling_locks}
+
+Generic build parameters:
+  Installation prefix (--prefix):          ${prefix}
+  Configuration directory (--sysconfdir):  ${e_sysconfdir}
+  Log directory (--localstatedir) :        ${e_logdir}
+
+  Host:                                    ${host}
+  GCC binary:                              ${CC}
+  GCC Protect enabled:                     ${enable_gccprotect}
+  GCC march native enabled:                ${enable_gccmarch_native}
+  GCC Profile enabled:                     ${enable_gccprofile}
+
+To build and install run 'make' and 'make install'.
+
+You can run 'make install-conf' if you want to install initial configuration
+files to ${e_sysconfdir}. Running 'make install-full' will install configuration
+and rules and provide you a ready-to-run suricata."
+echo
+echo "To install Suricata into /usr/bin/suricata, have the config in
+/etc/suricata and use /var/log/suricata as log dir, use:
+./configure --prefix=/usr/ --sysconfdir=/etc/ --localstatedir=/var/"
+echo
+

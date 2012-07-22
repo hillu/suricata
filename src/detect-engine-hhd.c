@@ -40,23 +40,14 @@
 #include "detect-engine-mpm.h"
 #include "detect-parse.h"
 #include "detect-engine-state.h"
-#include "detect-pcre.h"
-#include "detect-isdataat.h"
-#include "detect-bytetest.h"
-#include "detect-bytejump.h"
+#include "detect-engine-content-inspection.h"
 
 #include "flow-util.h"
-#include "util-spm.h"
 #include "util-debug.h"
 #include "util-print.h"
+#include "util-memcmp.h"
 #include "flow.h"
-#include "detect-flow.h"
-#include "flow-var.h"
-#include "threads.h"
-#include "flow-alert-sid.h"
 
-#include "stream-tcp.h"
-#include "stream.h"
 #include "app-layer-parser.h"
 
 #include "util-unittest.h"
@@ -64,249 +55,6 @@
 #include "app-layer.h"
 #include "app-layer-htp.h"
 #include "app-layer-protos.h"
-
-/**
- * \brief Run the actual payload match function for http header.
- *
- *        For accounting the last match in relative matching the
- *        det_ctx->payload_offset var is used.
- *
- * \param de_ctx      Detection engine context.
- * \param det_ctx     Detection engine thread context.
- * \param s           Signature to inspect.
- * \param sm          SigMatch to inspect.
- * \param payload     Ptr to the http headers buffer to inspect.
- * \param payload_len Length of the http headers buffer.
- *
- * \retval 0 no match.
- * \retval 1 match.
- */
-static int DoInspectHttpHeader(DetectEngineCtx *de_ctx,
-                               DetectEngineThreadCtx *det_ctx,
-                               Signature *s, SigMatch *sm,
-                               uint8_t *payload, uint32_t payload_len)
-{
-    SCEnter();
-
-    det_ctx->inspection_recursion_counter++;
-
-    if (det_ctx->inspection_recursion_counter == de_ctx->inspection_recursion_limit) {
-        det_ctx->discontinue_matching = 1;
-        SCReturnInt(0);
-    }
-
-    if (sm == NULL) {
-        SCReturnInt(0);
-    }
-
-    if (sm->type == DETECT_AL_HTTP_HEADER) {
-        if (payload_len == 0) {
-            SCReturnInt(0);
-        }
-
-        DetectContentData *cd = (DetectContentData *)sm->ctx;
-        SCLogDebug("inspecting http headers %"PRIu32" payload_len %"PRIu32,
-                   cd->id, payload_len);
-
-        //if (cd->flags & DETECT_CONTENT_HHD_MPM && !(cd->flags & DETECT_CONTENT_NEGATED))
-        //    goto match;
-
-        /* rule parsers should take care of this */
-#ifdef DEBUG
-        BUG_ON(cd->depth != 0 && cd->depth <= cd->offset);
-#endif
-
-        /* search for our pattern, checking the matches recursively.
-         * if we match we look for the next SigMatch as well */
-        uint8_t *found = NULL;
-        uint32_t offset = 0;
-        uint32_t depth = payload_len;
-        uint32_t prev_offset = 0; /**< used in recursive searching */
-        uint32_t prev_payload_offset = det_ctx->payload_offset;
-
-        do {
-            if (cd->flags & DETECT_CONTENT_DISTANCE ||
-                cd->flags & DETECT_CONTENT_WITHIN) {
-                SCLogDebug("prev_payload_offset %"PRIu32, prev_payload_offset);
-
-                offset = prev_payload_offset;
-                depth = payload_len;
-
-                if (cd->flags & DETECT_CONTENT_DISTANCE) {
-                    if (cd->distance < 0 && (uint32_t)(abs(cd->distance)) > offset)
-                        offset = 0;
-                    else
-                        offset += cd->distance;
-                }
-
-                if (cd->flags & DETECT_CONTENT_WITHIN) {
-                    if ((int32_t)depth > (int32_t)(prev_payload_offset + cd->within + cd->distance)) {
-                        depth = prev_payload_offset + cd->within + cd->distance;
-                    }
-                }
-
-                if (cd->depth != 0) {
-                    if ((cd->depth + prev_payload_offset) < depth) {
-                        depth = prev_payload_offset + cd->depth;
-                    }
-                }
-
-                if (cd->offset > offset) {
-                    offset = cd->offset;
-                }
-            } else { /* implied no relative matches */
-                /* set depth */
-                if (cd->depth != 0) {
-                    depth = cd->depth;
-                }
-
-                /* set offset */
-                offset = cd->offset;
-                prev_payload_offset = 0;
-            }
-
-            /* update offset with prev_offset if we're searching for
-             * matches after the first occurence. */
-            if (prev_offset != 0)
-                offset = prev_offset;
-
-            if (depth > payload_len)
-                depth = payload_len;
-
-            /* if offset is bigger than depth we can never match on a pattern.
-             * We can however, "match" on a negated pattern. */
-            if (offset > depth || depth == 0) {
-                if (cd->flags & DETECT_CONTENT_NEGATED) {
-                    goto match;
-                } else {
-                    SCReturnInt(0);
-                }
-            }
-
-            uint8_t *spayload = payload + offset;
-            uint32_t spayload_len = depth - offset;
-            uint32_t match_offset = 0;
-#ifdef DEBUG
-            BUG_ON(spayload_len > payload_len);
-#endif
-
-            /* do the actual search with boyer moore precooked ctx */
-            if (cd->flags & DETECT_CONTENT_NOCASE) {
-                found = BoyerMooreNocase(cd->content, cd->content_len,
-                                         spayload, spayload_len,
-                                         cd->bm_ctx->bmGs, cd->bm_ctx->bmBc);
-            } else {
-                found = BoyerMoore(cd->content, cd->content_len,
-                                   spayload, spayload_len,
-                                   cd->bm_ctx->bmGs, cd->bm_ctx->bmBc);
-            }
-
-            /* next we evaluate the result in combination with the
-             * negation flag. */
-            if (found == NULL && !(cd->flags & DETECT_CONTENT_NEGATED)) {
-                SCReturnInt(0);
-            } else if (found == NULL && cd->flags & DETECT_CONTENT_NEGATED) {
-                goto match;
-            } else if (found != NULL && cd->flags & DETECT_CONTENT_NEGATED) {
-                det_ctx->discontinue_matching = 1;
-                SCReturnInt(0);
-            } else {
-                match_offset = (uint32_t)((found - payload) + cd->content_len);
-                det_ctx->payload_offset = match_offset;
-
-                if (!(cd->flags & DETECT_CONTENT_RELATIVE_NEXT)) {
-                    SCLogDebug("no relative match coming up, so this is a match");
-                    goto match;
-                }
-
-                /* bail out if we have no next match. Technically this is an
-                 * error, as the current cd has the DETECT_CONTENT_RELATIVE_NEXT
-                 * flag set. */
-                if (sm->next == NULL) {
-                    SCReturnInt(0);
-                }
-
-                /* see if the next payload keywords match. If not, we will
-                 * search for another occurence of this http header content and
-                 * see if the others match then until we run out of matches */
-                int r = DoInspectHttpHeader(de_ctx, det_ctx, s, sm->next,
-                                            payload, payload_len);
-                if (r == 1) {
-                    SCReturnInt(1);
-                }
-
-                if (det_ctx->discontinue_matching)
-                    SCReturnInt(0);
-
-                /* set the previous match offset to the start of this match + 1 */
-                prev_offset = (match_offset - (cd->content_len - 1));
-                SCLogDebug("trying to see if there is another match after "
-                           "prev_offset %"PRIu32, prev_offset);
-            }
-
-        } while(1);
-
-    } else if (sm->type == DETECT_PCRE) {
-        SCLogDebug("inspecting pcre");
-        DetectPcreData *pe = (DetectPcreData *)sm->ctx;
-        uint32_t prev_payload_offset = det_ctx->payload_offset;
-        uint32_t prev_offset = 0;
-        int r = 0;
-
-        det_ctx->pcre_match_start_offset = 0;
-        do {
-            r = DetectPcrePayloadMatch(det_ctx, s, sm, NULL, NULL,
-                                       payload, payload_len);
-
-            if (r == 0) {
-                det_ctx->discontinue_matching = 1;
-                SCReturnInt(0);
-            }
-
-            if (!(pe->flags & DETECT_PCRE_RELATIVE_NEXT)) {
-                SCLogDebug("no relative match coming up, so this is a match");
-                goto match;
-            }
-
-            /* save it, in case we need to do a pcre match once again */
-            prev_offset = det_ctx->pcre_match_start_offset;
-
-            /* see if the next payload keywords match. If not, we will
-             * search for another occurence of this pcre and see
-             * if the others match, until we run out of matches */
-            int r = DoInspectHttpHeader(de_ctx, det_ctx, s, sm->next,
-                                        payload, payload_len);
-            if (r == 1) {
-                SCReturnInt(1);
-            }
-
-            if (det_ctx->discontinue_matching)
-                SCReturnInt(0);
-
-            det_ctx->payload_offset = prev_payload_offset;
-            det_ctx->pcre_match_start_offset = prev_offset;
-        } while (1);
-    } else {
-        /* we should never get here, but bail out just in case */
-        SCLogDebug("sm->type %u", sm->type);
-#ifdef DEBUG
-        BUG_ON(1);
-#endif
-    }
-
-    SCReturnInt(0);
-
-match:
-    /* this sigmatch matched, inspect the next one. If it was the last,
-     * the payload portion of the signature matched. */
-    if (sm->next != NULL) {
-        int r = DoInspectHttpHeader(de_ctx, det_ctx, s, sm->next, payload,
-                                    payload_len);
-        SCReturnInt(r);
-    } else {
-        SCReturnInt(1);
-    }
-}
 
 /**
  * \brief Helps buffer http normalized headers from different transactions and
@@ -390,6 +138,18 @@ static void DetectEngineBufferHttpHeaders(DetectEngineThreadCtx *det_ctx, Flow *
             size_t size1 = bstr_size(h->name);
             size_t size2 = bstr_size(h->value);
 
+            if (flags & STREAM_TOSERVER) {
+                if (size1 == 6 &&
+                    SCMemcmpLowercase("cookie", bstr_ptr(h->name), 6)) {
+                    continue;
+                }
+            } else {
+                if (size1 == 10 &&
+                    SCMemcmpLowercase("set-cookie", bstr_ptr(h->name), 10) == 0) {
+                    continue;
+                }
+            }
+
             /* the extra 4 bytes if for ": " and "\r\n" */
             headers_buffer = SCRealloc(headers_buffer, headers_buffer_len + size1 + size2 + 4);
             if (headers_buffer == NULL) {
@@ -430,59 +190,23 @@ int DetectEngineRunHttpHeaderMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
     uint32_t cnt = 0;
 
     if (det_ctx->hhd_buffers_list_len == 0) {
-        SCMutexLock(&f->m);
-        DetectEngineBufferHttpHeaders(det_ctx, f, htp_state,
-                                      (flags & STREAM_TOSERVER) ? STREAM_TOCLIENT : STREAM_TOSERVER);
-        SCMutexUnlock(&f->m);
-
-        for (i = 0; i < det_ctx->hhd_buffers_list_len; i++) {
-            cnt += HttpHeaderPatternSearch(det_ctx,
-                                           det_ctx->hhd_buffers[i],
-                                           det_ctx->hhd_buffers_len[i]);
-        }
-
-        DetectEngineCleanHHDBuffers(det_ctx);
-
-        SCMutexLock(&f->m);
+        FLOWLOCK_RDLOCK(f);
         DetectEngineBufferHttpHeaders(det_ctx, f, htp_state, flags);
-        SCMutexUnlock(&f->m);
+        FLOWLOCK_UNLOCK(f);
 
         for (i = 0; i < det_ctx->hhd_buffers_list_len; i++) {
             cnt += HttpHeaderPatternSearch(det_ctx,
                                            det_ctx->hhd_buffers[i],
-                                           det_ctx->hhd_buffers_len[i]);
+                                           det_ctx->hhd_buffers_len[i],
+                                           flags);
         }
     } else {
         for (i = 0; i < det_ctx->hhd_buffers_list_len; i++) {
             cnt += HttpHeaderPatternSearch(det_ctx,
                                            det_ctx->hhd_buffers[i],
-                                           det_ctx->hhd_buffers_len[i]);
+                                           det_ctx->hhd_buffers_len[i],
+                                           flags);
         }
-
-        uint16_t hhd_buffers_list_len = det_ctx->hhd_buffers_list_len;
-        uint8_t **hhd_buffers = det_ctx->hhd_buffers;
-        uint32_t *hhd_buffers_len = det_ctx->hhd_buffers_len;
-
-        det_ctx->hhd_buffers_list_len = 0;
-        det_ctx->hhd_buffers = NULL;
-        det_ctx->hhd_buffers_len = NULL;
-
-        SCMutexLock(&f->m);
-        DetectEngineBufferHttpHeaders(det_ctx, f, htp_state,
-                                      (flags & STREAM_TOSERVER) ? STREAM_TOCLIENT : STREAM_TOSERVER);
-        SCMutexUnlock(&f->m);
-
-        for (i = 0; i < det_ctx->hhd_buffers_list_len; i++) {
-            cnt += HttpHeaderPatternSearch(det_ctx,
-                                           det_ctx->hhd_buffers[i],
-                                           det_ctx->hhd_buffers_len[i]);
-        }
-
-        DetectEngineCleanHHDBuffers(det_ctx);
-
-        det_ctx->hhd_buffers_list_len = hhd_buffers_list_len;
-        det_ctx->hhd_buffers = hhd_buffers;
-        det_ctx->hhd_buffers_len = hhd_buffers_len;
     }
 
     return cnt;
@@ -511,9 +235,9 @@ int DetectEngineInspectHttpHeader(DetectEngineCtx *de_ctx,
     int i = 0;
 
     if (det_ctx->hhd_buffers_list_len == 0) {
-        SCMutexLock(&f->m);
+        FLOWLOCK_RDLOCK(f);
         DetectEngineBufferHttpHeaders(det_ctx, f, alstate, flags);
-        SCMutexUnlock(&f->m);
+        FLOWLOCK_UNLOCK(f);
     }
 
     for (i = 0; i < det_ctx->hhd_buffers_list_len; i++) {
@@ -523,8 +247,17 @@ int DetectEngineInspectHttpHeader(DetectEngineCtx *de_ctx,
         if (hhd_buffer == NULL)
             continue;
 
-        r = DoInspectHttpHeader(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_HHDMATCH],
-                                hhd_buffer, hhd_buffer_len);
+        det_ctx->buffer_offset = 0;
+        det_ctx->discontinue_matching = 0;
+        det_ctx->inspection_recursion_counter = 0;
+
+        r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_HHDMATCH],
+                                          f,
+                                          hhd_buffer,
+                                          hhd_buffer_len,
+                                          DETECT_ENGINE_CONTENT_INSPECTION_MODE_HHD, NULL);
+        //r = DoInspectHttpHeader(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_HHDMATCH],
+        //hhd_buffer, hhd_buffer_len);
         if (r == 1) {
             break;
         }
@@ -2129,7 +1862,7 @@ static int DetectEngineHttpHeaderTest18(void)
 
     /* start the search phase */
     det_ctx->sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, p);
-    uint32_t r = HttpHeaderPatternSearch(det_ctx, http_buf, http_len);
+    uint32_t r = HttpHeaderPatternSearch(det_ctx, http_buf, http_len, STREAM_TOSERVER);
     if (r != 2) {
         printf("expected result 2, got %"PRIu32": ", r);
         goto end;
@@ -2203,7 +1936,7 @@ static int DetectEngineHttpHeaderTest19(void)
 
     /* start the search phase */
     det_ctx->sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, p);
-    uint32_t r = HttpHeaderPatternSearch(det_ctx, http_buf, http_len);
+    uint32_t r = HttpHeaderPatternSearch(det_ctx, http_buf, http_len, STREAM_TOSERVER);
     if (r != 1) {
         printf("expected result 1, got %"PRIu32": ", r);
         goto end;
@@ -3407,6 +3140,126 @@ static int DetectEngineHttpHeaderTest30(void)
 
 #endif /* #if 0 */
 
+static int DetectEngineHttpHeaderTest30(void)
+{
+    TcpSession ssn;
+    Packet *p1 = NULL;
+    Packet *p2 = NULL;
+    ThreadVars th_v;
+    DetectEngineCtx *de_ctx = NULL;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    HtpState *http_state = NULL;
+    Flow f;
+    uint8_t http_buf1[] =
+        "GET /index.html HTTP/1.0\r\n"
+        "Host: www.openinfosecfoundation.org\r\n"
+        "User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.9.1.7) Gecko/20091221 Firefox/3.5.7\r\n"
+        "\r\n";
+    uint32_t http_buf1_len = sizeof(http_buf1) - 1;
+    uint8_t http_buf2[] =
+        "HTTP/1.0 200 ok\r\n"
+        "Set-Cookie: dummycookieset\r\n"
+        "Content-Type: text/html\r\n"
+        "Content-Length: 6\r\n"
+        "\r\n"
+        "abcdef";
+    uint32_t http_buf2_len = sizeof(http_buf2) - 1;
+    int result = 0;
+
+    memset(&th_v, 0, sizeof(th_v));
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    p1 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+    p2 = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx = (void *)&ssn;
+    f.flags |= FLOW_IPV4;
+
+    p1->flow = &f;
+    p1->flowflags |= FLOW_PKT_TOSERVER;
+    p1->flowflags |= FLOW_PKT_ESTABLISHED;
+    p1->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+    p2->flow = &f;
+    p2->flowflags |= FLOW_PKT_TOCLIENT;
+    p2->flowflags |= FLOW_PKT_ESTABLISHED;
+    p2->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
+    f.alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any "
+                               "(msg:\"http header test\"; "
+                               "content:\"dummycookieset\"; http_header; "
+                               "sid:1;)");
+    if (de_ctx->sig_list == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf1,
+                          http_buf1_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    http_state = f.alstate;
+    if (http_state == NULL) {
+        printf("no http state: \n");
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+
+    if (PacketAlertCheck(p1, 1)) {
+        printf("sid 1 matched but shouldn't have\n");
+        goto end;
+    }
+
+    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOCLIENT, http_buf2, http_buf2_len);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: \n", r);
+        result = 0;
+        goto end;
+    }
+
+    /* do detect */
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
+
+    if (PacketAlertCheck(p2, 1)) {
+        printf("sid 1 matched but shouldn't have\n");
+        goto end;
+    }
+
+    result = 1;
+
+end:
+    if (de_ctx != NULL)
+        SigGroupCleanup(de_ctx);
+    if (de_ctx != NULL)
+        SigCleanSignatures(de_ctx);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    UTHFreePackets(&p1, 1);
+    UTHFreePackets(&p2, 1);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void DetectEngineHttpHeaderRegisterTests(void)
@@ -3471,6 +3324,8 @@ void DetectEngineHttpHeaderRegisterTests(void)
                    DetectEngineHttpHeaderTest28, 1);
     UtRegisterTest("DetectEngineHttpHeaderTest29",
                    DetectEngineHttpHeaderTest29, 1);
+    UtRegisterTest("DetectEngineHttpHeaderTest30",
+                   DetectEngineHttpHeaderTest30, 1);
 #if 0
     UtRegisterTest("DetectEngineHttpHeaderTest30",
                    DetectEngineHttpHeaderTest30, 1);

@@ -46,6 +46,7 @@
 #include "tm-threads.h"
 #include "util-optimize.h"
 #include "flow-manager.h"
+#include "util-profiling.h"
 
 extern uint8_t suricata_ctl_flags;
 extern int max_pending_packets;
@@ -112,6 +113,7 @@ void TmModuleDecodePcapFileRegister (void) {
     tmm_modules[TMM_DECODEPCAPFILE].ThreadDeinit = NULL;
     tmm_modules[TMM_DECODEPCAPFILE].RegisterTests = NULL;
     tmm_modules[TMM_DECODEPCAPFILE].cap_flags = 0;
+    tmm_modules[TMM_DECODEPCAPFILE].flags = TM_FLAG_DECODE_TM;
 }
 
 void PcapFileCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
@@ -123,6 +125,7 @@ void PcapFileCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
     if (unlikely(p == NULL)) {
         SCReturn;
     }
+    PACKET_PROFILING_TMM_START(p, TMM_RECEIVEPCAPFILE);
 
     p->ts.tv_sec = h->ts.tv_sec;
     p->ts.tv_usec = h->ts.tv_usec;
@@ -135,8 +138,10 @@ void PcapFileCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
 
     if (unlikely(PacketCopyData(p, pkt, h->caplen))) {
         TmqhOutputPacketpool(ptv->tv, p);
+        PACKET_PROFILING_TMM_END(p, TMM_RECEIVEPCAPFILE);
         SCReturn;
     }
+    PACKET_PROFILING_TMM_END(p, TMM_RECEIVEPCAPFILE);
 
     if (TmThreadsSlotProcessPkt(ptv->tv, ptv->slot, p) != TM_ECODE_OK) {
         pcap_breakloop(pcap_g.pcap_handle);
@@ -305,7 +310,7 @@ TmEcode DecodePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, P
     SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
 
     double curr_ts = p->ts.tv_sec + p->ts.tv_usec / 1000.0;
-    if (curr_ts < prev_signaled_ts || (curr_ts - prev_signaled_ts) > 2.0) {
+    if (curr_ts < prev_signaled_ts || (curr_ts - prev_signaled_ts) > 60.0) {
         prev_signaled_ts = curr_ts;
         FlowWakeupFlowManagerThread();
     }

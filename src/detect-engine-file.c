@@ -120,6 +120,12 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
                 break;
             }
 
+            if (s->file_flags & FILE_SIG_NEED_MD5 && (!(file->flags & FILE_MD5))) {
+                SCLogDebug("sig needs file md5, but we don't have any");
+                r = 0;
+                break;
+            }
+
             /* run the file match functions. */
             for (sm = s->sm_lists[DETECT_SM_LIST_FILEMATCH]; sm != NULL; sm = sm->next) {
                 SCLogDebug("sm %p, sm->next %p", sm, sm->next);
@@ -202,8 +208,9 @@ int DetectFileInspectHttp(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Flow *
     int match = 0;
     FileContainer *ffc;
 
-    /* locking the flow, we will inspect the htp state */
-    SCMutexLock(&f->m);
+    /* locking the flow, we will inspect the htp state, files + we will set
+     * magic, so need a WRITE lock */
+    FLOWLOCK_WRLOCK(f);
 
     htp_state = (HtpState *)alstate;
     if (htp_state == NULL) {
@@ -252,6 +259,6 @@ int DetectFileInspectHttp(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Flow *
     }
 
 end:
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     SCReturnInt(r);
 }

@@ -192,7 +192,7 @@ static inline SCACPattern *SCACInitHashLookup(SCACCtx *ctx, uint8_t *pat,
 {
     uint32_t hash = SCACInitHashRaw(pat, patlen);
 
-    if (ctx->init_hash[hash] == NULL) {
+    if (ctx->init_hash == NULL || ctx->init_hash[hash] == NULL) {
         return NULL;
     }
 
@@ -234,6 +234,7 @@ static inline SCACPattern *SCACAllocPattern(MpmCtx *mpm_ctx)
  *
  * \param mpm_ctx Pointer to the mpm context.
  * \param p       Pointer to the SCACPattern instance to be freed.
+ * \param free    Free the above pointer or not.
  */
 static inline void SCACFreePattern(MpmCtx *mpm_ctx, SCACPattern *p)
 {
@@ -292,6 +293,10 @@ static inline uint32_t SCACInitHash(SCACPattern *p)
 static inline int SCACInitHashAdd(SCACCtx *ctx, SCACPattern *p)
 {
     uint32_t hash = SCACInitHash(p);
+
+    if (ctx->init_hash == NULL) {
+        return 0;
+    }
 
     if (ctx->init_hash[hash] == NULL) {
         ctx->init_hash[hash] = p;
@@ -953,7 +958,7 @@ int SCACPreparePatterns(MpmCtx *mpm_ctx)
 {
     SCACCtx *ctx = (SCACCtx *)mpm_ctx->ctx;
 
-    if (mpm_ctx->pattern_cnt == 0) {
+    if (mpm_ctx->pattern_cnt == 0 || ctx->init_hash == NULL) {
         SCLogDebug("no patterns supplied to this mpm_ctx");
         return 0;
     }
@@ -1168,6 +1173,25 @@ void SCACDestroyCtx(MpmCtx *mpm_ctx)
         mpm_ctx->memory_cnt++;
         mpm_ctx->memory_size -= (ctx->state_count *
                                  sizeof(SC_AC_STATE_TYPE_U32) * 256);
+    }
+
+    if (ctx->output_table != NULL) {
+        uint32_t state_count;
+        for (state_count = 0; state_count < ctx->state_count; state_count++) {
+            if (ctx->output_table[state_count].pids != NULL) {
+                SCFree(ctx->output_table[state_count].pids);
+            }
+        }
+        SCFree(ctx->output_table);
+    }
+
+    if (ctx->pid_pat_list != NULL) {
+        int i;
+        for (i = 0; i < (ctx->max_pat_id + 1); i++) {
+            if (ctx->pid_pat_list[i].cs != NULL)
+                SCFree(ctx->pid_pat_list[i].cs);
+        }
+        SCFree(ctx->pid_pat_list);
     }
 
     SCFree(mpm_ctx->ctx);
@@ -2039,6 +2063,7 @@ static int SCACTest19(void)
         printf("1 != %" PRIu32 " ",cnt);
 
     SCACDestroyCtx(&mpm_ctx);
+    SCACDestroyThreadCtx(&mpm_ctx, &mpm_thread_ctx);
     PmqFree(&pmq);
     return result;
 }

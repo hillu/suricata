@@ -3,8 +3,11 @@ noinst_HEADERS = action-globals.h \
     debug.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
 	suricata-common.h threadvars.h util-binsearch.h \
-    util-atomic.h util-validate.h
+        util-validate.h
 bin_PROGRAMS = suricata
+
+AM_CPPFLAGS = -DCONFIG_DIR=\"$(e_sysconfdir)\"
+
 suricata_SOURCES = suricata.c suricata.h \
 runmodes.c runmodes.h \
 runmode-pcap.c runmode-pcap.h \
@@ -14,6 +17,7 @@ runmode-nfq.c runmode-nfq.h \
 runmode-ipfw.c runmode-ipfw.h \
 runmode-erf-file.c runmode-erf-file.h \
 runmode-erf-dag.c runmode-erf-dag.h \
+runmode-napatech.c runmode-napatech.h \
 runmode-af-packet.c runmode-af-packet.h \
 packet-queue.c packet-queue.h \
 data-queue.c data-queue.h \
@@ -25,6 +29,7 @@ source-pfring.c source-pfring.h \
 source-ipfw.c source-ipfw.h \
 source-erf-file.c source-erf-file.h \
 source-erf-dag.c source-erf-dag.h \
+source-napatech.c source-napatech.h \
 source-af-packet.c source-af-packet.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
@@ -53,6 +58,8 @@ flow-bit.c flow-bit.h \
 flow-alert-sid.c flow-alert-sid.h \
 pkt-var.c pkt-var.h \
 host.c host.h \
+host-queue.c host-queue.h \
+host-timeout.c host-timeout.h \
 reputation.c reputation.h \
 detect.c detect.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
@@ -72,6 +79,7 @@ detect-engine-port.c detect-engine-port.h \
 detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-iponly.c detect-engine-iponly.h \
+detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-uri.c detect-engine-uri.h \
@@ -82,8 +90,12 @@ detect-engine-hrhd.c detect-engine-hrhd.h \
 detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hcd.c detect-engine-hcd.h \
 detect-engine-hrud.c detect-engine-hrud.h \
+detect-engine-hsmd.c detect-engine-hsmd.h \
+detect-engine-hscd.c detect-engine-hscd.h \
+detect-engine-hua.c detect-engine-hua.h \
 detect-engine-state.c detect-engine-state.h \
 detect-engine-file.c detect-engine-file.h \
+detect-engine-analyzer.c detect-engine-analyzer.h \
 detect-parse.c detect-parse.h \
 detect-ack.c detect-ack.h \
 detect-seq.c detect-seq.h \
@@ -97,7 +109,6 @@ detect-pcre.c detect-pcre.h \
 detect-depth.c detect-depth.h \
 detect-nocase.c detect-nocase.h \
 detect-fast-pattern.c detect-fast-pattern.h \
-detect-recursive.c detect-recursive.h \
 detect-rawbytes.c detect-rawbytes.h \
 detect-bytetest.c detect-bytetest.h \
 detect-bytejump.c detect-bytejump.h \
@@ -139,6 +150,8 @@ detect-http-raw-header.c detect-http-raw-header.h \
 detect-http-uri.c detect-http-uri.h \
 detect-http-raw-uri.c detect-http-raw-uri.h \
 detect-file-data.c detect-file-data.h \
+detect-http-ua.c detect-http-ua.h \
+detect-tls.c detect-tls.h \
 detect-tls-version.c detect-tls-version.h \
 detect-ssh-proto-version.c detect-ssh-proto-version.h \
 detect-ssh-software-version.c detect-ssh-software-version.h \
@@ -157,6 +170,7 @@ detect-filename.c detect-filename.h \
 detect-fileext.c detect-fileext.h \
 detect-filestore.c detect-filestore.h \
 detect-filemagic.c detect-filemagic.h \
+detect-filemd5.c detect-filemd5.h \
 detect-http-stat-code.c detect-http-stat-code.h \
 detect-ssl-version.c detect-ssl-version.h \
 detect-ssl-state.c detect-ssl-state.h \
@@ -166,7 +180,8 @@ decode-events.c decode-events.h \
 detect-replace.c detect-replace.h \
 util-magic.c util-magic.h \
 util-misc.c util-misc.h \
-util-atomic.h \
+util-atomic.c util-atomic.h \
+util-signal.c util-signal.h \
 util-print.c util-print.h \
 util-fmemopen.c util-fmemopen.h \
 util-cpu.c util-cpu.h \
@@ -184,11 +199,14 @@ util-mpm-b2gc.c util-mpm-b2gc.h \
 util-mpm-b2gm.c util-mpm-b2gm.h \
 util-mpm-ac.c util-mpm-ac.h \
 util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
+util-mpm-ac-bs.c util-mpm-ac-bs.h \
 util-cidr.c util-cidr.h \
 util-unittest.c util-unittest.h \
 util-unittest-helper.c util-unittest-helper.h \
 util-hash.c util-hash.h \
 util-hashlist.c util-hashlist.h \
+util-hash-lookup3.c util-hash-lookup3.h \
+util-rohash.c util-rohash.h \
 util-bloomfilter.c util-bloomfilter.h \
 util-bloomfilter-counting.c util-bloomfilter-counting.h \
 util-pool.c util-pool.h \
@@ -217,6 +235,8 @@ util-cuda-handlers.c util-cuda-handlers.h \
 util-optimize.h \
 util-privs.c util-privs.h \
 util-decode-asn1.c util-decode-asn1.h \
+util-decode-der.c util-decode-der.h \
+util-decode-der-get.c util-decode-der-get.h \
 util-ringbuffer.c util-ringbuffer.h \
 util-validate.h util-affinity.h util-affinity.c \
 util-memcmp.c util-memcmp.h \
@@ -228,6 +248,7 @@ util-checksum.c util-checksum.h \
 util-runmodes.c util-runmodes.h \
 util-file.c util-file.h \
 util-path.c util-path.h \
+util-buffer.c util-buffer.h \
 tm-modules.c tm-modules.h \
 tm-queues.c tm-queues.h \
 tm-queuehandlers.c tm-queuehandlers.h \
@@ -247,6 +268,7 @@ log-droplog.c log-droplog.h \
 log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
 log-file.c log-file.h \
+log-filestore.c log-filestore.h \
 stream.c stream.h \
 stream-tcp.c stream-tcp.h stream-tcp-private.h \
 stream-tcp-reassemble.c stream-tcp-reassemble.h \
@@ -272,6 +294,7 @@ app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-ssl.c app-layer-ssl.h \
 app-layer-ssh.c app-layer-ssh.h \
+app-layer-tls-handshake.c app-layer-tls-handshake.h \
 app-layer-smtp.c app-layer-smtp.h \
 defrag.c defrag.h \
 output.c output.h \
@@ -280,9 +303,12 @@ win32-service.c win32-service.h \
 util-action.c util-action.h \
 win32-syslog.h \
 util-profiling.c util-profiling.h \
+util-profiling-locks.c util-profiling-locks.h \
 cuda-packet-batcher.c cuda-packet-batcher.h \
 util-ioctl.h util-ioctl.c \
 util-logopenfile.h util-logopenfile.c
+
+EXTRA_DIST = util-mpm-b2g-cuda-kernel.cu ptxdump.py
 
 # set the include path found by configure
 INCLUDES= $(all_includes)

@@ -185,9 +185,6 @@ static inline int SCSigGetFlowvarType(Signature *sig)
         sm = sm->next;
     }
 
-    if (type != DETECT_FLOWVAR_NOT_USED)
-        return type;
-
     sm = sig->sm_lists[DETECT_SM_LIST_MATCH];
     pd = NULL;
     while (sm != NULL) {
@@ -232,9 +229,6 @@ static inline int SCSigGetPktvarType(Signature *sig)
 
         sm = sm->next;
     }
-
-    if (type != DETECT_PKTVAR_NOT_USED)
-        return type;
 
     sm = sig->sm_lists[DETECT_SM_LIST_MATCH];
     pd = NULL;
@@ -855,13 +849,17 @@ static inline SCSigSignatureWrapper *SCSigAllocSignatureWrapper(Signature *sig)
 
     sw->sig = sig;
 
-    if ( (sw->user = SCMalloc(SC_RADIX_USER_DATA_MAX * sizeof(int *))) == NULL)
+    if ( (sw->user = SCMalloc(SC_RADIX_USER_DATA_MAX * sizeof(int *))) == NULL) {
+        SCFree(sw);
         return NULL;
+    }
     memset(sw->user, 0, SC_RADIX_USER_DATA_MAX * sizeof(int *));
 
     for (i = 0; i < SC_RADIX_USER_DATA_MAX; i++) {
-        if ( (sw->user[i] = SCMalloc(sizeof(int))) == NULL)
+        if ( (sw->user[i] = SCMalloc(sizeof(int))) == NULL) {
+            SCFree(sw);
             return NULL;
+        }
         memset(sw->user[i], 0, sizeof(int));
     }
 
@@ -1824,6 +1822,7 @@ end:
  */
 static int SCSigTestSignatureOrdering08(void)
 {
+#ifdef HAVE_LIBNET11
     int result = 0;
     Signature *prevsig = NULL, *sig = NULL;
     extern uint8_t action_order_sigs[4];
@@ -1940,6 +1939,9 @@ end:
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
     return result;
+#else
+    return 1;
+#endif
 }
 
 /**

@@ -38,6 +38,7 @@
 #include "flow.h"
 
 #include "stream.h"
+#include "stream-tcp-reassemble.h"
 
 #include "tm-queuehandlers.h"
 
@@ -68,9 +69,8 @@ void TmqhPacketpoolRegister (void) {
 }
 
 void TmqhPacketpoolDestroy (void) {
-    if (ringbuffer != NULL) {
-       RingBufferDestroy(ringbuffer);
-    }
+    /* doing this clean up PacketPoolDestroy now,
+     * where we also clean the packets */
 }
 
 int PacketPoolIsEmpty(void) {
@@ -109,6 +109,40 @@ Packet *PacketPoolGetPacket(void) {
     return p;
 }
 
+void PacketPoolInit(intmax_t max_pending_packets) {
+    /* pre allocate packets */
+    SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)SIZE_OF_PACKET);
+    int i = 0;
+    for (i = 0; i < max_pending_packets; i++) {
+        /* XXX pkt alloc function */
+        Packet *p = SCMalloc(SIZE_OF_PACKET);
+        if (p == NULL) {
+            SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
+            exit(EXIT_FAILURE);
+        }
+        PACKET_INITIALIZE(p);
+
+        PacketPoolStorePacket(p);
+    }
+    SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
+            max_pending_packets, (uintmax_t)(max_pending_packets*SIZE_OF_PACKET));
+}
+
+void PacketPoolDestroy(void) {
+    if (ringbuffer == NULL) {
+        return;
+    }
+
+    Packet *p = NULL;
+    while ((p = PacketPoolGetPacket()) != NULL) {
+        PACKET_CLEANUP(p);
+        SCFree(p);
+    }
+
+    RingBufferDestroy(ringbuffer);
+    ringbuffer = NULL;
+}
+
 Packet *TmqhInputPacketpool(ThreadVars *t)
 {
     Packet *p = NULL;
@@ -129,10 +163,13 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
     SCEnter();
     SCLogDebug("Packet %p, p->root %p, alloced %s", p, p->root, p->flags & PKT_ALLOC ? "true" : "false");
 
-    /* final alerts cleanup... return smsgs to pool if needed */
-    if (p->alerts.alert_msgs != NULL) {
-        StreamMsgReturnListToPool(p->alerts.alert_msgs);
-        p->alerts.alert_msgs = NULL;
+    /** \todo make this a callback
+     *  Release tcp segments. Done here after alerting can use them. */
+    if (p->flow != NULL && p->proto == IPPROTO_TCP) {
+        SCMutexLock(&p->flow->m);
+        StreamTcpPruneSession(p->flow, p->flowflags & FLOW_PKT_TOSERVER ?
+                STREAM_TOSERVER : STREAM_TOCLIENT);
+        SCMutexUnlock(&p->flow->m);
     }
 
     if (IS_TUNNEL_PKT(p)) {
@@ -229,7 +266,9 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 
     /* if p uses extended data, free them */
     if (p->ext_pkt) {
-        SCFree(p->ext_pkt);
+        if (!(p->flags & PKT_ZERO_COPY)) {
+            SCFree(p->ext_pkt);
+        }
         p->ext_pkt = NULL;
     }
 

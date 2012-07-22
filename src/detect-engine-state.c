@@ -64,6 +64,9 @@
 #include "detect-engine-hmd.h"
 #include "detect-engine-hcd.h"
 #include "detect-engine-hrud.h"
+#include "detect-engine-hsmd.h"
+#include "detect-engine-hscd.h"
+#include "detect-engine-hua.h"
 #include "detect-engine-dcepayload.h"
 #include "detect-engine-file.h"
 
@@ -241,9 +244,9 @@ int DeStateUpdateInspectTransactionId(Flow *f, char direction) {
 
     int r = 0;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     r = AppLayerTransactionUpdateInspectId(f, direction);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
 
     SCReturnInt(r);
 }
@@ -262,7 +265,7 @@ int DeStateUpdateInspectTransactionId(Flow *f, char direction) {
  *       many args is slow.
  */
 static void DeStateSignatureAppend(DetectEngineState *state, Signature *s,
-                                   SigMatch *sm, uint16_t match_flags) {
+                                   SigMatch *sm, uint32_t match_flags) {
     DeStateStore *store = state->tail;
 
     if (store == NULL) {
@@ -394,8 +397,8 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
     SigMatch *sm = s->sm_lists[DETECT_SM_LIST_AMATCH];
     int match = 0;
     int r = 0;
-    uint16_t inspect_flags = 0;
-    uint16_t match_flags = 0;
+    uint32_t inspect_flags = 0;
+    uint32_t match_flags = 0;
     uint16_t file_no_match = 0;
 
     if (alstate == NULL) {
@@ -493,6 +496,22 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                     SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
                 }
             }
+            /* not inspecting in toserver direction */
+            if (s->sm_lists[DETECT_SM_LIST_HSMDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSMD_INSPECT;
+            }
+            /* not inspecting in toserver direction */
+            if (s->sm_lists[DETECT_SM_LIST_HSCDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSCD_INSPECT;
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HUADMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HUAD_INSPECT;
+                if (DetectEngineInspectHttpUA(de_ctx, det_ctx, s, f,
+                                              flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HUAD_MATCH;
+                }
+                SCLogDebug("inspecting http cookie");
+            }
         } else if (flags & STREAM_TOCLIENT) {
             /* For to client set the flags in inspect so it can't match
              * if the sig requires something only the request has. The rest
@@ -561,6 +580,25 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 } else {
                     SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
                 }
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HSMDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSMD_INSPECT;
+                if (DetectEngineInspectHttpStatMsg(de_ctx, det_ctx, s, f,
+                                                   flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HSMD_MATCH;
+                }
+                SCLogDebug("inspecting http stat msg");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HSCDMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HSCD_INSPECT;
+                if (DetectEngineInspectHttpStatCode(de_ctx, det_ctx, s, f,
+                                                    flags, alstate) == 1) {
+                    match_flags |= DE_STATE_FLAG_HSCD_MATCH;
+                }
+                SCLogDebug("inspecting http stat code");
+            }
+            if (s->sm_lists[DETECT_SM_LIST_HUADMATCH] != NULL) {
+                inspect_flags |= DE_STATE_FLAG_HUAD_INSPECT;
             }
         }
     } else if (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
@@ -633,7 +671,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
     }
 
     SCLogDebug("detection done, store results: sm %p, inspect_flags %04X, "
-            "match_flags %04X", sm, inspect_flags, match_flags);
+               "match_flags %04X", sm, inspect_flags, match_flags);
 
     SCMutexLock(&f->de_state_m);
     /* match or no match, we store the state anyway
@@ -650,8 +688,12 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
         if (DeStateStoreFilestoreSigsCantMatch(det_ctx->sgh, f->de_state, flags) == 1) {
             SCLogDebug("disabling file storage for transaction %u", det_ctx->tx_id);
+
+            FLOWLOCK_WRLOCK(f);
             FileDisableStoringForTransaction(f, flags & (STREAM_TOCLIENT|STREAM_TOSERVER),
                     det_ctx->tx_id);
+            FLOWLOCK_UNLOCK(f);
+
             f->de_state->flags |= DE_STATE_FILE_STORE_DISABLED;
         }
     }
@@ -671,8 +713,8 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     SigIntId cnt = 0;
     SigIntId store_cnt = 0;
     DeStateStore *store = NULL;
-    uint16_t inspect_flags = 0;
-    uint16_t match_flags = 0;
+    uint32_t inspect_flags = 0;
+    uint32_t match_flags = 0;
     int match = 0;
     uint16_t file_no_match = 0;
 
@@ -885,6 +927,30 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         }
                     }
                 }
+                /* not inspecting in toserver direction */
+                if (s->sm_lists[DETECT_SM_LIST_HSMDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSMD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HSMD_INSPECT;
+                    }
+                }
+                /* not inspecting in toserver direction */
+                if (s->sm_lists[DETECT_SM_LIST_HSCDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSCD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HSCD_INSPECT;
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HUADMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HUAD_MATCH)) {
+                        SCLogDebug("inspecting http user agent data");
+                        inspect_flags |= DE_STATE_FLAG_HUAD_INSPECT;
+
+                        if (DetectEngineInspectHttpUA(de_ctx, det_ctx, s, f,
+                                                      flags, alstate) == 1) {
+                            SCLogDebug("http user agent matched");
+                            match_flags |= DE_STATE_FLAG_HUAD_MATCH;
+                        }
+                    }
+                }
             } else if (alproto == ALPROTO_HTTP && (flags & STREAM_TOCLIENT)) {
                 /* For to client set the flags in inspect so it can't match
                  * if the sig requires something only the request has. The rest
@@ -971,6 +1037,35 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
                         } else {
                             SCLogDebug("skipping file inspection as we're not yet done with the other inspection");
                         }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HSMDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSMD_MATCH)) {
+                        SCLogDebug("inspecting http stat msg data");
+                        inspect_flags |= DE_STATE_FLAG_HSMD_INSPECT;
+
+                        if (DetectEngineInspectHttpStatMsg(de_ctx, det_ctx, s, f,
+                                                           flags, alstate) == 1) {
+                            SCLogDebug("http stat msg matched");
+                            match_flags |= DE_STATE_FLAG_HSMD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HSCDMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HSCD_MATCH)) {
+                        SCLogDebug("inspecting http stat code data");
+                        inspect_flags |= DE_STATE_FLAG_HSCD_INSPECT;
+
+                        if (DetectEngineInspectHttpStatCode(de_ctx, det_ctx, s, f,
+                                                            flags, alstate) == 1) {
+                            SCLogDebug("http stat code matched");
+                            match_flags |= DE_STATE_FLAG_HSCD_MATCH;
+                        }
+                    }
+                }
+                if (s->sm_lists[DETECT_SM_LIST_HUADMATCH] != NULL) {
+                    if (!(item->flags & DE_STATE_FLAG_HUAD_MATCH)) {
+                        inspect_flags |= DE_STATE_FLAG_HUAD_INSPECT;
                     }
                 }
 
@@ -1078,17 +1173,23 @@ int DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx, Dete
     if (!(f->de_state->flags & DE_STATE_FILE_STORE_DISABLED)) {
         if (DeStateStoreFilestoreSigsCantMatch(det_ctx->sgh, f->de_state, flags) == 1) {
             SCLogDebug("disabling file storage for transaction");
+
+            FLOWLOCK_WRLOCK(f);
             FileDisableStoringForTransaction(f, flags & (STREAM_TOCLIENT|STREAM_TOSERVER),
                     det_ctx->tx_id);
+            FLOWLOCK_UNLOCK(f);
+
             f->de_state->flags |= DE_STATE_FILE_STORE_DISABLED;
         }
     }
 
 end:
-    if (flags & STREAM_TOCLIENT)
-        f->de_state->flags &= ~DE_STATE_FILE_TC_NEW;
-    else
-        f->de_state->flags &= ~DE_STATE_FILE_TS_NEW;
+    if (f->de_state != NULL) {
+        if (flags & STREAM_TOCLIENT)
+            f->de_state->flags &= ~DE_STATE_FILE_TC_NEW;
+        else
+            f->de_state->flags &= ~DE_STATE_FILE_TS_NEW;
+    }
 
     SCMutexUnlock(&f->de_state_m);
     SCReturnInt(0);
@@ -1123,7 +1224,7 @@ static void DeStateResetFileInspection(Flow *f, uint16_t alproto, void *alstate)
         SCReturn;
     }
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     HtpState *htp_state = (HtpState *)alstate;
 
     if (htp_state->flags & HTP_FLAG_NEW_FILE_TX_TC) {
@@ -1136,7 +1237,7 @@ static void DeStateResetFileInspection(Flow *f, uint16_t alproto, void *alstate)
         f->de_state->flags |= DE_STATE_FILE_TS_NEW;
     }
 
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
 }
 
 #ifdef UNITTESTS
