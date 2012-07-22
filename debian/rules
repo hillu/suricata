@@ -12,8 +12,12 @@ export DH_VERBOSE=1
 
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
 
+DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude \
-	--enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native
+	--enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native \
+	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
+	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH)
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
