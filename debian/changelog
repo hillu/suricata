@@ -1,3 +1,11 @@
+suricata (1.3-1) unstable; urgency=low
+
+  * Imported Upstream version 1.3
+  * Add build-dependency on libnss3-dev and libnspr4-dev
+  * Bump Standards Version to 3.9.3
+
+ -- Pierre Chifflier <pollux@debian.org>  Sun, 22 Jul 2012 22:27:36 +0200
+
 suricata (1.2.1-2) unstable; urgency=low
 
   * Use override targets in rules files (Closes: #666330)
