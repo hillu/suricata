@@ -1,5 +1,8 @@
 /* config.h.in.  Generated from configure.in by autoheader.  */
 
+/* Our CONFIG_DIR */
+#undef CONFIG_DIR
+
 /* AF_PACKET support is available */
 #undef HAVE_AF_PACKET
 
