@@ -1022,7 +1022,9 @@ static int SigMatchSignaturesRunPostMatch(ThreadVars *tv,
 
     DetectReplaceExecute(p, det_ctx->replist);
     det_ctx->replist = NULL;
-    DetectFilestorePostMatch(tv, det_ctx,p);
+
+    if (s->flags & SIG_FLAG_FILESTORE)
+        DetectFilestorePostMatch(tv, det_ctx, p, s);
 
     return 1;
 }
@@ -1415,8 +1417,6 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
             flags |= STREAM_EOF;
             SCLogDebug("STREAM_EOF set");
         }
-
-        FlowIncrUsecnt(p->flow);
 
         FLOWLOCK_WRLOCK(p->flow);
         {
@@ -1827,6 +1827,9 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
 
         if (!(s->flags & SIG_FLAG_NOALERT)) {
             PacketAlertAppend(det_ctx, s, p, alert_flags);
+        } else {
+            /* apply actions even if not alerting */
+            p->action |= s->action;
         }
 next:
         DetectReplaceFree(det_ctx->replist);
@@ -1946,8 +1949,6 @@ end:
         StreamMsgReturnListToPool(smsg);
 
         FLOWLOCK_UNLOCK(p->flow);
-
-        FlowDecrUsecnt(p->flow);
     }
     PACKET_PROFILING_DETECT_END(p, PROF_DETECT_CLEANUP);
 
