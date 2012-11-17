@@ -108,6 +108,12 @@
 /* Packet fanout support is available */
 #undef HAVE_PACKET_FANOUT
 
+/* Define to 1 if you have the <pcap.h> header file. */
+#undef HAVE_PCAP_H
+
+/* Define to 1 if you have the <pcap/pcap.h> header file. */
+#undef HAVE_PCAP_PCAP_H
+
 /* PF_RING pfring_set_cluster is available */
 #undef HAVE_PFRING_CLUSTER_TYPE
 
