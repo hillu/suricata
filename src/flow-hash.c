@@ -425,6 +425,10 @@ static Flow *FlowGetNew(Packet *p) {
             }
 
             f = FlowGetUsedFlow();
+            if (f == NULL) {
+                /* very rare, but we can fail. Just giving up */
+                return NULL;
+            }
 
             /* freed a flow, but it's unlocked */
         } else {
@@ -589,7 +593,7 @@ static Flow *FlowGetUsedFlow(void) {
     uint32_t cnt = flow_config.hash_size;
 
     while (cnt--) {
-        if (idx++ >= flow_config.hash_size)
+        if (++idx >= flow_config.hash_size)
             idx = 0;
 
         FlowBucket *fb = &flow_hash[idx];
