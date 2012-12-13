@@ -25,7 +25,7 @@ Package: suricata
 Architecture: any
 Depends: ${shlibs:Depends},
     ${misc:Depends}
-Recommends: oinkmaster, snort-rules-default
+Recommends: oinkmaster, snort-rules-default, python
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
  rules (and is fully compatible with snort rules) to detect a variety of
