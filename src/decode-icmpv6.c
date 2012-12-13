@@ -163,7 +163,7 @@ void DecodePartialIPV6(Packet *p, uint8_t *partial_packet, uint16_t len )
 void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
                   uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
-    int error_msg = 0;
+    int full_hdr = 0;
     SCPerfCounterIncr(dtv->counter_icmpv6, tv->sc_perf_pca);
 
     if (len < ICMPV6_HEADER_LEN) {
@@ -191,9 +191,9 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             } else {
                 DecodePartialIPV6(p, (uint8_t*) (pkt + ICMPV6_HEADER_LEN),
                                   len - ICMPV6_HEADER_LEN );
+                full_hdr = 1;
             }
 
-            error_msg = 1;
             break;
         case ICMP6_PACKET_TOO_BIG:
             SCLogDebug("ICMP6_PACKET_TOO_BIG");
@@ -204,9 +204,9 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
                 p->icmpv6vars.mtu = ICMPV6_GET_MTU(p);
                 DecodePartialIPV6(p, (uint8_t*) (pkt + ICMPV6_HEADER_LEN),
                                   len - ICMPV6_HEADER_LEN );
+                full_hdr = 1;
             }
 
-            error_msg = 1;
             break;
         case ICMP6_TIME_EXCEEDED:
             SCLogDebug("ICMP6_TIME_EXCEEDED");
@@ -216,9 +216,9 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             } else {
                 DecodePartialIPV6(p, (uint8_t*) (pkt + ICMPV6_HEADER_LEN),
                                   len - ICMPV6_HEADER_LEN );
+                full_hdr = 1;
             }
 
-            error_msg = 1;
             break;
         case ICMP6_PARAM_PROB:
             SCLogDebug("ICMP6_PARAM_PROB");
@@ -229,9 +229,9 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
                 p->icmpv6vars.error_ptr= ICMPV6_GET_ERROR_PTR(p);
                 DecodePartialIPV6(p, (uint8_t*) (pkt + ICMPV6_HEADER_LEN),
                                   len - ICMPV6_HEADER_LEN );
+                full_hdr = 1;
             }
 
-            error_msg = 1;
             break;
         case ICMP6_ECHO_REQUEST:
             SCLogDebug("ICMP6_ECHO_REQUEST id: %u seq: %u",
@@ -242,6 +242,7 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             } else {
                 p->icmpv6vars.id = p->icmpv6h->icmpv6b.icmpv6i.id;
                 p->icmpv6vars.seq = p->icmpv6h->icmpv6b.icmpv6i.seq;
+                full_hdr = 1;
             }
 
             break;
@@ -254,6 +255,7 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             } else {
                 p->icmpv6vars.id = p->icmpv6h->icmpv6b.icmpv6i.id;
                 p->icmpv6vars.seq = p->icmpv6h->icmpv6b.icmpv6i.seq;
+                full_hdr = 1;
             }
 
             break;
@@ -264,7 +266,7 @@ void DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
     }
 
     /* for a info message the header is just 4 bytes */
-    if (!error_msg) {
+    if (!full_hdr) {
         if (p->payload_len >= 4) {
             p->payload_len -= 4;
             p->payload = pkt + 4;
@@ -367,7 +369,7 @@ static int ICMPV6ParamProbTest01(void)
         0x80, 0x00, 0x08, 0xb5, 0x99, 0xc3, 0xde, 0x40 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -439,7 +441,7 @@ static int ICMPV6PktTooBigTest01(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -513,7 +515,7 @@ static int ICMPV6TimeExceedTest01(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -589,7 +591,7 @@ static int ICMPV6DestUnreachTest01(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -657,7 +659,7 @@ static int ICMPV6EchoReqTest01(void)
         0x80, 0x00, 0xe5, 0xa5, 0x25, 0xf0, 0x75, 0x23 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -710,7 +712,7 @@ static int ICMPV6EchoRepTest01(void)
         0xe5, 0xa5, 0x25, 0xf0, 0x75, 0x23 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -770,7 +772,7 @@ static int ICMPV6ParamProbTest02(void)
         0x80, 0x00, 0x08, 0xb5, 0x99, 0xc3, 0xde, 0x40 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -831,7 +833,7 @@ static int ICMPV6PktTooBigTest02(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -883,7 +885,7 @@ static int ICMPV6TimeExceedTest02(void)
     /* The icmpv6 header is broken in the checksum (so we dont have a complete header) */
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -932,7 +934,7 @@ static int ICMPV6DestUnreachTest02(void)
         0x00, 0x00, 0x00, 0x00, 0x00 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -977,7 +979,7 @@ static int ICMPV6EchoReqTest02(void)
         0xe5, 0xa5, 0x25, 0xf0, 0x75, 0x23 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -1022,7 +1024,7 @@ static int ICMPV6EchoRepTest02(void)
         0xe5, 0xa5, 0x25, 0xf0, 0x75, 0x23 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;
@@ -1070,7 +1072,7 @@ static int ICMPV6PayloadTest01(void)
         0x00, 0x00, 0x00, 0x00, 0x00 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;

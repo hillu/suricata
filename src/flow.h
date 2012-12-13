@@ -102,6 +102,10 @@
 #define FLOW_FILE_NO_MD5_TS               0x10000000
 #define FLOW_FILE_NO_MD5_TC               0x20000000
 
+/** no size tracking of files in this flow */
+#define FLOW_FILE_NO_SIZE_TS              0x40000000
+#define FLOW_FILE_NO_SIZE_TC              0x80000000
+
 #define FLOW_IS_IPV4(f) \
     (((f)->flags & FLOW_IPV4) == FLOW_IPV4)
 #define FLOW_IS_IPV6(f) \
@@ -477,18 +481,18 @@ static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *f) {
     f->flags |= FLOW_NO_APPLAYER_INSPECTION;
 }
 
-#define FlowReference(dst_f_ptr, f) do {        \
-        if ((f) != NULL) {                      \
-            FlowIncrUsecnt((f));                \
-            *(dst_f_ptr) = f;                   \
-        }                                       \
+#define FlowReference(dst_f_ptr, f) do {            \
+        if ((f) != NULL) {                          \
+            FlowIncrUsecnt((f));                    \
+            *(dst_f_ptr) = f;                       \
+        }                                           \
     } while (0)
 
-#define FlowDeReference(src_f_ptr) do {         \
-        if (*(src_f_ptr) != NULL) {             \
-            FlowDecrUsecnt(*(src_f_ptr));       \
-            *(src_f_ptr) = NULL;                \
-        }                                       \
+#define FlowDeReference(src_f_ptr) do {               \
+        if (*(src_f_ptr) != NULL) {                   \
+            FlowDecrUsecnt(*(src_f_ptr));             \
+            *(src_f_ptr) = NULL;                      \
+        }                                             \
     } while (0)
 
 int FlowClearMemory(Flow *,uint8_t );

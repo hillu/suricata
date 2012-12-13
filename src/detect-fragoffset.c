@@ -53,6 +53,8 @@ void DetectFragOffsetFree(void *);
  */
 void DetectFragOffsetRegister (void) {
     sigmatch_table[DETECT_FRAGOFFSET].name = "fragoffset";
+    sigmatch_table[DETECT_FRAGOFFSET].desc = "match on specific decimal values of the IP fragment offset field";
+    sigmatch_table[DETECT_FRAGOFFSET].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Fragoffset";
     sigmatch_table[DETECT_FRAGOFFSET].Match = DetectFragOffsetMatch;
     sigmatch_table[DETECT_FRAGOFFSET].Setup = DetectFragOffsetSetup;
     sigmatch_table[DETECT_FRAGOFFSET].Free = DetectFragOffsetFree;
@@ -159,7 +161,7 @@ DetectFragOffsetData *DetectFragOffsetParse (char *fragoffsetstr) {
     }
 
     fragoff = SCMalloc(sizeof(DetectFragOffsetData));
-    if (fragoff == NULL)
+    if (unlikely(fragoff == NULL))
         goto error;
 
     fragoff->frag_off = 0;
@@ -302,7 +304,7 @@ int DetectFragOffsetParseTest03 (void) {
 int DetectFragOffsetMatchTest01 (void) {
     int result = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     DecodeThreadVars dtv;

@@ -292,7 +292,7 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
     f->bytecnt += GET_PKT_LEN(p);
 #endif
 
-    if (f->flags & FLOW_TO_DST_SEEN && f->flags & FLOW_TO_SRC_SEEN) {
+    if ((f->flags & FLOW_TO_DST_SEEN) && (f->flags & FLOW_TO_SRC_SEEN)) {
         SCLogDebug("pkt %p FLOW_PKT_ESTABLISHED", p);
         p->flowflags |= FLOW_PKT_ESTABLISHED;
     }
@@ -393,7 +393,7 @@ void FlowInitConfig(char quiet)
         exit(EXIT_FAILURE);
     }
     flow_hash = SCCalloc(flow_config.hash_size, sizeof(FlowBucket));
-    if (flow_hash == NULL) {
+    if (unlikely(flow_hash == NULL)) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in FlowInitConfig. Exiting...");
         exit(EXIT_FAILURE);
     }
@@ -474,6 +474,9 @@ void FlowShutdown(void)
         for (u = 0; u < flow_config.hash_size; u++) {
             Flow *f = flow_hash[u].head;
             while (f) {
+#ifdef DEBUG_VALIDATION
+                BUG_ON(SC_ATOMIC_GET(f->use_cnt) != 0);
+#endif
                 Flow *n = f->hnext;
                 uint8_t proto_map = FlowGetProtoMapping(f->proto);
                 FlowClearMemory(f, proto_map);

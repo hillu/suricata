@@ -62,7 +62,7 @@ ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
 	$(top_srcdir)/m4/ltsugar.m4 $(top_srcdir)/m4/ltversion.m4 \
-	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.in
+	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
@@ -71,341 +71,358 @@ CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
-am__suricata_SOURCES_DIST = suricata.c suricata.h runmodes.c \
-	runmodes.h runmode-pcap.c runmode-pcap.h runmode-pcap-file.c \
-	runmode-pcap-file.h runmode-pfring.c runmode-pfring.h \
-	runmode-nfq.c runmode-nfq.h runmode-ipfw.c runmode-ipfw.h \
-	runmode-erf-file.c runmode-erf-file.h runmode-erf-dag.c \
-	runmode-erf-dag.h runmode-napatech.c runmode-napatech.h \
-	runmode-af-packet.c runmode-af-packet.h packet-queue.c \
-	packet-queue.h data-queue.c data-queue.h threads.c threads.h \
-	source-nfq.c source-nfq.h source-pcap.c source-pcap.h \
-	source-pcap-file.c source-pcap-file.h source-pfring.c \
-	source-pfring.h source-ipfw.c source-ipfw.h source-erf-file.c \
-	source-erf-file.h source-erf-dag.c source-erf-dag.h \
-	source-napatech.c source-napatech.h source-af-packet.c \
-	source-af-packet.h decode.c decode.h decode-ethernet.c \
-	decode-ethernet.h decode-vlan.c decode-vlan.h decode-sll.c \
-	decode-sll.h decode-gre.c decode-gre.h decode-ppp.c \
-	decode-ppp.h decode-pppoe.c decode-pppoe.h decode-ipv4.c \
-	decode-ipv4.h decode-ipv6.c decode-ipv6.h decode-raw.c \
-	decode-raw.h decode-icmpv4.c decode-icmpv4.h decode-icmpv6.c \
-	decode-icmpv6.h decode-tcp.c decode-tcp.h decode-udp.c \
-	decode-udp.h decode-sctp.c decode-sctp.h flow.c flow.h \
-	flow-timeout.c flow-timeout.h flow-manager.c flow-manager.h \
-	flow-queue.c flow-queue.h flow-hash.c flow-hash.h flow-util.c \
-	flow-util.h util-mem.h flow-var.c flow-var.h flow-bit.c \
-	flow-bit.h flow-alert-sid.c flow-alert-sid.h pkt-var.c \
-	pkt-var.h host.c host.h host-queue.c host-queue.h \
-	host-timeout.c host-timeout.h reputation.c reputation.h \
-	detect.c detect.h detect-engine-sigorder.c \
-	detect-engine-sigorder.h detect-engine-alert.c \
-	detect-engine-alert.h detect-engine.c detect-engine.h \
-	detect-rpc.c detect-rpc.h detect-isdataat.c detect-isdataat.h \
-	detect-window.c detect-window.h detect-ftpbounce.c \
-	detect-ftpbounce.h detect-engine-address.c \
-	detect-engine-address.h detect-engine-threshold.c \
-	detect-engine-threshold.h detect-engine-tag.c \
-	detect-engine-tag.h detect-engine-address-ipv4.c \
-	detect-engine-address-ipv4.h detect-engine-address-ipv6.c \
-	detect-engine-address-ipv6.h detect-engine-proto.c \
-	detect-engine-proto.h detect-engine-port.c \
-	detect-engine-port.h detect-engine-siggroup.c \
-	detect-engine-siggroup.h detect-engine-mpm.c \
-	detect-engine-mpm.h detect-engine-iponly.c \
-	detect-engine-iponly.h detect-engine-content-inspection.c \
-	detect-engine-content-inspection.h detect-engine-payload.c \
-	detect-engine-payload.h detect-engine-dcepayload.c \
-	detect-engine-dcepayload.h detect-engine-uri.c \
-	detect-engine-uri.h detect-engine-hcbd.c detect-engine-hcbd.h \
-	detect-engine-hsbd.c detect-engine-hsbd.h detect-engine-hhd.c \
-	detect-engine-hhd.h detect-engine-hrhd.c detect-engine-hrhd.h \
-	detect-engine-hmd.c detect-engine-hmd.h detect-engine-hcd.c \
-	detect-engine-hcd.h detect-engine-hrud.c detect-engine-hrud.h \
-	detect-engine-hsmd.c detect-engine-hsmd.h detect-engine-hscd.c \
-	detect-engine-hscd.h detect-engine-hua.c detect-engine-hua.h \
-	detect-engine-state.c detect-engine-state.h \
-	detect-engine-file.c detect-engine-file.h \
+am__suricata_SOURCES_DIST = alert-debuglog.c alert-debuglog.h \
+	alert-fastlog.c alert-fastlog.h alert-pcapinfo.c \
+	alert-pcapinfo.h alert-prelude.c alert-prelude.h \
+	alert-syslog.c alert-syslog.h alert-unified2-alert.c \
+	alert-unified2-alert.h app-layer.c app-layer.h \
+	app-layer-dcerpc.c app-layer-dcerpc.h app-layer-dcerpc-udp.c \
+	app-layer-dcerpc-udp.h app-layer-detect-proto.c \
+	app-layer-detect-proto.h app-layer-ftp.c app-layer-ftp.h \
+	app-layer-htp-body.c app-layer-htp-body.h app-layer-htp.c \
+	app-layer-htp.h app-layer-htp-file.c app-layer-htp-file.h \
+	app-layer-parser.c app-layer-parser.h app-layer-protos.c \
+	app-layer-protos.h app-layer-smb2.c app-layer-smb2.h \
+	app-layer-smb.c app-layer-smb.h app-layer-smtp.c \
+	app-layer-smtp.h app-layer-ssh.c app-layer-ssh.h \
+	app-layer-ssl.c app-layer-ssl.h app-layer-tls-handshake.c \
+	app-layer-tls-handshake.h conf.c conf.h conf-yaml-loader.c \
+	conf-yaml-loader.h counters.c counters.h cuda-packet-batcher.c \
+	cuda-packet-batcher.h data-queue.c data-queue.h decode.c \
+	decode.h decode-ethernet.c decode-ethernet.h decode-events.c \
+	decode-events.h decode-gre.c decode-gre.h decode-icmpv4.c \
+	decode-icmpv4.h decode-icmpv6.c decode-icmpv6.h decode-ipv4.c \
+	decode-ipv4.h decode-ipv6.c decode-ipv6.h decode-ppp.c \
+	decode-ppp.h decode-pppoe.c decode-pppoe.h decode-raw.c \
+	decode-raw.h decode-sctp.c decode-sctp.h decode-sll.c \
+	decode-sll.h decode-tcp.c decode-tcp.h decode-teredo.c \
+	decode-teredo.h decode-udp.c decode-udp.h decode-vlan.c \
+	decode-vlan.h defrag.c defrag.h defrag-hash.c defrag-hash.h \
+	defrag-queue.c defrag-queue.h defrag-timeout.c \
+	defrag-timeout.h detect-ack.c detect-ack.h \
+	detect-app-layer-event.c detect-app-layer-event.h \
+	detect-asn1.c detect-asn1.h detect-byte-extract.c \
+	detect-byte-extract.h detect-bytejump.c detect-bytejump.h \
+	detect-bytetest.c detect-bytetest.h detect.c detect.h \
+	detect-classtype.c detect-classtype.h detect-content.c \
+	detect-content.h detect-csum.c detect-csum.h \
+	detect-dce-iface.c detect-dce-iface.h detect-dce-opnum.c \
+	detect-dce-opnum.h detect-dce-stub-data.c \
+	detect-dce-stub-data.h detect-depth.c detect-depth.h \
+	detect-detection-filter.c detect-detection-filter.h \
+	detect-distance.c detect-distance.h detect-dsize.c \
+	detect-dsize.h detect-engine-address.c detect-engine-address.h \
+	detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
+	detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
+	detect-engine-alert.c detect-engine-alert.h \
 	detect-engine-analyzer.c detect-engine-analyzer.h \
-	detect-parse.c detect-parse.h detect-ack.c detect-ack.h \
-	detect-seq.c detect-seq.h detect-content.c detect-content.h \
-	detect-uricontent.c detect-uricontent.h detect-flowbits.c \
-	detect-flowbits.h detect-flowvar.c detect-flowvar.h \
-	detect-flowint.c detect-flowint.h detect-pktvar.c \
-	detect-pktvar.h detect-pcre.c detect-pcre.h detect-depth.c \
-	detect-depth.h detect-nocase.c detect-nocase.h \
-	detect-fast-pattern.c detect-fast-pattern.h detect-rawbytes.c \
-	detect-rawbytes.h detect-bytetest.c detect-bytetest.h \
-	detect-bytejump.c detect-bytejump.h detect-sameip.c \
-	detect-sameip.h detect-ipproto.c detect-ipproto.h \
-	detect-within.c detect-within.h detect-distance.c \
-	detect-distance.h detect-offset.c detect-offset.h detect-sid.c \
-	detect-sid.h detect-priority.c detect-priority.h detect-rev.c \
-	detect-rev.h detect-classtype.c detect-classtype.h \
-	detect-reference.c detect-reference.h detect-tag.c \
-	detect-tag.h detect-threshold.c detect-threshold.h \
-	detect-metadata.c detect-metadata.h detect-msg.c detect-msg.h \
-	detect-id.c detect-id.h detect-flow.c detect-flow.h \
-	detect-dsize.c detect-dsize.h detect-tos.c detect-tos.h \
-	detect-stream_size.c detect-stream_size.h \
-	detect-engine-event.c detect-engine-event.h detect-ipopts.c \
-	detect-ipopts.h detect-flags.c detect-flags.h \
+	detect-engine.c detect-engine.h \
+	detect-engine-content-inspection.c \
+	detect-engine-content-inspection.h detect-engine-dcepayload.c \
+	detect-engine-dcepayload.h detect-engine-event.c \
+	detect-engine-event.h detect-engine-file.c \
+	detect-engine-file.h detect-engine-hcbd.c detect-engine-hcbd.h \
+	detect-engine-hcd.c detect-engine-hcd.h detect-engine-hhd.c \
+	detect-engine-hhd.h detect-engine-hmd.c detect-engine-hmd.h \
+	detect-engine-hrhd.c detect-engine-hrhd.h detect-engine-hrud.c \
+	detect-engine-hrud.h detect-engine-hsbd.c detect-engine-hsbd.h \
+	detect-engine-hscd.c detect-engine-hscd.h detect-engine-hsmd.c \
+	detect-engine-hsmd.h detect-engine-hua.c detect-engine-hua.h \
+	detect-engine-iponly.c detect-engine-iponly.h \
+	detect-engine-mpm.c detect-engine-mpm.h \
+	detect-engine-payload.c detect-engine-payload.h \
+	detect-engine-port.c detect-engine-port.h \
+	detect-engine-proto.c detect-engine-proto.h \
+	detect-engine-siggroup.c detect-engine-siggroup.h \
+	detect-engine-sigorder.c detect-engine-sigorder.h \
+	detect-engine-state.c detect-engine-state.h \
+	detect-engine-tag.c detect-engine-tag.h \
+	detect-engine-threshold.c detect-engine-threshold.h \
+	detect-engine-uri.c detect-engine-uri.h detect-fast-pattern.c \
+	detect-fast-pattern.h detect-file-data.c detect-file-data.h \
+	detect-fileext.c detect-fileext.h detect-filemagic.c \
+	detect-filemagic.h detect-filemd5.c detect-filemd5.h \
+	detect-filename.c detect-filename.h detect-filesize.c \
+	detect-filesize.h detect-filestore.c detect-filestore.h \
+	detect-flags.c detect-flags.h detect-flowbits.c \
+	detect-flowbits.h detect-flow.c detect-flow.h detect-flowint.c \
+	detect-flowint.h detect-flowvar.c detect-flowvar.h \
 	detect-fragbits.c detect-fragbits.h detect-fragoffset.c \
-	detect-fragoffset.h detect-gid.c detect-gid.h detect-mark.c \
-	detect-mark.h detect-noalert.c detect-noalert.h detect-csum.c \
-	detect-csum.h detect-ttl.c detect-ttl.h detect-itype.c \
-	detect-itype.h detect-icode.c detect-icode.h \
-	detect-http-cookie.c detect-http-cookie.h detect-http-method.c \
-	detect-http-method.h detect-http-header.c detect-http-header.h \
+	detect-fragoffset.h detect-ftpbounce.c detect-ftpbounce.h \
+	detect-gid.c detect-gid.h detect-http-client-body.c \
+	detect-http-client-body.h detect-http-cookie.c \
+	detect-http-cookie.h detect-http-header.c detect-http-header.h \
+	detect-http-method.c detect-http-method.h \
 	detect-http-raw-header.c detect-http-raw-header.h \
-	detect-http-uri.c detect-http-uri.h detect-http-raw-uri.c \
-	detect-http-raw-uri.h detect-file-data.c detect-file-data.h \
-	detect-http-ua.c detect-http-ua.h detect-tls.c detect-tls.h \
-	detect-tls-version.c detect-tls-version.h \
+	detect-http-raw-uri.c detect-http-raw-uri.h \
+	detect-http-server-body.c detect-http-server-body.h \
+	detect-http-stat-code.c detect-http-stat-code.h \
+	detect-http-stat-msg.c detect-http-stat-msg.h detect-http-ua.c \
+	detect-http-ua.h detect-http-uri.c detect-http-uri.h \
+	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
+	detect-icmp-seq.h detect-icode.c detect-icode.h detect-id.c \
+	detect-id.h detect-ipopts.c detect-ipopts.h detect-ipproto.c \
+	detect-ipproto.h detect-iprep.c detect-iprep.h \
+	detect-isdataat.c detect-isdataat.h detect-itype.c \
+	detect-itype.h detect-l3proto.c detect-l3proto.h \
+	detect-luajit.c detect-luajit.h detect-mark.c detect-mark.h \
+	detect-metadata.c detect-metadata.h detect-msg.c detect-msg.h \
+	detect-noalert.c detect-noalert.h detect-nocase.c \
+	detect-nocase.h detect-offset.c detect-offset.h detect-parse.c \
+	detect-parse.h detect-pcre.c detect-pcre.h detect-pkt-data.c \
+	detect-pkt-data.h detect-pktvar.c detect-pktvar.h \
+	detect-priority.c detect-priority.h detect-rawbytes.c \
+	detect-rawbytes.h detect-reference.c detect-reference.h \
+	detect-replace.c detect-replace.h detect-rev.c detect-rev.h \
+	detect-rpc.c detect-rpc.h detect-sameip.c detect-sameip.h \
+	detect-seq.c detect-seq.h detect-sid.c detect-sid.h \
 	detect-ssh-proto-version.c detect-ssh-proto-version.h \
 	detect-ssh-software-version.c detect-ssh-software-version.h \
-	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
-	detect-icmp-seq.h detect-dce-iface.c detect-dce-iface.h \
-	detect-dce-opnum.c detect-dce-opnum.h detect-dce-stub-data.c \
-	detect-dce-stub-data.h detect-urilen.c detect-urilen.h \
-	detect-detection-filter.c detect-detection-filter.h \
-	detect-http-client-body.c detect-http-client-body.h \
-	detect-http-server-body.c detect-http-server-body.h \
-	detect-http-stat-msg.c detect-http-stat-msg.h detect-asn1.c \
-	detect-asn1.h detect-filename.c detect-filename.h \
-	detect-fileext.c detect-fileext.h detect-filestore.c \
-	detect-filestore.h detect-filemagic.c detect-filemagic.h \
-	detect-filemd5.c detect-filemd5.h detect-http-stat-code.c \
-	detect-http-stat-code.h detect-ssl-version.c \
-	detect-ssl-version.h detect-ssl-state.c detect-ssl-state.h \
-	detect-byte-extract.c detect-byte-extract.h \
-	detect-app-layer-event.c detect-app-layer-event.h \
-	decode-events.c decode-events.h detect-replace.c \
-	detect-replace.h util-magic.c util-magic.h util-misc.c \
-	util-misc.h util-atomic.c util-atomic.h util-signal.c \
-	util-signal.h util-print.c util-print.h util-fmemopen.c \
-	util-fmemopen.h util-cpu.c util-cpu.h util-pidfile.c \
-	util-pidfile.h util-mpm.c util-mpm.h util-spm.c util-spm.h \
-	util-clock.h util-spm-bs.c util-spm-bs.h util-spm-bs2bm.c \
-	util-spm-bs2bm.h util-spm-bm.c util-spm-bm.h \
-	util-mpm-wumanber.c util-mpm-wumanber.h util-mpm-b2g.c \
-	util-mpm-b2g.h util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
-	util-mpm-b3g.c util-mpm-b3g.h util-mpm-b2gc.c util-mpm-b2gc.h \
-	util-mpm-b2gm.c util-mpm-b2gm.h util-mpm-ac.c util-mpm-ac.h \
-	util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h util-mpm-ac-bs.c \
-	util-mpm-ac-bs.h util-cidr.c util-cidr.h util-unittest.c \
-	util-unittest.h util-unittest-helper.c util-unittest-helper.h \
-	util-hash.c util-hash.h util-hashlist.c util-hashlist.h \
-	util-hash-lookup3.c util-hash-lookup3.h util-rohash.c \
-	util-rohash.h util-bloomfilter.c util-bloomfilter.h \
-	util-bloomfilter-counting.c util-bloomfilter-counting.h \
-	util-pool.c util-pool.h util-time.c util-time.h util-var.c \
-	util-var.h util-var-name.c util-var-name.h util-byte.c \
-	util-byte.h util-debug.c util-debug.h util-debug-filters.c \
-	util-debug-filters.h util-error.c util-error.h util-enum.c \
-	util-enum.h util-radix-tree.c util-radix-tree.h \
-	util-host-os-info.c util-host-os-info.h util-rule-vars.c \
-	util-rule-vars.h util-fix_checksum.c util-fix_checksum.h \
-	util-daemon.c util-daemon.h util-random.c util-random.h \
-	util-classification-config.c util-classification-config.h \
-	util-threshold-config.c util-threshold-config.h \
-	util-reference-config.c util-reference-config.h \
-	util-coredump-config.c util-coredump-config.h util-strlcatu.c \
-	util-strlcpyu.c util-cuda.c util-cuda.h util-cuda-handlers.c \
-	util-cuda-handlers.h util-optimize.h util-privs.c util-privs.h \
-	util-decode-asn1.c util-decode-asn1.h util-decode-der.c \
-	util-decode-der.h util-decode-der-get.c util-decode-der-get.h \
-	util-ringbuffer.c util-ringbuffer.h util-validate.h \
-	util-affinity.h util-affinity.c util-memcmp.c util-memcmp.h \
-	util-proto-name.c util-proto-name.h util-syslog.c \
-	util-syslog.h util-vector.h util-device.c util-device.h \
-	util-checksum.c util-checksum.h util-runmodes.c \
-	util-runmodes.h util-file.c util-file.h util-path.c \
-	util-path.h util-buffer.c util-buffer.h tm-modules.c \
-	tm-modules.h tm-queues.c tm-queues.h tm-queuehandlers.c \
-	tm-queuehandlers.h tm-threads.c tm-threads.h \
-	tm-threads-common.h tmqh-simple.c tmqh-simple.h tmqh-nfq.c \
-	tmqh-nfq.h tmqh-packetpool.c tmqh-packetpool.h tmqh-flow.c \
-	tmqh-flow.h tmqh-ringbuffer.c tmqh-ringbuffer.h \
-	alert-fastlog.c alert-fastlog.h alert-debuglog.c \
-	alert-debuglog.h alert-prelude.c alert-prelude.h \
-	alert-unified2-alert.c alert-unified2-alert.h alert-syslog.c \
-	alert-syslog.h alert-pcapinfo.c alert-pcapinfo.h log-droplog.c \
-	log-droplog.h log-httplog.c log-httplog.h log-pcap.c \
-	log-pcap.h log-file.c log-file.h log-filestore.c \
-	log-filestore.h stream.c stream.h stream-tcp.c stream-tcp.h \
-	stream-tcp-private.h stream-tcp-reassemble.c \
-	stream-tcp-reassemble.h stream-tcp-inline.c \
-	stream-tcp-inline.h stream-tcp-sack.c stream-tcp-sack.h \
-	stream-tcp-util.c stream-tcp-util.h respond-reject.c \
+	detect-ssl-state.c detect-ssl-state.h detect-ssl-version.c \
+	detect-ssl-version.h detect-stream_size.c detect-stream_size.h \
+	detect-tag.c detect-tag.h detect-threshold.c \
+	detect-threshold.h detect-tls.c detect-tls.h \
+	detect-tls-version.c detect-tls-version.h detect-tos.c \
+	detect-tos.h detect-ttl.c detect-ttl.h detect-uricontent.c \
+	detect-uricontent.h detect-urilen.c detect-urilen.h \
+	detect-window.c detect-window.h detect-within.c \
+	detect-within.h flow-alert-sid.c flow-alert-sid.h flow-bit.c \
+	flow-bit.h flow.c flow.h flow-hash.c flow-hash.h \
+	flow-manager.c flow-manager.h flow-queue.c flow-queue.h \
+	flow-timeout.c flow-timeout.h flow-util.c flow-util.h \
+	flow-var.c flow-var.h host.c host.h host-queue.c host-queue.h \
+	host-timeout.c host-timeout.h log-droplog.c log-droplog.h \
+	log-file.c log-file.h log-filestore.c log-filestore.h \
+	log-httplog.c log-httplog.h log-pcap.c log-pcap.h log-tlslog.c \
+	log-tlslog.h output.c output.h packet-queue.c packet-queue.h \
+	pkt-var.c pkt-var.h reputation.c reputation.h respond-reject.c \
 	respond-reject.h respond-reject-libnet11.h \
-	respond-reject-libnet11.c conf.c conf.h conf-yaml-loader.c \
-	conf-yaml-loader.h counters.c counters.h app-layer.c \
-	app-layer.h app-layer-detect-proto.c app-layer-detect-proto.h \
-	app-layer-parser.c app-layer-parser.h app-layer-protos.c \
-	app-layer-protos.h app-layer-htp.c app-layer-htp.h \
-	app-layer-htp-body.c app-layer-htp-body.h app-layer-htp-file.c \
-	app-layer-htp-file.h app-layer-smb.c app-layer-smb.h \
-	app-layer-smb2.c app-layer-smb2.h app-layer-dcerpc.c \
-	app-layer-dcerpc.h app-layer-dcerpc-udp.c \
-	app-layer-dcerpc-udp.h app-layer-ftp.c app-layer-ftp.h \
-	app-layer-ssl.c app-layer-ssl.h app-layer-ssh.c \
-	app-layer-ssh.h app-layer-tls-handshake.c \
-	app-layer-tls-handshake.h app-layer-smtp.c app-layer-smtp.h \
-	defrag.c defrag.h output.c output.h win32-misc.c win32-misc.h \
-	win32-service.c win32-service.h util-action.c util-action.h \
-	win32-syslog.h util-profiling.c util-profiling.h \
-	util-profiling-locks.c util-profiling-locks.h \
-	cuda-packet-batcher.c cuda-packet-batcher.h util-ioctl.h \
+	respond-reject-libnet11.c runmode-af-packet.c \
+	runmode-af-packet.h runmode-erf-dag.c runmode-erf-dag.h \
+	runmode-erf-file.c runmode-erf-file.h runmode-ipfw.c \
+	runmode-ipfw.h runmode-napatech.c runmode-napatech.h \
+	runmode-nfq.c runmode-nfq.h runmode-pcap.c runmode-pcap.h \
+	runmode-pcap-file.c runmode-pcap-file.h runmode-pfring.c \
+	runmode-pfring.h runmode-unix-socket.c runmode-unix-socket.h \
+	runmodes.c runmodes.h source-af-packet.c source-af-packet.h \
+	source-erf-dag.c source-erf-dag.h source-erf-file.c \
+	source-erf-file.h source-ipfw.c source-ipfw.h \
+	source-napatech.c source-napatech.h source-nfq.c source-nfq.h \
+	source-pcap.c source-pcap.h source-pcap-file.c \
+	source-pcap-file.h source-pfring.c source-pfring.h stream.c \
+	stream.h stream-tcp.c stream-tcp.h stream-tcp-private.h \
+	stream-tcp-inline.c stream-tcp-inline.h \
+	stream-tcp-reassemble.c stream-tcp-reassemble.h \
+	stream-tcp-sack.c stream-tcp-sack.h stream-tcp-util.c \
+	stream-tcp-util.h suricata.c suricata.h threads.c threads.h \
+	tm-modules.c tm-modules.h tmqh-flow.c tmqh-flow.h tmqh-nfq.c \
+	tmqh-nfq.h tmqh-packetpool.c tmqh-packetpool.h \
+	tmqh-ringbuffer.c tmqh-ringbuffer.h tmqh-simple.c \
+	tmqh-simple.h tm-queuehandlers.c tm-queuehandlers.h \
+	tm-queues.c tm-queues.h tm-threads.c tm-threads.h \
+	tm-threads-common.h unix-manager.c unix-manager.h \
+	util-action.c util-action.h util-atomic.c util-atomic.h \
+	util-bloomfilter-counting.c util-bloomfilter-counting.h \
+	util-bloomfilter.c util-bloomfilter.h util-buffer.c \
+	util-buffer.h util-byte.c util-byte.h util-checksum.c \
+	util-checksum.h util-cidr.c util-cidr.h \
+	util-classification-config.c util-classification-config.h \
+	util-coredump-config.c util-coredump-config.h util-cpu.c \
+	util-cpu.h util-crypt.c util-crypt.h util-cuda.c util-cuda.h \
+	util-cuda-handlers.c util-cuda-handlers.h util-daemon.c \
+	util-daemon.h util-debug.c util-debug.h util-debug-filters.c \
+	util-debug-filters.h util-decode-asn1.c util-decode-asn1.h \
+	util-decode-der.c util-decode-der.h util-decode-der-get.c \
+	util-decode-der-get.h util-device.c util-device.h util-enum.c \
+	util-enum.h util-error.c util-error.h util-file.c util-file.h \
+	util-fix_checksum.c util-fix_checksum.h util-fmemopen.c \
+	util-fmemopen.h util-hash.c util-hash.h util-hashlist.c \
+	util-hashlist.h util-hash-lookup3.c util-hash-lookup3.h \
+	util-host-os-info.c util-host-os-info.h util-ioctl.h \
 	util-ioctl.c util-logopenfile.h util-logopenfile.c \
+	util-magic.c util-magic.h util-memcmp.c util-memcmp.h \
+	util-mem.h util-misc.c util-misc.h util-mpm-ac-bs.c \
+	util-mpm-ac-bs.h util-mpm-ac.c util-mpm-ac.h \
+	util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h util-mpm-b2gc.c \
+	util-mpm-b2gc.h util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
+	util-mpm-b2g.c util-mpm-b2g.h util-mpm-b2gm.c util-mpm-b2gm.h \
+	util-mpm-b3g.c util-mpm-b3g.h util-mpm.c util-mpm.h \
+	util-mpm-wumanber.c util-mpm-wumanber.h util-optimize.h \
+	util-path.c util-path.h util-pidfile.c util-pidfile.h \
+	util-pool.c util-pool.h util-print.c util-print.h util-privs.c \
+	util-privs.h util-profiling.c util-profiling.h \
+	util-profiling-locks.c util-profiling-locks.h \
+	util-profiling-rules.c util-proto-name.c util-proto-name.h \
+	util-radix-tree.c util-radix-tree.h util-random.c \
+	util-random.h util-reference-config.c util-reference-config.h \
+	util-ringbuffer.c util-ringbuffer.h util-rohash.c \
+	util-rohash.h util-rule-vars.c util-rule-vars.h \
+	util-runmodes.c util-runmodes.h util-signal.c util-signal.h \
+	util-spm-bm.c util-spm-bm.h util-spm-bs2bm.c util-spm-bs2bm.h \
+	util-spm-bs.c util-spm-bs.h util-spm.c util-spm.h util-clock.h \
+	util-strlcatu.c util-strlcpyu.c util-syslog.c util-syslog.h \
+	util-threshold-config.c util-threshold-config.h util-time.c \
+	util-time.h util-unittest.c util-unittest.h \
+	util-unittest-helper.c util-unittest-helper.h util-validate.h \
+	util-affinity.h util-affinity.c util-var.c util-var.h \
+	util-var-name.c util-var-name.h util-vector.h win32-misc.c \
+	win32-misc.h win32-service.c win32-service.h win32-syslog.h \
 	cuda-ptxdump.h
 am__objects_1 =
-am_suricata_OBJECTS = suricata.$(OBJEXT) runmodes.$(OBJEXT) \
-	runmode-pcap.$(OBJEXT) runmode-pcap-file.$(OBJEXT) \
-	runmode-pfring.$(OBJEXT) runmode-nfq.$(OBJEXT) \
-	runmode-ipfw.$(OBJEXT) runmode-erf-file.$(OBJEXT) \
-	runmode-erf-dag.$(OBJEXT) runmode-napatech.$(OBJEXT) \
-	runmode-af-packet.$(OBJEXT) packet-queue.$(OBJEXT) \
-	data-queue.$(OBJEXT) threads.$(OBJEXT) source-nfq.$(OBJEXT) \
-	source-pcap.$(OBJEXT) source-pcap-file.$(OBJEXT) \
-	source-pfring.$(OBJEXT) source-ipfw.$(OBJEXT) \
-	source-erf-file.$(OBJEXT) source-erf-dag.$(OBJEXT) \
-	source-napatech.$(OBJEXT) source-af-packet.$(OBJEXT) \
+am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
+	alert-pcapinfo.$(OBJEXT) alert-prelude.$(OBJEXT) \
+	alert-syslog.$(OBJEXT) alert-unified2-alert.$(OBJEXT) \
+	app-layer.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
+	app-layer-dcerpc-udp.$(OBJEXT) \
+	app-layer-detect-proto.$(OBJEXT) app-layer-ftp.$(OBJEXT) \
+	app-layer-htp-body.$(OBJEXT) app-layer-htp.$(OBJEXT) \
+	app-layer-htp-file.$(OBJEXT) app-layer-parser.$(OBJEXT) \
+	app-layer-protos.$(OBJEXT) app-layer-smb2.$(OBJEXT) \
+	app-layer-smb.$(OBJEXT) app-layer-smtp.$(OBJEXT) \
+	app-layer-ssh.$(OBJEXT) app-layer-ssl.$(OBJEXT) \
+	app-layer-tls-handshake.$(OBJEXT) conf.$(OBJEXT) \
+	conf-yaml-loader.$(OBJEXT) counters.$(OBJEXT) \
+	cuda-packet-batcher.$(OBJEXT) data-queue.$(OBJEXT) \
 	decode.$(OBJEXT) decode-ethernet.$(OBJEXT) \
-	decode-vlan.$(OBJEXT) decode-sll.$(OBJEXT) \
-	decode-gre.$(OBJEXT) decode-ppp.$(OBJEXT) \
-	decode-pppoe.$(OBJEXT) decode-ipv4.$(OBJEXT) \
-	decode-ipv6.$(OBJEXT) decode-raw.$(OBJEXT) \
+	decode-events.$(OBJEXT) decode-gre.$(OBJEXT) \
 	decode-icmpv4.$(OBJEXT) decode-icmpv6.$(OBJEXT) \
-	decode-tcp.$(OBJEXT) decode-udp.$(OBJEXT) \
-	decode-sctp.$(OBJEXT) flow.$(OBJEXT) flow-timeout.$(OBJEXT) \
-	flow-manager.$(OBJEXT) flow-queue.$(OBJEXT) \
-	flow-hash.$(OBJEXT) flow-util.$(OBJEXT) flow-var.$(OBJEXT) \
-	flow-bit.$(OBJEXT) flow-alert-sid.$(OBJEXT) pkt-var.$(OBJEXT) \
-	host.$(OBJEXT) host-queue.$(OBJEXT) host-timeout.$(OBJEXT) \
-	reputation.$(OBJEXT) detect.$(OBJEXT) \
-	detect-engine-sigorder.$(OBJEXT) detect-engine-alert.$(OBJEXT) \
-	detect-engine.$(OBJEXT) detect-rpc.$(OBJEXT) \
-	detect-isdataat.$(OBJEXT) detect-window.$(OBJEXT) \
-	detect-ftpbounce.$(OBJEXT) detect-engine-address.$(OBJEXT) \
-	detect-engine-threshold.$(OBJEXT) detect-engine-tag.$(OBJEXT) \
+	decode-ipv4.$(OBJEXT) decode-ipv6.$(OBJEXT) \
+	decode-ppp.$(OBJEXT) decode-pppoe.$(OBJEXT) \
+	decode-raw.$(OBJEXT) decode-sctp.$(OBJEXT) \
+	decode-sll.$(OBJEXT) decode-tcp.$(OBJEXT) \
+	decode-teredo.$(OBJEXT) decode-udp.$(OBJEXT) \
+	decode-vlan.$(OBJEXT) defrag.$(OBJEXT) defrag-hash.$(OBJEXT) \
+	defrag-queue.$(OBJEXT) defrag-timeout.$(OBJEXT) \
+	detect-ack.$(OBJEXT) detect-app-layer-event.$(OBJEXT) \
+	detect-asn1.$(OBJEXT) detect-byte-extract.$(OBJEXT) \
+	detect-bytejump.$(OBJEXT) detect-bytetest.$(OBJEXT) \
+	detect.$(OBJEXT) detect-classtype.$(OBJEXT) \
+	detect-content.$(OBJEXT) detect-csum.$(OBJEXT) \
+	detect-dce-iface.$(OBJEXT) detect-dce-opnum.$(OBJEXT) \
+	detect-dce-stub-data.$(OBJEXT) detect-depth.$(OBJEXT) \
+	detect-detection-filter.$(OBJEXT) detect-distance.$(OBJEXT) \
+	detect-dsize.$(OBJEXT) detect-engine-address.$(OBJEXT) \
 	detect-engine-address-ipv4.$(OBJEXT) \
 	detect-engine-address-ipv6.$(OBJEXT) \
-	detect-engine-proto.$(OBJEXT) detect-engine-port.$(OBJEXT) \
-	detect-engine-siggroup.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
-	detect-engine-iponly.$(OBJEXT) \
+	detect-engine-alert.$(OBJEXT) detect-engine-analyzer.$(OBJEXT) \
+	detect-engine.$(OBJEXT) \
 	detect-engine-content-inspection.$(OBJEXT) \
-	detect-engine-payload.$(OBJEXT) \
-	detect-engine-dcepayload.$(OBJEXT) detect-engine-uri.$(OBJEXT) \
-	detect-engine-hcbd.$(OBJEXT) detect-engine-hsbd.$(OBJEXT) \
-	detect-engine-hhd.$(OBJEXT) detect-engine-hrhd.$(OBJEXT) \
-	detect-engine-hmd.$(OBJEXT) detect-engine-hcd.$(OBJEXT) \
-	detect-engine-hrud.$(OBJEXT) detect-engine-hsmd.$(OBJEXT) \
-	detect-engine-hscd.$(OBJEXT) detect-engine-hua.$(OBJEXT) \
-	detect-engine-state.$(OBJEXT) detect-engine-file.$(OBJEXT) \
-	detect-engine-analyzer.$(OBJEXT) detect-parse.$(OBJEXT) \
-	detect-ack.$(OBJEXT) detect-seq.$(OBJEXT) \
-	detect-content.$(OBJEXT) detect-uricontent.$(OBJEXT) \
-	detect-flowbits.$(OBJEXT) detect-flowvar.$(OBJEXT) \
-	detect-flowint.$(OBJEXT) detect-pktvar.$(OBJEXT) \
-	detect-pcre.$(OBJEXT) detect-depth.$(OBJEXT) \
-	detect-nocase.$(OBJEXT) detect-fast-pattern.$(OBJEXT) \
-	detect-rawbytes.$(OBJEXT) detect-bytetest.$(OBJEXT) \
-	detect-bytejump.$(OBJEXT) detect-sameip.$(OBJEXT) \
-	detect-ipproto.$(OBJEXT) detect-within.$(OBJEXT) \
-	detect-distance.$(OBJEXT) detect-offset.$(OBJEXT) \
-	detect-sid.$(OBJEXT) detect-priority.$(OBJEXT) \
-	detect-rev.$(OBJEXT) detect-classtype.$(OBJEXT) \
-	detect-reference.$(OBJEXT) detect-tag.$(OBJEXT) \
-	detect-threshold.$(OBJEXT) detect-metadata.$(OBJEXT) \
-	detect-msg.$(OBJEXT) detect-id.$(OBJEXT) detect-flow.$(OBJEXT) \
-	detect-dsize.$(OBJEXT) detect-tos.$(OBJEXT) \
-	detect-stream_size.$(OBJEXT) detect-engine-event.$(OBJEXT) \
-	detect-ipopts.$(OBJEXT) detect-flags.$(OBJEXT) \
+	detect-engine-dcepayload.$(OBJEXT) \
+	detect-engine-event.$(OBJEXT) detect-engine-file.$(OBJEXT) \
+	detect-engine-hcbd.$(OBJEXT) detect-engine-hcd.$(OBJEXT) \
+	detect-engine-hhd.$(OBJEXT) detect-engine-hmd.$(OBJEXT) \
+	detect-engine-hrhd.$(OBJEXT) detect-engine-hrud.$(OBJEXT) \
+	detect-engine-hsbd.$(OBJEXT) detect-engine-hscd.$(OBJEXT) \
+	detect-engine-hsmd.$(OBJEXT) detect-engine-hua.$(OBJEXT) \
+	detect-engine-iponly.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
+	detect-engine-payload.$(OBJEXT) detect-engine-port.$(OBJEXT) \
+	detect-engine-proto.$(OBJEXT) detect-engine-siggroup.$(OBJEXT) \
+	detect-engine-sigorder.$(OBJEXT) detect-engine-state.$(OBJEXT) \
+	detect-engine-tag.$(OBJEXT) detect-engine-threshold.$(OBJEXT) \
+	detect-engine-uri.$(OBJEXT) detect-fast-pattern.$(OBJEXT) \
+	detect-file-data.$(OBJEXT) detect-fileext.$(OBJEXT) \
+	detect-filemagic.$(OBJEXT) detect-filemd5.$(OBJEXT) \
+	detect-filename.$(OBJEXT) detect-filesize.$(OBJEXT) \
+	detect-filestore.$(OBJEXT) detect-flags.$(OBJEXT) \
+	detect-flowbits.$(OBJEXT) detect-flow.$(OBJEXT) \
+	detect-flowint.$(OBJEXT) detect-flowvar.$(OBJEXT) \
 	detect-fragbits.$(OBJEXT) detect-fragoffset.$(OBJEXT) \
-	detect-gid.$(OBJEXT) detect-mark.$(OBJEXT) \
-	detect-noalert.$(OBJEXT) detect-csum.$(OBJEXT) \
-	detect-ttl.$(OBJEXT) detect-itype.$(OBJEXT) \
-	detect-icode.$(OBJEXT) detect-http-cookie.$(OBJEXT) \
-	detect-http-method.$(OBJEXT) detect-http-header.$(OBJEXT) \
-	detect-http-raw-header.$(OBJEXT) detect-http-uri.$(OBJEXT) \
-	detect-http-raw-uri.$(OBJEXT) detect-file-data.$(OBJEXT) \
-	detect-http-ua.$(OBJEXT) detect-tls.$(OBJEXT) \
-	detect-tls-version.$(OBJEXT) \
-	detect-ssh-proto-version.$(OBJEXT) \
-	detect-ssh-software-version.$(OBJEXT) detect-icmp-id.$(OBJEXT) \
-	detect-icmp-seq.$(OBJEXT) detect-dce-iface.$(OBJEXT) \
-	detect-dce-opnum.$(OBJEXT) detect-dce-stub-data.$(OBJEXT) \
-	detect-urilen.$(OBJEXT) detect-detection-filter.$(OBJEXT) \
-	detect-http-client-body.$(OBJEXT) \
+	detect-ftpbounce.$(OBJEXT) detect-gid.$(OBJEXT) \
+	detect-http-client-body.$(OBJEXT) detect-http-cookie.$(OBJEXT) \
+	detect-http-header.$(OBJEXT) detect-http-method.$(OBJEXT) \
+	detect-http-raw-header.$(OBJEXT) detect-http-raw-uri.$(OBJEXT) \
 	detect-http-server-body.$(OBJEXT) \
-	detect-http-stat-msg.$(OBJEXT) detect-asn1.$(OBJEXT) \
-	detect-filename.$(OBJEXT) detect-fileext.$(OBJEXT) \
-	detect-filestore.$(OBJEXT) detect-filemagic.$(OBJEXT) \
-	detect-filemd5.$(OBJEXT) detect-http-stat-code.$(OBJEXT) \
-	detect-ssl-version.$(OBJEXT) detect-ssl-state.$(OBJEXT) \
-	detect-byte-extract.$(OBJEXT) detect-app-layer-event.$(OBJEXT) \
-	decode-events.$(OBJEXT) detect-replace.$(OBJEXT) \
-	util-magic.$(OBJEXT) util-misc.$(OBJEXT) util-atomic.$(OBJEXT) \
-	util-signal.$(OBJEXT) util-print.$(OBJEXT) \
-	util-fmemopen.$(OBJEXT) util-cpu.$(OBJEXT) \
-	util-pidfile.$(OBJEXT) util-mpm.$(OBJEXT) util-spm.$(OBJEXT) \
-	util-spm-bs.$(OBJEXT) util-spm-bs2bm.$(OBJEXT) \
-	util-spm-bm.$(OBJEXT) util-mpm-wumanber.$(OBJEXT) \
-	util-mpm-b2g.$(OBJEXT) util-mpm-b2g-cuda.$(OBJEXT) \
-	util-mpm-b3g.$(OBJEXT) util-mpm-b2gc.$(OBJEXT) \
-	util-mpm-b2gm.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
-	util-mpm-ac-gfbs.$(OBJEXT) util-mpm-ac-bs.$(OBJEXT) \
-	util-cidr.$(OBJEXT) util-unittest.$(OBJEXT) \
-	util-unittest-helper.$(OBJEXT) util-hash.$(OBJEXT) \
-	util-hashlist.$(OBJEXT) util-hash-lookup3.$(OBJEXT) \
-	util-rohash.$(OBJEXT) util-bloomfilter.$(OBJEXT) \
-	util-bloomfilter-counting.$(OBJEXT) util-pool.$(OBJEXT) \
-	util-time.$(OBJEXT) util-var.$(OBJEXT) util-var-name.$(OBJEXT) \
-	util-byte.$(OBJEXT) util-debug.$(OBJEXT) \
-	util-debug-filters.$(OBJEXT) util-error.$(OBJEXT) \
-	util-enum.$(OBJEXT) util-radix-tree.$(OBJEXT) \
-	util-host-os-info.$(OBJEXT) util-rule-vars.$(OBJEXT) \
-	util-fix_checksum.$(OBJEXT) util-daemon.$(OBJEXT) \
-	util-random.$(OBJEXT) util-classification-config.$(OBJEXT) \
-	util-threshold-config.$(OBJEXT) \
-	util-reference-config.$(OBJEXT) util-coredump-config.$(OBJEXT) \
-	util-strlcatu.$(OBJEXT) util-strlcpyu.$(OBJEXT) \
-	util-cuda.$(OBJEXT) util-cuda-handlers.$(OBJEXT) \
-	util-privs.$(OBJEXT) util-decode-asn1.$(OBJEXT) \
-	util-decode-der.$(OBJEXT) util-decode-der-get.$(OBJEXT) \
-	util-ringbuffer.$(OBJEXT) util-affinity.$(OBJEXT) \
-	util-memcmp.$(OBJEXT) util-proto-name.$(OBJEXT) \
-	util-syslog.$(OBJEXT) util-device.$(OBJEXT) \
-	util-checksum.$(OBJEXT) util-runmodes.$(OBJEXT) \
-	util-file.$(OBJEXT) util-path.$(OBJEXT) util-buffer.$(OBJEXT) \
-	tm-modules.$(OBJEXT) tm-queues.$(OBJEXT) \
-	tm-queuehandlers.$(OBJEXT) tm-threads.$(OBJEXT) \
-	tmqh-simple.$(OBJEXT) tmqh-nfq.$(OBJEXT) \
-	tmqh-packetpool.$(OBJEXT) tmqh-flow.$(OBJEXT) \
-	tmqh-ringbuffer.$(OBJEXT) alert-fastlog.$(OBJEXT) \
-	alert-debuglog.$(OBJEXT) alert-prelude.$(OBJEXT) \
-	alert-unified2-alert.$(OBJEXT) alert-syslog.$(OBJEXT) \
-	alert-pcapinfo.$(OBJEXT) log-droplog.$(OBJEXT) \
-	log-httplog.$(OBJEXT) log-pcap.$(OBJEXT) log-file.$(OBJEXT) \
-	log-filestore.$(OBJEXT) stream.$(OBJEXT) stream-tcp.$(OBJEXT) \
-	stream-tcp-reassemble.$(OBJEXT) stream-tcp-inline.$(OBJEXT) \
-	stream-tcp-sack.$(OBJEXT) stream-tcp-util.$(OBJEXT) \
+	detect-http-stat-code.$(OBJEXT) detect-http-stat-msg.$(OBJEXT) \
+	detect-http-ua.$(OBJEXT) detect-http-uri.$(OBJEXT) \
+	detect-icmp-id.$(OBJEXT) detect-icmp-seq.$(OBJEXT) \
+	detect-icode.$(OBJEXT) detect-id.$(OBJEXT) \
+	detect-ipopts.$(OBJEXT) detect-ipproto.$(OBJEXT) \
+	detect-iprep.$(OBJEXT) detect-isdataat.$(OBJEXT) \
+	detect-itype.$(OBJEXT) detect-l3proto.$(OBJEXT) \
+	detect-luajit.$(OBJEXT) detect-mark.$(OBJEXT) \
+	detect-metadata.$(OBJEXT) detect-msg.$(OBJEXT) \
+	detect-noalert.$(OBJEXT) detect-nocase.$(OBJEXT) \
+	detect-offset.$(OBJEXT) detect-parse.$(OBJEXT) \
+	detect-pcre.$(OBJEXT) detect-pkt-data.$(OBJEXT) \
+	detect-pktvar.$(OBJEXT) detect-priority.$(OBJEXT) \
+	detect-rawbytes.$(OBJEXT) detect-reference.$(OBJEXT) \
+	detect-replace.$(OBJEXT) detect-rev.$(OBJEXT) \
+	detect-rpc.$(OBJEXT) detect-sameip.$(OBJEXT) \
+	detect-seq.$(OBJEXT) detect-sid.$(OBJEXT) \
+	detect-ssh-proto-version.$(OBJEXT) \
+	detect-ssh-software-version.$(OBJEXT) \
+	detect-ssl-state.$(OBJEXT) detect-ssl-version.$(OBJEXT) \
+	detect-stream_size.$(OBJEXT) detect-tag.$(OBJEXT) \
+	detect-threshold.$(OBJEXT) detect-tls.$(OBJEXT) \
+	detect-tls-version.$(OBJEXT) detect-tos.$(OBJEXT) \
+	detect-ttl.$(OBJEXT) detect-uricontent.$(OBJEXT) \
+	detect-urilen.$(OBJEXT) detect-window.$(OBJEXT) \
+	detect-within.$(OBJEXT) flow-alert-sid.$(OBJEXT) \
+	flow-bit.$(OBJEXT) flow.$(OBJEXT) flow-hash.$(OBJEXT) \
+	flow-manager.$(OBJEXT) flow-queue.$(OBJEXT) \
+	flow-timeout.$(OBJEXT) flow-util.$(OBJEXT) flow-var.$(OBJEXT) \
+	host.$(OBJEXT) host-queue.$(OBJEXT) host-timeout.$(OBJEXT) \
+	log-droplog.$(OBJEXT) log-file.$(OBJEXT) \
+	log-filestore.$(OBJEXT) log-httplog.$(OBJEXT) \
+	log-pcap.$(OBJEXT) log-tlslog.$(OBJEXT) output.$(OBJEXT) \
+	packet-queue.$(OBJEXT) pkt-var.$(OBJEXT) reputation.$(OBJEXT) \
 	respond-reject.$(OBJEXT) respond-reject-libnet11.$(OBJEXT) \
-	conf.$(OBJEXT) conf-yaml-loader.$(OBJEXT) counters.$(OBJEXT) \
-	app-layer.$(OBJEXT) app-layer-detect-proto.$(OBJEXT) \
-	app-layer-parser.$(OBJEXT) app-layer-protos.$(OBJEXT) \
-	app-layer-htp.$(OBJEXT) app-layer-htp-body.$(OBJEXT) \
-	app-layer-htp-file.$(OBJEXT) app-layer-smb.$(OBJEXT) \
-	app-layer-smb2.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
-	app-layer-dcerpc-udp.$(OBJEXT) app-layer-ftp.$(OBJEXT) \
-	app-layer-ssl.$(OBJEXT) app-layer-ssh.$(OBJEXT) \
-	app-layer-tls-handshake.$(OBJEXT) app-layer-smtp.$(OBJEXT) \
-	defrag.$(OBJEXT) output.$(OBJEXT) win32-misc.$(OBJEXT) \
-	win32-service.$(OBJEXT) util-action.$(OBJEXT) \
+	runmode-af-packet.$(OBJEXT) runmode-erf-dag.$(OBJEXT) \
+	runmode-erf-file.$(OBJEXT) runmode-ipfw.$(OBJEXT) \
+	runmode-napatech.$(OBJEXT) runmode-nfq.$(OBJEXT) \
+	runmode-pcap.$(OBJEXT) runmode-pcap-file.$(OBJEXT) \
+	runmode-pfring.$(OBJEXT) runmode-unix-socket.$(OBJEXT) \
+	runmodes.$(OBJEXT) source-af-packet.$(OBJEXT) \
+	source-erf-dag.$(OBJEXT) source-erf-file.$(OBJEXT) \
+	source-ipfw.$(OBJEXT) source-napatech.$(OBJEXT) \
+	source-nfq.$(OBJEXT) source-pcap.$(OBJEXT) \
+	source-pcap-file.$(OBJEXT) source-pfring.$(OBJEXT) \
+	stream.$(OBJEXT) stream-tcp.$(OBJEXT) \
+	stream-tcp-inline.$(OBJEXT) stream-tcp-reassemble.$(OBJEXT) \
+	stream-tcp-sack.$(OBJEXT) stream-tcp-util.$(OBJEXT) \
+	suricata.$(OBJEXT) threads.$(OBJEXT) tm-modules.$(OBJEXT) \
+	tmqh-flow.$(OBJEXT) tmqh-nfq.$(OBJEXT) \
+	tmqh-packetpool.$(OBJEXT) tmqh-ringbuffer.$(OBJEXT) \
+	tmqh-simple.$(OBJEXT) tm-queuehandlers.$(OBJEXT) \
+	tm-queues.$(OBJEXT) tm-threads.$(OBJEXT) \
+	unix-manager.$(OBJEXT) util-action.$(OBJEXT) \
+	util-atomic.$(OBJEXT) util-bloomfilter-counting.$(OBJEXT) \
+	util-bloomfilter.$(OBJEXT) util-buffer.$(OBJEXT) \
+	util-byte.$(OBJEXT) util-checksum.$(OBJEXT) \
+	util-cidr.$(OBJEXT) util-classification-config.$(OBJEXT) \
+	util-coredump-config.$(OBJEXT) util-cpu.$(OBJEXT) \
+	util-crypt.$(OBJEXT) util-cuda.$(OBJEXT) \
+	util-cuda-handlers.$(OBJEXT) util-daemon.$(OBJEXT) \
+	util-debug.$(OBJEXT) util-debug-filters.$(OBJEXT) \
+	util-decode-asn1.$(OBJEXT) util-decode-der.$(OBJEXT) \
+	util-decode-der-get.$(OBJEXT) util-device.$(OBJEXT) \
+	util-enum.$(OBJEXT) util-error.$(OBJEXT) util-file.$(OBJEXT) \
+	util-fix_checksum.$(OBJEXT) util-fmemopen.$(OBJEXT) \
+	util-hash.$(OBJEXT) util-hashlist.$(OBJEXT) \
+	util-hash-lookup3.$(OBJEXT) util-host-os-info.$(OBJEXT) \
+	util-ioctl.$(OBJEXT) util-logopenfile.$(OBJEXT) \
+	util-magic.$(OBJEXT) util-memcmp.$(OBJEXT) util-misc.$(OBJEXT) \
+	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
+	util-mpm-ac-gfbs.$(OBJEXT) util-mpm-b2gc.$(OBJEXT) \
+	util-mpm-b2g-cuda.$(OBJEXT) util-mpm-b2g.$(OBJEXT) \
+	util-mpm-b2gm.$(OBJEXT) util-mpm-b3g.$(OBJEXT) \
+	util-mpm.$(OBJEXT) util-mpm-wumanber.$(OBJEXT) \
+	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-print.$(OBJEXT) util-privs.$(OBJEXT) \
 	util-profiling.$(OBJEXT) util-profiling-locks.$(OBJEXT) \
-	cuda-packet-batcher.$(OBJEXT) util-ioctl.$(OBJEXT) \
-	util-logopenfile.$(OBJEXT) $(am__objects_1)
+	util-profiling-rules.$(OBJEXT) util-proto-name.$(OBJEXT) \
+	util-radix-tree.$(OBJEXT) util-random.$(OBJEXT) \
+	util-reference-config.$(OBJEXT) util-ringbuffer.$(OBJEXT) \
+	util-rohash.$(OBJEXT) util-rule-vars.$(OBJEXT) \
+	util-runmodes.$(OBJEXT) util-signal.$(OBJEXT) \
+	util-spm-bm.$(OBJEXT) util-spm-bs2bm.$(OBJEXT) \
+	util-spm-bs.$(OBJEXT) util-spm.$(OBJEXT) \
+	util-strlcatu.$(OBJEXT) util-strlcpyu.$(OBJEXT) \
+	util-syslog.$(OBJEXT) util-threshold-config.$(OBJEXT) \
+	util-time.$(OBJEXT) util-unittest.$(OBJEXT) \
+	util-unittest-helper.$(OBJEXT) util-affinity.$(OBJEXT) \
+	util-var.$(OBJEXT) util-var-name.$(OBJEXT) \
+	win32-misc.$(OBJEXT) win32-service.$(OBJEXT) $(am__objects_1)
 suricata_OBJECTS = $(am_suricata_OBJECTS)
 @BUILD_LIBHTP_TRUE@suricata_DEPENDENCIES =  \
 @BUILD_LIBHTP_TRUE@	$(top_builddir)/libhtp/htp/libhtp.la
@@ -462,6 +479,7 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GREP = @GREP@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
+HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 INSTALL = @INSTALL@
@@ -486,6 +504,8 @@ LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
+LUAJIT_CFLAGS = @LUAJIT_CFLAGS@
+LUAJIT_LIBS = @LUAJIT_LIBS@
 MAKEINFO = @MAKEINFO@
 MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
@@ -541,9 +561,11 @@ datadir = @datadir@
 datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
+e_localstatedir = @e_localstatedir@
 e_logdir = @e_logdir@
 e_logfilesdir = @e_logfilesdir@
 e_magic_file = @e_magic_file@
+e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
 exec_prefix = @exec_prefix@
@@ -587,193 +609,202 @@ noinst_HEADERS = action-globals.h \
 	suricata-common.h threadvars.h util-binsearch.h \
         util-validate.h
 
-suricata_SOURCES = suricata.c suricata.h runmodes.c runmodes.h \
-	runmode-pcap.c runmode-pcap.h runmode-pcap-file.c \
-	runmode-pcap-file.h runmode-pfring.c runmode-pfring.h \
-	runmode-nfq.c runmode-nfq.h runmode-ipfw.c runmode-ipfw.h \
-	runmode-erf-file.c runmode-erf-file.h runmode-erf-dag.c \
-	runmode-erf-dag.h runmode-napatech.c runmode-napatech.h \
-	runmode-af-packet.c runmode-af-packet.h packet-queue.c \
-	packet-queue.h data-queue.c data-queue.h threads.c threads.h \
-	source-nfq.c source-nfq.h source-pcap.c source-pcap.h \
-	source-pcap-file.c source-pcap-file.h source-pfring.c \
-	source-pfring.h source-ipfw.c source-ipfw.h source-erf-file.c \
-	source-erf-file.h source-erf-dag.c source-erf-dag.h \
-	source-napatech.c source-napatech.h source-af-packet.c \
-	source-af-packet.h decode.c decode.h decode-ethernet.c \
-	decode-ethernet.h decode-vlan.c decode-vlan.h decode-sll.c \
-	decode-sll.h decode-gre.c decode-gre.h decode-ppp.c \
-	decode-ppp.h decode-pppoe.c decode-pppoe.h decode-ipv4.c \
-	decode-ipv4.h decode-ipv6.c decode-ipv6.h decode-raw.c \
-	decode-raw.h decode-icmpv4.c decode-icmpv4.h decode-icmpv6.c \
-	decode-icmpv6.h decode-tcp.c decode-tcp.h decode-udp.c \
-	decode-udp.h decode-sctp.c decode-sctp.h flow.c flow.h \
-	flow-timeout.c flow-timeout.h flow-manager.c flow-manager.h \
-	flow-queue.c flow-queue.h flow-hash.c flow-hash.h flow-util.c \
-	flow-util.h util-mem.h flow-var.c flow-var.h flow-bit.c \
-	flow-bit.h flow-alert-sid.c flow-alert-sid.h pkt-var.c \
-	pkt-var.h host.c host.h host-queue.c host-queue.h \
-	host-timeout.c host-timeout.h reputation.c reputation.h \
-	detect.c detect.h detect-engine-sigorder.c \
-	detect-engine-sigorder.h detect-engine-alert.c \
-	detect-engine-alert.h detect-engine.c detect-engine.h \
-	detect-rpc.c detect-rpc.h detect-isdataat.c detect-isdataat.h \
-	detect-window.c detect-window.h detect-ftpbounce.c \
-	detect-ftpbounce.h detect-engine-address.c \
-	detect-engine-address.h detect-engine-threshold.c \
-	detect-engine-threshold.h detect-engine-tag.c \
-	detect-engine-tag.h detect-engine-address-ipv4.c \
-	detect-engine-address-ipv4.h detect-engine-address-ipv6.c \
-	detect-engine-address-ipv6.h detect-engine-proto.c \
-	detect-engine-proto.h detect-engine-port.c \
-	detect-engine-port.h detect-engine-siggroup.c \
-	detect-engine-siggroup.h detect-engine-mpm.c \
-	detect-engine-mpm.h detect-engine-iponly.c \
-	detect-engine-iponly.h detect-engine-content-inspection.c \
-	detect-engine-content-inspection.h detect-engine-payload.c \
-	detect-engine-payload.h detect-engine-dcepayload.c \
-	detect-engine-dcepayload.h detect-engine-uri.c \
-	detect-engine-uri.h detect-engine-hcbd.c detect-engine-hcbd.h \
-	detect-engine-hsbd.c detect-engine-hsbd.h detect-engine-hhd.c \
-	detect-engine-hhd.h detect-engine-hrhd.c detect-engine-hrhd.h \
-	detect-engine-hmd.c detect-engine-hmd.h detect-engine-hcd.c \
-	detect-engine-hcd.h detect-engine-hrud.c detect-engine-hrud.h \
-	detect-engine-hsmd.c detect-engine-hsmd.h detect-engine-hscd.c \
-	detect-engine-hscd.h detect-engine-hua.c detect-engine-hua.h \
-	detect-engine-state.c detect-engine-state.h \
-	detect-engine-file.c detect-engine-file.h \
+suricata_SOURCES = alert-debuglog.c alert-debuglog.h alert-fastlog.c \
+	alert-fastlog.h alert-pcapinfo.c alert-pcapinfo.h \
+	alert-prelude.c alert-prelude.h alert-syslog.c alert-syslog.h \
+	alert-unified2-alert.c alert-unified2-alert.h app-layer.c \
+	app-layer.h app-layer-dcerpc.c app-layer-dcerpc.h \
+	app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
+	app-layer-detect-proto.c app-layer-detect-proto.h \
+	app-layer-ftp.c app-layer-ftp.h app-layer-htp-body.c \
+	app-layer-htp-body.h app-layer-htp.c app-layer-htp.h \
+	app-layer-htp-file.c app-layer-htp-file.h app-layer-parser.c \
+	app-layer-parser.h app-layer-protos.c app-layer-protos.h \
+	app-layer-smb2.c app-layer-smb2.h app-layer-smb.c \
+	app-layer-smb.h app-layer-smtp.c app-layer-smtp.h \
+	app-layer-ssh.c app-layer-ssh.h app-layer-ssl.c \
+	app-layer-ssl.h app-layer-tls-handshake.c \
+	app-layer-tls-handshake.h conf.c conf.h conf-yaml-loader.c \
+	conf-yaml-loader.h counters.c counters.h cuda-packet-batcher.c \
+	cuda-packet-batcher.h data-queue.c data-queue.h decode.c \
+	decode.h decode-ethernet.c decode-ethernet.h decode-events.c \
+	decode-events.h decode-gre.c decode-gre.h decode-icmpv4.c \
+	decode-icmpv4.h decode-icmpv6.c decode-icmpv6.h decode-ipv4.c \
+	decode-ipv4.h decode-ipv6.c decode-ipv6.h decode-ppp.c \
+	decode-ppp.h decode-pppoe.c decode-pppoe.h decode-raw.c \
+	decode-raw.h decode-sctp.c decode-sctp.h decode-sll.c \
+	decode-sll.h decode-tcp.c decode-tcp.h decode-teredo.c \
+	decode-teredo.h decode-udp.c decode-udp.h decode-vlan.c \
+	decode-vlan.h defrag.c defrag.h defrag-hash.c defrag-hash.h \
+	defrag-queue.c defrag-queue.h defrag-timeout.c \
+	defrag-timeout.h detect-ack.c detect-ack.h \
+	detect-app-layer-event.c detect-app-layer-event.h \
+	detect-asn1.c detect-asn1.h detect-byte-extract.c \
+	detect-byte-extract.h detect-bytejump.c detect-bytejump.h \
+	detect-bytetest.c detect-bytetest.h detect.c detect.h \
+	detect-classtype.c detect-classtype.h detect-content.c \
+	detect-content.h detect-csum.c detect-csum.h \
+	detect-dce-iface.c detect-dce-iface.h detect-dce-opnum.c \
+	detect-dce-opnum.h detect-dce-stub-data.c \
+	detect-dce-stub-data.h detect-depth.c detect-depth.h \
+	detect-detection-filter.c detect-detection-filter.h \
+	detect-distance.c detect-distance.h detect-dsize.c \
+	detect-dsize.h detect-engine-address.c detect-engine-address.h \
+	detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
+	detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
+	detect-engine-alert.c detect-engine-alert.h \
 	detect-engine-analyzer.c detect-engine-analyzer.h \
-	detect-parse.c detect-parse.h detect-ack.c detect-ack.h \
-	detect-seq.c detect-seq.h detect-content.c detect-content.h \
-	detect-uricontent.c detect-uricontent.h detect-flowbits.c \
-	detect-flowbits.h detect-flowvar.c detect-flowvar.h \
-	detect-flowint.c detect-flowint.h detect-pktvar.c \
-	detect-pktvar.h detect-pcre.c detect-pcre.h detect-depth.c \
-	detect-depth.h detect-nocase.c detect-nocase.h \
-	detect-fast-pattern.c detect-fast-pattern.h detect-rawbytes.c \
-	detect-rawbytes.h detect-bytetest.c detect-bytetest.h \
-	detect-bytejump.c detect-bytejump.h detect-sameip.c \
-	detect-sameip.h detect-ipproto.c detect-ipproto.h \
-	detect-within.c detect-within.h detect-distance.c \
-	detect-distance.h detect-offset.c detect-offset.h detect-sid.c \
-	detect-sid.h detect-priority.c detect-priority.h detect-rev.c \
-	detect-rev.h detect-classtype.c detect-classtype.h \
-	detect-reference.c detect-reference.h detect-tag.c \
-	detect-tag.h detect-threshold.c detect-threshold.h \
-	detect-metadata.c detect-metadata.h detect-msg.c detect-msg.h \
-	detect-id.c detect-id.h detect-flow.c detect-flow.h \
-	detect-dsize.c detect-dsize.h detect-tos.c detect-tos.h \
-	detect-stream_size.c detect-stream_size.h \
-	detect-engine-event.c detect-engine-event.h detect-ipopts.c \
-	detect-ipopts.h detect-flags.c detect-flags.h \
+	detect-engine.c detect-engine.h \
+	detect-engine-content-inspection.c \
+	detect-engine-content-inspection.h detect-engine-dcepayload.c \
+	detect-engine-dcepayload.h detect-engine-event.c \
+	detect-engine-event.h detect-engine-file.c \
+	detect-engine-file.h detect-engine-hcbd.c detect-engine-hcbd.h \
+	detect-engine-hcd.c detect-engine-hcd.h detect-engine-hhd.c \
+	detect-engine-hhd.h detect-engine-hmd.c detect-engine-hmd.h \
+	detect-engine-hrhd.c detect-engine-hrhd.h detect-engine-hrud.c \
+	detect-engine-hrud.h detect-engine-hsbd.c detect-engine-hsbd.h \
+	detect-engine-hscd.c detect-engine-hscd.h detect-engine-hsmd.c \
+	detect-engine-hsmd.h detect-engine-hua.c detect-engine-hua.h \
+	detect-engine-iponly.c detect-engine-iponly.h \
+	detect-engine-mpm.c detect-engine-mpm.h \
+	detect-engine-payload.c detect-engine-payload.h \
+	detect-engine-port.c detect-engine-port.h \
+	detect-engine-proto.c detect-engine-proto.h \
+	detect-engine-siggroup.c detect-engine-siggroup.h \
+	detect-engine-sigorder.c detect-engine-sigorder.h \
+	detect-engine-state.c detect-engine-state.h \
+	detect-engine-tag.c detect-engine-tag.h \
+	detect-engine-threshold.c detect-engine-threshold.h \
+	detect-engine-uri.c detect-engine-uri.h detect-fast-pattern.c \
+	detect-fast-pattern.h detect-file-data.c detect-file-data.h \
+	detect-fileext.c detect-fileext.h detect-filemagic.c \
+	detect-filemagic.h detect-filemd5.c detect-filemd5.h \
+	detect-filename.c detect-filename.h detect-filesize.c \
+	detect-filesize.h detect-filestore.c detect-filestore.h \
+	detect-flags.c detect-flags.h detect-flowbits.c \
+	detect-flowbits.h detect-flow.c detect-flow.h detect-flowint.c \
+	detect-flowint.h detect-flowvar.c detect-flowvar.h \
 	detect-fragbits.c detect-fragbits.h detect-fragoffset.c \
-	detect-fragoffset.h detect-gid.c detect-gid.h detect-mark.c \
-	detect-mark.h detect-noalert.c detect-noalert.h detect-csum.c \
-	detect-csum.h detect-ttl.c detect-ttl.h detect-itype.c \
-	detect-itype.h detect-icode.c detect-icode.h \
-	detect-http-cookie.c detect-http-cookie.h detect-http-method.c \
-	detect-http-method.h detect-http-header.c detect-http-header.h \
+	detect-fragoffset.h detect-ftpbounce.c detect-ftpbounce.h \
+	detect-gid.c detect-gid.h detect-http-client-body.c \
+	detect-http-client-body.h detect-http-cookie.c \
+	detect-http-cookie.h detect-http-header.c detect-http-header.h \
+	detect-http-method.c detect-http-method.h \
 	detect-http-raw-header.c detect-http-raw-header.h \
-	detect-http-uri.c detect-http-uri.h detect-http-raw-uri.c \
-	detect-http-raw-uri.h detect-file-data.c detect-file-data.h \
-	detect-http-ua.c detect-http-ua.h detect-tls.c detect-tls.h \
-	detect-tls-version.c detect-tls-version.h \
+	detect-http-raw-uri.c detect-http-raw-uri.h \
+	detect-http-server-body.c detect-http-server-body.h \
+	detect-http-stat-code.c detect-http-stat-code.h \
+	detect-http-stat-msg.c detect-http-stat-msg.h detect-http-ua.c \
+	detect-http-ua.h detect-http-uri.c detect-http-uri.h \
+	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
+	detect-icmp-seq.h detect-icode.c detect-icode.h detect-id.c \
+	detect-id.h detect-ipopts.c detect-ipopts.h detect-ipproto.c \
+	detect-ipproto.h detect-iprep.c detect-iprep.h \
+	detect-isdataat.c detect-isdataat.h detect-itype.c \
+	detect-itype.h detect-l3proto.c detect-l3proto.h \
+	detect-luajit.c detect-luajit.h detect-mark.c detect-mark.h \
+	detect-metadata.c detect-metadata.h detect-msg.c detect-msg.h \
+	detect-noalert.c detect-noalert.h detect-nocase.c \
+	detect-nocase.h detect-offset.c detect-offset.h detect-parse.c \
+	detect-parse.h detect-pcre.c detect-pcre.h detect-pkt-data.c \
+	detect-pkt-data.h detect-pktvar.c detect-pktvar.h \
+	detect-priority.c detect-priority.h detect-rawbytes.c \
+	detect-rawbytes.h detect-reference.c detect-reference.h \
+	detect-replace.c detect-replace.h detect-rev.c detect-rev.h \
+	detect-rpc.c detect-rpc.h detect-sameip.c detect-sameip.h \
+	detect-seq.c detect-seq.h detect-sid.c detect-sid.h \
 	detect-ssh-proto-version.c detect-ssh-proto-version.h \
 	detect-ssh-software-version.c detect-ssh-software-version.h \
-	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
-	detect-icmp-seq.h detect-dce-iface.c detect-dce-iface.h \
-	detect-dce-opnum.c detect-dce-opnum.h detect-dce-stub-data.c \
-	detect-dce-stub-data.h detect-urilen.c detect-urilen.h \
-	detect-detection-filter.c detect-detection-filter.h \
-	detect-http-client-body.c detect-http-client-body.h \
-	detect-http-server-body.c detect-http-server-body.h \
-	detect-http-stat-msg.c detect-http-stat-msg.h detect-asn1.c \
-	detect-asn1.h detect-filename.c detect-filename.h \
-	detect-fileext.c detect-fileext.h detect-filestore.c \
-	detect-filestore.h detect-filemagic.c detect-filemagic.h \
-	detect-filemd5.c detect-filemd5.h detect-http-stat-code.c \
-	detect-http-stat-code.h detect-ssl-version.c \
-	detect-ssl-version.h detect-ssl-state.c detect-ssl-state.h \
-	detect-byte-extract.c detect-byte-extract.h \
-	detect-app-layer-event.c detect-app-layer-event.h \
-	decode-events.c decode-events.h detect-replace.c \
-	detect-replace.h util-magic.c util-magic.h util-misc.c \
-	util-misc.h util-atomic.c util-atomic.h util-signal.c \
-	util-signal.h util-print.c util-print.h util-fmemopen.c \
-	util-fmemopen.h util-cpu.c util-cpu.h util-pidfile.c \
-	util-pidfile.h util-mpm.c util-mpm.h util-spm.c util-spm.h \
-	util-clock.h util-spm-bs.c util-spm-bs.h util-spm-bs2bm.c \
-	util-spm-bs2bm.h util-spm-bm.c util-spm-bm.h \
-	util-mpm-wumanber.c util-mpm-wumanber.h util-mpm-b2g.c \
-	util-mpm-b2g.h util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
-	util-mpm-b3g.c util-mpm-b3g.h util-mpm-b2gc.c util-mpm-b2gc.h \
-	util-mpm-b2gm.c util-mpm-b2gm.h util-mpm-ac.c util-mpm-ac.h \
-	util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h util-mpm-ac-bs.c \
-	util-mpm-ac-bs.h util-cidr.c util-cidr.h util-unittest.c \
-	util-unittest.h util-unittest-helper.c util-unittest-helper.h \
-	util-hash.c util-hash.h util-hashlist.c util-hashlist.h \
-	util-hash-lookup3.c util-hash-lookup3.h util-rohash.c \
-	util-rohash.h util-bloomfilter.c util-bloomfilter.h \
-	util-bloomfilter-counting.c util-bloomfilter-counting.h \
-	util-pool.c util-pool.h util-time.c util-time.h util-var.c \
-	util-var.h util-var-name.c util-var-name.h util-byte.c \
-	util-byte.h util-debug.c util-debug.h util-debug-filters.c \
-	util-debug-filters.h util-error.c util-error.h util-enum.c \
-	util-enum.h util-radix-tree.c util-radix-tree.h \
-	util-host-os-info.c util-host-os-info.h util-rule-vars.c \
-	util-rule-vars.h util-fix_checksum.c util-fix_checksum.h \
-	util-daemon.c util-daemon.h util-random.c util-random.h \
-	util-classification-config.c util-classification-config.h \
-	util-threshold-config.c util-threshold-config.h \
-	util-reference-config.c util-reference-config.h \
-	util-coredump-config.c util-coredump-config.h util-strlcatu.c \
-	util-strlcpyu.c util-cuda.c util-cuda.h util-cuda-handlers.c \
-	util-cuda-handlers.h util-optimize.h util-privs.c util-privs.h \
-	util-decode-asn1.c util-decode-asn1.h util-decode-der.c \
-	util-decode-der.h util-decode-der-get.c util-decode-der-get.h \
-	util-ringbuffer.c util-ringbuffer.h util-validate.h \
-	util-affinity.h util-affinity.c util-memcmp.c util-memcmp.h \
-	util-proto-name.c util-proto-name.h util-syslog.c \
-	util-syslog.h util-vector.h util-device.c util-device.h \
-	util-checksum.c util-checksum.h util-runmodes.c \
-	util-runmodes.h util-file.c util-file.h util-path.c \
-	util-path.h util-buffer.c util-buffer.h tm-modules.c \
-	tm-modules.h tm-queues.c tm-queues.h tm-queuehandlers.c \
-	tm-queuehandlers.h tm-threads.c tm-threads.h \
-	tm-threads-common.h tmqh-simple.c tmqh-simple.h tmqh-nfq.c \
-	tmqh-nfq.h tmqh-packetpool.c tmqh-packetpool.h tmqh-flow.c \
-	tmqh-flow.h tmqh-ringbuffer.c tmqh-ringbuffer.h \
-	alert-fastlog.c alert-fastlog.h alert-debuglog.c \
-	alert-debuglog.h alert-prelude.c alert-prelude.h \
-	alert-unified2-alert.c alert-unified2-alert.h alert-syslog.c \
-	alert-syslog.h alert-pcapinfo.c alert-pcapinfo.h log-droplog.c \
-	log-droplog.h log-httplog.c log-httplog.h log-pcap.c \
-	log-pcap.h log-file.c log-file.h log-filestore.c \
-	log-filestore.h stream.c stream.h stream-tcp.c stream-tcp.h \
-	stream-tcp-private.h stream-tcp-reassemble.c \
-	stream-tcp-reassemble.h stream-tcp-inline.c \
-	stream-tcp-inline.h stream-tcp-sack.c stream-tcp-sack.h \
-	stream-tcp-util.c stream-tcp-util.h respond-reject.c \
+	detect-ssl-state.c detect-ssl-state.h detect-ssl-version.c \
+	detect-ssl-version.h detect-stream_size.c detect-stream_size.h \
+	detect-tag.c detect-tag.h detect-threshold.c \
+	detect-threshold.h detect-tls.c detect-tls.h \
+	detect-tls-version.c detect-tls-version.h detect-tos.c \
+	detect-tos.h detect-ttl.c detect-ttl.h detect-uricontent.c \
+	detect-uricontent.h detect-urilen.c detect-urilen.h \
+	detect-window.c detect-window.h detect-within.c \
+	detect-within.h flow-alert-sid.c flow-alert-sid.h flow-bit.c \
+	flow-bit.h flow.c flow.h flow-hash.c flow-hash.h \
+	flow-manager.c flow-manager.h flow-queue.c flow-queue.h \
+	flow-timeout.c flow-timeout.h flow-util.c flow-util.h \
+	flow-var.c flow-var.h host.c host.h host-queue.c host-queue.h \
+	host-timeout.c host-timeout.h log-droplog.c log-droplog.h \
+	log-file.c log-file.h log-filestore.c log-filestore.h \
+	log-httplog.c log-httplog.h log-pcap.c log-pcap.h log-tlslog.c \
+	log-tlslog.h output.c output.h packet-queue.c packet-queue.h \
+	pkt-var.c pkt-var.h reputation.c reputation.h respond-reject.c \
 	respond-reject.h respond-reject-libnet11.h \
-	respond-reject-libnet11.c conf.c conf.h conf-yaml-loader.c \
-	conf-yaml-loader.h counters.c counters.h app-layer.c \
-	app-layer.h app-layer-detect-proto.c app-layer-detect-proto.h \
-	app-layer-parser.c app-layer-parser.h app-layer-protos.c \
-	app-layer-protos.h app-layer-htp.c app-layer-htp.h \
-	app-layer-htp-body.c app-layer-htp-body.h app-layer-htp-file.c \
-	app-layer-htp-file.h app-layer-smb.c app-layer-smb.h \
-	app-layer-smb2.c app-layer-smb2.h app-layer-dcerpc.c \
-	app-layer-dcerpc.h app-layer-dcerpc-udp.c \
-	app-layer-dcerpc-udp.h app-layer-ftp.c app-layer-ftp.h \
-	app-layer-ssl.c app-layer-ssl.h app-layer-ssh.c \
-	app-layer-ssh.h app-layer-tls-handshake.c \
-	app-layer-tls-handshake.h app-layer-smtp.c app-layer-smtp.h \
-	defrag.c defrag.h output.c output.h win32-misc.c win32-misc.h \
-	win32-service.c win32-service.h util-action.c util-action.h \
-	win32-syslog.h util-profiling.c util-profiling.h \
-	util-profiling-locks.c util-profiling-locks.h \
-	cuda-packet-batcher.c cuda-packet-batcher.h util-ioctl.h \
+	respond-reject-libnet11.c runmode-af-packet.c \
+	runmode-af-packet.h runmode-erf-dag.c runmode-erf-dag.h \
+	runmode-erf-file.c runmode-erf-file.h runmode-ipfw.c \
+	runmode-ipfw.h runmode-napatech.c runmode-napatech.h \
+	runmode-nfq.c runmode-nfq.h runmode-pcap.c runmode-pcap.h \
+	runmode-pcap-file.c runmode-pcap-file.h runmode-pfring.c \
+	runmode-pfring.h runmode-unix-socket.c runmode-unix-socket.h \
+	runmodes.c runmodes.h source-af-packet.c source-af-packet.h \
+	source-erf-dag.c source-erf-dag.h source-erf-file.c \
+	source-erf-file.h source-ipfw.c source-ipfw.h \
+	source-napatech.c source-napatech.h source-nfq.c source-nfq.h \
+	source-pcap.c source-pcap.h source-pcap-file.c \
+	source-pcap-file.h source-pfring.c source-pfring.h stream.c \
+	stream.h stream-tcp.c stream-tcp.h stream-tcp-private.h \
+	stream-tcp-inline.c stream-tcp-inline.h \
+	stream-tcp-reassemble.c stream-tcp-reassemble.h \
+	stream-tcp-sack.c stream-tcp-sack.h stream-tcp-util.c \
+	stream-tcp-util.h suricata.c suricata.h threads.c threads.h \
+	tm-modules.c tm-modules.h tmqh-flow.c tmqh-flow.h tmqh-nfq.c \
+	tmqh-nfq.h tmqh-packetpool.c tmqh-packetpool.h \
+	tmqh-ringbuffer.c tmqh-ringbuffer.h tmqh-simple.c \
+	tmqh-simple.h tm-queuehandlers.c tm-queuehandlers.h \
+	tm-queues.c tm-queues.h tm-threads.c tm-threads.h \
+	tm-threads-common.h unix-manager.c unix-manager.h \
+	util-action.c util-action.h util-atomic.c util-atomic.h \
+	util-bloomfilter-counting.c util-bloomfilter-counting.h \
+	util-bloomfilter.c util-bloomfilter.h util-buffer.c \
+	util-buffer.h util-byte.c util-byte.h util-checksum.c \
+	util-checksum.h util-cidr.c util-cidr.h \
+	util-classification-config.c util-classification-config.h \
+	util-coredump-config.c util-coredump-config.h util-cpu.c \
+	util-cpu.h util-crypt.c util-crypt.h util-cuda.c util-cuda.h \
+	util-cuda-handlers.c util-cuda-handlers.h util-daemon.c \
+	util-daemon.h util-debug.c util-debug.h util-debug-filters.c \
+	util-debug-filters.h util-decode-asn1.c util-decode-asn1.h \
+	util-decode-der.c util-decode-der.h util-decode-der-get.c \
+	util-decode-der-get.h util-device.c util-device.h util-enum.c \
+	util-enum.h util-error.c util-error.h util-file.c util-file.h \
+	util-fix_checksum.c util-fix_checksum.h util-fmemopen.c \
+	util-fmemopen.h util-hash.c util-hash.h util-hashlist.c \
+	util-hashlist.h util-hash-lookup3.c util-hash-lookup3.h \
+	util-host-os-info.c util-host-os-info.h util-ioctl.h \
 	util-ioctl.c util-logopenfile.h util-logopenfile.c \
+	util-magic.c util-magic.h util-memcmp.c util-memcmp.h \
+	util-mem.h util-misc.c util-misc.h util-mpm-ac-bs.c \
+	util-mpm-ac-bs.h util-mpm-ac.c util-mpm-ac.h \
+	util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h util-mpm-b2gc.c \
+	util-mpm-b2gc.h util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
+	util-mpm-b2g.c util-mpm-b2g.h util-mpm-b2gm.c util-mpm-b2gm.h \
+	util-mpm-b3g.c util-mpm-b3g.h util-mpm.c util-mpm.h \
+	util-mpm-wumanber.c util-mpm-wumanber.h util-optimize.h \
+	util-path.c util-path.h util-pidfile.c util-pidfile.h \
+	util-pool.c util-pool.h util-print.c util-print.h util-privs.c \
+	util-privs.h util-profiling.c util-profiling.h \
+	util-profiling-locks.c util-profiling-locks.h \
+	util-profiling-rules.c util-proto-name.c util-proto-name.h \
+	util-radix-tree.c util-radix-tree.h util-random.c \
+	util-random.h util-reference-config.c util-reference-config.h \
+	util-ringbuffer.c util-ringbuffer.h util-rohash.c \
+	util-rohash.h util-rule-vars.c util-rule-vars.h \
+	util-runmodes.c util-runmodes.h util-signal.c util-signal.h \
+	util-spm-bm.c util-spm-bm.h util-spm-bs2bm.c util-spm-bs2bm.h \
+	util-spm-bs.c util-spm-bs.h util-spm.c util-spm.h util-clock.h \
+	util-strlcatu.c util-strlcpyu.c util-syslog.c util-syslog.h \
+	util-threshold-config.c util-threshold-config.h util-time.c \
+	util-time.h util-unittest.c util-unittest.h \
+	util-unittest-helper.c util-unittest-helper.h util-validate.h \
+	util-affinity.h util-affinity.c util-var.c util-var.h \
+	util-var-name.c util-var-name.h util-vector.h win32-misc.c \
+	win32-misc.h win32-service.c win32-service.h win32-syslog.h \
 	$(am__append_2)
 EXTRA_DIST = util-mpm-b2g-cuda-kernel.cu ptxdump.py
 
@@ -805,6 +836,9 @@ suricata_LDFLAGS = $(all_libraries)
 @BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_20) \
 @BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_21)
 @BUILD_CUDA_TRUE@CLEANFILES = $(PTXS) cuda-ptxdump.h
+
+#suricata_CFLAGS = -Wall -fno-strict-aliasing 
+AM_CFLAGS = -DLOCAL_STATE_DIR=\"$(localstatedir)\"
 all: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -936,9 +970,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-sctp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-sll.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-tcp.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-teredo.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-udp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-vlan.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/defrag-hash.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/defrag-queue.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/defrag-timeout.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/defrag.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ack.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-app-layer-event.Po@am__quote@
@@ -993,6 +1031,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filemagic.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filemd5.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filename.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filesize.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filestore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-flags.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-flow.Po@am__quote@
@@ -1020,8 +1059,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-id.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ipopts.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ipproto.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-iprep.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-isdataat.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-itype.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-l3proto.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-luajit.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-mark.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-metadata.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-msg.Po@am__quote@
@@ -1030,6 +1072,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-offset.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-parse.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pcre.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pkt-data.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pktvar.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-priority.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-rawbytes.Po@am__quote@
@@ -1073,6 +1116,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-filestore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-httplog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-pcap.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-tlslog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/packet-queue.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/pkt-var.Po@am__quote@
@@ -1088,6 +1132,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-pcap-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-pcap.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-pfring.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-unix-socket.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmodes.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-af-packet.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-erf-dag.Po@am__quote@
@@ -1115,6 +1160,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tmqh-packetpool.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tmqh-ringbuffer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/tmqh-simple.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/unix-manager.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-action.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-affinity.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-atomic.Po@am__quote@
@@ -1127,6 +1173,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-classification-config.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-coredump-config.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-cpu.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-crypt.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-cuda-handlers.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-cuda.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-daemon.Po@am__quote@
@@ -1166,6 +1213,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-print.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-privs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-profiling-locks.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-profiling-rules.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-profiling.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-proto-name.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-radix-tree.Po@am__quote@
@@ -1449,8 +1497,6 @@ uninstall-am: uninstall-binPROGRAMS
 
 @BUILD_CUDA_TRUE@cuda-ptxdump.h: $(PTXS)
 @BUILD_CUDA_TRUE@	$(PYTHON) ptxdump.py cuda-ptxdump $(PTXS)
-
-#suricata_CFLAGS = -Wall -fno-strict-aliasing 
 
 @BUILD_UNITTESTS_TRUE@check-am:
 @BUILD_UNITTESTS_TRUE@	$(top_builddir)/src/suricata -u

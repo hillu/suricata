@@ -101,7 +101,7 @@ void StreamTcpPseudoPacketCreateStreamEndPacket(Packet *, TcpSession *, PacketQu
 static int StreamTcpValidateTimestamp(TcpSession * , Packet *);
 static int StreamTcpHandleTimestamp(TcpSession * , Packet *);
 static int StreamTcpValidateRst(TcpSession * , Packet *);
-static inline int StreamTcpValidateAck(TcpStream *, Packet *);
+static inline int StreamTcpValidateAck(TcpSession *ssn, TcpStream *, Packet *);
 
 static Pool *ssn_pool = NULL;
 static SCMutex ssn_pool_mutex;
@@ -244,28 +244,33 @@ void StreamTcpSessionPktFree (Packet *p)
 }
 
 /** \brief Stream alloc function for the Pool
- *  \param null NULL ptr (value of null is ignored)
  *  \retval ptr void ptr to TcpSession structure with all vars set to 0/NULL
  */
-void *StreamTcpSessionPoolAlloc(void *null)
+void *StreamTcpSessionPoolAlloc()
 {
+    void *ptr = NULL;
+
     if (StreamTcpCheckMemcap((uint32_t)sizeof(TcpSession)) == 0)
         return NULL;
 
-    void *ptr = SCMalloc(sizeof(TcpSession));
-    if (ptr == NULL)
+    ptr = SCMalloc(sizeof(TcpSession));
+    if (unlikely(ptr == NULL))
         return NULL;
-
-    memset(ptr, 0, sizeof(TcpSession));
-
-    StreamTcpIncrMemuse((uint64_t)sizeof(TcpSession));
 
     return ptr;
 }
 
+int StreamTcpSessionPoolInit(void *data, void* initdata)
+{
+    memset(data, 0, sizeof(TcpSession));
+    StreamTcpIncrMemuse((uint64_t)sizeof(TcpSession));
+
+    return 1;
+}
+
 /** \brief Pool free function
  *  \param s Void ptr to TcpSession memory */
-void StreamTcpSessionPoolFree(void *s)
+void StreamTcpSessionPoolCleanup(void *s)
 {
     StreamMsg *smsg = NULL;
 
@@ -302,10 +307,7 @@ void StreamTcpSessionPoolFree(void *s)
     }
     ssn->toclient_smsg_head = NULL;
 
-    SCFree(ssn);
-
     StreamTcpDecrMemuse((uint64_t)sizeof(TcpSession));
-
 }
 
 /** \brief          To initialize the stream global configuration data
@@ -394,8 +396,20 @@ void StreamTcpInitConfig(char quiet)
 
     int inl = 0;
 
-    if (ConfGetBool("stream.inline", &inl) == 1) {
+
+    char *temp_stream_inline_str;
+    if (ConfGet("stream.inline", &temp_stream_inline_str) == 1) {
+        /* checking for "auto" and falling back to boolean to provide
+         * backward compatibility */
+        if (strcmp(temp_stream_inline_str, "auto") == 0) {
+            if (IS_ENGINE_MODE_IPS(engine_mode)) {
+                stream_inline = 1;
+            } else {
+                stream_inline = 0;
+            }
+        } else if (ConfGetBool("stream.inline", &inl) == 1) {
             stream_inline = inl;
+        }
     }
 
     if (!quiet) {
@@ -488,8 +502,10 @@ void StreamTcpInitConfig(char quiet)
     SCMutexLock(&ssn_pool_mutex);
     ssn_pool = PoolInit(stream_config.max_sessions,
                         stream_config.prealloc_sessions,
-                        StreamTcpSessionPoolAlloc, NULL,
-                        StreamTcpSessionPoolFree);
+                        sizeof(TcpSession),
+                        StreamTcpSessionPoolAlloc,
+                        StreamTcpSessionPoolInit, NULL,
+                        StreamTcpSessionPoolCleanup, NULL);
     if (ssn_pool == NULL) {
         SCLogError(SC_ERR_POOL_INIT, "ssn_pool is not initialized");
         SCMutexUnlock(&ssn_pool_mutex);
@@ -630,6 +646,27 @@ void StreamTcpSetOSPolicy(TcpStream *stream, Packet *p)
         (stream)->next_win = ((win) + sacked_size__); \
         SCLogDebug("ssn %p: next_win set to %"PRIu32, (ssn), (stream)->next_win); \
     } \
+}
+
+static int StreamTcpPacketIsRetransmission(TcpStream *stream, Packet *p) {
+    if (p->payload_len == 0)
+        SCReturnInt(0);
+
+    /* retransmission of already ack'd data */
+    if (SEQ_LEQ((TCP_GET_SEQ(p) + p->payload_len), stream->last_ack)) {
+        StreamTcpSetEvent(p, STREAM_PKT_RETRANSMISSION);
+        SCReturnInt(1);
+    }
+
+    /* retransmission of in flight data */
+    if (SEQ_LEQ((TCP_GET_SEQ(p) + p->payload_len), stream->next_seq)) {
+        StreamTcpSetEvent(p, STREAM_PKT_RETRANSMISSION);
+        SCReturnInt(2);
+    }
+
+    SCLogDebug("seq %u payload_len %u => %u, last_ack %u", TCP_GET_SEQ(p),
+            p->payload_len, (TCP_GET_SEQ(p) + p->payload_len), stream->last_ack);
+    SCReturnInt(0);
 }
 
 /**
@@ -918,7 +955,7 @@ static int StreamTcpPacketStateSynSent(ThreadVars *tv, Packet *p,
 
     /* SYN/ACK */
     } else if ((p->tcph->th_flags & (TH_SYN|TH_ACK)) == (TH_SYN|TH_ACK)) {
-        if (ssn->flags & STREAMTCP_FLAG_4WHS && PKT_IS_TOSERVER(p)) {
+        if ((ssn->flags & STREAMTCP_FLAG_4WHS) && PKT_IS_TOSERVER(p)) {
             SCLogDebug("ssn %p: SYN/ACK received on 4WHS session", ssn);
 
             /* Check if the SYN/ACK packet ack's the earlier
@@ -1281,7 +1318,7 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
                             " not resetting the connection !!");
                 }
             } else {
-                if ((ssn->client.os_policy == OS_POLICY_LINUX) |
+                if ((ssn->client.os_policy == OS_POLICY_LINUX) ||
                         (ssn->client.os_policy == OS_POLICY_OLD_LINUX) ||
                         (ssn->client.os_policy == OS_POLICY_SOLARIS))
                 {
@@ -1375,7 +1412,7 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
             }
         }
 
-        if (ssn->flags & STREAMTCP_FLAG_4WHS && PKT_IS_TOCLIENT(p)) {
+        if ((ssn->flags & STREAMTCP_FLAG_4WHS) && PKT_IS_TOCLIENT(p)) {
             SCLogDebug("ssn %p: ACK received on 4WHS session",ssn);
 
             if (!(SEQ_EQ(TCP_GET_SEQ(p), ssn->server.next_seq))) {
@@ -1384,7 +1421,7 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: 4WHS invalid ack nr on packet", ssn);
                 StreamTcpSetEvent(p, STREAM_4WHS_INVALID_ACK);
                 return -1;
@@ -1565,13 +1602,19 @@ static int HandleEstablishedPacketToServer(ThreadVars *tv, TcpSession *ssn, Pack
                "ACK %" PRIu32 ", WIN %"PRIu16"", ssn, p->payload_len,
                 TCP_GET_SEQ(p), TCP_GET_ACK(p), TCP_GET_WINDOW(p));
 
-    if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+    if (StreamTcpValidateAck(ssn, &(ssn->server), p) == -1) {
         SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
         StreamTcpSetEvent(p, STREAM_EST_INVALID_ACK);
         return -1;
     }
 
-    if (!(SEQ_GEQ((TCP_GET_SEQ(p)+p->payload_len), ssn->client.last_ack))) {
+    /* check for Keep Alive */
+    if ((p->payload_len == 0 || p->payload_len == 1) &&
+            (TCP_GET_SEQ(p) == (ssn->client.next_seq - 1))) {
+        SCLogDebug("ssn %p: pkt is keep alive", ssn);
+
+    /* normal pkt */
+    } else if (!(SEQ_GEQ((TCP_GET_SEQ(p)+p->payload_len), ssn->client.last_ack))) {
         if (ssn->flags & STREAMTCP_FLAG_ASYNC) {
             SCLogDebug("ssn %p: server => Asynchrouns stream, packet SEQ"
                     " %" PRIu32 ", payload size %" PRIu32 " (%" PRIu32 "),"
@@ -1628,21 +1671,31 @@ static int HandleEstablishedPacketToServer(ThreadVars *tv, TcpSession *ssn, Pack
                     ssn->client.last_ack, ssn->client.next_win,
                     TCP_GET_SEQ(p) + p->payload_len - ssn->client.next_win);
 
+            SCLogDebug("ssn %p: rejecting because pkt before last_ack", ssn);
             StreamTcpSetEvent(p, STREAM_EST_PKT_BEFORE_LAST_ACK);
             return -1;
         }
     }
 
-    if (SEQ_EQ(ssn->client.next_seq, TCP_GET_SEQ(p))) {
+    int zerowindowprobe = 0;
+    /* zero window probe */
+    if (p->payload_len == 1 && TCP_GET_SEQ(p) == ssn->client.next_seq && ssn->client.window == 0) {
+        SCLogDebug("ssn %p: zero window probe", ssn);
+        zerowindowprobe = 1;
+
+    /* expected packet */
+    } else if (SEQ_EQ(ssn->client.next_seq, TCP_GET_SEQ(p))) {
         ssn->client.next_seq += p->payload_len;
         SCLogDebug("ssn %p: ssn->client.next_seq %" PRIu32 "",
                     ssn, ssn->client.next_seq);
     }
 
     /* in window check */
-    if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
+    if (zerowindowprobe) {
+        SCLogDebug("ssn %p: zero window probe, skipping oow check", ssn);
+    } else if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
             (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
-            ssn->flags & STREAMTCP_FLAG_ASYNC)
+            (ssn->flags & STREAMTCP_FLAG_ASYNC))
     {
         SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->client.next_win "
                    "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->client.next_win);
@@ -1706,7 +1759,7 @@ static int HandleEstablishedPacketToClient(ThreadVars *tv, TcpSession *ssn, Pack
                " ACK %" PRIu32 ", WIN %"PRIu16"", ssn, p->payload_len,
                 TCP_GET_SEQ(p), TCP_GET_ACK(p), TCP_GET_WINDOW(p));
 
-    if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+    if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
         SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
         StreamTcpSetEvent(p, STREAM_EST_INVALID_ACK);
         return -1;
@@ -1724,7 +1777,13 @@ static int HandleEstablishedPacketToClient(ThreadVars *tv, TcpSession *ssn, Pack
                 "%" PRIu32 "", ssn, ssn->server.next_win);
     }
 
-    if (!(SEQ_GEQ((TCP_GET_SEQ(p)+p->payload_len), ssn->server.last_ack))) {
+    /* check for Keep Alive */
+    if ((p->payload_len == 0 || p->payload_len == 1) &&
+            (TCP_GET_SEQ(p) == (ssn->server.next_seq - 1))) {
+        SCLogDebug("ssn %p: pkt is keep alive", ssn);
+
+    /* normal pkt */
+    } else if (!(SEQ_GEQ((TCP_GET_SEQ(p)+p->payload_len), ssn->server.last_ack))) {
         if (ssn->flags & STREAMTCP_FLAG_ASYNC) {
 
             SCLogDebug("ssn %p: client => Asynchrouns stream, packet SEQ"
@@ -1746,13 +1805,22 @@ static int HandleEstablishedPacketToClient(ThreadVars *tv, TcpSession *ssn, Pack
         }
     }
 
-    if (SEQ_EQ(ssn->server.next_seq, TCP_GET_SEQ(p))) {
+    int zerowindowprobe = 0;
+    /* zero window probe */
+    if (p->payload_len == 1 && TCP_GET_SEQ(p) == ssn->server.next_seq && ssn->server.window == 0) {
+        SCLogDebug("ssn %p: zero window probe", ssn);
+        zerowindowprobe = 1;
+
+    /* expected packet */
+    } else if (SEQ_EQ(ssn->server.next_seq, TCP_GET_SEQ(p))) {
         ssn->server.next_seq += p->payload_len;
         SCLogDebug("ssn %p: ssn->server.next_seq %" PRIu32 "",
                 ssn, ssn->server.next_seq);
     }
 
-    if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
+    if (zerowindowprobe) {
+        SCLogDebug("ssn %p: zero window probe, skipping oow check", ssn);
+    } else if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
             (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
             (ssn->flags & STREAMTCP_FLAG_ASYNC)) {
         SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->server.next_win "
@@ -2016,8 +2084,10 @@ static int StreamTcpPacketStateEstablished(ThreadVars *tv, Packet *p,
                     ,ssn->client.next_win, ssn->client.window);
 
         } else { /* implied to client */
-            ssn->flags |= STREAMTCP_FLAG_3WHS_CONFIRMED;
-            SCLogDebug("3whs is now confirmed by server");
+            if (!(ssn->flags & STREAMTCP_FLAG_3WHS_CONFIRMED)) {
+                ssn->flags |= STREAMTCP_FLAG_3WHS_CONFIRMED;
+                SCLogDebug("3whs is now confirmed by server");
+            }
 
             /* Process the received packet to client */
             HandleEstablishedPacketToClient(tv, ssn, p, stt, pq);
@@ -2054,7 +2124,7 @@ static int StreamTcpHandleFin(ThreadVars *tv, StreamTcpThread *stt,
                 " ACK %" PRIu32 "", ssn, p->payload_len, TCP_GET_SEQ(p),
                 TCP_GET_ACK(p));
 
-        if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+        if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
             SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
             StreamTcpSetEvent(p, STREAM_FIN_INVALID_ACK);
             return -1;
@@ -2102,7 +2172,7 @@ static int StreamTcpHandleFin(ThreadVars *tv, StreamTcpThread *stt,
                    "ACK %" PRIu32 "", ssn, p->payload_len, TCP_GET_SEQ(p),
                     TCP_GET_ACK(p));
 
-        if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+        if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
             SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
             StreamTcpSetEvent(p, STREAM_FIN_INVALID_ACK);
             return -1;
@@ -2211,6 +2281,128 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                     &ssn->server, p, pq);
         }
 
+    } else if ((p->tcph->th_flags & (TH_FIN|TH_ACK)) == (TH_FIN|TH_ACK)) {
+        if (ssn->flags & STREAMTCP_FLAG_TIMESTAMP) {
+            if (!StreamTcpValidateTimestamp(ssn, p))
+                return -1;
+        }
+
+        if (PKT_IS_TOSERVER(p)) {
+            SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to server: SEQ "
+                    "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
+                    TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
+
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
+                    SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
+            {
+                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                        " != %" PRIu32 " from stream", ssn,
+                        TCP_GET_SEQ(p), ssn->client.next_seq);
+                StreamTcpSetEvent(p, STREAM_FIN1_FIN_WRONG_SEQ);
+                return -1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
+                SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
+                StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
+                return -1;
+            }
+
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
+                ssn->client.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+
+                ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+            }
+
+            StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
+
+            if (ssn->flags & STREAMTCP_FLAG_TIMESTAMP) {
+                StreamTcpHandleTimestamp(ssn, p);
+            }
+
+            /* Update the next_seq, in case if we have missed the client
+               packet and server has already received and acked it */
+            if (SEQ_LT(ssn->server.next_seq, TCP_GET_ACK(p)))
+                ssn->server.next_seq = TCP_GET_ACK(p);
+
+            if (SEQ_EQ(ssn->client.next_seq, TCP_GET_SEQ(p))) {
+                ssn->client.next_seq += p->payload_len;
+                SCLogDebug("ssn %p: ssn->client.next_seq %" PRIu32 "",
+                        ssn, ssn->client.next_seq);
+            }
+
+            StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                    &ssn->client, p, pq);
+
+            SCLogDebug("ssn %p: =+ next SEQ %" PRIu32 ", last ACK "
+                    "%" PRIu32 "", ssn, ssn->client.next_seq,
+                    ssn->server.last_ack);
+        } else { /* implied to client */
+            SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to client: SEQ "
+                    "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
+                    TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
+
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
+                    SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
+            {
+                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                        " != %" PRIu32 " from stream", ssn,
+                        TCP_GET_SEQ(p), ssn->server.next_seq);
+                StreamTcpSetEvent(p, STREAM_FIN1_FIN_WRONG_SEQ);
+                return -1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
+                SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
+                StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
+                return -1;
+            }
+
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
+                ssn->server.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+            }
+
+            StreamTcpUpdateLastAck(ssn, &ssn->client, TCP_GET_ACK(p));
+
+            if (ssn->flags & STREAMTCP_FLAG_TIMESTAMP) {
+                StreamTcpHandleTimestamp(ssn, p);
+            }
+
+            /* Update the next_seq, in case if we have missed the client
+               packet and server has already received and acked it */
+            if (SEQ_LT(ssn->client.next_seq, TCP_GET_ACK(p)))
+                ssn->client.next_seq = TCP_GET_ACK(p);
+
+            if (SEQ_EQ(ssn->server.next_seq, TCP_GET_SEQ(p))) {
+                ssn->server.next_seq += p->payload_len;
+                SCLogDebug("ssn %p: ssn->server.next_seq %" PRIu32 "",
+                        ssn, ssn->server.next_seq);
+            }
+
+            StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                    &ssn->server, p, pq);
+
+            SCLogDebug("ssn %p: =+ next SEQ %" PRIu32 ", last ACK "
+                    "%" PRIu32 "", ssn, ssn->server.next_seq,
+                    ssn->client.last_ack);
+        }
+
     } else if (p->tcph->th_flags & TH_FIN) {
         if (ssn->flags & STREAMTCP_FLAG_TIMESTAMP) {
             if (!StreamTcpValidateTimestamp(ssn, p))
@@ -2221,8 +2413,13 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to server: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
@@ -2232,17 +2429,19 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
                 return -1;
             }
 
-            StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
-            ssn->client.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
-            SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_CLOSING);
+                ssn->client.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_CLOSING", ssn);
 
-            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+                ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
 
@@ -2272,7 +2471,13 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
+            int retransmission = 0;
+
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
@@ -2282,17 +2487,19 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
                 return -1;
             }
 
-            StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
-            ssn->server.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
-            SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_CLOSING);
+                ssn->server.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_CLOSING", ssn);
 
-            ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->client, TCP_GET_ACK(p));
 
@@ -2318,7 +2525,6 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                     "%" PRIu32 "", ssn, ssn->server.next_seq,
                     ssn->client.last_ack);
         }
-
     } else if (p->tcph->th_flags & TH_SYN) {
         SCLogDebug("ssn (%p): SYN pkt on FinWait1", ssn);
         StreamTcpSetEvent(p, STREAM_SHUTDOWN_SYN_RESEND);
@@ -2334,34 +2540,42 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to server: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
                 return -1;
             }
 
-            if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
-                    (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
-                    ssn->flags & STREAMTCP_FLAG_ASYNC)
-            {
-                SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->client.next_win "
-                        "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->client.next_win);
+            if (!retransmission) {
+                if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
+                        (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
+                        ssn->flags & STREAMTCP_FLAG_ASYNC)
+                {
+                    SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->client.next_win "
+                            "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->client.next_win);
 
-                if (TCP_GET_SEQ(p) == ssn->client.next_seq) {
-                    StreamTcpPacketSetState(p, ssn, TCP_FIN_WAIT2);
-                    SCLogDebug("ssn %p: state changed to TCP_FIN_WAIT2", ssn);
+                    if (TCP_GET_SEQ(p) == ssn->client.next_seq) {
+                        StreamTcpPacketSetState(p, ssn, TCP_FIN_WAIT2);
+                        SCLogDebug("ssn %p: state changed to TCP_FIN_WAIT2", ssn);
+                    }
+                } else {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->client.next_seq);
+
+                    StreamTcpSetEvent(p, STREAM_FIN1_ACK_WRONG_SEQ);
+                    return -1;
                 }
-            } else {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->client.next_seq);
 
-                StreamTcpSetEvent(p, STREAM_FIN1_ACK_WRONG_SEQ);
-                return -1;
+                ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
             }
-
-            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
 
             StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
 
@@ -2398,32 +2612,41 @@ static int StreamTcpPacketStateFinWait1(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            int retransmission = 0;
+
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN1_INVALID_ACK);
                 return -1;
             }
 
-            if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
-                    (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
-                    ssn->flags & STREAMTCP_FLAG_ASYNC)
-            {
-                SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->server.next_win "
-                        "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->server.next_win);
+            if (!retransmission) {
+                if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
+                        (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
+                        (ssn->flags & STREAMTCP_FLAG_ASYNC))
+                {
+                    SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->server.next_win "
+                            "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->server.next_win);
 
-                if (TCP_GET_SEQ(p) == ssn->server.next_seq) {
-                    StreamTcpPacketSetState(p, ssn, TCP_FIN_WAIT2);
-                    SCLogDebug("ssn %p: state changed to TCP_FIN_WAIT2", ssn);
+                    if (TCP_GET_SEQ(p) == ssn->server.next_seq) {
+                        StreamTcpPacketSetState(p, ssn, TCP_FIN_WAIT2);
+                        SCLogDebug("ssn %p: state changed to TCP_FIN_WAIT2", ssn);
+                    }
+                } else {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->server.next_seq);
+                    StreamTcpSetEvent(p, STREAM_FIN1_ACK_WRONG_SEQ);
+                    return -1;
                 }
-            } else {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->server.next_seq);
-                StreamTcpSetEvent(p, STREAM_FIN1_ACK_WRONG_SEQ);
-                return -1;
-            }
 
-            ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->client, TCP_GET_ACK(p));
 
@@ -2529,8 +2752,17 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to server: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
+            if (SEQ_EQ(TCP_GET_SEQ(p), ssn->client.next_seq - 1) &&
+                SEQ_EQ(TCP_GET_ACK(p), ssn->server.last_ack)) {
+                SCLogDebug("ssn %p: retransmission", ssn);
+                retransmission = 1;
+            } else if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ "
@@ -2540,17 +2772,19 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN2_INVALID_ACK);
                 return -1;
             }
 
-            StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
-            ssn->client.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
-            SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
+                ssn->client.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
 
-            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+                ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
 
@@ -2575,8 +2809,17 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to client: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
+            if (SEQ_EQ(TCP_GET_SEQ(p), ssn->server.next_seq - 1) &&
+                SEQ_EQ(TCP_GET_ACK(p), ssn->client.last_ack)) {
+                SCLogDebug("ssn %p: retransmission", ssn);
+                retransmission = 1;
+            } else if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+
+            } else if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ "
@@ -2586,17 +2829,19 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN2_INVALID_ACK);
                 return -1;
             }
 
-            StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
-            ssn->server.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
-            SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
+            if (!retransmission) {
+                StreamTcpPacketSetState(p, ssn, TCP_TIME_WAIT);
+                ssn->server.flags |= STREAMTCP_STREAM_FLAG_CLOSE_INITIATED;
+                SCLogDebug("ssn %p: state changed to TCP_TIME_WAIT", ssn);
 
-            ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->client, TCP_GET_ACK(p));
 
@@ -2633,29 +2878,37 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to server: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN2_INVALID_ACK);
                 return -1;
             }
 
-            if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
-                    (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
-                    ssn->flags & STREAMTCP_FLAG_ASYNC)
-            {
-                SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->client.next_win "
-                        "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->client.next_win);
+            if (!retransmission) {
+                if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->client.next_win) ||
+                        (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
+                        (ssn->flags & STREAMTCP_FLAG_ASYNC))
+                {
+                    SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->client.next_win "
+                            "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->client.next_win);
 
-            } else {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->client.next_seq);
-                StreamTcpSetEvent(p, STREAM_FIN2_ACK_WRONG_SEQ);
-                return -1;
+                } else {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->client.next_seq);
+                    StreamTcpSetEvent(p, STREAM_FIN2_ACK_WRONG_SEQ);
+                    return -1;
+                }
+
+                ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
             }
-
-            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
 
             StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
 
@@ -2684,28 +2937,36 @@ static int StreamTcpPacketStateFinWait2(ThreadVars *tv, Packet *p,
             SCLogDebug("ssn %p: pkt (%" PRIu32 ") is to client: SEQ "
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
+            int retransmission = 0;
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                retransmission = 1;
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_FIN2_INVALID_ACK);
                 return -1;
             }
 
-            if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
-                    (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
-                    ssn->flags & STREAMTCP_FLAG_ASYNC)
-            {
-                SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->server.next_win "
-                        "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->server.next_win);
-            } else {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->server.next_seq);
-                StreamTcpSetEvent(p, STREAM_FIN2_ACK_WRONG_SEQ);
-                return -1;
-            }
+            if (!retransmission) {
+                if (SEQ_LEQ(TCP_GET_SEQ(p) + p->payload_len, ssn->server.next_win) ||
+                        (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) ||
+                        (ssn->flags & STREAMTCP_FLAG_ASYNC))
+                {
+                    SCLogDebug("ssn %p: seq %"PRIu32" in window, ssn->server.next_win "
+                            "%" PRIu32 "", ssn, TCP_GET_SEQ(p), ssn->server.next_win);
+                } else {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->server.next_seq);
+                    StreamTcpSetEvent(p, STREAM_FIN2_ACK_WRONG_SEQ);
+                    return -1;
+                }
 
-            ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+            }
 
             StreamTcpUpdateLastAck(ssn, &ssn->client, TCP_GET_ACK(p));
 
@@ -2812,6 +3073,11 @@ static int StreamTcpPacketStateClosing(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
             if (TCP_GET_SEQ(p) != ssn->client.next_seq) {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
@@ -2820,7 +3086,7 @@ static int StreamTcpPacketStateClosing(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSING_INVALID_ACK);
                 return -1;
@@ -2851,6 +3117,11 @@ static int StreamTcpPacketStateClosing(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
             if (TCP_GET_SEQ(p) != ssn->server.next_seq) {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
@@ -2859,7 +3130,7 @@ static int StreamTcpPacketStateClosing(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSING_INVALID_ACK);
                 return -1;
@@ -2976,6 +3247,11 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
             if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
             {
@@ -2986,7 +3262,7 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                 SCReturnInt(-1);
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3019,6 +3295,11 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
             if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
                     SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
             {
@@ -3029,7 +3310,7 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                 SCReturnInt(-1);
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3075,17 +3356,26 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq) ||
-                    SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
+            if (p->payload_len > 0 && (SEQ_LEQ((TCP_GET_SEQ(p) + p->payload_len), ssn->client.last_ack))) {
+                SCLogDebug("ssn %p: -> retransmission", ssn);
+                StreamTcpSetEvent(p, STREAM_CLOSEWAIT_PKT_BEFORE_LAST_ACK);
+                SCReturnInt(-1);
+
+            } else if (SEQ_GT(TCP_GET_SEQ(p), (ssn->client.last_ack + ssn->client.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
                         TCP_GET_SEQ(p), ssn->client.next_seq);
-                SCReturnInt(-1);
                 StreamTcpSetEvent(p, STREAM_CLOSEWAIT_ACK_OUT_OF_WINDOW);
+                SCReturnInt(-1);
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3117,8 +3407,17 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (SEQ_LT(TCP_GET_SEQ(p), ssn->server.next_seq) ||
-                    SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
+            if (p->payload_len > 0 && (SEQ_LEQ((TCP_GET_SEQ(p) + p->payload_len), ssn->server.last_ack))) {
+                SCLogDebug("ssn %p: -> retransmission", ssn);
+                StreamTcpSetEvent(p, STREAM_CLOSEWAIT_PKT_BEFORE_LAST_ACK);
+                SCReturnInt(-1);
+
+            } else if (SEQ_GT(TCP_GET_SEQ(p), (ssn->server.last_ack + ssn->server.window)))
             {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
@@ -3127,7 +3426,7 @@ static int StreamTcpPacketStateCloseWait(ThreadVars *tv, Packet *p,
                 SCReturnInt(-1);
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_CLOSEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3239,7 +3538,12 @@ static int StreamTcpPakcetStateLastAck(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (TCP_GET_SEQ(p) != ssn->client.next_seq) {
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
+            if (TCP_GET_SEQ(p) != ssn->client.next_seq && TCP_GET_SEQ(p) != ssn->client.next_seq + 1) {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
                         TCP_GET_SEQ(p), ssn->client.next_seq);
@@ -3247,7 +3551,7 @@ static int StreamTcpPakcetStateLastAck(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_LASTACK_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3359,7 +3663,12 @@ static int StreamTcpPacketStateTimeWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (TCP_GET_SEQ(p) != ssn->client.next_seq) {
+            if (StreamTcpPacketIsRetransmission(&ssn->client, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
+            }
+
+            if (TCP_GET_SEQ(p) != ssn->client.next_seq && TCP_GET_SEQ(p) != ssn->client.next_seq+1) {
                 SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
                         " != %" PRIu32 " from stream", ssn,
                         TCP_GET_SEQ(p), ssn->client.next_seq);
@@ -3367,7 +3676,7 @@ static int StreamTcpPacketStateTimeWait(ThreadVars *tv, Packet *p,
                 return -1;
             }
 
-            if (StreamTcpValidateAck(&ssn->server, p) == -1) {
+            if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_TIMEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3401,15 +3710,25 @@ static int StreamTcpPacketStateTimeWait(ThreadVars *tv, Packet *p,
                     "%" PRIu32 ", ACK %" PRIu32 "", ssn, p->payload_len,
                     TCP_GET_SEQ(p), TCP_GET_ACK(p));
 
-            if (TCP_GET_SEQ(p) != ssn->server.next_seq) {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->server.next_seq);
-                StreamTcpSetEvent(p, STREAM_TIMEWAIT_ACK_WRONG_SEQ);
-                return -1;
+            if (StreamTcpPacketIsRetransmission(&ssn->server, p)) {
+                SCLogDebug("ssn %p: packet is retransmission", ssn);
+                SCReturnInt(-1);
             }
 
-            if (StreamTcpValidateAck(&ssn->client, p) == -1) {
+            if (TCP_GET_SEQ(p) != ssn->server.next_seq && TCP_GET_SEQ(p) != ssn->server.next_seq+1) {
+                if (p->payload_len > 0 && TCP_GET_SEQ(p) == ssn->server.last_ack) {
+                    SCLogDebug("ssn %p: -> retransmission", ssn);
+                    SCReturnInt(0);
+                } else {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->server.next_seq);
+                    StreamTcpSetEvent(p, STREAM_TIMEWAIT_ACK_WRONG_SEQ);
+                    return -1;
+                }
+            }
+
+            if (StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_TIMEWAIT_INVALID_ACK);
                 SCReturnInt(-1);
@@ -3467,6 +3786,11 @@ static int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
     }
     if (p->tcph->th_flags & (TH_RST)) {
         SCPerfCounterIncr(stt->counter_tcp_rst, tv->sc_perf_pca);
+    }
+
+    /* broken TCP http://ask.wireshark.org/questions/3183/acknowledgment-number-broken-tcp-the-acknowledge-field-is-nonzero-while-the-ack-flag-is-not-set */
+    if (!(p->tcph->th_flags & TH_ACK) && TCP_GET_ACK(p) != 0) {
+        StreamTcpSetEvent(p, STREAM_PKT_BROKEN_ACK);
     }
 
     /* If we are on IPS mode, and got a drop action triggered from
@@ -3647,15 +3971,15 @@ static int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
         /* check for conditions that may make us not want to log this packet */
 
         /* streams that hit depth */
-        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED ||
-             ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
+        if ((ssn->client.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) ||
+             (ssn->server.flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED))
         {
             p->flags |= PKT_STREAM_NOPCAPLOG;
         }
 
         /* encrypted packets */
-        if ((PKT_IS_TOSERVER(p) && ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) ||
-            (PKT_IS_TOCLIENT(p) && ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY))
+        if ((PKT_IS_TOSERVER(p) && (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) ||
+            (PKT_IS_TOCLIENT(p) && (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)))
         {
             p->flags |= PKT_STREAM_NOPCAPLOG;
         }
@@ -3763,7 +4087,7 @@ TmEcode StreamTcpThreadInit(ThreadVars *tv, void *initdata, void **data)
 {
     SCEnter();
     StreamTcpThread *stt = SCMalloc(sizeof(StreamTcpThread));
-    if (stt == NULL)
+    if (unlikely(stt == NULL))
         SCReturnInt(TM_ECODE_FAILED);
     memset(stt, 0, sizeof(StreamTcpThread));
 
@@ -3890,7 +4214,8 @@ static int StreamTcpValidateRst(TcpSession *ssn, Packet *p)
 
         os_policy = ssn->server.os_policy;
 
-        if (TCP_GET_ACK(p) && StreamTcpValidateAck(&ssn->server, p) == -1) {
+        if (p->tcph->th_flags & TH_ACK &&
+                TCP_GET_ACK(p) && StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
             SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
             StreamTcpSetEvent(p, STREAM_RST_INVALID_ACK);
             SCReturnInt(0);
@@ -3902,7 +4227,8 @@ static int StreamTcpValidateRst(TcpSession *ssn, Packet *p)
 
         os_policy = ssn->client.os_policy;
 
-        if (TCP_GET_ACK(p) && StreamTcpValidateAck(&ssn->client, p) == -1) {
+        if (p->tcph->th_flags & TH_ACK &&
+                TCP_GET_ACK(p) && StreamTcpValidateAck(ssn, &ssn->client, p) == -1) {
             SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
             StreamTcpSetEvent(p, STREAM_RST_INVALID_ACK);
             SCReturnInt(0);
@@ -4362,13 +4688,14 @@ invalid:
  *          and previous ack value. ACK values should be higher than previous
  *          ACK value and less than the next_win value.
  *
+ *  \param  ssn     TcpSession for state access
  *  \param  stream  TcpStream of which last_ack needs to be tested
  *  \param  p       Packet which is used to test the last_ack
  *
  *  \retval 0  ACK is valid, last_ack is updated if ACK was higher
  *  \retval -1 ACK is invalid
  */
-static inline int StreamTcpValidateAck(TcpStream *stream, Packet *p)
+static inline int StreamTcpValidateAck(TcpSession *ssn, TcpStream *stream, Packet *p)
 {
     SCEnter();
 
@@ -4403,9 +4730,15 @@ static inline int StreamTcpValidateAck(TcpStream *stream, Packet *p)
         SCReturnInt(0);
     }
 
-    if (SEQ_GT(ack, stream->next_win)) {
+    if (ssn->state > TCP_SYN_SENT && SEQ_GT(ack, stream->next_win)) {
         SCLogDebug("ACK %"PRIu32" is after next_win %"PRIu32, ack, stream->next_win);
         goto invalid;
+    /* a toclient RST as a reponse to SYN, next_win is 0, ack will be isn+1, just like
+     * the syn ack */
+    } else if (ssn->state == TCP_SYN_SENT && PKT_IS_TOCLIENT(p) &&
+            p->tcph->th_flags & TH_RST &&
+            SEQ_EQ(ack, stream->isn + 1)) {
+        SCReturnInt(0);
     }
 
     SCLogDebug("default path leading to invalid: ACK %"PRIu32", last_ack %"PRIu32
@@ -4573,6 +4906,7 @@ void StreamTcpPseudoPacketCreateStreamEndPacket(Packet *p, TcpSession *ssn, Pack
         SCLogDebug("The packet received from packet allocation is NULL");
         SCReturn;
     }
+    PKT_SET_SRC(np, PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO);
 
     /* Setup the IP and TCP headers */
     StreamTcpPseudoPacketSetupHeader(np,p);
@@ -4665,7 +4999,7 @@ int StreamTcpSegmentForEach(Packet *p, uint8_t flag, StreamSegmentCallback Callb
 
 static int StreamTcpTest01 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     memset(p, 0, SIZE_OF_PACKET);
@@ -4711,7 +5045,7 @@ end:
 
 static int StreamTcpTest02 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -4810,7 +5144,7 @@ end:
 
 static int StreamTcpTest03 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -4884,7 +5218,7 @@ end:
 
 static int StreamTcpTest04 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -4951,7 +5285,7 @@ end:
 
 static int StreamTcpTest05 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5054,7 +5388,7 @@ end:
 
 static int StreamTcpTest06 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TcpSession ssn;
@@ -5117,7 +5451,7 @@ end:
 
 static int StreamTcpTest07 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5205,7 +5539,7 @@ end:
 static int StreamTcpTest08 (void) {
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     Flow f;
     ThreadVars tv;
@@ -5295,7 +5629,7 @@ end:
 static int StreamTcpTest09 (void) {
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     Flow f;
     ThreadVars tv;
@@ -5371,7 +5705,7 @@ end:
 
 static int StreamTcpTest10 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5471,7 +5805,7 @@ end:
 
 static int StreamTcpTest11 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5572,7 +5906,7 @@ end:
 
 static int StreamTcpTest12 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5666,7 +6000,7 @@ end:
 
 static int StreamTcpTest13 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -5835,12 +6169,12 @@ char *StreamTcpParseOSPolicy (char *conf_var_name)
     if (snprintf(conf_var_full_name,
                  strlen(conf_var_type_name) + strlen(conf_var_name) + 2, "%s.%s",
                  conf_var_type_name, conf_var_name) < 0) {
-        SCLogError(SC_LOG_ERROR, "Error in making the conf full name");
+        SCLogError(SC_ERR_INVALID_VALUE, "Error in making the conf full name");
         goto end;
     }
 
     if (ConfGet(conf_var_full_name, &conf_var_value) != 1) {
-        SCLogError(SC_LOG_ERROR, "Error in getting conf value for conf name %s",
+        SCLogError(SC_ERR_UNKNOWN_VALUE, "Error in getting conf value for conf name %s",
                     conf_var_full_name);
         goto end;
     }
@@ -5864,7 +6198,7 @@ char *StreamTcpParseOSPolicy (char *conf_var_name)
 
 static int StreamTcpTest14 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6035,7 +6369,7 @@ end:
 static int StreamTcp4WHSTest01 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6115,7 +6449,7 @@ end:
 static int StreamTcp4WHSTest02 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6184,7 +6518,7 @@ end:
 static int StreamTcp4WHSTest03 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6262,7 +6596,7 @@ end:
 
 static int StreamTcpTest15 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6432,7 +6766,7 @@ end:
 
 static int StreamTcpTest16 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6603,7 +6937,7 @@ end:
 
 static int StreamTcpTest17 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -6773,7 +7107,7 @@ static int StreamTcpTest18 (void) {
     char *ip_addr;
     TcpStream stream;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     IPV4Hdr ipv4h;
     int ret = 0;
@@ -6822,7 +7156,7 @@ static int StreamTcpTest19 (void) {
     char *ip_addr;
     TcpStream stream;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     IPV4Hdr ipv4h;
     int ret = 0;
@@ -6874,7 +7208,7 @@ static int StreamTcpTest20 (void) {
     char *ip_addr;
     TcpStream stream;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     IPV4Hdr ipv4h;
     int ret = 0;
@@ -6926,7 +7260,7 @@ static int StreamTcpTest21 (void) {
     char *ip_addr;
     TcpStream stream;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     IPV4Hdr ipv4h;
     int ret = 0;
@@ -6978,7 +7312,7 @@ static int StreamTcpTest22 (void) {
     char *ip_addr;
     TcpStream stream;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     IPV4Hdr ipv4h;
     int ret = 0;
@@ -7035,7 +7369,7 @@ static int StreamTcpTest23(void)
     PacketQueue pq;
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
 
     memset(&pq,0,sizeof(PacketQueue));
@@ -7117,7 +7451,7 @@ static int StreamTcpTest24(void)
 {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -7207,7 +7541,7 @@ end:
  */
 static int StreamTcpTest25(void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -7305,7 +7639,7 @@ end:
  */
 static int StreamTcpTest26(void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -7399,7 +7733,7 @@ end:
  */
 static int StreamTcpTest27(void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -7511,7 +7845,7 @@ static int StreamTcpTest28(void)
     }
 
     if (StreamTcpCheckMemcap((memuse + stream_config.memcap)) != 0) {
-        printf("failed in validating the memcap");
+        printf("failed in validating the overflowed memcap");
         goto end;
     }
 
@@ -8387,7 +8721,7 @@ end:
  */
 static int StreamTcpTest37(void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     ThreadVars tv;
@@ -8528,7 +8862,7 @@ static int StreamTcpTest38 (void) {
     memset(&pq,0,sizeof(PacketQueue));
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     memset(p, 0, SIZE_OF_PACKET);
     p->pkt = (uint8_t *)(p + 1);
@@ -8644,7 +8978,7 @@ static int StreamTcpTest39 (void) {
     memset(&pq,0,sizeof(PacketQueue));
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     memset(p, 0, SIZE_OF_PACKET);
     p->pkt = (uint8_t *)(p + 1);
@@ -8747,7 +9081,7 @@ static int StreamTcpTest40(void) {
         0x00, 0x04, 0xf0, 0xc8, 0x01, 0x99, 0xa3, 0xf3
     };
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
@@ -8805,7 +9139,7 @@ static int StreamTcpTest41(void) {
         0x04, 0x02, 0x08, 0x0a, 0x00, 0xdd, 0x1a, 0x39,
         0x00, 0x00, 0x00, 0x00, 0x01, 0x03, 0x03, 0x02 };
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;

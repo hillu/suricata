@@ -55,6 +55,8 @@ void DetectStreamSizeRegisterTests(void);
 
 void DetectStreamSizeRegister(void) {
     sigmatch_table[DETECT_STREAM_SIZE].name = "stream_size";
+    sigmatch_table[DETECT_STREAM_SIZE].desc = "match on amount of bytes of a stream";
+    sigmatch_table[DETECT_STREAM_SIZE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#stream_size";
     sigmatch_table[DETECT_STREAM_SIZE].Match = DetectStreamSizeMatch;
     sigmatch_table[DETECT_STREAM_SIZE].Setup = DetectStreamSizeSetup;
     sigmatch_table[DETECT_STREAM_SIZE].Free = DetectStreamSizeFree;
@@ -231,8 +233,8 @@ DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
     value = (char *)str_ptr;
 
     sd = SCMalloc(sizeof(DetectStreamSizeData));
-    if (sd == NULL)
-        goto error;
+    if (unlikely(sd == NULL))
+    goto error;
     sd->ssize = 0;
     sd->flags = 0;
 
@@ -386,7 +388,7 @@ static int DetectStreamSizeParseTest03 (void) {
     ThreadVars tv;
     DetectEngineThreadCtx dtx;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     Signature s;
     SigMatch sm;
@@ -463,7 +465,7 @@ static int DetectStreamSizeParseTest04 (void) {
     ThreadVars tv;
     DetectEngineThreadCtx dtx;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     Signature s;
     SigMatch sm;

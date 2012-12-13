@@ -45,12 +45,9 @@ static uint16_t toclient_min_chunk_len = 2560;
 static Pool *stream_msg_pool = NULL;
 static SCMutex stream_msg_pool_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-void *StreamMsgAlloc(void *null) {
-    StreamMsg *s = SCMalloc(sizeof(StreamMsg));
-    if (s == NULL)
-        return NULL;
-
-    memset(s, 0, sizeof(StreamMsg));
+int StreamMsgInit(void *data, void *initdata)
+{
+    memset(data, 0, sizeof(StreamMsg));
 
 #ifdef DEBUG
     SCMutexLock(&stream_pool_memuse_mutex);
@@ -58,16 +55,7 @@ void *StreamMsgAlloc(void *null) {
     stream_pool_memcnt ++;
     SCMutexUnlock(&stream_pool_memuse_mutex);
 #endif
-    return s;
-}
-
-void StreamMsgFree(void *ptr) {
-    if (ptr == NULL)
-        return;
-
-    StreamMsg *s = (StreamMsg *)ptr;
-    SCFree(s);
-    return;
+    return 1;
 }
 
 static void StreamMsgEnqueue (StreamMsgQueue *q, StreamMsg *s) {
@@ -160,7 +148,7 @@ void StreamMsgQueuesInit(void) {
     SCMutexInit(&stream_pool_memuse_mutex, NULL);
 #endif
     SCMutexLock(&stream_msg_pool_mutex);
-    stream_msg_pool = PoolInit(0,250,StreamMsgAlloc,NULL,StreamMsgFree);
+    stream_msg_pool = PoolInit(0,250,sizeof(StreamMsg),NULL,StreamMsgInit,NULL,NULL,NULL);
     if (stream_msg_pool == NULL)
         exit(EXIT_FAILURE); /* XXX */
     SCMutexUnlock(&stream_msg_pool_mutex);
@@ -183,7 +171,7 @@ void StreamMsgQueuesDeinit(char quiet) {
  *  \retval smq ptr to the queue or NULL */
 StreamMsgQueue *StreamMsgQueueGetNew(void) {
     StreamMsgQueue *smq = SCMalloc(sizeof(StreamMsgQueue));
-    if (smq == NULL)
+    if (unlikely(smq == NULL))
         return NULL;
 
     memset(smq, 0x00, sizeof(StreamMsgQueue));

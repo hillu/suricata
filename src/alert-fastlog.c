@@ -140,7 +140,7 @@ TmEcode AlertFastLogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
             continue;
         }
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -190,7 +190,7 @@ TmEcode AlertFastLogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
             continue;
         }
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -238,7 +238,7 @@ TmEcode AlertFastLogDecoderEvent(ThreadVars *tv, Packet *p, void *data, PacketQu
             continue;
         }
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -282,7 +282,7 @@ TmEcode AlertFastLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
 TmEcode AlertFastLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     AlertFastLogThread *aft = SCMalloc(sizeof(AlertFastLogThread));
-    if (aft == NULL)
+    if (unlikely(aft == NULL))
         return TM_ECODE_FAILED;
     memset(aft, 0, sizeof(AlertFastLogThread));
     if(initdata == NULL)
@@ -340,7 +340,7 @@ OutputCtx *AlertFastLogInitCtx(ConfNode *conf)
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (output_ctx == NULL)
+    if (unlikely(output_ctx == NULL))
         return NULL;
     output_ctx->data = logfile_ctx;
     output_ctx->DeInit = AlertFastLogDeInitCtx;

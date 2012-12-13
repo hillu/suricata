@@ -299,7 +299,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
     }
 
     char *temp_fmt = strdup(sc_log_config->log_format);
-    if (temp_fmt == NULL) {
+    if (unlikely(temp_fmt == NULL)) {
         return SC_ERR_MEM_ALLOC;
     }
     char *temp_fmt_h = temp_fmt;
@@ -1035,7 +1035,7 @@ SCLogOPIfaceCtx *SCLogInitOPIfaceCtx(const char *iface_name,
     if (log_level < SC_LOG_NONE || log_level > SC_LOG_DEBUG) {
 #ifndef UNITTESTS
         printf("Warning: Supplied log_level_override for op_interface \"%s\" "
-               "is invalid.  Defaulting to not specifing an override\n",
+               "is invalid.  Defaulting to not specifying an override\n",
                iface_name);
 #endif
         log_level = SC_LOG_NOTSET;
@@ -1098,10 +1098,11 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
     return;
 }
 
-void SCLogLoadConfig(void)
+void SCLogLoadConfig(int daemon)
 {
     ConfNode *outputs;
     SCLogInitData *sc_lid;
+    int have_logging = 0;
 
     outputs = ConfGetNode("logging.outputs");
     if (outputs == NULL) {
@@ -1178,6 +1179,7 @@ void SCLogLoadConfig(void)
                     "Logging to file requires a filename");
                 exit(EXIT_FAILURE);
             }
+            have_logging = 1;
             op_iface_ctx = SCLogInitFileOPIface(filename, format, level);
         }
         else if (strcmp(output->name, "syslog") == 0) {
@@ -1195,6 +1197,7 @@ void SCLogLoadConfig(void)
             }
             printf("Initialization syslog logging with format \"%s\".\n",
                 format);
+            have_logging = 1;
             op_iface_ctx = SCLogInitSyslogOPIface(facility, format, level);
         }
         else {
@@ -1204,6 +1207,13 @@ void SCLogLoadConfig(void)
         if (op_iface_ctx != NULL) {
             SCLogAppendOPIfaceCtx(op_iface_ctx, sc_lid);
         }
+    }
+
+    if (daemon && (have_logging == 0)) {
+        SCLogError(SC_ERR_MISSING_CONFIG_PARAM,
+                   "NO logging compatible with daemon mode selected,"
+                   " suricata won't be able to log. Please update "
+                   " 'logging.outputs' in the YAML.");
     }
 
     SCLogInitLogModule(sc_lid);
@@ -1362,7 +1372,7 @@ static char *SCLogGetLogFilename(char *filearg)
         log_dir = DEFAULT_LOG_DIR;
 
     log_filename = SCMalloc(PATH_MAX);
-    if (log_filename == NULL)
+    if (unlikely(log_filename == NULL))
         return NULL;
     snprintf(log_filename, PATH_MAX, "%s/%s", log_dir, filearg);
 

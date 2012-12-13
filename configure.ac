@@ -1,9 +1,9 @@
 #TODO A better place for default CFLAGS?
 
-AC_INIT(configure.in)
+AC_INIT(configure.ac)
 
     AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 1.3.5)
+    AM_INIT_AUTOMAKE(suricata, 1.4)
     CFLAGS="${CFLAGS} -DRELEASE"
 
     AC_LANG_C
@@ -36,24 +36,39 @@ AC_INIT(configure.in)
             echo
             ])
 
-    dnl get gcc version
-    AC_MSG_CHECKING([gcc version])
-            gccver=$($CC -dumpversion)
-            gccvermajor=$(echo $gccver | cut -d . -f1)
-            gccverminor=$(echo $gccver | cut -d . -f2)
-            gccvernum=$(expr $gccvermajor "*" 100 + $gccverminor)
-    AC_MSG_RESULT($gccver)
-
-    if test "$gccvernum" -ge "400"; then
-            dnl gcc 4.0 or later
-            CFLAGS="$CFLAGS -Wextra"
-    else
-            CFLAGS="$CFLAGS -W"
+    if test `basename $CC` = "clang"; then
+        CFLAGS="$CFLAGS -Wextra -Werror-implicit-function-declaration"
+        AC_MSG_CHECKING([clang __sync_bool_compare_and_swap])
+        AC_TRY_COMPILE([#include <stdio.h>],
+                [ unsigned int i = 0; (void)__sync_bool_compare_and_swap(&i, 1, 1);],
+                [
+                    AC_DEFINE([__GCC_HAVE_SYNC_COMPARE_AND_SWAP_1], [1], [Fake GCC atomic support])
+                    AC_DEFINE([__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2], [1], [Fake GCC atomic support])
+                    AC_DEFINE([__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4], [1], [Fake GCC atomic support])
+                    AC_DEFINE([__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8], [1], [Fake GCC atomic support])
+                    AC_MSG_RESULT([yes]) ],
+                [AC_MSG_RESULT([no])])
     fi
+    if test `basename $CC` = "gcc"; then
+        dnl get gcc version
+        AC_MSG_CHECKING([gcc version])
+                gccver=$($CC -dumpversion)
+                gccvermajor=$(echo $gccver | cut -d . -f1)
+                gccverminor=$(echo $gccver | cut -d . -f2)
+                gccvernum=$(expr $gccvermajor "*" 100 + $gccverminor)
+        AC_MSG_RESULT($gccver)
 
-    # remove optimization options that break our code
-    # VJ 2010/06/27: no-tree-pre added. It breaks ringbuffers code.
-    CFLAGS="$CFLAGS -Wall -fno-strict-aliasing -fno-tree-pre"
+        if test "$gccvernum" -ge "400"; then
+                dnl gcc 4.0 or later
+                CFLAGS="$CFLAGS -Wextra -Werror-implicit-function-declaration"
+                # remove optimization options that break our code
+                # VJ 2010/06/27: no-tree-pre added. It breaks ringbuffers code.
+                CFLAGS="$CFLAGS -fno-tree-pre"
+        else
+                CFLAGS="$CFLAGS -W"
+        fi
+    fi
+    CFLAGS="$CFLAGS -Wall -fno-strict-aliasing"
     CFLAGS="$CFLAGS -Wno-unused-parameter"
     CFLAGS="$CFLAGS -std=gnu99"
 
@@ -90,14 +105,28 @@ AC_INIT(configure.in)
     # Checks for libraries.
 
     # Checks for header files.
-    AC_CHECK_HEADERS([arpa/inet.h inttypes.h limits.h netdb.h poll.h signal.h stdint.h stdlib.h string.h syslog.h sys/ioctl.h sys/prctl.h sys/socket.h sys/syscall.h netinet/in.h sys/time.h unistd.h windows.h winsock2.h ws2tcpip.h])
-    AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h], [], [],
+    AC_CHECK_HEADERS([arpa/inet.h assert.h ctype.h errno.h fcntl.h inttypes.h])
+    AC_CHECK_HEADERS([getopt.h])
+    AC_CHECK_HEADERS([limits.h netdb.h netinet/in.h poll.h sched.h signal.h])
+    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h string.h sys/ioctl.h])
+    AC_CHECK_HEADERS([syslog.h sys/prctl.h sys/socket.h sys/stat.h sys/syscall.h])
+    AC_CHECK_HEADERS([sys/time.h time.h unistd.h])
+    AC_CHECK_HEADERS([sys/ioctl.h linux/if_ether.h linux/if_packet.h linux/filter.h])
+
+    AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h linux/if_arp.h], [], [],
     [[#ifdef HAVE_SYS_SOCKET_H
-#include <sys/types.h>
-#include <sys/socket.h>
-#endif
+        #include <sys/types.h>
+        #include <sys/socket.h>
+        #endif
     ]])
 
+    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h], [], [],
+                    [[#define _X86_
+                     ]])
+    AC_CHECK_HEADERS([w32api/winbase.h], [], [],
+                    [[#define _X86_
+                     #include <windows.h>
+                     ]])
 
     # Checks for typedefs, structures, and compiler characteristics.
     AC_C_INLINE
@@ -125,7 +154,7 @@ AC_INIT(configure.in)
     if test -z "$host" ; then
 	    host="`uname`"
     fi
-    echo -n "installation for $host OS... \c"
+    echo -n "installation for $host OS... "
 
     e_magic_file="/usr/share/file/magic"
     case "$host" in
@@ -243,22 +272,40 @@ AC_INIT(configure.in)
     AC_ARG_ENABLE(gccmarch_native,
            AS_HELP_STRING([--enable-gccmarch-native], [Enable gcc march=native gcc 4.2 and later only]),,[enable_gccmarch_native=yes])
     AS_IF([test "x$enable_gccmarch_native" = "xyes"], [
-        case $host in
-	    *darwin*|*Darwin*)
-		if test "$gccvernum" -ge "403"; then
-                    dnl gcc 4.3 or later
-                    CFLAGS="$CFLAGS -march=native"
-		else
-		    enable_gccmarch_native=no
-		fi
-		;;
-	    *)
-		if test "$gccvernum" -ge "402"; then
-                    dnl gcc 4.2 or later
-                    CFLAGS="$CFLAGS -march=native"
-		fi
-		;;
-	esac
+        if test `basename $CC` = "clang"; then
+            OFLAGS="$CFLAGS"
+            CFLAGS="$CFLAGS -march=native"
+            AC_MSG_CHECKING([checking if $CC supports -march=native])
+            AC_COMPILE_IFELSE(  [AC_LANG_PROGRAM([[#include <stdlib.h>]])],
+                        [
+                          AC_MSG_RESULT([yes])
+                          CFLAGS="$OFLAGS -march=native"
+                        ],
+                        [
+                          AC_MSG_RESULT([no])
+                          CFLAGS="$OFLAGS"
+                          enable_gccmarch_native=no
+                        ]
+                     )
+        fi
+        if test `basename $CC` = "gcc"; then
+            case $host in
+            *darwin*|*Darwin*)
+            if test "$gccvernum" -ge "403"; then
+                        dnl gcc 4.3 or later
+                        CFLAGS="$CFLAGS -march=native"
+            else
+                enable_gccmarch_native=no
+            fi
+            ;;
+            *)
+            if test "$gccvernum" -ge "402"; then
+                        dnl gcc 4.2 or later
+                        CFLAGS="$CFLAGS -march=native"
+            fi
+            ;;
+            esac
+        fi
     ])
 
 # options
@@ -298,7 +345,15 @@ AC_INIT(configure.in)
     AC_ARG_ENABLE(profiling,
            AS_HELP_STRING([--enable-profiling], [Enable performance profiling]),,[enable_profiling=no])
     AS_IF([test "x$enable_profiling" = "xyes"], [
-        CFLAGS="${CFLAGS} -DPROFILING"
+
+	case "$host" in
+           *-*-openbsd*)
+		AC_MSG_ERROR([profiling is not supported on OpenBSD])
+		;;
+	   *)
+		CFLAGS="${CFLAGS} -DPROFILING"
+		;;
+        esac
     ])
 
   # profiling support, locking
@@ -326,54 +381,51 @@ AC_INIT(configure.in)
             [with_libpcre_libraries="$withval"],[with_libpcre_libraries="no"])
 
     if test "$with_libpcre_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libpcre_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libpcre_includes}"
     fi
-
     AC_CHECK_HEADER(pcre.h,,[AC_ERROR(pcre.h not found ...)])
 
     if test "$with_libpcre_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libpcre_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libpcre_libraries}"
     fi
-
     PCRE=""
     AC_CHECK_LIB(pcre, pcre_get_substring,, PCRE="no")
-
     if test "$PCRE" = "no"; then
-    echo
-    echo "   ERROR!  pcre library not found, go get it"
-    echo "   from www.pcre.org."
-    echo
-    exit 1
+        echo
+        echo "   ERROR!  pcre library not found, go get it"
+        echo "   from www.pcre.org."
+        echo
+        exit 1
     fi
 
-   # To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
-   # see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
-   PCRE=""
-   TMPLIBS="${LIBS}"
-   AC_CHECK_LIB(pcre, pcre_dfa_exec,, PCRE="no")
-   if test "$PCRE" = "no"; then
-   echo
-   echo "   ERROR!  pcre library was found but version was < 6.0"
-   echo "   please upgrade to a newer version of pcre which you can get from"
-   echo "   www.pcre.org."
-   echo
-   exit 1
-   fi
-   LIBS="${TMPLIBS}"
+    # To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
+    # see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
+    PCRE=""
+    TMPLIBS="${LIBS}"
+    AC_CHECK_LIB(pcre, pcre_dfa_exec,, PCRE="no")
+    if test "$PCRE" = "no"; then
+        echo
+        echo "   ERROR!  pcre library was found but version was < 6.0"
+        echo "   please upgrade to a newer version of pcre which you can get from"
+        echo "   www.pcre.org."
+        echo
+        exit 1
+    fi
+    LIBS="${TMPLIBS}"
 
-   AC_TRY_COMPILE([ #include <pcre.h> ],
-   [ int eo = 0; eo |= PCRE_EXTRA_MATCH_LIMIT_RECURSION; ],
-   [ pcre_match_limit_recursion_available=yes ], [:]
-   )
-   if test "$pcre_match_limit_recursion_available" != "yes"; then
-    CFLAGS="${CFLAGS} -DNO_PCRE_MATCH_RLIMIT"
-    echo
-    echo "   Warning! pcre extra opt PCRE_EXTRA_MATCH_LIMIT_RECURSION not found"
-    echo "   This could lead to potential DoS please upgrade to pcre >= 6.5"
-    echo "   Continuing for now...."
-    echo "   from www.pcre.org."
-    echo
-   fi
+    AC_TRY_COMPILE([ #include <pcre.h> ],
+        [ int eo = 0; eo |= PCRE_EXTRA_MATCH_LIMIT_RECURSION; ],
+        [ pcre_match_limit_recursion_available=yes ], [:]
+    )
+    if test "$pcre_match_limit_recursion_available" != "yes"; then
+        CFLAGS="${CFLAGS} -DNO_PCRE_MATCH_RLIMIT"
+        echo
+        echo "   Warning! pcre extra opt PCRE_EXTRA_MATCH_LIMIT_RECURSION not found"
+        echo "   This could lead to potential DoS please upgrade to pcre >= 6.5"
+        echo "   Continuing for now...."
+        echo "   from www.pcre.org."
+        echo
+    fi
 
     #enable support for PCRE-jit available since pcre-8.20
     AC_MSG_CHECKING(for PCRE JIT support)
@@ -420,7 +472,7 @@ AC_INIT(configure.in)
            AC_MSG_RESULT(yes)
        fi
     else
-       AC_MSG_RESULT(no)
+        AC_MSG_RESULT(no)
     fi
 
   # libyaml
@@ -432,13 +484,13 @@ AC_INIT(configure.in)
             [with_libyaml_libraries="$withval"],[with_libyaml_libraries="no"])
 
     if test "$with_libyaml_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libyaml_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libyaml_includes}"
     fi
 
     AC_CHECK_HEADER(yaml.h,,LIBYAML="no")
 
     if test "$with_libyaml_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libyaml_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libyaml_libraries}"
     fi
 
     LIBYAML=""
@@ -465,24 +517,70 @@ AC_INIT(configure.in)
             [with_libpthread_libraries="$withval"],[with_libpthread_libraries="no"])
 
     if test "$with_libpthread_includes" != "no"; then
-    CPPFLAGS="${CPPFLAGS} -I${with_libpthread_includes}"
+        CPPFLAGS="${CPPFLAGS} -I${with_libpthread_includes}"
     fi
 
     dnl AC_CHECK_HEADER(pthread.h,,[AC_ERROR(pthread.h not found ...)])
 
     if test "$with_libpthread_libraries" != "no"; then
-    LDFLAGS="${LDFLAGS}  -L${with_libpthread_libraries}"
+        LDFLAGS="${LDFLAGS}  -L${with_libpthread_libraries}"
     fi
 
     PTHREAD=""
     AC_CHECK_LIB(pthread, pthread_create,, PTHREAD="no")
 
     if test "$PTHREAD" = "no"; then
-    echo
-    echo "   ERROR! libpthread library not found, glibc problem?"
-    echo
-    exit 1
+        echo
+        echo "   ERROR! libpthread library not found, glibc problem?"
+        echo
+        exit 1
     fi
+
+  # libjansson
+    enable_jansson="no"
+    AC_ARG_WITH(libjansson_includes,
+            [  --with-libjansson-includes=DIR  libjansson include directory],
+            [with_libjansson_includes="$withval"],[with_libjansson_includes=no])
+    AC_ARG_WITH(libjansson_libraries,
+            [  --with-libjansson-libraries=DIR    libjansson library directory],
+            [with_libjansson_libraries="$withval"],[with_libjansson_libraries="no"])
+
+    if test "$with_libjansson_includes" != "no"; then
+        CPPFLAGS="${CPPFLAGS} -I${with_libjansson_includes}"
+    fi
+
+    enable_jansson="no"
+    enable_unixsocket="no"
+    AC_CHECK_HEADER(jansson.h,JANSSON="yes",JANSSON="no")
+    if test "$JANSSON" = "yes"; then
+        if test "$with_libjansson_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS}  -L${with_libjansson_libraries}"
+        fi
+
+	    AC_CHECK_LIB(jansson, json_loads,, JANSSON="no")
+        enable_jansson="yes"
+        if test "$JANSSON" = "no"; then
+            echo
+            echo "   Jansson is required for features like unix socket"
+            echo "   Go get it from your distribution of from:"
+	        echo "     http://www.digip.org/jansson/"
+            echo
+            enable_unixsocket="no"
+            enable_jansson="no"
+        else
+            case $host in
+                *-*-mingw32*)
+                ;;
+                *-*-cygwin)
+                ;;
+                *)
+                enable_unixsocket="yes"
+                ;;
+            esac
+        fi
+    fi
+
+    AS_IF([test "x$enable_unixsocket" = "xyes"], [AC_DEFINE([BUILD_UNIX_SOCKET], [1], [Unix socket support enabled])])
 
     #enable support for NFQUEUE
     AC_ARG_ENABLE(nfqueue,
@@ -567,11 +665,16 @@ AC_INIT(configure.in)
         AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",)
         AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_maxlen],AC_DEFINE_UNQUOTED([HAVE_NFQ_MAXLEN],[1],[Found queue max length support in netfilter_queue]) ,,[-lnfnetlink])
         AC_CHECK_LIB([netfilter_queue], [nfq_set_verdict2],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_VERDICT2],[1],[Found nfq_set_verdict2 function in netfilter_queue]) ,,[-lnfnetlink])
+        AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_flags],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_QUEUE_FLAGS],[1],[Found nfq_set_queue_flags function in netfilter_queue]) ,,[-lnfnetlink])
 
         # check if the argument to nfq_get_payload is signed or unsigned
         AC_MSG_CHECKING([for signed nfq_get_payload payload argument])
         STORECFLAGS="${CFLAGS}"
-        CFLAGS="${CFLAGS} -Werror"
+        if test `basename $CC` = "clang"; then
+            CFLAGS="${CFLAGS} -Werror=incompatible-pointer-types"
+        else
+            CFLAGS="${CFLAGS} -Werror"
+        fi
         AC_COMPILE_IFELSE(
             [AC_LANG_PROGRAM(
                 [
@@ -585,7 +688,7 @@ AC_INIT(configure.in)
             [libnetfilter_queue_nfq_get_payload_signed="no"])
         AC_MSG_RESULT($libnetfilter_queue_nfq_get_payload_signed)
         if test "x$libnetfilter_queue_nfq_get_payload_signed" = "xyes"; then
-            AC_DEFINE([NFQ_GET_PAYLOAD_SIGNED], [], [For signed version of nfq_get_payload])
+            AC_DEFINE([NFQ_GET_PAYLOAD_SIGNED], [1], [For signed version of nfq_get_payload])
         fi
         CFLAGS="${STORECFLAGS}"
     ;;
@@ -599,7 +702,7 @@ AC_INIT(configure.in)
         echo "   for headers etc. when the --with-libnfq-includes directive"
         echo "   is used"
         echo
-        exit 1 
+        exit 1
     fi
   ])
 
@@ -711,11 +814,11 @@ AC_INIT(configure.in)
                 [with_libpfring_libraries="$withval"],[with_libpfring_libraries="no"])
 
         if test "$with_libpfring_includes" != "no"; then
-        CPPFLAGS="${CPPFLAGS} -I${with_libpfring_includes}"
+            CPPFLAGS="${CPPFLAGS} -I${with_libpfring_includes}"
         fi
 
         if test "$with_libpfring_libraries" != "no"; then
-        LDFLAGS="${LDFLAGS}  -L${with_libpfring_libraries}"
+            LDFLAGS="${LDFLAGS}  -L${with_libpfring_libraries}"
         fi
 
         LIBPFRING=""
@@ -814,7 +917,7 @@ AC_INIT(configure.in)
     if test "$with_libpcap_libraries" != "no"; then
         LDFLAGS="${LDFLAGS}  -L${with_libpcap_libraries}"
     fi
-    AC_CHECK_HEADERS([pcap.h pcap/pcap.h])
+    AC_CHECK_HEADERS([pcap.h pcap/pcap.h pcap/bpf.h])
 
     LIBPCAP=""
     AC_CHECK_LIB(pcap, pcap_open_live,, LIBPCAP="no", [-lpthread])
@@ -1057,7 +1160,7 @@ AC_INIT(configure.in)
 
     if test "$enable_dag" = "yes"; then
 
-	if test "$with_dag_includes" != "no"; then
+    	if test "$with_dag_includes" != "no"; then
             CPPFLAGS="${CPPFLAGS} -I${with_dag_includes}"
         fi
 
@@ -1185,33 +1288,25 @@ AC_INIT(configure.in)
         exit 1
     fi
 
-  # Check for Napatech support.
+  # Napatech - Using the 3GD API
     AC_ARG_ENABLE(napatech,
-                [  --enable-napatech  Enable Napatech adapter],
+                [  --enable-napatech   Enabled Napatech Devices],
                 [ enable_napatech=yes ],
                 [ enable_napatech=no])
     AC_ARG_WITH(napatech_includes,
-            [  --with-napatech-includes=DIR  napatech include directory],
-            [with_napatech_includes="$withval"],[with_napatech_includes="no"])
+                [  --with-napatech-includes=DIR   napatech include directory],
+                [with_napatech_includes="$withval"],[with_napatech_includes="/opt/napatech3/include"])
     AC_ARG_WITH(napatech_libraries,
-            [  --with-napatech-libraries=DIR  napatech library directory],
-            [with_napatech_libraries="$withval"],[with_napatech_libraries="no"])
+                [  --with-napatech-libraries=DIR  napatech library directory],
+                [with_napatech_libraries="$withval"],[with_napatech_libraries="/opt/napatech3/lib"])
 
     if test "$enable_napatech" = "yes"; then
-
-        if test "$with_napatech_includes" != "no"; then
-            CPPFLAGS="${CPPFLAGS} -I${with_napatech_includes}"
-        fi
-
-        if test "$with_napatech_libraries" != "no"; then
-            LDFLAGS="${LDFLAGS} -L${with_napatech_libraries} -lntfeeds -lntcommoninterface"
-        fi
-
-        AC_CHECK_HEADER(ntfeeds.h,NAPATECH="yes",NAPATECH="no")
+        CPPFLAGS="${CPPFLAGS} -I${with_napatech_includes}"
+        LDFLAGS="${LDFLAGS} -L${with_napatech_libraries} -lntapi"
+        AC_CHECK_HEADER(nt.h,NAPATECH="yes",NAPATECH="no")
         if test "$NAPATECH" != "no"; then
             NAPATECH=""
-            AC_CHECK_LIB(ntcommoninterface,NTCI_OpenCard,NAPATECH="yes",NAPATECH="no")
-            #AC_CHECK_LIB(ntfeeds,napatech_open,NAPATECH="yes",NAPATECH="no")
+            AC_CHECK_LIB(ntapi, NT_Init,NAPATECH="yes",NAPATECH="no")
         fi
 
         if test "$NAPATECH" != "no"; then
@@ -1220,9 +1315,72 @@ AC_INIT(configure.in)
 
         if test "$NAPATECH" = "no"; then
             echo
-            echo "  ERROR! libntfeeds (and libntcommoninterface) library not found"
+            echo "  ERROR! libntapi library not found"
             echo
             exit 1
+        fi
+    fi
+
+  # libluajit
+    AC_ARG_ENABLE(luajit,
+	        [  --enable-luajit  Enable Luajit support],
+	        [ enable_luajit="yes"],
+	        [ enable_luajit="no"])
+    AC_ARG_WITH(libluajit_includes,
+            [  --with-libluajit-includes=DIR  libluajit include directory],
+            [with_libluajit_includes="$withval"],[with_libluajit_includes="no"])
+    AC_ARG_WITH(libluajit_libraries,
+            [  --with-libluajit-libraries=DIR    libluajit library directory],
+            [with_libluajit_libraries="$withval"],[with_libluajit_libraries="no"])
+
+    if test "$enable_luajit" = "yes"; then
+        if test "$with_libluajit_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_libluajit_includes}"
+        else
+            PKG_CHECK_MODULES([LUAJIT], [luajit], , LUAJIT="no")
+            CPPFLAGS="${CPPFLAGS} ${LUAJIT_CFLAGS}"
+        fi
+
+        AC_CHECK_HEADER(lualib.h,LUAJIT="yes",LUAJIT="no")
+        if test "$LUAJIT" = "yes"; then
+            if test "$with_libluajit_libraries" != "no"; then
+                LDFLAGS="${LDFLAGS}  -L${with_libluajit_libraries}"
+            else
+                PKG_CHECK_MODULES([LUAJIT], [luajit])
+                LDFLAGS="${LDFLAGS} ${LUAJIT_LIBS}"
+            fi
+
+            AC_CHECK_LIB(luajit-5.1, luaL_openlibs,, LUAJIT="no")
+
+            if test "$LUAJIT" = "no"; then
+                echo
+                echo "   ERROR!  libluajit library not found, go get it"
+                echo "   from http://luajit.org/index.html or your distribution:"
+                echo
+                echo "   Ubuntu: apt-get install libluajit-5.1-dev"
+                echo
+                echo "   If you installed software in a non-standard prefix"
+                echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
+                echo "   or use --with-libluajit-libraries configure option."
+                echo
+                exit 1
+            fi
+
+            AC_DEFINE([HAVE_LUAJIT],[1],[libluajit available])
+            enable_luajit="yes"
+        else
+	        echo
+                echo "   ERROR!  libluajit headers not found, go get them"
+                echo "   from http://luajit.org/index.html or your distribution:"
+                echo
+                echo "   Ubuntu: apt-get install libluajit-5.1-dev"
+                echo
+                echo "   If you installed software in a non-standard prefix"
+                echo "   consider adjusting the PKG_CONFIG_PATH environment variable"
+                echo "   or use --with-libluajit-includes and --with-libluajit-libraries"
+                echo "   configure option."
+                echo
+                exit 1
         fi
     fi
 
@@ -1231,16 +1389,12 @@ AC_INIT(configure.in)
         REVISION=`cat ./revision`
         CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
     else
-        AC_MSG_CHECKING(git command available)
-        GIT=`which git`
-        if [ test "$GIT" != ""]; then
-            AC_MSG_RESULT(yes)
+        AC_PATH_PROG(HAVE_GIT_CMD, git, "no")
+        if test "$HAVE_GIT_CMD" != "no"; then
             if [ test -d .git ]; then
                 REVISION=`git rev-parse --short HEAD`
                 CFLAGS="${CFLAGS} -DREVISION=\"${REVISION}\""
             fi
-        else
-            AC_MSG_RESULT(no)
         fi
     fi
 
@@ -1281,18 +1435,22 @@ if test "$WINDOWS_PATH" = "yes"; then
   e_logfilesdir="$e_logdir\\\\files"
 else
   EXPAND_VARIABLE(localstatedir, e_logdir, "/log/suricata/")
+  EXPAND_VARIABLE(localstatedir, e_rundir, "/run/")
   EXPAND_VARIABLE(localstatedir, e_logfilesdir, "/log/suricata/files")
   EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
   EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
+  EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/suricata")
 fi
 AC_SUBST(e_logdir)
+AC_SUBST(e_rundir)
 AC_SUBST(e_logfilesdir)
 AC_SUBST(e_sysconfdir)
 AC_SUBST(e_sysconfrulesdir)
+AC_SUBST(e_localstatedir)
 AC_DEFINE_UNQUOTED([CONFIG_DIR],["$e_sysconfdir"],[Our CONFIG_DIR])
 AC_SUBST(e_magic_file)
 
-AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile suricata.yaml)
+AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
 
 echo "
 Suricata Configuration:
@@ -1302,11 +1460,14 @@ Suricata Configuration:
   IPFW support:                            ${enable_ipfw}
   DAG enabled:                             ${enable_dag}
   Napatech enabled:                        ${enable_napatech}
+  Unix socket enabled:                     ${enable_unixsocket}
 
   libnss support:                          ${enable_nss}
   libnspr support:                         ${enable_nspr}
+  libjansson support:                      ${enable_jansson}
   Prelude support:                         ${enable_prelude}
   PCRE jit:                                ${pcre_jit_available}
+  libluajit:                               ${enable_luajit}
   Non-bundled htp:                         ${enable_non_bundled_htp}
   Old barnyard2 support:                   ${enable_old_barnyard2}
   CUDA enabled:                            ${enable_cuda}
@@ -1338,4 +1499,3 @@ echo "To install Suricata into /usr/bin/suricata, have the config in
 /etc/suricata and use /var/log/suricata as log dir, use:
 ./configure --prefix=/usr/ --sysconfdir=/etc/ --localstatedir=/var/"
 echo
-

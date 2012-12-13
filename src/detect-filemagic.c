@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -52,18 +52,23 @@
 
 #include "detect-filemagic.h"
 
-int DetectFilemagicMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
+#include "conf.h"
+#include "util-magic.h"
+
+static int DetectFilemagicMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
+        uint8_t, File *, Signature *, SigMatch *);
 static int DetectFilemagicSetup (DetectEngineCtx *, Signature *, char *);
-void DetectFilemagicRegisterTests(void);
-void DetectFilemagicFree(void *);
+static void DetectFilemagicRegisterTests(void);
+static void DetectFilemagicFree(void *);
 
 /**
  * \brief Registration function for keyword: filemagic
  */
 void DetectFilemagicRegister(void) {
     sigmatch_table[DETECT_FILEMAGIC].name = "filemagic";
-    sigmatch_table[DETECT_FILEMAGIC].Match = NULL;
-    sigmatch_table[DETECT_FILEMAGIC].AppLayerMatch = DetectFilemagicMatch;
+    sigmatch_table[DETECT_FILEMAGIC].desc = "match on the information libmagic returns about a file";
+    sigmatch_table[DETECT_FILEMAGIC].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filemagic";
+    sigmatch_table[DETECT_FILEMAGIC].FileMatch = DetectFilemagicMatch;
     sigmatch_table[DETECT_FILEMAGIC].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILEMAGIC].Setup = DetectFilemagicSetup;
     sigmatch_table[DETECT_FILEMAGIC].Free  = DetectFilemagicFree;
@@ -83,19 +88,19 @@ void DetectFilemagicRegister(void) {
  *  \retval -1 error
  *  \retval 0 ok
  */
-int FilemagicLookup(File *file) {
+int FilemagicGlobalLookup(File *file) {
     if (file == NULL || file->chunks_head == NULL) {
         SCReturnInt(-1);
     }
 
     /* initial chunk already matching our requirement */
     if (file->chunks_head->len >= FILEMAGIC_MIN_SIZE) {
-        file->magic = MagicLookup(file->chunks_head->data, FILEMAGIC_MIN_SIZE);
+        file->magic = MagicGlobalLookup(file->chunks_head->data, FILEMAGIC_MIN_SIZE);
     } else {
         uint8_t *buf = SCMalloc(FILEMAGIC_MIN_SIZE);
         uint32_t size = 0;
 
-        if (buf != NULL) {
+        if (likely(buf != NULL)) {
             FileData *ffd = file->chunks_head;
 
             for ( ; ffd != NULL; ffd = ffd->next) {
@@ -107,12 +112,61 @@ int FilemagicLookup(File *file) {
                 size += copy_len;
 
                 if (size >= FILEMAGIC_MIN_SIZE) {
-                    file->magic = MagicLookup(buf, size);
+                    file->magic = MagicGlobalLookup(buf, size);
                     break;
                 }
                 /* file is done but smaller than FILEMAGIC_MIN_SIZE */
                 if (ffd->next == NULL && file->state >= FILE_STATE_CLOSED) {
-                    file->magic = MagicLookup(buf, size);
+                    file->magic = MagicGlobalLookup(buf, size);
+                    break;
+                }
+            }
+
+            SCFree(buf);
+        }
+    }
+
+    SCReturnInt(0);
+}
+
+/**
+ *  \brief run the magic check
+ *
+ *  \param file the file
+ *
+ *  \retval -1 error
+ *  \retval 0 ok
+ */
+int FilemagicThreadLookup(magic_t *ctx, File *file) {
+    if (ctx == NULL || file == NULL || file->chunks_head == NULL) {
+        SCReturnInt(-1);
+    }
+
+    /* initial chunk already matching our requirement */
+    if (file->chunks_head->len >= FILEMAGIC_MIN_SIZE) {
+        file->magic = MagicThreadLookup(ctx, file->chunks_head->data, FILEMAGIC_MIN_SIZE);
+    } else {
+        uint8_t *buf = SCMalloc(FILEMAGIC_MIN_SIZE);
+        uint32_t size = 0;
+
+        if (likely(buf != NULL)) {
+            FileData *ffd = file->chunks_head;
+
+            for ( ; ffd != NULL; ffd = ffd->next) {
+                uint32_t copy_len = ffd->len;
+                if (size + ffd->len > FILEMAGIC_MIN_SIZE)
+                    copy_len = FILEMAGIC_MIN_SIZE - size;
+
+                memcpy(buf + size, ffd->data, copy_len);
+                size += copy_len;
+
+                if (size >= FILEMAGIC_MIN_SIZE) {
+                    file->magic = MagicThreadLookup(ctx, buf, size);
+                    break;
+                }
+                /* file is done but smaller than FILEMAGIC_MIN_SIZE */
+                if (ffd->next == NULL && file->state >= FILE_STATE_CLOSED) {
+                    file->magic = MagicThreadLookup(ctx, buf, size);
                     break;
                 }
             }
@@ -127,21 +181,23 @@ int FilemagicLookup(File *file) {
 /**
  * \brief match the specified filemagic
  *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectFilemagicData
+ * \param t thread local vars
+ * \param det_ctx pattern matcher thread local data
+ * \param f *LOCKED* flow
+ * \param flags direction flags
+ * \param file file being inspected
+ * \param s signature being inspected
+ * \param m sigmatch that we will cast into DetectFilemagicData
  *
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
 {
     SCEnter();
     int ret = 0;
     DetectFilemagicData *filemagic = (DetectFilemagicData *)m->ctx;
-
-    File *file = (File *)state;
 
     if (file->txid < det_ctx->tx_id)
         SCReturnInt(0);
@@ -149,8 +205,13 @@ int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f
     if (file->txid > det_ctx->tx_id)
         SCReturnInt(0);
 
+    DetectFilemagicThreadData *tfilemagic = (DetectFilemagicThreadData *)DetectThreadCtxGetKeywordThreadCtx(det_ctx, filemagic->thread_ctx_id);
+    if (tfilemagic == NULL) {
+        SCReturnInt(0);
+    }
+
     if (file->magic == NULL) {
-        FilemagicLookup(file);
+        FilemagicThreadLookup(&tfilemagic->ctx, file);
     }
 
     if (file->magic != NULL) {
@@ -165,9 +226,11 @@ int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f
 #ifdef DEBUG
             if (SCLogDebugEnabled()) {
                 char *name = SCMalloc(filemagic->len + 1);
-                memcpy(name, filemagic->name, filemagic->len);
-                name[filemagic->len] = '\0';
-                SCLogDebug("will look for filemagic %s", name);
+                if (name != NULL) {
+                    memcpy(name, filemagic->name, filemagic->len);
+                    name[filemagic->len] = '\0';
+                    SCLogDebug("will look for filemagic %s", name);
+                }
             }
 #endif
 
@@ -191,13 +254,13 @@ int DetectFilemagicMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f
  * \retval filemagic pointer to DetectFilemagicData on success
  * \retval NULL on failure
  */
-DetectFilemagicData *DetectFilemagicParse (char *str)
+static DetectFilemagicData *DetectFilemagicParse (char *str)
 {
     DetectFilemagicData *filemagic = NULL;
 
     /* We have a correct filemagic option */
     filemagic = SCMalloc(sizeof(DetectFilemagicData));
-    if (filemagic == NULL)
+    if (unlikely(filemagic == NULL))
         goto error;
 
     memset(filemagic, 0x00, sizeof(DetectFilemagicData));
@@ -220,9 +283,11 @@ DetectFilemagicData *DetectFilemagicParse (char *str)
 #ifdef DEBUG
     if (SCLogDebugEnabled()) {
         char *name = SCMalloc(filemagic->len + 1);
-        memcpy(name, filemagic->name, filemagic->len);
-        name[filemagic->len] = '\0';
-        SCLogDebug("will look for filemagic %s", name);
+        if (name != NULL) {
+            memcpy(name, filemagic->name, filemagic->len);
+            name[filemagic->len] = '\0';
+            SCLogDebug("will look for filemagic %s", name);
+        }
     }
 #endif
 
@@ -232,6 +297,59 @@ error:
     if (filemagic != NULL)
         DetectFilemagicFree(filemagic);
     return NULL;
+}
+
+static void *DetectFilemagicThreadInit(void *data) {
+    char *filename = NULL;
+    FILE *fd = NULL;
+    DetectFilemagicData *filemagic = (DetectFilemagicData *)data;
+    BUG_ON(filemagic == NULL);
+
+    DetectFilemagicThreadData *t = SCMalloc(sizeof(DetectFilemagicThreadData));
+    if (unlikely(t == NULL)) {
+        SCLogError(SC_ERR_LUAJIT_ERROR, "couldn't alloc ctx memory");
+        return NULL;
+    }
+    memset(t, 0x00, sizeof(DetectFilemagicThreadData));
+
+    t->ctx = magic_open(0);
+    if (t->ctx == NULL) {
+        SCLogError(SC_ERR_MAGIC_OPEN, "magic_open failed: %s", magic_error(t->ctx));
+        goto error;
+    }
+
+    (void)ConfGet("magic-file", &filename);
+    if (filename != NULL) {
+        SCLogInfo("using magic-file %s", filename);
+
+        if ( (fd = fopen(filename, "r")) == NULL) {
+            SCLogWarning(SC_ERR_FOPEN, "Error opening file: \"%s\": %s", filename, strerror(errno));
+            goto error;
+        }
+        fclose(fd);
+    }
+
+    if (magic_load(t->ctx, filename) != 0) {
+        SCLogError(SC_ERR_MAGIC_LOAD, "magic_load failed: %s", magic_error(t->ctx));
+        goto error;
+    }
+SCLogInfo("returning %p", t);
+    return (void *)t;
+
+error:
+    if (t->ctx)
+        magic_close(t->ctx);
+    SCFree(t);
+    return NULL;
+}
+
+static void DetectFilemagicThreadFree(void *ctx) {
+    if (ctx != NULL) {
+        DetectFilemagicThreadData *t = (DetectFilemagicThreadData *)ctx;
+        if (t->ctx)
+            magic_close(t->ctx);
+        SCFree(t);
+    }
 }
 
 /**
@@ -252,6 +370,12 @@ static int DetectFilemagicSetup (DetectEngineCtx *de_ctx, Signature *s, char *st
 
     filemagic = DetectFilemagicParse(str);
     if (filemagic == NULL)
+        goto error;
+
+    filemagic->thread_ctx_id = DetectRegisterThreadCtxFuncs(de_ctx, "filemagic",
+            DetectFilemagicThreadInit, (void *)filemagic,
+            DetectFilemagicThreadFree, 1);
+    if (filemagic->thread_ctx_id == -1)
         goto error;
 
     /* Okay so far so good, lets get this into a SigMatch
@@ -291,7 +415,7 @@ error:
  *
  * \param filemagic pointer to DetectFilemagicData
  */
-void DetectFilemagicFree(void *ptr) {
+static void DetectFilemagicFree(void *ptr) {
     if (ptr != NULL) {
         DetectFilemagicData *filemagic = (DetectFilemagicData *)ptr;
         if (filemagic->bm_ctx != NULL) {

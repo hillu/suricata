@@ -32,6 +32,8 @@ static int DetectRevSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectRevRegister (void) {
     sigmatch_table[DETECT_REV].name = "rev";
+    sigmatch_table[DETECT_REV].desc = "set version of the rule";
+    sigmatch_table[DETECT_REV].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Rev-Revision";
     sigmatch_table[DETECT_REV].Match = NULL;
     sigmatch_table[DETECT_REV].Setup = DetectRevSetup;
     sigmatch_table[DETECT_REV].Free  = NULL;
@@ -46,7 +48,7 @@ static int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     /* strip "'s */
     if (rawstr[0] == '\"' && rawstr[strlen(rawstr)-1] == '\"') {
         str = SCStrdup(rawstr+1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             return -1;
 
         str[strlen(rawstr)-2] = '\0';

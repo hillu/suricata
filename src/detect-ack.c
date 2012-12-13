@@ -48,6 +48,8 @@ static void DetectAckFree(void *);
 
 void DetectAckRegister(void) {
     sigmatch_table[DETECT_ACK].name = "ack";
+    sigmatch_table[DETECT_ACK].desc = "check for a specific TCP acknowledgement number";
+    sigmatch_table[DETECT_ACK].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#ack";
     sigmatch_table[DETECT_ACK].Match = DetectAckMatch;
     sigmatch_table[DETECT_ACK].Setup = DetectAckSetup;
     sigmatch_table[DETECT_ACK].Free = DetectAckFree;
@@ -97,7 +99,7 @@ static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     SigMatch *sm = NULL;
 
     data = SCMalloc(sizeof(DetectAckData));
-    if (data == NULL)
+    if (unlikely(data == NULL))
         goto error;
 
     sm = SigMatchAlloc();

@@ -56,6 +56,8 @@ void DetectIpOptsFree(void *);
  */
 void DetectIpOptsRegister (void) {
     sigmatch_table[DETECT_IPOPTS].name = "ipopts";
+    sigmatch_table[DETECT_IPOPTS].desc = "check if a specific IP option is set";
+    sigmatch_table[DETECT_IPOPTS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Ipopts";
     sigmatch_table[DETECT_IPOPTS].Match = DetectIpOptsMatch;
     sigmatch_table[DETECT_IPOPTS].Setup = DetectIpOptsSetup;
     sigmatch_table[DETECT_IPOPTS].Free  = DetectIpOptsFree;
@@ -161,7 +163,7 @@ DetectIpOptsData *DetectIpOptsParse (char *rawstr)
         goto error;
 
     de = SCMalloc(sizeof(DetectIpOptsData));
-    if (de == NULL)
+    if (unlikely(de == NULL))
         goto error;
 
     de->ipopt = DIpOpts[i].code;
@@ -269,7 +271,7 @@ int IpOptsTestParse02 (void) {
  */
 int IpOptsTestParse03 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     int ret = 0;
@@ -321,7 +323,7 @@ error:
  */
 int IpOptsTestParse04 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     int ret = 0;

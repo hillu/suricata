@@ -249,11 +249,13 @@ static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
         idmef_assessment_set_action(assessment, action, 0);
     }
 
-    ret = idmef_impact_new_description(impact, &str);
-    if ( ret < 0 )
-        SCReturnInt(ret);
+    if (pa->s->class_msg) {
+        ret = idmef_impact_new_description(impact, &str);
+        if ( ret < 0 )
+            SCReturnInt(ret);
 
-    prelude_string_set_ref(str, pa->s->class_msg);
+        prelude_string_set_ref(str, pa->s->class_msg);
+    }
 
     SCReturnInt(0);
 }
@@ -693,11 +695,13 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     if ( ret < 0 )
         goto err;
 
-    ret = idmef_classification_new_text(class, &str);
-    if ( ret < 0 )
-        goto err;
+    if (pa->s->msg) {
+        ret = idmef_classification_new_text(class, &str);
+        if ( ret < 0 )
+            goto err;
 
-    prelude_string_set_ref(str, pa->s->msg);
+        prelude_string_set_ref(str, pa->s->msg);
+    }
 
     ret = EventToImpact(pa, p, alert);
     if ( ret < 0 )
@@ -772,7 +776,7 @@ TmEcode AlertPreludeThreadInit(ThreadVars *t, void *initdata, void **data)
     }
 
     aun = SCMalloc(sizeof(AlertPreludeThread));
-    if (aun == NULL)
+    if (unlikely(aun == NULL))
         SCReturnInt(TM_ECODE_FAILED);
     memset(aun, 0, sizeof(AlertPreludeThread));
 
@@ -865,7 +869,7 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
     }
 
     ctx = SCMalloc(sizeof(AlertPreludeCtx));
-    if ( ctx == NULL ) {
+    if (unlikely(ctx == NULL)) {
         prelude_perror(ret, "Unable to allocate memory");
         prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
         SCReturnPtr(NULL, "AlertPreludeCtx");
@@ -880,9 +884,8 @@ OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
         ctx->log_packet_header = 0;
 
     output_ctx = SCMalloc(sizeof(OutputCtx));
-    if (output_ctx == NULL) {
+    if (unlikely(output_ctx == NULL)) {
         SCFree(ctx);
-
         prelude_perror(ret, "Unable to allocate memory");
         prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
         SCReturnPtr(NULL, "AlertPreludeCtx");

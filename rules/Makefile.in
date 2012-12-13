@@ -56,7 +56,7 @@ ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
 	$(top_srcdir)/m4/ltsugar.m4 $(top_srcdir)/m4/ltversion.m4 \
-	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.in
+	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
@@ -97,6 +97,7 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GREP = @GREP@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
+HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 INSTALL = @INSTALL@
@@ -121,6 +122,8 @@ LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
+LUAJIT_CFLAGS = @LUAJIT_CFLAGS@
+LUAJIT_LIBS = @LUAJIT_LIBS@
 MAKEINFO = @MAKEINFO@
 MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
@@ -176,9 +179,11 @@ datadir = @datadir@
 datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
+e_localstatedir = @e_localstatedir@
 e_logdir = @e_logdir@
 e_logfilesdir = @e_logfilesdir@
 e_magic_file = @e_magic_file@
+e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
 exec_prefix = @exec_prefix@

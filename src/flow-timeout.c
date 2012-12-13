@@ -40,6 +40,7 @@
 #include "flow-private.h"
 #include "flow-manager.h"
 #include "pkt-var.h"
+#include "host.h"
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
@@ -69,6 +70,29 @@ static ThreadVars *stream_pseudo_pkt_detect_prev_TV = NULL;
 
 static TmSlot *stream_pseudo_pkt_decode_tm_slot = NULL;
 static ThreadVars *stream_pseudo_pkt_decode_TV = NULL;
+
+/**
+ * \internal
+ * \brief Flush out if we have any unattended packets.
+ */
+static inline void FlowForceReassemblyFlushPendingPseudoPackets(void)
+{
+    /* we don't lock the queue, since flow manager is dead */
+    if (stream_pseudo_pkt_decode_tm_slot->slot_post_pq.len == 0)
+        return;
+
+    SCMutexLock(&stream_pseudo_pkt_decode_tm_slot->slot_post_pq.mutex_q);
+    Packet *p = PacketDequeue(&stream_pseudo_pkt_decode_tm_slot->slot_post_pq);
+    SCMutexUnlock(&stream_pseudo_pkt_decode_tm_slot->slot_post_pq.mutex_q);
+    if (TmThreadsSlotProcessPkt(stream_pseudo_pkt_decode_TV,
+                                stream_pseudo_pkt_decode_tm_slot,
+                                p) != TM_ECODE_OK) {
+        SCLogError(SC_ERR_TM_THREADS_ERROR, "Received error from FFR on "
+                   "flushing packets through decode->.. TMs");
+    }
+
+    return;
+}
 
 /**
  * \internal
@@ -269,7 +293,7 @@ int FlowForceReassemblyNeedReassmbly(Flow *f, int *server, int *client) {
     TcpSession *ssn;
 
     /* looks like we have no flows in this queue */
-    if (f == NULL || f->flags & FLOW_TIMEOUT_REASSEMBLY_DONE) {
+    if (f == NULL || (f->flags & FLOW_TIMEOUT_REASSEMBLY_DONE)) {
         return 0;
     }
 
@@ -341,14 +365,16 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
         if (p1 == NULL) {
             return 1;
         }
+        PKT_SET_SRC(p1, PKT_SRC_FFR_V2);
 
         if (server == 1) {
             p2 = FlowForceReassemblyPseudoPacketGet(0, f, ssn, 0);
             if (p2 == NULL) {
                 FlowDeReference(&p1->flow);
-                TmqhOutputPacketpool(NULL,p1);
+                TmqhOutputPacketpool(NULL, p1);
                 return 1;
             }
+            PKT_SET_SRC(p2, PKT_SRC_FFR_V2);
 
             p3 = FlowForceReassemblyPseudoPacketGet(1, f, ssn, 1);
             if (p3 == NULL) {
@@ -358,6 +384,7 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
                 TmqhOutputPacketpool(NULL, p2);
                 return 1;
             }
+            PKT_SET_SRC(p3, PKT_SRC_FFR_V2);
         } else {
             p2 = FlowForceReassemblyPseudoPacketGet(0, f, ssn, 1);
             if (p2 == NULL) {
@@ -365,6 +392,7 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
                 TmqhOutputPacketpool(NULL, p1);
                 return 1;
             }
+            PKT_SET_SRC(p2, PKT_SRC_FFR_V2);
         }
 
     } else if (client == 2) {
@@ -373,6 +401,7 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
             if (p1 == NULL) {
                 return 1;
             }
+            PKT_SET_SRC(p1, PKT_SRC_FFR_V2);
 
             p2 = FlowForceReassemblyPseudoPacketGet(1, f, ssn, 1);
             if (p2 == NULL) {
@@ -380,11 +409,13 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
                 TmqhOutputPacketpool(NULL, p1);
                 return 1;
             }
+            PKT_SET_SRC(p2, PKT_SRC_FFR_V2);
         } else {
             p1 = FlowForceReassemblyPseudoPacketGet(0, f, ssn, 1);
             if (p1 == NULL) {
                 return 1;
             }
+            PKT_SET_SRC(p1, PKT_SRC_FFR_V2);
 
             if (server == 2) {
                 p2 = FlowForceReassemblyPseudoPacketGet(1, f, ssn, 1);
@@ -393,6 +424,7 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
                     TmqhOutputPacketpool(NULL, p1);
                     return 1;
                 }
+                PKT_SET_SRC(p2, PKT_SRC_FFR_V2);
             }
         }
 
@@ -402,6 +434,7 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
             if (p1 == NULL) {
                 return 1;
             }
+            PKT_SET_SRC(p1, PKT_SRC_FFR_V2);
 
             p2 = FlowForceReassemblyPseudoPacketGet(1, f, ssn, 1);
             if (p2 == NULL) {
@@ -409,11 +442,13 @@ int FlowForceReassemblyForFlowV2(Flow *f, int server, int client)
                 TmqhOutputPacketpool(NULL, p1);
                 return 1;
             }
+            PKT_SET_SRC(p2, PKT_SRC_FFR_V2);
         } else if (server == 2) {
             p1 = FlowForceReassemblyPseudoPacketGet(1, f, ssn, 1);
             if (p1 == NULL) {
                 return 1;
             }
+            PKT_SET_SRC(p1, PKT_SRC_FFR_V2);
         } else {
             /* impossible */
             BUG_ON(1);
@@ -502,6 +537,7 @@ static inline void FlowForceReassemblyForHash(void)
                 StreamTcpReassembleHandleSegment(stream_pseudo_pkt_stream_TV,
                         stt->ra_ctx, ssn, &ssn->server,
                         reassemble_p, NULL);
+                FlowDeReference(&reassemble_p->flow);
                 if (StreamTcpReassembleProcessAppLayer(stt->ra_ctx) < 0) {
                     SCLogDebug("shutdown flow timeout "
                                "StreamTcpReassembleProcessAppLayer() erroring "
@@ -519,6 +555,7 @@ static inline void FlowForceReassemblyForHash(void)
                 StreamTcpReassembleHandleSegment(stream_pseudo_pkt_stream_TV,
                         stt->ra_ctx, ssn, &ssn->client,
                         reassemble_p, NULL);
+                FlowDeReference(&reassemble_p->flow);
                 if (StreamTcpReassembleProcessAppLayer(stt->ra_ctx) < 0) {
                     SCLogDebug("shutdown flow timeout "
                                "StreamTcpReassembleProcessAppLayer() erroring "
@@ -545,6 +582,7 @@ static inline void FlowForceReassemblyForHash(void)
                     FBLOCK_UNLOCK(fb);
                     return;
                 }
+                PKT_SET_SRC(p, PKT_SRC_FFR_SHUTDOWN);
 
                 if (stream_pseudo_pkt_detect_prev_TV != NULL) {
                     stream_pseudo_pkt_detect_prev_TV->
@@ -552,7 +590,8 @@ static inline void FlowForceReassemblyForHash(void)
                 } else {
                     TmSlot *s = stream_pseudo_pkt_detect_tm_slot;
                     while (s != NULL) {
-                        s->SlotFunc(NULL, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
+                        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
+                        SlotFunc(NULL, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
                                     &s->slot_post_pq);
                         s = s->slot_next;
                     }
@@ -560,6 +599,8 @@ static inline void FlowForceReassemblyForHash(void)
                     if (stream_pseudo_pkt_detect_TV != NULL) {
                         stream_pseudo_pkt_detect_TV->
                             tmqh_out(stream_pseudo_pkt_detect_TV, p);
+                    } else {
+                        TmqhOutputPacketpool(NULL, p);
                     }
                 }
             } /* if (ssn->client.seg_list != NULL) */
@@ -574,6 +615,7 @@ static inline void FlowForceReassemblyForHash(void)
                     FBLOCK_UNLOCK(fb);
                     return;
                 }
+                PKT_SET_SRC(p, PKT_SRC_FFR_SHUTDOWN);
 
                 if (stream_pseudo_pkt_detect_prev_TV != NULL) {
                     stream_pseudo_pkt_detect_prev_TV->
@@ -581,7 +623,8 @@ static inline void FlowForceReassemblyForHash(void)
                 } else {
                     TmSlot *s = stream_pseudo_pkt_detect_tm_slot;
                     while (s != NULL) {
-                        s->SlotFunc(NULL, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
+                        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
+                        SlotFunc(NULL, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
                                     &s->slot_post_pq);
                         s = s->slot_next;
                     }
@@ -589,6 +632,8 @@ static inline void FlowForceReassemblyForHash(void)
                     if (stream_pseudo_pkt_detect_TV != NULL) {
                         stream_pseudo_pkt_detect_TV->
                             tmqh_out(stream_pseudo_pkt_detect_TV, p);
+                    } else {
+                        TmqhOutputPacketpool(NULL, p);
                     }
                 }
             } /* if (ssn->server.seg_list != NULL) */
@@ -599,6 +644,7 @@ static inline void FlowForceReassemblyForHash(void)
         FBLOCK_UNLOCK(fb);
     }
 
+    PKT_SET_SRC(reassemble_p, PKT_SRC_FFR_SHUTDOWN);
     TmqhOutputPacketpool(NULL, reassemble_p);
     return;
 }
@@ -610,7 +656,11 @@ void FlowForceReassembly(void)
 {
     /* Do remember.  We need to have packet acquire disabled by now */
 
-    /** ----- Part 1 ----- **/
+    /** ----- Part 1 ------*/
+    /* Flush out unattended packets */
+    FlowForceReassemblyFlushPendingPseudoPackets();
+
+    /** ----- Part 2 ----- **/
     /* Check if all threads are idle.  We need this so that we have all
      * packets freeds.  As a consequence, no flows are in use */
 
@@ -638,7 +688,7 @@ void FlowForceReassembly(void)
 
     SCMutexUnlock(&tv_root_lock);
 
-    /** ----- Part 2 ----- **/
+    /** ----- Part 3 ----- **/
     /* Carry out flow reassembly for unattended flows */
     FlowForceReassemblyForHash();
 
@@ -683,7 +733,7 @@ void FlowForceReassemblySetup(void)
     if (stream_pseudo_pkt_detect_TV->tm_slots == stream_pseudo_pkt_detect_tm_slot) {
         stream_pseudo_pkt_detect_prev_TV = stream_pseudo_pkt_detect_TV->prev;
     }
-    if (stream_pseudo_pkt_detect_TV->next == NULL) {
+    if (strcasecmp(stream_pseudo_pkt_detect_TV->outqh_name, "packetpool") == 0) {
         stream_pseudo_pkt_detect_TV = NULL;
     }
 

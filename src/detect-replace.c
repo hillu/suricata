@@ -103,7 +103,7 @@ int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (pm == NULL) {
         SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "replace needs"
-                "preceeding content option for raw sig");
+                "preceding content option for raw sig");
         SCFree(str);
         return -1;
     }
@@ -155,7 +155,7 @@ DetectReplaceList * DetectReplaceAddToList(DetectReplaceList *replist, uint8_t *
     SCLogDebug("replace: Adding match");
 
     newlist = SCMalloc(sizeof(DetectReplaceList));
-    if (newlist == NULL)
+    if (unlikely(newlist == NULL))
         return NULL;
     newlist->found = found;
     newlist->cd = cd;
@@ -218,7 +218,7 @@ int DetectReplaceLongPatternMatchTest(uint8_t *raw_eth_pkt, uint16_t pktsize, ch
 
     Packet *p = NULL;
     p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
 
     DecodeThreadVars dtv;

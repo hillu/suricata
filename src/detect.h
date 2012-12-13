@@ -38,6 +38,7 @@
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-radix-tree.h"
+#include "util-file.h"
 
 #include "detect-mark.h"
 
@@ -261,6 +262,8 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_TOSERVER               (1<<19)
 #define SIG_FLAG_TOCLIENT               (1<<20)
 
+#define SIG_FLAG_TLSSTORE               (1<<21)
+
 /* signature init flags */
 #define SIG_FLAG_INIT_DEONLY         1  /**< decode event only signature */
 #define SIG_FLAG_INIT_PACKET         (1<<1)  /**< signature has matches against a packet (as opposed to app layer) */
@@ -270,14 +273,14 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_INIT_FILE_DATA      (1<<5)  /**< file_data set */
 
 /* signature mask flags */
-#define SIG_MASK_REQUIRE_PAYLOAD            1
+#define SIG_MASK_REQUIRE_PAYLOAD            (1<<0)
 #define SIG_MASK_REQUIRE_FLOW               (1<<1)
 #define SIG_MASK_REQUIRE_FLAGS_INITDEINIT   (1<<2)    /* SYN, FIN, RST */
 #define SIG_MASK_REQUIRE_FLAGS_UNUSUAL      (1<<3)    /* URG, ECN, CWR */
 #define SIG_MASK_REQUIRE_NO_PAYLOAD         (1<<4)
-//
 #define SIG_MASK_REQUIRE_HTTP_STATE         (1<<5)
 #define SIG_MASK_REQUIRE_DCE_STATE          (1<<6)
+#define SIG_MASK_REQUIRE_ENGINE_EVENT       (1<<7)
 
 /* for now a uint8_t is enough */
 #define SignatureMask uint8_t
@@ -292,6 +295,7 @@ typedef struct DetectPort_ {
 #define FILE_SIG_NEED_MAGIC         0x08    /**< need the start of the file */
 #define FILE_SIG_NEED_FILECONTENT   0x10
 #define FILE_SIG_NEED_MD5           0x20
+#define FILE_SIG_NEED_SIZE          0x40
 
 /* Detection Engine flags */
 #define DE_QUIET           0x01     /**< DE is quiet (esp for unittests) */
@@ -318,30 +322,26 @@ typedef struct SignatureHeader_ {
     union {
         struct {
             uint32_t flags;
-            uint16_t mpm_pattern_id_div_8;
-            uint8_t mpm_pattern_id_mod_8;
-            SignatureMask mask;
+            uint16_t alproto;
+            uint16_t dsize_low;
         };
         uint64_t hdr_copy1;
     };
     union {
         struct {
-            uint16_t alproto;
-            SigIntId num; /**< signature number, internal id */
+            uint16_t dsize_high;
+            uint16_t mpm_pattern_id_div_8;
         };
         uint32_t hdr_copy2;
     };
     union {
         struct {
-            SigIntId order_id;
-
-            /** inline -- action */
-            uint8_t action;
-            uint8_t file_flags;
+            uint8_t mpm_pattern_id_mod_8;
+            SignatureMask mask;
+            SigIntId num; /**< signature number, internal id */
         };
         uint32_t hdr_copy3;
     };
-
     /** pointer to the full signature */
     struct Signature_ *full_sig;
 } SignatureHeader;
@@ -360,66 +360,59 @@ typedef struct Signature_ {
     union {
         struct {
             uint32_t flags;
-            uint16_t mpm_pattern_id_div_8;
-            uint8_t mpm_pattern_id_mod_8;
-            SignatureMask mask;
+            uint16_t alproto;
+            uint16_t dsize_low;
         };
         uint64_t hdr_copy1;
     };
     union {
         struct {
-            uint16_t alproto;
-            SigIntId num; /**< signature number, internal id */
+            uint16_t dsize_high;
+            uint16_t mpm_pattern_id_div_8;
         };
         uint32_t hdr_copy2;
     };
     union {
         struct {
-            SigIntId order_id;
-
-            /** inline -- action */
-            uint8_t action;
-            uint8_t file_flags;
+            uint8_t mpm_pattern_id_mod_8;
+            SignatureMask mask;
+            SigIntId num; /**< signature number, internal id */
         };
         uint32_t hdr_copy3;
     };
 
-    /* the fast pattern added from this signature */
-    SigMatch *mpm_sm;
+    SigIntId order_id;
+
+    /** inline -- action */
+    uint8_t action;
+    uint8_t file_flags;
 
     /** ipv4 match arrays */
-    DetectMatchAddressIPv4 *addr_dst_match4;
     uint16_t addr_dst_match4_cnt;
-    DetectMatchAddressIPv4 *addr_src_match4;
     uint16_t addr_src_match4_cnt;
+    DetectMatchAddressIPv4 *addr_dst_match4;
+    DetectMatchAddressIPv4 *addr_src_match4;
     /** ipv6 match arrays */
     DetectMatchAddressIPv6 *addr_dst_match6;
-    uint16_t addr_dst_match6_cnt;
     DetectMatchAddressIPv6 *addr_src_match6;
+    uint16_t addr_dst_match6_cnt;
     uint16_t addr_src_match6_cnt;
 
+    uint32_t id;  /**< sid, set by the 'sid' rule keyword */
     /** port settings for this signature */
     DetectPort *sp, *dp;
 
     /** addresses, ports and proto this sig matches on */
     DetectProto proto;
 
+    /** classification id **/
+    uint8_t class;
+    uint32_t gid; /**< generator id */
+
     /** netblocks and hosts specified at the sid, in CIDR format */
     IPOnlyCIDRItem *CidrSrc, *CidrDst;
 
-    /* helper for init phase */
-    uint16_t mpm_content_maxlen;
-    uint16_t mpm_uricontent_maxlen;
-
-    /** number of sigmatches in the match and pmatch list */
-    uint16_t sm_cnt;
-
-    uint32_t id;  /**< sid, set by the 'sid' rule keyword */
-    uint32_t gid; /**< generator id */
     uint32_t rev;
-
-    /** classification id **/
-    uint8_t class;
 
     int prio;
 
@@ -449,7 +442,17 @@ typedef struct Signature_ {
 
     /* used to hold flags that are predominantly used during init */
     uint32_t init_flags;
+    /** number of sigmatches in the match and pmatch list */
+    uint16_t sm_cnt;
+
+    SigMatch *dsize_sm;
     SigMatch *filestore_sm;
+    /* the fast pattern added from this signature */
+    SigMatch *mpm_sm;
+    /* helper for init phase */
+    uint16_t mpm_content_maxlen;
+    uint16_t mpm_uricontent_maxlen;
+
 
     /** ptr to the next sig in the list */
     struct Signature_ *next;
@@ -526,6 +529,15 @@ typedef struct ThresholdCtx_    {
     uint32_t th_size;
 } ThresholdCtx;
 
+typedef struct DetectEngineThreadKeywordCtxItem_ {
+    void *(*InitFunc)(void *);
+    void (*FreeFunc)(void *);
+    void *data;
+    struct DetectEngineThreadKeywordCtxItem_ *next;
+    int id;
+    const char *name; /* keyword name, for error printing */
+} DetectEngineThreadKeywordCtxItem;
+
 /** \brief main detection engine ctx */
 typedef struct DetectEngineCtx_ {
     uint8_t flags;
@@ -533,6 +545,9 @@ typedef struct DetectEngineCtx_ {
 
     Signature *sig_list;
     uint32_t sig_cnt;
+
+    /* version of the srep data */
+    uint32_t srep_version;
 
     Signature **sig_array;
     uint32_t sig_array_size; /* size in bytes */
@@ -670,6 +685,19 @@ typedef struct DetectEngineCtx_ {
     /** Store rule file and line so that parsers can use them in errors. */
     char *rule_file;
     int rule_line;
+
+    /** Is detect engine using a delayed init */
+    int delayed_detect;
+
+    /** list of keywords that need thread local ctxs */
+    DetectEngineThreadKeywordCtxItem *keyword_list;
+    int keyword_id;
+
+    int detect_luajit_instances;
+
+#ifdef PROFILING
+    struct SCProfileDetectCtx_ *profile_ctx;
+#endif
 } DetectEngineCtx;
 
 /* Engine groups profiles (low, medium, high, custom) */
@@ -716,16 +744,21 @@ typedef struct DetectionEngineThreadCtx_ {
     /* counter for the filestore array below -- up here for cache reasons. */
     uint16_t filestore_cnt;
 
-    uint16_t hhd_buffers_list_len;
-
-    uint16_t hcbd_buffers_list_len;
+    HttpReassembledBody *hsbd;
+    int hsbd_start_tx_id;
+    uint16_t hsbd_buffers_size;
     uint16_t hsbd_buffers_list_len;
 
-    HttpReassembledBody *hsbd;
     HttpReassembledBody *hcbd;
+    int hcbd_start_tx_id;
+    uint16_t hcbd_buffers_size;
+    uint16_t hcbd_buffers_list_len;
 
     uint8_t **hhd_buffers;
     uint32_t *hhd_buffers_len;
+    uint16_t hhd_buffers_size;
+    uint16_t hhd_buffers_list_len;
+    int hhd_start_tx_id;
 
     /** id for alert counter */
     uint16_t counter_alerts;
@@ -788,15 +821,34 @@ typedef struct DetectionEngineThreadCtx_ {
      * thread can dump the packets once it has processed them */
     Tmq *cuda_mpm_rc_disp_outq;
 #endif
+
+    /** store for keyword contexts that need a per thread storage because of
+     *  thread safety issues */
+    void **keyword_ctxs_array;
+    int keyword_ctxs_size;
+
+#ifdef PROFILING
+    struct SCProfileData_ *rule_perf_data;
+    int rule_perf_data_size;
+#endif
 } DetectEngineThreadCtx;
 
-/** \brief element in sigmatch type table. */
+/** \brief element in sigmatch type table.
+ *  \note FileMatch pointer below takes a locked flow, AppLayerMatch an unlocked flow
+ */
 typedef struct SigTableElmt_ {
     /** Packet match function pointer */
     int (*Match)(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
 
     /** AppLayer match function  pointer */
     int (*AppLayerMatch)(ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t flags, void *alstate, Signature *, SigMatch *);
+
+    /** File match function  pointer */
+    int (*FileMatch)(ThreadVars *,  /**< thread local vars */
+        DetectEngineThreadCtx *,
+        Flow *,                     /**< *LOCKED* flow */
+        uint8_t flags, File *, Signature *, SigMatch *);
+
     /** app layer proto from app-layer-protos.h this match applies to */
     uint16_t alproto;
 
@@ -808,6 +860,9 @@ typedef struct SigTableElmt_ {
 
     uint8_t flags;
     char *name;
+    char *desc;
+    char *url;
+
 } SigTableElmt;
 
 #define SIG_GROUP_HEAD_MPM_COPY         (1)
@@ -830,6 +885,7 @@ typedef struct SigTableElmt_ {
 #define SIG_GROUP_HEAD_MPM_HSCD         (1 << 17)
 #define SIG_GROUP_HEAD_MPM_HUAD         (1 << 18)
 #define SIG_GROUP_HEAD_HAVEFILEMD5      (1 << 19)
+#define SIG_GROUP_HEAD_HAVEFILESIZE     (1 << 20)
 
 typedef struct SigGroupHeadInitData_ {
     /* list of content containers
@@ -918,13 +974,15 @@ typedef struct SigGroupHead_ {
 } SigGroupHead;
 
 /** sigmatch has no options, so the parser shouldn't expect any */
-#define SIGMATCH_NOOPT          0x01
+#define SIGMATCH_NOOPT          (1 << 0)
 /** sigmatch is compatible with a ip only rule */
-#define SIGMATCH_IPONLY_COMPAT  0x02
+#define SIGMATCH_IPONLY_COMPAT  (1 << 1)
 /** sigmatch is compatible with a decode event only rule */
-#define SIGMATCH_DEONLY_COMPAT  0x04
+#define SIGMATCH_DEONLY_COMPAT  (1 << 2)
 /**< Flag to indicate that the signature inspects the packet payload */
-#define SIGMATCH_PAYLOAD        0x08
+#define SIGMATCH_PAYLOAD        (1 << 3)
+/**< Flag to indicate that the signature is not built-in */
+#define SIGMATCH_NOT_BUILT      (1 << 4)
 
 /** Remember to add the options in SignatureIsIPOnly() at detect.c otherwise it wont be part of a signature group */
 
@@ -995,6 +1053,8 @@ enum {
     DETECT_AL_TLS_VERSION,
     DETECT_AL_TLS_SUBJECT,
     DETECT_AL_TLS_ISSUERDN,
+    DETECT_AL_TLS_FINGERPRINT,
+    DETECT_AL_TLS_STORE,
 
     DETECT_AL_HTTP_COOKIE,
     DETECT_AL_HTTP_METHOD,
@@ -1014,6 +1074,7 @@ enum {
     DETECT_AL_SSL_STATE,
     DETECT_BYTE_EXTRACT,
     DETECT_FILE_DATA,
+    DETECT_PKT_DATA,
     DETECT_AL_APP_LAYER_EVENT,
 
     DETECT_DCE_IFACE,
@@ -1030,6 +1091,11 @@ enum {
     DETECT_FILESTORE,
     DETECT_FILEMAGIC,
     DETECT_FILEMD5,
+    DETECT_FILESIZE,
+
+    DETECT_L3PROTO,
+    DETECT_LUAJIT,
+    DETECT_IPREP,
 
     /* make sure this stays last */
     DETECT_TBLSIZE,
@@ -1054,7 +1120,7 @@ void SigAddressPrepareBidirectionals (DetectEngineCtx *);
 
 char *DetectLoadCompleteSigPath(char *sig_file);
 int SigLoadSignatures (DetectEngineCtx *, char *, int);
-void SigTableList(void);
+void SigTableList(const char *keyword);
 void SigTableSetup(void);
 int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx,
                        DetectEngineThreadCtx *det_ctx, Packet *p);
@@ -1067,6 +1133,10 @@ Signature *DetectGetTagSignature(void);
 int SignatureIsFilestoring(Signature *);
 int SignatureIsFilemagicInspecting(Signature *);
 int SignatureIsFileMd5Inspecting(Signature *);
+int SignatureIsFilesizeInspecting(Signature *);
+
+int DetectRegisterThreadCtxFuncs(DetectEngineCtx *, const char *name, void *(*InitFunc)(void *), void *data, void (*FreeFunc)(void *), int);
+void *DetectThreadCtxGetKeywordThreadCtx(DetectEngineThreadCtx *, int);
 
 #endif /* __DETECT_H__ */
 

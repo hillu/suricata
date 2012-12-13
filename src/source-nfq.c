@@ -102,7 +102,6 @@ TmEcode NoNFQSupportExit(ThreadVars *tv, void *initdata, void **data)
 }
 
 #else /* implied we do have NFQ support */
-#include <pthread.h>
 
 extern int max_pending_packets;
 
@@ -137,7 +136,6 @@ static NFQQueueVars nfq_q[NFQ_MAX_QUEUE];
 static uint16_t receive_queue_num = 0;
 static SCMutex nfq_init_lock;
 
-TmEcode ReceiveNFQ(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode ReceiveNFQLoop(ThreadVars *tv, void *data, void *slot);
 TmEcode ReceiveNFQThreadInit(ThreadVars *, void *, void **);
 TmEcode ReceiveNFQThreadDeinit(ThreadVars *, void *);
@@ -156,11 +154,14 @@ typedef enum NFQMode_ {
     NFQ_ROUTE_MODE,
 } NFQMode;
 
+#define NFQ_FLAG_FAIL_OPEN  (1 << 0)
+
 typedef struct NFQCnf_ {
     NFQMode mode;
     uint32_t mark;
     uint32_t mask;
     uint32_t next_queue;
+    uint32_t flags;
 } NFQCnf;
 
 NFQCnf nfq_config;
@@ -172,7 +173,7 @@ void TmModuleReceiveNFQRegister (void) {
 
     tmm_modules[TMM_RECEIVENFQ].name = "ReceiveNFQ";
     tmm_modules[TMM_RECEIVENFQ].ThreadInit = ReceiveNFQThreadInit;
-    tmm_modules[TMM_RECEIVENFQ].Func = ReceiveNFQ;
+    tmm_modules[TMM_RECEIVENFQ].Func = NULL;
     tmm_modules[TMM_RECEIVENFQ].PktAcqLoop = ReceiveNFQLoop;
     tmm_modules[TMM_RECEIVENFQ].ThreadExitPrintStats = ReceiveNFQThreadExitStats;
     tmm_modules[TMM_RECEIVENFQ].ThreadDeinit = ReceiveNFQThreadDeinit;
@@ -208,6 +209,7 @@ void NFQInitConfig(char quiet)
 {
     intmax_t value = 0;
     char* nfq_mode = NULL;
+    int boolval;
 
     SCLogDebug("Initializing NFQ");
 
@@ -223,9 +225,20 @@ void NFQInitConfig(char quiet)
         }  else if (!strcmp("route", nfq_mode)) {
             nfq_config.mode = NFQ_ROUTE_MODE;
         } else {
-            SCLogError(SC_LOG_ERROR, "Unknown nfq.mode");
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Unknown nfq.mode");
             exit(EXIT_FAILURE);
         }
+    }
+
+    (void)ConfGetBool("nfq.fail-open", (int *)&boolval);
+    if (boolval) {
+#ifdef HAVE_NFQ_SET_QUEUE_FLAGS
+        SCLogInfo("Enabling fail-open on queue");
+        nfq_config.flags |= NFQ_FLAG_FAIL_OPEN;
+#else
+        SCLogError(SC_ERR_NFQ_NOSUPPORT,
+                   "nfq.fail-open set but NFQ library has no support for it.");
+#endif
     }
 
     if ((ConfGetInt("nfq.repeat-mark", &value)) == 1) {
@@ -364,6 +377,7 @@ static int NFQCallBack(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     if (p == NULL) {
         return -1;
     }
+    PKT_SET_SRC(p, PKT_SRC_WIRE);
 
     p->nfq_v.nfq_index = ntv->nfq_index;
     ret = NFQSetupPkt(p, qh, (void *)nfa);
@@ -495,6 +509,21 @@ TmEcode NFQInitThread(NFQThreadVars *nfq_t, uint32_t queue_maxlen)
 	packets instead */
 #ifdef NETLINK_NO_ENOBUFS
     setsockopt(nfq_q->fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
+#endif
+
+#ifdef HAVE_NFQ_SET_QUEUE_FLAGS
+    if (nfq_config.flags & NFQ_FLAG_FAIL_OPEN) {
+        uint32_t flags = NFQA_CFG_F_FAIL_OPEN;
+        uint32_t mask = NFQA_CFG_F_FAIL_OPEN;
+        int r = nfq_set_queue_flags(nfq_q->qh, mask, flags);
+
+        if (r == -1) {
+            SCLogWarning(SC_ERR_NFQ_SET_MODE, "can't set fail-open mode: %s",
+                         strerror(errno));
+        } else {
+            SCLogInfo("fail-open mode should be set on queue");
+        }
+    }
 #endif
 
     /* set a timeout to the socket so we can check for a signal
@@ -809,6 +838,12 @@ TmEcode ReceiveNFQLoop(ThreadVars *tv, void *data, void *slot)
 
     while(1) {
         if (suricata_ctl_flags != 0) {
+            NFQMutexLock(nq);
+            if (nq->qh) {
+                nfq_destroy_queue(nq->qh);
+                nq->qh = NULL;
+            }
+            NFQMutexUnlock(nq);
             break;
         }
         NFQRecvPkt(nq, ntv);
@@ -816,32 +851,6 @@ TmEcode ReceiveNFQLoop(ThreadVars *tv, void *data, void *slot)
         SCPerfSyncCountersIfSignalled(tv, 0);
     }
     SCReturnInt(TM_ECODE_OK);
-}
-
-/**
- * \brief NFQ receive module main entry function: receive a packet from NFQ
- */
-TmEcode ReceiveNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq) {
-
-    NFQThreadVars *ntv = (NFQThreadVars *)data;
-    NFQQueueVars *nq = NFQGetQueue(ntv->nfq_index);
-    if (nq == NULL) {
-        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                     "can't get queue for %" PRId16 "", ntv->nfq_index);
-        return TM_ECODE_FAILED;
-    }
-
-    /* make sure we have at least one packet in the packet pool, to prevent
-     * us from 1) alloc'ing packets at line rate, 2) have a race condition
-     * for the nfq mutex lock with the verdict thread. */
-    while (PacketPoolSize() == 0) {
-        PacketPoolWait();
-    }
-
-    /* do our nfq magic */
-    NFQRecvPkt(nq, ntv);
-
-    return TM_ECODE_OK;
 }
 
 /**

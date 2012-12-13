@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -50,18 +50,20 @@
 
 #include "detect-filename.h"
 
-int DetectFilenameMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
+static int DetectFilenameMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
+        uint8_t, File *, Signature *, SigMatch *);
 static int DetectFilenameSetup (DetectEngineCtx *, Signature *, char *);
-void DetectFilenameRegisterTests(void);
-void DetectFilenameFree(void *);
+static void DetectFilenameRegisterTests(void);
+static void DetectFilenameFree(void *);
 
 /**
  * \brief Registration function for keyword: filename
  */
 void DetectFilenameRegister(void) {
     sigmatch_table[DETECT_FILENAME].name = "filename";
-    sigmatch_table[DETECT_FILENAME].Match = NULL;
-    sigmatch_table[DETECT_FILENAME].AppLayerMatch = DetectFilenameMatch;
+    sigmatch_table[DETECT_FILENAME].desc = "match on the file name";
+    sigmatch_table[DETECT_FILENAME].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filename";
+    sigmatch_table[DETECT_FILENAME].FileMatch = DetectFilenameMatch;
     sigmatch_table[DETECT_FILENAME].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILENAME].Setup = DetectFilenameSetup;
     sigmatch_table[DETECT_FILENAME].Free  = DetectFilenameFree;
@@ -74,21 +76,24 @@ void DetectFilenameRegister(void) {
 /**
  * \brief match the specified filename
  *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectFilenameData
+ * \param t thread local vars
+ * \param det_ctx pattern matcher thread local data
+ * \param f *LOCKED* flow
+ * \param flags direction flags
+ * \param file file being inspected
+ * \param s signature being inspected
+ * \param m sigmatch that we will cast into DetectFilenameData
  *
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
 {
     SCEnter();
     int ret = 0;
 
     DetectFilenameData *filename = m->ctx;
-    File *file = (File *)state;
 
     if (file->name == NULL)
         SCReturnInt(0);
@@ -106,9 +111,11 @@ int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
 #ifdef DEBUG
         if (SCLogDebugEnabled()) {
             char *name = SCMalloc(filename->len + 1);
-            memcpy(name, filename->name, filename->len);
-            name[filename->len] = '\0';
-            SCLogDebug("will look for filename %s", name);
+            if (name != NULL) {
+                memcpy(name, filename->name, filename->len);
+                name[filename->len] = '\0';
+                SCLogDebug("will look for filename %s", name);
+            }
         }
 #endif
 
@@ -117,7 +124,7 @@ int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
         }
     }
 
-    if (ret == 0 && filename->flags & DETECT_CONTENT_NEGATED) {
+    if (ret == 0 && (filename->flags & DETECT_CONTENT_NEGATED)) {
         SCLogDebug("negated match");
         ret = 1;
     }
@@ -133,13 +140,13 @@ int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
  * \retval filename pointer to DetectFilenameData on success
  * \retval NULL on failure
  */
-DetectFilenameData *DetectFilenameParse (char *str)
+static DetectFilenameData *DetectFilenameParse (char *str)
 {
     DetectFilenameData *filename = NULL;
 
     /* We have a correct filename option */
     filename = SCMalloc(sizeof(DetectFilenameData));
-    if (filename == NULL)
+    if (unlikely(filename == NULL))
         goto error;
 
     memset(filename, 0x00, sizeof(DetectFilenameData));
@@ -162,9 +169,11 @@ DetectFilenameData *DetectFilenameParse (char *str)
 #ifdef DEBUG
     if (SCLogDebugEnabled()) {
         char *name = SCMalloc(filename->len + 1);
-        memcpy(name, filename->name, filename->len);
-        name[filename->len] = '\0';
-        SCLogDebug("will look for filename %s", name);
+        if (name != NULL) {
+            memcpy(name, filename->name, filename->len);
+            name[filename->len] = '\0';
+            SCLogDebug("will look for filename %s", name);
+        }
     }
 #endif
 
@@ -232,7 +241,7 @@ error:
  *
  * \param filename pointer to DetectFilenameData
  */
-void DetectFilenameFree(void *ptr) {
+static void DetectFilenameFree(void *ptr) {
     if (ptr != NULL) {
         DetectFilenameData *filename = (DetectFilenameData *)ptr;
         if (filename->bm_ctx != NULL) {

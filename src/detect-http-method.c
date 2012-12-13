@@ -54,7 +54,6 @@
 
 #include "app-layer.h"
 
-#include <htp/htp.h>
 #include "app-layer-htp.h"
 #include "detect-http-method.h"
 #include "stream-tcp.h"
@@ -69,6 +68,8 @@ void DetectHttpMethodFree(void *);
  */
 void DetectHttpMethodRegister(void) {
     sigmatch_table[DETECT_AL_HTTP_METHOD].name = "http_method";
+    sigmatch_table[DETECT_AL_HTTP_METHOD].desc = "content modifier to match only on the HTTP method-buffer";
+    sigmatch_table[DETECT_AL_HTTP_METHOD].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_method";
     sigmatch_table[DETECT_AL_HTTP_METHOD].Match = NULL;
     sigmatch_table[DETECT_AL_HTTP_METHOD].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_METHOD].alproto = ALPROTO_HTTP;
@@ -103,7 +104,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
 
     if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
         SCLogError(SC_ERR_HTTP_METHOD_NEEDS_PRECEEDING_CONTENT, "http_method "
-                "modifies preceeding \"content\", but none was found");
+                "modifies preceding \"content\", but none was found");
         SCReturnInt(-1);
     }
 
@@ -111,7 +112,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
                                                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
     if (sm == NULL) {
         SCLogError(SC_ERR_HTTP_METHOD_NEEDS_PRECEEDING_CONTENT, "http_method "
-                "modifies preceeding \"content\", but none was found");
+                "modifies preceding \"content\", but none was found");
         SCReturnInt(-1);
     }
 
@@ -129,7 +130,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
         goto error;
     }
 
-    if (cd->flags & DETECT_CONTENT_WITHIN || cd->flags & DETECT_CONTENT_DISTANCE) {
+    if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
         SigMatch *pm =  SigMatchGetLastSMFromLists(s, 4,
                                                    DETECT_CONTENT, sm->prev,
                                                    DETECT_PCRE, sm->prev);
@@ -152,7 +153,7 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
                                         s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]);
         if (pm == NULL) {
             SCLogError(SC_ERR_HTTP_METHOD_RELATIVE_MISSING, "http_method with "
-                    "a distance or within requires preceeding http_method "
+                    "a distance or within requires preceding http_method "
                     "content, but none was found");
             goto error;
         }

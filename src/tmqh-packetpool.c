@@ -36,6 +36,8 @@
 #include "threads.h"
 #include "threadvars.h"
 #include "flow.h"
+#include "flow-util.h"
+#include "host.h"
 
 #include "stream.h"
 #include "stream-tcp-reassemble.h"
@@ -50,7 +52,6 @@
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-profiling.h"
-#include "flow-util.h"
 
 static RingBuffer16 *ringbuffer = NULL;
 /**
@@ -117,7 +118,7 @@ void PacketPoolInit(intmax_t max_pending_packets) {
     for (i = 0; i < max_pending_packets; i++) {
         /* XXX pkt alloc function */
         Packet *p = SCMalloc(SIZE_OF_PACKET);
-        if (p == NULL) {
+        if (unlikely(p == NULL)) {
             SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
             exit(EXIT_FAILURE);
         }
@@ -251,8 +252,16 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 
         FlowDeReference(&p->root->flow);
         /* if p->root uses extended data, free them */
+        if (p->root->ReleaseData) {
+            if (p->root->ReleaseData(t, p->root) == TM_ECODE_FAILED) {
+                SCLogWarning(SC_ERR_INVALID_ACTION,
+                        "Unable to release packet data");
+            }
+        }
         if (p->root->ext_pkt) {
-            SCFree(p->root->ext_pkt);
+            if (!(p->root->flags & PKT_ZERO_COPY)) {
+                SCFree(p->root->ext_pkt);
+            }
             p->root->ext_pkt = NULL;
         }
         if (p->root->flags & PKT_ALLOC) {
@@ -262,6 +271,13 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
         } else {
             PACKET_RECYCLE(p->root);
             RingBufferMrMwPut(ringbuffer, (void *)p->root);
+        }
+
+    }
+
+    if (p->ReleaseData) {
+        if (p->ReleaseData(t, p) == TM_ECODE_FAILED) {
+            SCLogWarning(SC_ERR_INVALID_ACTION, "Unable to release packet data");
         }
     }
 

@@ -62,7 +62,7 @@ Host *HostAlloc(void) {
     (void) SC_ATOMIC_ADD(host_memuse, sizeof(Host));
 
     Host *h = SCMalloc(sizeof(Host));
-    if (h == NULL)
+    if (unlikely(h == NULL))
         goto error;
 
     memset(h, 0x00, sizeof(Host));
@@ -79,6 +79,7 @@ void HostFree(Host *h) {
     if (h != NULL) {
         HostClearMemory(h);
 
+        SC_ATOMIC_DESTROY(h->use_cnt);
         SCMutexDestroy(&h->m);
         SCFree(h);
         (void) SC_ATOMIC_SUB(host_memuse, sizeof(Host));
@@ -108,7 +109,10 @@ void HostClearMemory(Host *h) {
         ThresholdListFree(h->threshold);
         h->threshold = NULL;
     }
-    SC_ATOMIC_DESTROY(h->use_cnt);
+    if (h->iprep != NULL) {
+        SCFree(h->iprep);
+        h->iprep = NULL;
+    }
 }
 
 #define HOST_DEFAULT_HASHSIZE 4096
@@ -181,7 +185,7 @@ void HostInitConfig(char quiet)
         exit(EXIT_FAILURE);
     }
     host_hash = SCCalloc(host_config.hash_size, sizeof(HostHashRow));
-    if (host_hash == NULL) {
+    if (unlikely(host_hash == NULL)) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in HostInitConfig. Exiting...");
         exit(EXIT_FAILURE);
     }
@@ -230,12 +234,14 @@ void HostInitConfig(char quiet)
 
 /** \brief print some host stats
  *  \warning Not thread safe */
-static void HostPrintStats (void)
+void HostPrintStats (void)
 {
 #ifdef HOSTBITS_STATS
     SCLogInfo("hostbits added: %" PRIu32 ", removed: %" PRIu32 ", max memory usage: %" PRIu32 "",
         hostbits_added, hostbits_removed, hostbits_memuse_max);
 #endif /* HOSTBITS_STATS */
+    SCLogInfo("host memory usage: %llu bytes, maximum: %"PRIu64,
+            SC_ATOMIC_GET(host_memuse), host_config.memcap);
     return;
 }
 
@@ -276,6 +282,58 @@ void HostShutdown(void)
     SC_ATOMIC_DESTROY(host_memuse);
     SC_ATOMIC_DESTROY(host_counter);
     //SC_ATOMIC_DESTROY(flow_flags);
+    return;
+}
+
+/** \brief Cleanup the host engine
+ *
+ * Cleanup the host engine from tag and threshold.
+ *
+ */
+void HostCleanup(void)
+{
+    Host *h;
+    uint32_t u;
+
+    if (host_hash != NULL) {
+        for (u = 0; u < host_config.hash_size; u++) {
+            h = host_hash[u].head;
+            HostHashRow *hb = &host_hash[u];
+            HRLOCK_LOCK(hb);
+            while (h) {
+                if ((SC_ATOMIC_GET(h->use_cnt) > 0) && (h->iprep != NULL)) {
+                    /* iprep is attached to host only clear tag and threshold */
+                    if (h->tag != NULL) {
+                        DetectTagDataListFree(h->tag);
+                        h->tag = NULL;
+                    }
+                    if (h->threshold != NULL) {
+                        ThresholdListFree(h->threshold);
+                        h->threshold = NULL;
+                    }
+                    h = h->hnext;
+                } else {
+                    Host *n = h->hnext;
+                    /* remove from the hash */
+                    if (h->hprev != NULL)
+                        h->hprev->hnext = h->hnext;
+                    if (h->hnext != NULL)
+                        h->hnext->hprev = h->hprev;
+                    if (hb->head == h)
+                        hb->head = h->hnext;
+                    if (hb->tail == h)
+                        hb->tail = h->hprev;
+                    h->hnext = NULL;
+                    h->hprev = NULL;
+                    HostClearMemory(h);
+                    HostMoveToSpare(h);
+                    h = n;
+                }
+            }
+            HRLOCK_UNLOCK(hb);
+        }
+    }
+
     return;
 }
 
@@ -361,11 +419,6 @@ static Host *HostGetNew(Address *a) {
     return h;
 }
 
-#define HostIncrUsecnt(h) \
-    SC_ATOMIC_ADD((h)->use_cnt, 1)
-#define HostDecrUsecnt(h) \
-    SC_ATOMIC_SUB((h)->use_cnt, 1)
-
 void HostInit(Host *h, Address *a) {
     COPY_ADDRESS(a, &h->a);
     (void) HostIncrUsecnt(h);
@@ -374,6 +427,10 @@ void HostInit(Host *h, Address *a) {
 void HostRelease(Host *h) {
     (void) HostDecrUsecnt(h);
     SCMutexUnlock(&h->m);
+}
+
+void HostLock(Host *h) {
+    SCMutexLock(&h->m);
 }
 
 /* HostGetHostFromHash

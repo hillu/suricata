@@ -72,6 +72,13 @@ enum {
     IPV6_WRONG_IP_VER,              /**< wrong version in ipv6 */
     IPV6_EXTHDR_AH_RES_NOT_NULL,    /**< AH hdr reserved fields not null (rfc 4302) */
 
+    IPV6_HOPOPTS_UNKNOWN_OPT,       /**< unknown HOP opt */
+    IPV6_HOPOPTS_ONLY_PADDING,      /**< all options in HOP opts are padding */
+    IPV6_DSTOPTS_UNKNOWN_OPT,       /**< unknown DST opt */
+    IPV6_DSTOPTS_ONLY_PADDING,      /**< all options in DST opts are padding */
+
+    IPV6_WITH_ICMPV4,               /**< IPv6 packet with ICMPv4 header */
+
     /* TCP EVENTS */
     TCP_PKT_TOO_SMALL,              /**< tcp packet smaller than minimum size */
     TCP_HLEN_TOO_SMALL,             /**< tcp header smaller than minimum size */
@@ -146,6 +153,7 @@ enum {
     STREAM_4WHS_INVALID_ACK,
     STREAM_CLOSEWAIT_ACK_OUT_OF_WINDOW,
     STREAM_CLOSEWAIT_FIN_OUT_OF_WINDOW,
+    STREAM_CLOSEWAIT_PKT_BEFORE_LAST_ACK,
     STREAM_CLOSEWAIT_INVALID_ACK,
     STREAM_CLOSING_ACK_WRONG_SEQ,
     STREAM_CLOSING_INVALID_ACK,
@@ -176,12 +184,16 @@ enum {
     STREAM_SHUTDOWN_SYN_RESEND,
     STREAM_PKT_INVALID_TIMESTAMP,
     STREAM_PKT_INVALID_ACK,
+    STREAM_PKT_BROKEN_ACK,
     STREAM_RST_INVALID_ACK,
+    STREAM_PKT_RETRANSMISSION,
 
     STREAM_REASSEMBLY_SEGMENT_BEFORE_BASE_SEQ,
     STREAM_REASSEMBLY_NO_SEGMENT,
 
     STREAM_REASSEMBLY_SEQ_GAP,
+
+    STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA,
 
     /* SCTP EVENTS */
     SCTP_PKT_TOO_SMALL,              /**< sctp packet smaller than minimum size */
@@ -191,6 +203,18 @@ enum {
     IPV4_FRAG_OVERLAP,
     IPV6_FRAG_PKT_TOO_LARGE,
     IPV6_FRAG_OVERLAP,
+    IPV4_FRAG_TOO_LARGE,
+    IPV6_FRAG_TOO_LARGE,
+    /* Fragment ignored due to internal error */
+    IPV4_FRAG_IGNORED,
+    IPV6_FRAG_IGNORED,
+
+    /* IPv4 in IPv6 events */
+    IPV4_IN_IPV6_PKT_TOO_SMALL,
+    IPV4_IN_IPV6_WRONG_IP_VER,
+    /* IPv6 in IPv6 events */
+    IPV6_IN_IPV6_PKT_TOO_SMALL,
+    IPV6_IN_IPV6_WRONG_IP_VER,
 
     /* should always be last! */
     DECODE_EVENT_MAX,

@@ -109,14 +109,14 @@ TmModuleDecodeErfFileRegister(void)
  */
 TmEcode ReceiveErfFileLoop(ThreadVars *tv, void *data, void *slot)
 {
-    ErfFileThreadVars *etv = (ErfFileThreadVars *)data;
-    etv->slot = ((TmSlot *)slot)->slot_next;
-    Packet *p;
+    Packet *p = NULL;
     uint16_t packet_q_len = 0;
+    ErfFileThreadVars *etv = (ErfFileThreadVars *)data;
+
+    etv->slot = ((TmSlot *)slot)->slot_next;
 
     while (1) {
-        if (suricata_ctl_flags & SURICATA_STOP ||
-            suricata_ctl_flags & SURICATA_KILL) {
+        if (suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL)) {
             SCReturnInt(TM_ECODE_OK);
         }
 
@@ -135,6 +135,7 @@ TmEcode ReceiveErfFileLoop(ThreadVars *tv, void *data, void *slot)
             EngineStop();
             SCReturnInt(TM_ECODE_FAILED);
         }
+        PKT_SET_SRC(p, PKT_SRC_WIRE);
 
         if (ReadErfRecord(tv, p, data) != TM_ECODE_OK) {
             TmqhOutputPacketpool(etv->tv, p);
@@ -147,6 +148,7 @@ TmEcode ReceiveErfFileLoop(ThreadVars *tv, void *data, void *slot)
             SCReturnInt(TM_ECODE_FAILED);
         }
     }
+    SCReturnInt(TM_ECODE_FAILED);
 }
 
 static inline TmEcode ReadErfRecord(ThreadVars *tv, Packet *p, void *data)
@@ -186,7 +188,7 @@ static inline TmEcode ReadErfRecord(ThreadVars *tv, Packet *p, void *data)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    GET_PKT_LEN(p) = wlen - 4; /* Trim the FCS... */
+    GET_PKT_LEN(p) = wlen;
     p->datalink = LINKTYPE_ETHERNET;
 
     /* Convert ERF time to timeval - from libpcap. */
@@ -227,9 +229,8 @@ ReceiveErfFileThreadInit(ThreadVars *tv, void *initdata, void **data)
     }
 
     ErfFileThreadVars *etv = SCMalloc(sizeof(ErfFileThreadVars));
-    if (etv == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,
-            "Failed to allocate memory for ERF file thread vars.");
+    if (unlikely(etv == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate memory for ERF file thread vars.");
         fclose(erf);
         SCReturnInt(TM_ECODE_FAILED);
     }

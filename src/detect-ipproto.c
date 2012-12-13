@@ -65,6 +65,8 @@ void DetectIPProtoRegister(void)
     int opts = 0;
 
     sigmatch_table[DETECT_IPPROTO].name = "ip_proto";
+    sigmatch_table[DETECT_IPPROTO].desc = "match on the IP protocol in the packet-header";
+    sigmatch_table[DETECT_IPPROTO].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#ip_proto";
     sigmatch_table[DETECT_IPPROTO].Match = NULL;
     sigmatch_table[DETECT_IPPROTO].Setup = DetectIPProtoSetup;
     sigmatch_table[DETECT_IPPROTO].Free  = NULL;
@@ -129,7 +131,7 @@ static DetectIPProtoData *DetectIPProtoParse(const char *optstr)
 
     /* Initialize the data */
     data = SCMalloc(sizeof(DetectIPProtoData));
-    if (data == NULL)
+    if (unlikely(data == NULL))
         goto error;
     data->op = DETECT_IPPROTO_OP_EQ;
     data->proto = 0;
@@ -140,7 +142,7 @@ static DetectIPProtoData *DetectIPProtoParse(const char *optstr)
     }
 
     /* Protocol name/number */
-    if (!isdigit(*(args[1]))) {
+    if (!isdigit((unsigned char)*(args[1]))) {
         struct protoent *pent = getprotobyname(args[1]);
         if (pent == NULL) {
             SCLogError(SC_ERR_INVALID_VALUE, "Malformed protocol name: %s",
@@ -226,8 +228,12 @@ static int DetectIPProtoSetup(DetectEngineCtx *de_ctx, Signature *s, char *optst
         goto error;
     }
 
-    /* reset our "any" (or "ip") state */
-    if (s->proto.flags & DETECT_PROTO_ANY) {
+    /* Reset our "any" (or "ip") state: for ipv4, ipv6 and ip cases, the bitfield
+     * s->proto.proto have all bit set to 1 to be able to match any protocols. ipproto
+     * will refined the protocol list and thus it needs to reset the bitfield to zero
+     * before setting the value specified by the ip_proto keyword.
+     */
+    if (s->proto.flags & (DETECT_PROTO_ANY | DETECT_PROTO_IPV6 | DETECT_PROTO_IPV4)) {
         s->proto.flags &= ~DETECT_PROTO_ANY;
         memset(s->proto.proto, 0x00, sizeof(s->proto.proto));
     }
@@ -8863,7 +8869,7 @@ static int DetectIPProtoTestSig2(void)
     };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     memset(p, 0, SIZE_OF_PACKET);
     p->pkt = (uint8_t *)(p + 1);

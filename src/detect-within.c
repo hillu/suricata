@@ -48,6 +48,8 @@ void DetectWithinRegisterTests(void);
 
 void DetectWithinRegister (void) {
     sigmatch_table[DETECT_WITHIN].name = "within";
+    sigmatch_table[DETECT_WITHIN].desc = "indicate that this content match has to be within a certain distance of the previous content keyword match";
+    sigmatch_table[DETECT_WITHIN].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Within";
     sigmatch_table[DETECT_WITHIN].Match = NULL;
     sigmatch_table[DETECT_WITHIN].Setup = DetectWithinSetup;
     sigmatch_table[DETECT_WITHIN].Free  = NULL;
@@ -72,7 +74,7 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
     /* strip "'s */
     if (withinstr[0] == '\"' && withinstr[strlen(withinstr)-1] == '\"') {
         str = SCStrdup(withinstr+1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             goto error;
         str[strlen(withinstr)-2] = '\0';
         dubbed = 1;
@@ -178,7 +180,7 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
                 DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]);
         if (pm == NULL) {
             SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "\"within\" requires "
-                       "preceeding content, uricontent, http_client_body, "
+                       "preceding content, uricontent, http_client_body, "
                        "http_server_body, http_header, http_raw_header, "
                        "http_method, http_cookie, http_raw_uri, "
                        "http_stat_msg, http_stat_code or http_user_agent "
@@ -214,13 +216,13 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
                 }
             }
 
-            if (cd->flags & DETECT_CONTENT_DEPTH || cd->flags & DETECT_CONTENT_OFFSET) {
+            if ((cd->flags & DETECT_CONTENT_DEPTH) || (cd->flags & DETECT_CONTENT_OFFSET)) {
                 SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use a relative keyword "
                                "with a non-relative keyword for the same content" );
                 goto error;
             }
 
-            if (str[0] != '-' && isalpha(str[0])) {
+            if (str[0] != '-' && isalpha((unsigned char)str[0])) {
                 SigMatch *bed_sm =
                     DetectByteExtractRetrieveSMVar(str, s,
                                                    SigMatchListSMBelongsTo(s, pm));
@@ -307,7 +309,7 @@ static int DetectWithinSetup (DetectEngineCtx *de_ctx, Signature *s, char *withi
 
         default:
             SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "within needs two "
-                       "preceeding content or uricontent options");
+                       "preceding content or uricontent options");
             goto error;
     }
 

@@ -73,7 +73,7 @@ static uint32_t detect_address_group_head_free_cnt = 0;
 DetectAddress *DetectAddressInit(void)
 {
     DetectAddress *ag = SCMalloc(sizeof(DetectAddress));
-    if (ag == NULL)
+    if (unlikely(ag == NULL))
         return NULL;
     memset(ag, 0, sizeof(DetectAddress));
 
@@ -596,12 +596,14 @@ static void DetectAddressParseIPv6CIDR(int cidr, struct in6_addr *in6)
  */
 int DetectAddressParseString(DetectAddress *dd, char *str)
 {
-    char *ipdup = SCStrdup(str);
     char *ip = NULL;
     char *ip2 = NULL;
     char *mask = NULL;
     int r = 0;
+    char *ipdup = SCStrdup(str);
 
+    if (unlikely(ipdup == NULL))
+        return -1;
     SCLogDebug("str %s", str);
 
     /* first handle 'any' */
@@ -616,9 +618,6 @@ int DetectAddressParseString(DetectAddress *dd, char *str)
 
     /* we dup so we can put a nul-termination in it later */
     ip = ipdup;
-    if (ip == NULL) {
-        goto error;
-    }
 
     /* handle the negation case */
     if (ip[0] == '!') {
@@ -645,7 +644,7 @@ int DetectAddressParseString(DetectAddress *dd, char *str)
                 /* 1.2.3.4/24 format */
 
                 for (u = 0; u < strlen(mask); u++) {
-                    if(!isdigit(mask[u]))
+                    if(!isdigit((unsigned char)mask[u]))
                         goto error;
                 }
 
@@ -976,7 +975,7 @@ int DetectAddressParse2(DetectAddressHead *gh, DetectAddressHead *ghn, char *s,
                 temp_rule_var_address = rule_var_address;
                 if ((negate + n_set) % 2) {
                     temp_rule_var_address = SCMalloc(strlen(rule_var_address) + 3);
-                    if (temp_rule_var_address == NULL)
+                    if (unlikely(temp_rule_var_address == NULL))
                         goto error;
                     snprintf(temp_rule_var_address, strlen(rule_var_address) + 3,
                              "[%s]", rule_var_address);
@@ -1025,7 +1024,7 @@ int DetectAddressParse2(DetectAddressHead *gh, DetectAddressHead *ghn, char *s,
                 temp_rule_var_address = rule_var_address;
                 if ((negate + n_set) % 2) {
                     temp_rule_var_address = SCMalloc(strlen(rule_var_address) + 3);
-                    if (temp_rule_var_address == NULL)
+                    if (unlikely(temp_rule_var_address == NULL))
                         goto error;
                     snprintf(temp_rule_var_address, strlen(rule_var_address) + 3,
                             "[%s]", rule_var_address);
@@ -1342,7 +1341,7 @@ error:
 DetectAddressHead *DetectAddressHeadInit(void)
 {
     DetectAddressHead *gh = SCMalloc(sizeof(DetectAddressHead));
-    if (gh == NULL)
+    if (unlikely(gh == NULL))
         return NULL;
     memset(gh, 0, sizeof(DetectAddressHead));
 
@@ -1479,7 +1478,7 @@ int DetectAddressCmp(DetectAddress *a, DetectAddress *b)
         return ADDRESS_ER;
 
     /* check any */
-    if (a->flags & ADDRESS_FLAG_ANY && b->flags & ADDRESS_FLAG_ANY)
+    if ((a->flags & ADDRESS_FLAG_ANY) && (b->flags & ADDRESS_FLAG_ANY))
         return ADDRESS_EQ;
     else if (a->ip.family == AF_INET)
         return DetectAddressCmpIPv4(a, b);

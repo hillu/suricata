@@ -201,6 +201,7 @@ void DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
                     Packet *tp = PacketPseudoPktSetup(p, pkt + header_len,
                             len - header_len, IPPROTO_IP);
                     if (tp != NULL) {
+                        PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         DecodeTunnel(tv, dtv, tp, GET_PKT_DATA(tp),
                                 GET_PKT_LEN(tp), pq, IPPROTO_IP);
                         PacketEnqueue(pq,tp);
@@ -215,6 +216,7 @@ void DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
                     Packet *tp = PacketPseudoPktSetup(p, pkt + header_len,
                             len - header_len, PPP_OVER_GRE);
                     if (tp != NULL) {
+                        PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         DecodeTunnel(tv, dtv, tp, GET_PKT_DATA(tp),
                                 GET_PKT_LEN(tp), pq, PPP_OVER_GRE);
                         PacketEnqueue(pq,tp);
@@ -229,6 +231,7 @@ void DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
                     Packet *tp = PacketPseudoPktSetup(p, pkt + header_len,
                             len - header_len, IPPROTO_IPV6);
                     if (tp != NULL) {
+                        PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         DecodeTunnel(tv, dtv, tp, GET_PKT_DATA(tp),
                                 GET_PKT_LEN(tp), pq, IPPROTO_IPV6);
                         PacketEnqueue(pq,tp);
@@ -243,6 +246,7 @@ void DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
                     Packet *tp = PacketPseudoPktSetup(p, pkt + header_len,
                             len - header_len, VLAN_OVER_GRE);
                     if (tp != NULL) {
+                        PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         DecodeTunnel(tv, dtv, tp, GET_PKT_DATA(tp),
                                 GET_PKT_LEN(tp), pq, VLAN_OVER_GRE);
                         PacketEnqueue(pq,tp);
@@ -267,7 +271,7 @@ static int DecodeGREtest01 (void)   {
 
     uint8_t raw_gre[] = { 0x00 ,0x6e ,0x62 };
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
@@ -309,7 +313,7 @@ static int DecodeGREtest02 (void)   {
         0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00 };
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
@@ -352,7 +356,7 @@ static int DecodeGREtest03 (void)   {
         0x01, 0x00, 0x00, 0x29, 0x10, 0x00, 0x00, 0x00,
         0x00, 0x00, 0x00, 0x00 };
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;

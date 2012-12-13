@@ -66,12 +66,12 @@ static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, char *
  */
 void DetectFileMd5Register(void) {
     sigmatch_table[DETECT_FILEMD5].name = "filemd5";
-    sigmatch_table[DETECT_FILEMD5].Match = NULL;
-    sigmatch_table[DETECT_FILEMD5].AppLayerMatch = NULL;
+    sigmatch_table[DETECT_FILEMD5].FileMatch = NULL;
     sigmatch_table[DETECT_FILEMD5].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILEMD5].Setup = DetectFileMd5SetupNoSupport;
     sigmatch_table[DETECT_FILEMD5].Free  = NULL;
     sigmatch_table[DETECT_FILEMD5].RegisterTests = NULL;
+    sigmatch_table[DETECT_FILEMD5].flags = SIGMATCH_NOT_BUILT;
 
 	SCLogDebug("registering filemd5 rule option");
     return;
@@ -79,18 +79,20 @@ void DetectFileMd5Register(void) {
 
 #else /* HAVE_NSS */
 
-int DetectFileMd5Match (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
+static int DetectFileMd5Match (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, File *, Signature *, SigMatch *);
 static int DetectFileMd5Setup (DetectEngineCtx *, Signature *, char *);
-void DetectFileMd5RegisterTests(void);
-void DetectFileMd5Free(void *);
+static void DetectFileMd5RegisterTests(void);
+static void DetectFileMd5Free(void *);
 
 /**
  * \brief Registration function for keyword: filemd5
  */
 void DetectFileMd5Register(void) {
     sigmatch_table[DETECT_FILEMD5].name = "filemd5";
-    sigmatch_table[DETECT_FILEMD5].Match = NULL;
-    sigmatch_table[DETECT_FILEMD5].AppLayerMatch = DetectFileMd5Match;
+    sigmatch_table[DETECT_FILEMD5].desc = "match file MD5 against list of MD5 checksums";
+    sigmatch_table[DETECT_FILEMD5].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filemd5";
+    sigmatch_table[DETECT_FILEMD5].FileMatch = DetectFileMd5Match;
     sigmatch_table[DETECT_FILEMD5].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILEMD5].Setup = DetectFileMd5Setup;
     sigmatch_table[DETECT_FILEMD5].Free  = DetectFileMd5Free;
@@ -146,21 +148,23 @@ static int MD5MatchLookupBuffer(ROHashTable *hash, uint8_t *buf, size_t buflen) 
 /**
  * \brief match the specified filemd5
  *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectFileMd5Data
+ * \param t thread local vars
+ * \param det_ctx pattern matcher thread local data
+ * \param f *LOCKED* flow
+ * \param flags direction flags
+ * \param file file being inspected
+ * \param s signature being inspected
+ * \param m sigmatch that we will cast into DetectFileMd5Data
  *
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFileMd5Match (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectFileMd5Match (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
 {
     SCEnter();
     int ret = 0;
     DetectFileMd5Data *filemd5 = (DetectFileMd5Data *)m->ctx;
-
-    File *file = (File *)state;
 
     if (file->txid < det_ctx->tx_id) {
         SCReturnInt(0);
@@ -199,13 +203,13 @@ int DetectFileMd5Match (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, 
  * \retval filemd5 pointer to DetectFileMd5Data on success
  * \retval NULL on failure
  */
-DetectFileMd5Data *DetectFileMd5Parse (char *str)
+static DetectFileMd5Data *DetectFileMd5Parse (char *str)
 {
     DetectFileMd5Data *filemd5 = NULL;
 
     /* We have a correct filemd5 option */
     filemd5 = SCMalloc(sizeof(DetectFileMd5Data));
-    if (filemd5 == NULL)
+    if (unlikely(filemd5 == NULL))
         goto error;
 
     memset(filemd5, 0x00, sizeof(DetectFileMd5Data));
@@ -329,7 +333,7 @@ error:
  *
  * \param filemd5 pointer to DetectFileMd5Data
  */
-void DetectFileMd5Free(void *ptr) {
+static void DetectFileMd5Free(void *ptr) {
     if (ptr != NULL) {
         DetectFileMd5Data *filemd5 = (DetectFileMd5Data *)ptr;
         if (filemd5->hash != NULL)

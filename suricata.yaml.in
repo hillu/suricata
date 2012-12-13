@@ -32,9 +32,19 @@
 #
 #autofp-scheduler: active-packets
 
+# Run suricata as user and group.
+#run-as:
+#  user: suri
+#  group: suri
+
 # Default pid file.
 # Will use this file if no --pidfile in command options.
 #pid-file: /var/run/suricata.pid
+
+# Daemon working directory
+# Suricata will change directory to this one if provided
+# Default: "/"
+#daemon-directory: "/"
 
 # Preallocated size for packet. Default is 1514 which is the classical
 # size for pcap on ethernet. You should adjust this value to the highest
@@ -45,6 +55,15 @@
 # placed here if its not specified with a full path name.  This can be
 # overridden with the -l command line parameter.
 default-log-dir: @e_logdir@
+
+# Unix command socket can be used to pass commands to suricata.
+# An external tool can then connect to get information from suricata
+# or trigger some modifications of the engine. Set enabled to yes
+# to activate the feature. You can use the filename variable to set
+# the file name of the socket.
+unix-command:
+  enabled: no
+  #filename: custom.socket
 
 # Configure the type of alert (and other) logging you would like.
 outputs:
@@ -71,11 +90,20 @@ outputs:
       filename: http.log
       append: yes
       #extended: yes     # enable this for extended logging information
+      #custom: yes       # enabled the custom logging format (defined by customformat)
+      #customformat: "%{%D-%H:%M:%S}t.%z %{X-Forwarded-For}i %H %m %h %u %s %B %a:%p -> %A:%P"
       #filetype: regular # 'regular', 'unix_stream' or 'unix_dgram'
+
+  # a line based log of TLS handshake parameters (no alerts)
+  - tls-log:
+      enabled: no  # Log TLS connections.
+      filename: tls.log # File to store TLS logs.
+      #extended: yes # Log extended information like fingerprint
+      certs-log-dir: certs # directory to store the certificates files
 
   # a line based log to used with pcap file study.
   # this module is dedicated to offline pcap parsing (empty output
-  # if used with an other kind of input). It can interoperate with
+  # if used with another kind of input). It can interoperate with
   # pcap parser like wireshark via the suriwire plugin.
   - pcap-info:
       enabled: no
@@ -189,11 +217,14 @@ magic-file: @e_magic_file@
 # this mode, you need to set mode to 'repeat'
 # If you want packet to be sent to another queue after an ACCEPT decision
 # set mode to 'route' and set next-queue value.
+# On linux >= 3.6, you can set the fail-open option to yes to have the kernel
+# accept the packet if suricata is not able to keep pace.
 nfq:
 #  mode: accept
 #  repeat-mark: 1
 #  repeat-mask: 1
 #  route-queue: 2
+#  fail-open: yes
 
 # af-packet support
 # Set threads to > 1 to use PACKET_FANOUT support
@@ -218,6 +249,15 @@ af-packet:
     defrag: yes
     # To use the ring feature of AF_PACKET, set 'use-mmap' to yes
     use-mmap: yes
+    # Ring size will be computed with respect to max_pending_packets and number
+    # of threads. You can set manually the ring size in number of packets by setting
+    # the following value. If you are using flow cluster-type and have really network
+    # intensive single-flow you could want to set the ring-size independantly of the number
+    # of threads:
+    #ring-size: 2048
+    # On busy system, this could help to set it to yes to recover from a packet drop
+    # phase. This will result in some packets (at max a ring flush) being non treated.
+    #use-emergency-flush: yes
     # recv buffer size, increase value could improve performance
     # buffer-size: 32768
     # Set to yes to disable promiscuous mode
@@ -235,6 +275,13 @@ af-packet:
     #checksum-checks: kernel
     # BPF filter to apply to this interface. The pcap filter syntax apply here.
     #bpf-filter: port 80 or udp
+    # You can use the following variables to activate AF_PACKET tap od IPS mode.
+    # If copy-mode is set to ips or tap, the traffic coming to the current
+    # interface will be copied to the copy-iface interface. If 'tap' is set, the
+    # copy is complete. If 'ips' is set, the packet matching a 'drop' action
+    # will not be copied.
+    #copy-mode: ips
+    #copy-iface: eth1
   - interface: eth1
     threads: 1
     cluster-id: 98
@@ -282,6 +329,9 @@ detect-engine:
   # When rule-reload is enabled, sending a USR2 signal to the Suricata process
   # will trigger a live rule reload. Experimental feature, use with care.
   #- rule-reload: true
+  # If set to yes, the loading of signatures will be made after the capture
+  # is started. This will limit the downtime in IPS mode.
+  #- delayed-detect: yes
 
 # Suricata is multi-threaded. Here the threading can be influenced.
 threading:
@@ -427,8 +477,11 @@ pattern-matcher:
 # Defrag settings:
 
 defrag:
-  trackers: 65535
-  max-frags: 65535
+  memcap: 32mb
+  hash-size: 65536
+  trackers: 65535 # number of defragmented flows to follow
+  max-frags: 65535 # number of fragments to keep (higher than trackers)
+  prealloc: yes
   timeout: 60
 
 # Flow settings:
@@ -500,7 +553,7 @@ flow-timeouts:
     emergency-new: 10
     emergency-established: 100
 
-# Stream engine settings. Here the TCP stream tracking and reaasembly
+# Stream engine settings. Here the TCP stream tracking and reassembly
 # engine is configured.
 #
 # stream:
@@ -536,7 +589,7 @@ flow-timeouts:
 stream:
   memcap: 32mb
   checksum-validation: yes      # reject wrong csums
-  inline: no                    # no inline mode
+  inline: auto                  # auto will use inline mode in IPS mode, yes or no set it statically
   reassembly:
     memcap: 64mb
     depth: 1mb                  # reassemble 1mb into a stream
@@ -597,9 +650,6 @@ pfring:
     # runmode)
     threads: 1
 
-    # Default interface we will listen on.
-    interface: eth0
-
     # Default clusterid.  PF_RING will load balance packets based on flow.
     # All threads/processes that will participate need to have the same
     # clusterid.
@@ -641,6 +691,11 @@ pcap:
     #  checksum off-loading is used. (default)
     # Warning: 'checksum-validation' must be set to yes to have any validation
     #checksum-checks: auto
+    # With some accelerator cards using a modified libpcap (like myricom), you
+    # may want to have the same number of capture threads as the number of capture
+    # rings. In this case, set up the threads variable to N to start N threads
+    # listening on the same interface.
+    #threads: 16
 
 # For FreeBSD ipfw(8) divert(4) support.
 # Please make sure you have ipfw_load="YES" and ipdivert_load="YES"
@@ -748,6 +803,18 @@ vars:
 
     AIM_SERVERS: "$EXTERNAL_NET"
 
+    DNP3_SERVER: "$HOME_NET"
+
+    DNP3_CLIENT: "$HOME_NET"
+
+    MODBUS_CLIENT: "$HOME_NET"
+
+    MODBUS_SERVER: "$HOME_NET"
+
+    ENIP_CLIENT: "$HOME_NET"
+
+    ENIP_SERVER: "$HOME_NET"
+
   # Holds the port group vars that would be passed in a Signature.
   # These would be retrieved during the Signature port parsing stage.
   port-groups:
@@ -760,6 +827,7 @@ vars:
 
     SSH_PORTS: 22
 
+    DNP3_PORTS: 20000
 
 # Set the order of alerts bassed on actions
 # The default order is pass, drop, reject, alert
@@ -769,6 +837,11 @@ action-order:
   - reject
   - alert
 
+# IP Reputation
+#reputation-categories-file: @e_sysconfdir@iprep/categories.txt
+#default-reputation-path: @e_sysconfdir@iprep
+#reputation-files:
+# - reputation.list
 
 # Host specific policies for defragmentation and TCP stream
 # reassembly.  The host OS lookup is done using a radix tree, just
@@ -849,10 +922,19 @@ libhtp:
 
    default-config:
      personality: IDS
+
      # Can be specified in kb, mb, gb.  Just a number indicates
      # it's in bytes.
      request-body-limit: 3072
      response-body-limit: 3072
+
+     # inspection limits
+     request-body-minimal-inspect-size: 32kb
+     request-body-inspect-window: 4kb
+     response-body-minimal-inspect-size: 32kb
+     response-body-inspect-window: 4kb
+
+     # decoding
      double-decode-path: no
      double-decode-query: no
 

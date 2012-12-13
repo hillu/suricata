@@ -74,7 +74,7 @@ int RunModeSetLiveCaptureAuto(DetectEngineCtx *de_ctx,
 
         if (ModThreadsCount(aconf) > 1) {
             SCLogWarning(SC_ERR_UNIMPLEMENTED, "'Auto' running mode does not honor 'threads'"
-                         " variable (set on '%s'). Please use an other mode as"
+                         " variable (set on '%s'). Please use another mode as"
                          " 'autofp' or 'worker'",
                          live_dev);
         }
@@ -125,14 +125,14 @@ int RunModeSetLiveCaptureAuto(DetectEngineCtx *de_ctx,
 
             if (ModThreadsCount(aconf) > 1) {
                 SCLogWarning(SC_ERR_UNIMPLEMENTED, "'Auto' running mode does not honor 'threads'"
-                         " variable (set on '%s'). Please use an other mode as"
+                         " variable (set on '%s'). Please use another mode as"
                          " 'autofp' or 'worker'",
                          live_dev);
             }
 
             snprintf(tname, sizeof(tname),"%s-%s", thread_name, live_dev);
             tnamec = SCStrdup(tname);
-            if (tnamec == NULL) {
+            if (unlikely(tnamec == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
                 exit(EXIT_FAILURE);
             }
@@ -311,7 +311,7 @@ int RunModeSetLiveCaptureAuto(DetectEngineCtx *de_ctx,
 
         char *thread_name = SCStrdup(tname);
 
-        if (thread_name == NULL) {
+        if (unlikely(thread_name == NULL)) {
             SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
             exit(EXIT_FAILURE);
         }
@@ -330,12 +330,13 @@ int RunModeSetLiveCaptureAuto(DetectEngineCtx *de_ctx,
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv_detect_ncpu, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
 
         char *thread_group_name = SCStrdup("Detect");
-        if (thread_group_name == NULL) {
+        if (unlikely(thread_group_name == NULL)) {
             SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
             exit(EXIT_FAILURE);
         }
@@ -443,7 +444,7 @@ int RunModeSetLiveCaptureAutoFp(DetectEngineCtx *de_ctx,
         for (thread = 0; thread < threads_count; thread++) {
             snprintf(tname, sizeof(tname), "%s%"PRIu16, thread_name, thread+1);
             char *thread_name = SCStrdup(tname);
-            if (thread_name == NULL) {
+            if (unlikely(thread_name == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
                 exit(EXIT_FAILURE);
             }
@@ -506,7 +507,7 @@ int RunModeSetLiveCaptureAutoFp(DetectEngineCtx *de_ctx,
                 snprintf(tname, sizeof(tname), "%s%s%"PRIu16, thread_name,
                          live_dev, thread+1);
                 char *thread_name = SCStrdup(tname);
-                if (thread_name == NULL) {
+                if (unlikely(thread_name == NULL)) {
                     SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
                     exit(EXIT_FAILURE);
                 }
@@ -549,7 +550,7 @@ int RunModeSetLiveCaptureAutoFp(DetectEngineCtx *de_ctx,
         SCLogDebug("tname %s, qname %s", tname, qname);
 
         char *thread_name = SCStrdup(tname);
-        if (thread_name == NULL) {
+        if (unlikely(thread_name == NULL)) {
             SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
             exit(EXIT_FAILURE);
         }
@@ -574,12 +575,13 @@ int RunModeSetLiveCaptureAutoFp(DetectEngineCtx *de_ctx,
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv_detect_ncpu, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
 
         char *thread_group_name = SCStrdup("Detect");
-        if (thread_group_name == NULL) {
+        if (unlikely(thread_group_name == NULL)) {
             SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
             exit(EXIT_FAILURE);
         }
@@ -635,7 +637,7 @@ static int RunModeSetLiveCaptureWorkersForDevice(DetectEngineCtx *de_ctx,
                      thread_name, live_dev, thread+1);
         }
         n_thread_name = SCStrdup(tname);
-        if (n_thread_name == NULL) {
+        if (unlikely(n_thread_name == NULL)) {
             SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
             exit(EXIT_FAILURE);
         }
@@ -674,7 +676,8 @@ static int RunModeSetLiveCaptureWorkersForDevice(DetectEngineCtx *de_ctx,
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         tm_module = TmModuleGetByName("RespondReject");
         if (tm_module == NULL) {
@@ -712,7 +715,7 @@ int RunModeSetLiveCaptureWorkers(DetectEngineCtx *de_ctx,
         if (live_dev != NULL) {
             aconf = ConfigParser(live_dev);
             live_dev_c = SCStrdup(live_dev);
-            if (live_dev_c == NULL) {
+            if (unlikely(live_dev_c == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate interface name");
                 exit(EXIT_FAILURE);
             }
@@ -794,6 +797,10 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Recv-Q%s", cur_queue);
 
         char *thread_name = SCStrdup(tname);
+        if (unlikely(thread_name == NULL)) {
+            printf("ERROR: Can't create thread name failed\n");
+            exit(EXIT_FAILURE);
+        }
         ThreadVars *tv_receivenfq =
             TmThreadCreatePacketHandler(thread_name,
                                         "packetpool", "packetpool",
@@ -863,6 +870,10 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Detect%"PRIu16, thread+1);
 
         char *thread_name = SCStrdup(tname);
+        if (unlikely(thread_name == NULL)) {
+            printf("ERROR: thead name creation failed\n");
+            exit(EXIT_FAILURE);
+        }
         SCLogDebug("Assigning %s affinity", thread_name);
 
         ThreadVars *tv_detect_ncpu =
@@ -879,12 +890,13 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
             printf("ERROR: TmModuleGetByName Detect failed\n");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv_detect_ncpu, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
 
         char *thread_group_name = SCStrdup("Detect");
-        if (thread_group_name == NULL) {
+        if (unlikely(thread_group_name == NULL)) {
             printf("Error allocating memory\n");
             exit(EXIT_FAILURE);
         }
@@ -902,6 +914,10 @@ int RunModeSetIPSAuto(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Verdict%"PRIu16, i);
 
         char *thread_name = SCStrdup(tname);
+        if (unlikely(thread_name == NULL)) {
+            printf("ERROR: thead name creation failed\n");
+            exit(EXIT_FAILURE);
+        }
         ThreadVars *tv_verdict =
             TmThreadCreatePacketHandler(thread_name,
                                         "verdict-queue", "simple",
@@ -1001,7 +1017,10 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Recv-Q%s", cur_queue);
 
         char *thread_name = SCStrdup(tname);
-
+        if (unlikely(thread_name == NULL)) {
+            printf("ERROR: thead name creation failed\n");
+            exit(EXIT_FAILURE);
+        }
         ThreadVars *tv_receive =
             TmThreadCreatePacketHandler(thread_name,
                     "packetpool", "packetpool",
@@ -1039,7 +1058,7 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
         SCLogDebug("tname %s, qname %s", tname, qname);
 
         char *thread_name = SCStrdup(tname);
-        if (thread_name == NULL) {
+        if (unlikely(thread_name == NULL)) {
             SCLogError(SC_ERR_MEM_ALLOC, "Can't allocate thread name");
             exit(EXIT_FAILURE);
         }
@@ -1064,14 +1083,15 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv_detect_ncpu, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
 
         SetupOutputs(tv_detect_ncpu);
 
         char *thread_group_name = SCStrdup("Detect");
-        if (thread_group_name == NULL) {
+        if (unlikely(thread_group_name == NULL)) {
             SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
             exit(EXIT_FAILURE);
         }
@@ -1089,6 +1109,10 @@ int RunModeSetIPSAutoFp(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Verdict%"PRIu16, i);
 
         char *thread_name = SCStrdup(tname);
+        if (unlikely(thread_name == NULL)) {
+            SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
         ThreadVars *tv_verdict =
             TmThreadCreatePacketHandler(thread_name,
                                         "verdict-queue", "simple",
@@ -1146,6 +1170,10 @@ int RunModeSetIPSWorker(DetectEngineCtx *de_ctx,
         snprintf(tname, sizeof(tname), "Worker-Q%s", cur_queue);
 
         char *thread_name = SCStrdup(tname);
+        if (unlikely(thread_name == NULL)) {
+            SCLogError(SC_ERR_RUNMODE, "Error allocating memory");
+            exit(EXIT_FAILURE);
+        }
         tv = TmThreadCreatePacketHandler(thread_name,
                 "packetpool", "packetpool",
                 "packetpool", "packetpool",
@@ -1181,7 +1209,8 @@ int RunModeSetIPSWorker(DetectEngineCtx *de_ctx,
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppendDelayed(tv, tm_module,
+                                   (void *)de_ctx, de_ctx->delayed_detect);
 
         tm_module = TmModuleGetByName(verdict_mod_name);
         if (tm_module == NULL) {

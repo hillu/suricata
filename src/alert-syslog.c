@@ -158,7 +158,7 @@ OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
     openlog(ident, LOG_PID|LOG_NDELAY, facility);
 
     OutputCtx *output_ctx = SCMalloc(sizeof(OutputCtx));
-    if (output_ctx == NULL) {
+    if (unlikely(output_ctx == NULL)) {
         SCLogDebug("AlertSyslogInitCtx: Could not create new OutputCtx");
         return NULL;
     }
@@ -207,7 +207,7 @@ TmEcode AlertSyslogThreadInit(ThreadVars *t, void *initdata, void **data)
     }
 
     AlertSyslogThread *ast = SCMalloc(sizeof(AlertSyslogThread));
-    if (ast == NULL)
+    if (unlikely(ast == NULL))
         return TM_ECODE_FAILED;
 
     memset(ast, 0, sizeof(AlertSyslogThread));
@@ -275,7 +275,7 @@ TmEcode AlertSyslogIPv4(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
         PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -336,7 +336,7 @@ TmEcode AlertSyslogIPv6(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
         PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
         PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -399,7 +399,7 @@ TmEcode AlertSyslogDecoderEvent(ThreadVars *tv, Packet *p, void *data,
             continue;
         }
 
-        if (pa->action & ACTION_DROP && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";

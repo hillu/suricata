@@ -55,6 +55,9 @@ typedef enum {
     TMM_LOGHTTPLOG,
     TMM_LOGHTTPLOG4,
     TMM_LOGHTTPLOG6,
+    TMM_LOGTLSLOG,
+    TMM_LOGTLSLOG4,
+    TMM_LOGTLSLOG6,
     TMM_PCAPLOG,
     TMM_FILELOG,
     TMM_FILESTORE,
@@ -70,11 +73,11 @@ typedef enum {
     TMM_DECODEERFFILE,
     TMM_RECEIVEERFDAG,
     TMM_DECODEERFDAG,
-    TMM_RECEIVENAPATECH,
-    TMM_DECODENAPATECH,
     TMM_RECEIVEAFP,
     TMM_DECODEAFP,
     TMM_ALERTPCAPINFO,
+    TMM_RECEIVENAPATECH,
+    TMM_DECODENAPATECH,
     TMM_SIZE,
 } TmmId;
 
@@ -82,12 +85,14 @@ typedef enum {
 typedef enum {
     TM_ECODE_OK = 0,    /**< Thread module exits OK*/
     TM_ECODE_FAILED,    /**< Thread module exits due to failure*/
+    TM_ECODE_DONE,    /**< Thread module task is finished*/
 } TmEcode;
 
 /* ThreadVars type */
 enum {
     TVT_PPT,
     TVT_MGMT,
+    TVT_CMD,
     TVT_MAX,
 };
 
