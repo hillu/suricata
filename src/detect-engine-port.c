@@ -67,7 +67,7 @@ static uint32_t detect_port_free_cnt = 0;
  */
 DetectPort *DetectPortInit(void) {
     DetectPort *dp = SCMalloc(sizeof(DetectPort));
-    if (dp == NULL)
+    if (unlikely(dp == NULL))
         return NULL;
     memset(dp, 0, sizeof(DetectPort));
 
@@ -685,11 +685,11 @@ error:
  * */
 int DetectPortCmp(DetectPort *a, DetectPort *b) {
     /* check any */
-    if (a->flags & PORT_FLAG_ANY && b->flags & PORT_FLAG_ANY)
+    if ((a->flags & PORT_FLAG_ANY) && (b->flags & PORT_FLAG_ANY))
         return PORT_EQ;
-    if (a->flags & PORT_FLAG_ANY && !(b->flags & PORT_FLAG_ANY))
+    if ((a->flags & PORT_FLAG_ANY) && !(b->flags & PORT_FLAG_ANY))
         return PORT_LT;
-    if (!(a->flags & PORT_FLAG_ANY) && b->flags & PORT_FLAG_ANY)
+    if (!(a->flags & PORT_FLAG_ANY) && (b->flags & PORT_FLAG_ANY))
         return PORT_GT;
 
     uint16_t a_port1 = a->port;
@@ -1059,7 +1059,7 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                 temp_rule_var_port = rule_var_port;
                 if (negate == 1 || n_set == 1) {
                     temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
-                    if (temp_rule_var_port == NULL)
+                    if (unlikely(temp_rule_var_port == NULL))
                         goto error;
                     snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
                              "[%s]", rule_var_port);
@@ -1115,7 +1115,7 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                 temp_rule_var_port = rule_var_port;
                 if ((negate + n_set) % 2) {
                     temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
-                    if (temp_rule_var_port == NULL)
+                    if (unlikely(temp_rule_var_port == NULL))
                         goto error;
                     snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
                             "[%s]", rule_var_port);
@@ -1379,9 +1379,13 @@ error:
  * \retval NULL on error
  */
 DetectPort *PortParse(char *str) {
-    char *portdup = SCStrdup(str);
     char *port2 = NULL;
     DetectPort *dp = NULL;
+    char *portdup = SCStrdup(str);
+
+    if (unlikely(portdup == NULL)) {
+        return NULL;
+    }
 
     dp = DetectPortInit();
     if (dp == NULL)
@@ -1391,9 +1395,6 @@ DetectPort *PortParse(char *str) {
 
     /* we dup so we can put a nul-termination in it later */
     char *port = portdup;
-    if (port == NULL) {
-        goto error;
-    }
 
     /* handle the negation case */
     if (port[0] == '!') {
@@ -1945,7 +1946,7 @@ end:
  */
 int PortTestParse14 (void) {
     DetectPort *dd = NULL;
-    int result = 1;
+    int result = 0;
 
     int r = DetectPortParseInsertString(&dd, "0:100");
     if (r != 0)
@@ -1954,6 +1955,7 @@ int PortTestParse14 (void) {
     if (r != 0 || dd->next == NULL)
         goto end;
 
+    result = 1;
     result &= (dd->port == 0) ? 1 : 0;
     result &= (dd->port2 == 100) ? 1 : 0;
     result &= (dd->next->port == 1000) ? 1 : 0;
@@ -1970,12 +1972,13 @@ end:
  */
 int PortTestParse15 (void) {
     DetectPort *dd = NULL;
-    int result = 1;
+    int result = 0;
 
     int r = DetectPortParse(&dd,"![0:100,1000:3000]");
     if (r != 0 || dd->next == NULL)
         goto end;
 
+    result = 1;
     result &= (dd->port == 101) ? 1 : 0;
     result &= (dd->port2 == 999) ? 1 : 0;
     result &= (dd->next->port == 3001) ? 1 : 0;
@@ -2046,7 +2049,7 @@ end:
 int PortTestFunctions01(void) {
     DetectPort *head = NULL;
     DetectPort *dp1= NULL;
-    int result = 1;
+    int result = 0;
 
     /* Parse */
     int r = DetectPortParse(&head,"![0:100,1000:65535]");
@@ -2054,36 +2057,45 @@ int PortTestFunctions01(void) {
         goto end;
 
     /* We should have only one DetectPort */
-    result &= (head->port == 101) ? 1 : 0;
-    result &= (head->port2 == 999) ? 1 : 0;
-    result &= (head->next == NULL) ? 1 : 0;
-
-    if (result == 0) goto end;
+    if (!(head->port == 101))
+        goto end;
+    if (!(head->port2 == 999))
+        goto end;
+    if (!(head->next == NULL))
+        goto end;
 
     r = DetectPortParse(&dp1,"2000:3000");
-    if (r != 0 || dp1->next == NULL)
+    if (r != 0 || dp1->next != NULL)
         goto end;
-    result &= (dp1->port == 101) ? 1 : 0;
-    result &= (dp1->port2 == 999) ? 1 : 0;
+    if (!(dp1->port == 2000))
+        goto end;
+    if (!(dp1->port2 == 3000))
+        goto end;
 
     /* Add */
     r = DetectPortAdd(&head, dp1);
     if (r != 0 || head->next == NULL)
         goto end;
-    result &= (head->port == 101) ? 1 : 0;
-    result &= (head->port2 == 999) ? 1 : 0;
-    result &= (head->next->port == 2000) ? 1 : 0;
-    result &= (head->next->port2 == 3000) ? 1 : 0;
-
-    if (result == 0) goto end;
+    if (!(head->port == 101))
+        goto end;
+    if (!(head->port2 == 999))
+        goto end;
+    if (!(head->next->port == 2000))
+        goto end;
+    if (!(head->next->port2 == 3000))
+        goto end;
 
     /* Match */
-    result &= DetectPortMatch(head, 150);
-    result &= DetectPortMatch(head, 1500);
-    result &= (DetectPortMatch(head, 3500))? 0 : 1;
-    result &= (DetectPortMatch(head, 50))? 0 : 1;
+    if (!DetectPortMatch(head, 150))
+        goto end;
+    if (DetectPortMatch(head->next, 1500))
+        goto end;
+    if ((DetectPortMatch(head, 3500)))
+        goto end;
+    if ((DetectPortMatch(head, 50)))
+        goto end;
 
-
+    result = 1;
 end:
     if (dp1 != NULL)
         DetectPortFree(dp1);
@@ -2099,7 +2111,7 @@ int PortTestFunctions02(void) {
     DetectPort *head = NULL;
     DetectPort *dp1= NULL;
     DetectPort *dp2= NULL;
-    int result = 1;
+    int result = 0;
 
     /* Parse */
     int r = DetectPortParse(&head, "![0:100,1000:65535]");
@@ -2124,8 +2136,12 @@ int PortTestFunctions02(void) {
     if (r != 0 || head->next != NULL)
         goto end;
 
-    result &= (head->port == 200) ? 1 : 0;
-    result &= (head->port2 == 300) ? 1 : 0;
+    if (!(head->port == 200))
+        goto end;
+    if (!(head->port2 == 300))
+        goto end;
+
+    result = 1;
 
 end:
     if (dp1 != NULL)
@@ -2144,7 +2160,7 @@ int PortTestFunctions03(void) {
     DetectPort *dp1= NULL;
     DetectPort *dp2= NULL;
     DetectPort *dp3= NULL;
-    int result = 1;
+    int result = 0;
 
     int r = DetectPortParse(&dp1, "200:300");
     if (r != 0)
@@ -2159,12 +2175,13 @@ int PortTestFunctions03(void) {
     if (r != 0)
         goto end;
 
-    result &= (dp1->port == 200) ? 1 : 0;
-    result &= (dp1->port2 == 249) ? 1 : 0;
-    result &= (dp2->port == 250) ? 1 : 0;
-    result &= (dp2->port2 == 300) ? 1 : 0;
-
-    if (result == 0)
+    if (!(dp1->port == 200))
+        goto end;
+    if (!(dp1->port2 == 249))
+        goto end;
+    if (!(dp2->port == 250))
+        goto end;
+    if (!(dp2->port2 == 300))
         goto end;
 
     dp1->port = 0;
@@ -2176,12 +2193,20 @@ int PortTestFunctions03(void) {
     DetectPortCut(NULL, dp1, dp2, &dp3);
     if (r != 0)
         goto end;
-    result &= (dp1->port == 0) ? 1 : 0;
-    result &= (dp1->port2 == 249) ? 1 : 0;
-    result &= (dp2->port == 250) ? 1 : 0;
-    result &= (dp2->port2 == 500) ? 1 : 0;
-    result &= (dp3->port == 501) ? 1 : 0;
-    result &= (dp3->port2 == 750) ? 1 : 0;
+    if (!(dp1->port == 0))
+        goto end;
+    if (!(dp1->port2 == 249))
+        goto end;
+    if (!(dp2->port == 250))
+        goto end;
+    if (!(dp2->port2 == 500))
+        goto end;
+    if (!(dp3->port == 501))
+        goto end;
+    if (!(dp3->port2 == 750))
+        goto end;
+
+    result = 1;
 
 end:
     if (dp1 != NULL)
@@ -2199,7 +2224,7 @@ end:
 int PortTestFunctions04(void) {
     DetectPort *dp1= NULL;
     DetectPort *dp2= NULL;
-    int result = 1;
+    int result = 0;
 
     int r = DetectPortParse(&dp1, "200:300");
     if (r != 0)
@@ -2212,11 +2237,16 @@ int PortTestFunctions04(void) {
     if (r != 0)
         goto end;
 
-    result &= (dp1->port == 0);
-    result &= (dp1->port2 == 199);
-    result &= (dp2->port == 301);
-    result &= (dp2->port2 == 65535);
+    if (!(dp1->port == 0))
+        goto end;
+    if (!(dp1->port2 == 199))
+        goto end;
+    if (!(dp2->port == 301))
+        goto end;
+    if (!(dp2->port2 == 65535))
+        goto end;
 
+    result = 1;
 end:
     if (dp1 != NULL)
         DetectPortFree(dp1);
@@ -2237,7 +2267,7 @@ end:
 int PortTestMatchReal(uint8_t *raw_eth_pkt, uint16_t pktsize, char *sig,
                       uint32_t sid)
 {
-    int result = 1;
+    int result = 0;
     FlowInitConfig(FLOW_QUIET);
     Packet *p = UTHBuildPacketFromEth(raw_eth_pkt, pktsize);
     result = UTHPacketMatchSig(p, sig);

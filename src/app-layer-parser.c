@@ -98,14 +98,14 @@ FileContainer *AppLayerGetFilesFromFlow(Flow *f, uint8_t direction) {
 }
 
 /** \brief Alloc a AppLayerParserResultElmt func for the pool */
-static void *AlpResultElmtPoolAlloc(void *null)
+static void *AlpResultElmtPoolAlloc()
 {
-    AppLayerParserResultElmt *e = (AppLayerParserResultElmt *)SCMalloc
-                                    (sizeof(AppLayerParserResultElmt));
+    AppLayerParserResultElmt *e = NULL;
+
+    e = (AppLayerParserResultElmt *)SCMalloc
+        (sizeof(AppLayerParserResultElmt));
     if (e == NULL)
         return NULL;
-
-    memset(e, 0, sizeof(AppLayerParserResultElmt));
 
 #ifdef DEBUG
     al_result_pool_elmts++;
@@ -114,7 +114,7 @@ static void *AlpResultElmtPoolAlloc(void *null)
     return e;
 }
 
-static void AlpResultElmtPoolFree(void *e)
+static void AlpResultElmtPoolCleanup(void *e)
 {
     AppLayerParserResultElmt *re = (AppLayerParserResultElmt *)e;
 
@@ -122,7 +122,6 @@ static void AlpResultElmtPoolFree(void *e)
         if (re->data_ptr != NULL)
             SCFree(re->data_ptr);
     }
-    SCFree(re);
 
 #ifdef DEBUG
     al_result_pool_elmts--;
@@ -530,6 +529,20 @@ uint16_t AppLayerGetProtoByName(const char *name)
     return ALPROTO_UNKNOWN;
 }
 
+const char *AppLayerGetProtoString(int proto)
+{
+
+    if ((proto >= ALPROTO_MAX) || (proto < 0)) {
+        return "Undefined";
+    }
+
+    if (al_proto_table[proto].name == NULL)  {
+        return "Unset";
+    } else {
+        return al_proto_table[proto].name;
+    }
+}
+
 /** \brief Description: register a parser.
  *
  * \param name full parser name, e.g. "http.request_line"
@@ -630,6 +643,19 @@ void AppLayerRegisterLocalStorageFunc(uint16_t proto,
     al_proto_table[proto].LocalStorageFree = LocalStorageFree;
 
     return;
+}
+
+void AppLayerRegisterTruncateFunc(uint16_t proto, void (*Truncate)(void *, uint8_t))
+{
+    al_proto_table[proto].Truncate = Truncate;
+
+    return;
+}
+
+void AppLayerStreamTruncated(uint16_t proto, void *state, uint8_t flags) {
+    if (al_proto_table[proto].Truncate != NULL) {
+        al_proto_table[proto].Truncate(state, flags);
+    }
 }
 
 void *AppLayerGetProtocolParserLocalStorage(uint16_t proto)
@@ -857,6 +883,9 @@ int AppLayerParse(void *local_data, Flow *f, uint8_t proto,
     /* Do this check before calling AppLayerParse */
     if (flags & STREAM_GAP) {
         SCLogDebug("stream gap detected (missing packets), this is not yet supported.");
+
+        if (f->alstate != NULL)
+            AppLayerStreamTruncated(proto, f->alstate, flags);
         goto error;
     }
 
@@ -903,7 +932,7 @@ int AppLayerParse(void *local_data, Flow *f, uint8_t proto,
         }
     }
 
-    if (parser_idx == 0 || parser_state->flags & APP_LAYER_PARSER_DONE) {
+    if (parser_idx == 0 || (parser_state->flags & APP_LAYER_PARSER_DONE)) {
         SCLogDebug("no parser for protocol %" PRIu32 "", proto);
         SCReturnInt(0);
     }
@@ -964,6 +993,11 @@ int AppLayerParse(void *local_data, Flow *f, uint8_t proto,
     if (parser_state->flags & APP_LAYER_PARSER_EOF) {
         SCLogDebug("eof, flag Transaction id's");
         parser_state_store->id_flags |= APP_LAYER_TRANSACTION_EOF;
+    }
+
+    /* stream truncated, inform app layer */
+    if (flags & STREAM_DEPTH) {
+        AppLayerStreamTruncated(proto, app_layer_state, flags);
     }
 
     SCReturnInt(0);
@@ -1314,7 +1348,10 @@ void RegisterAppLayerParsers(void)
 
     /** setup result pool
      * \todo Per thread pool */
-    al_result_pool = PoolInit(1000,250,AlpResultElmtPoolAlloc,NULL,AlpResultElmtPoolFree);
+    al_result_pool = PoolInit(1000, 250,
+            sizeof(AppLayerParserResultElmt),
+            AlpResultElmtPoolAlloc, NULL, NULL,
+            AlpResultElmtPoolCleanup, NULL);
 
     RegisterHTPParsers();
     RegisterSSLParsers();
@@ -1476,7 +1513,7 @@ AppLayerCreateAppLayerProbingParserElement(const char *al_proto_name,
                                            (uint8_t *input, uint32_t input_len))
 {
     AppLayerProbingParserElement *pe = SCMalloc(sizeof(AppLayerProbingParserElement));
-    if (pe == NULL) {
+    if (unlikely(pe == NULL)) {
         return NULL;
     }
 
@@ -1518,7 +1555,7 @@ static AppLayerProbingParserElement *
 AppLayerDuplicateAppLayerProbingParserElement(AppLayerProbingParserElement *pe)
 {
     AppLayerProbingParserElement *new_pe = SCMalloc(sizeof(AppLayerProbingParserElement));
-    if (new_pe == NULL) {
+    if (unlikely(new_pe == NULL)) {
         return NULL;
     }
 
@@ -1553,7 +1590,7 @@ AppLayerInsertNewProbingParserSingleElement(AppLayerProbingParser *pp,
 {
     if (pp == NULL) {
         AppLayerProbingParser *new_pp = SCMalloc(sizeof(AppLayerProbingParser));
-        if (new_pp == NULL)
+        if (unlikely(new_pp == NULL))
             return;
         memset(new_pp, 0, sizeof(AppLayerProbingParser));
 
@@ -1807,7 +1844,7 @@ int AppLayerProbingParserInfoAdd(AlpProtoDetectCtx *ctx,
 
     if (ppi == NULL) {
         new_ppi = SCMalloc(sizeof(AppLayerProbingParserInfo));
-        if (new_ppi == NULL) {
+        if (unlikely(new_ppi == NULL)) {
             return -1;
         }
         memset(new_ppi, 0, sizeof(AppLayerProbingParserInfo));
@@ -1986,7 +2023,7 @@ static int TestProtocolParser(Flow *f, void *test_state, AppLayerParserState *ps
 static void *TestProtocolStateAlloc(void)
 {
     void *s = SCMalloc(sizeof(TestState));
-    if (s == NULL)
+    if (unlikely(s == NULL))
         return NULL;
 
     memset(s, 0, sizeof(TestState));

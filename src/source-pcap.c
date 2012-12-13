@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -70,6 +70,10 @@ typedef struct PcapThreadVars_
     uint64_t bytes;
     uint32_t errs;
 
+    uint16_t capture_kernel_packets;
+    uint16_t capture_kernel_drops;
+    uint16_t capture_kernel_ifdrops;
+
     ThreadVars *tv;
     TmSlot *slot;
 
@@ -129,6 +133,18 @@ void TmModuleDecodePcapRegister (void) {
     tmm_modules[TMM_DECODEPCAP].cap_flags = 0;
     tmm_modules[TMM_DECODEPCAP].flags = TM_FLAG_DECODE_TM;
 }
+
+static inline void PcapDumpCounters(PcapThreadVars *ptv)
+{
+    struct pcap_stat pcap_s;
+    if (likely((pcap_stats(ptv->pcap_handle, &pcap_s) >= 0))) {
+        SCPerfCounterSetUI64(ptv->capture_kernel_packets, ptv->tv->sc_perf_pca, pcap_s.ps_recv);
+        SCPerfCounterSetUI64(ptv->capture_kernel_drops, ptv->tv->sc_perf_pca, pcap_s.ps_drop);
+        (void) SC_ATOMIC_SET(ptv->livedev->drop, pcap_s.ps_drop);
+        SCPerfCounterSetUI64(ptv->capture_kernel_ifdrops, ptv->tv->sc_perf_pca, pcap_s.ps_ifdrop);
+    }
+}
+
 
 #if LIBPCAP_VERSION_MAJOR == 1
 static int PcapTryReopen(PcapThreadVars *ptv)
@@ -199,11 +215,14 @@ void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
 
     PcapThreadVars *ptv = (PcapThreadVars *)user;
     Packet *p = PacketGetFromQueueOrAlloc();
+    time_t last_dump = 0;
+    struct timeval current_time;
 
     if (unlikely(p == NULL)) {
         SCReturn;
     }
 
+    PKT_SET_SRC(p, PKT_SRC_WIRE);
     p->ts.tv_sec = h->ts.tv_sec;
     p->ts.tv_usec = h->ts.tv_usec;
     SCLogDebug("p->ts.tv_sec %"PRIuMAX"", (uintmax_t)p->ts.tv_sec);
@@ -242,6 +261,13 @@ void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
         ptv->cb_result = TM_ECODE_FAILED;
     }
 
+    /* Trigger one dump of stats every second */
+    TimeGet(&current_time);
+    if (current_time.tv_sec != last_dump) {
+        PcapDumpCounters(ptv);
+        last_dump = current_time.tv_sec;
+    }
+
     SCReturn;
 }
 
@@ -250,19 +276,18 @@ void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
  */
 TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
 {
-    uint16_t packet_q_len = 0;
-    PcapThreadVars *ptv = (PcapThreadVars *)data;
-    TmSlot *s = (TmSlot *)slot;
-    ptv->slot = s->slot_next;
-    ptv->cb_result = TM_ECODE_OK;
-    int r;
-
     SCEnter();
 
+    uint16_t packet_q_len = 0;
+    PcapThreadVars *ptv = (PcapThreadVars *)data;
+    int r;
+    TmSlot *s = (TmSlot *)slot;
+
+    ptv->slot = s->slot_next;
+    ptv->cb_result = TM_ECODE_OK;
+
     while (1) {
-        if (suricata_ctl_flags & SURICATA_STOP ||
-            suricata_ctl_flags & SURICATA_KILL)
-        {
+        if (suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL)) {
             SCReturnInt(TM_ECODE_OK);
         }
 
@@ -277,11 +302,16 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
 
         /* Right now we just support reading packets one at a time. */
         r = pcap_dispatch(ptv->pcap_handle, (int)packet_q_len,
-                (pcap_handler)PcapCallbackLoop, (u_char *)ptv);
+                          (pcap_handler)PcapCallbackLoop, (u_char *)ptv);
         if (unlikely(r < 0)) {
             int dbreak = 0;
             SCLogError(SC_ERR_PCAP_DISPATCH, "error code %" PRId32 " %s",
-                    r, pcap_geterr(ptv->pcap_handle));
+                       r, pcap_geterr(ptv->pcap_handle));
+#ifdef PCAP_ERROR_BREAK
+            if (r == PCAP_ERROR_BREAK) {
+                SCReturnInt(ptv->cb_result);
+            }
+#endif
             do {
                 usleep(PCAP_RECONNECT_TIMEOUT);
                 if (suricata_ctl_flags != 0) {
@@ -330,7 +360,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
     }
 
     PcapThreadVars *ptv = SCMalloc(sizeof(PcapThreadVars));
-    if (ptv == NULL) {
+    if (unlikely(ptv == NULL)) {
         pcapconfig->DerefFunc(pcapconfig);
         SCReturnInt(TM_ECODE_FAILED);
     }
@@ -456,6 +486,19 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     pcapconfig->DerefFunc(pcapconfig);
 
+    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+    ptv->capture_kernel_ifdrops = SCPerfTVRegisterCounter("capture.kernel_ifdrops",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+
     *data = (void *)ptv;
     SCReturnInt(TM_ECODE_OK);
 }
@@ -470,8 +513,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
     }
 
     PcapThreadVars *ptv = SCMalloc(sizeof(PcapThreadVars));
-    if (ptv == NULL) {
-        /* Dereference config */
+    if (unlikely(ptv == NULL)) {
         pcapconfig->DerefFunc(pcapconfig);
         SCReturnInt(TM_ECODE_FAILED);
     }

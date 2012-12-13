@@ -29,13 +29,15 @@
 #include "tm-threads-common.h"
 #include "tm-modules.h"
 
+typedef TmEcode (*TmSlotFunc)(ThreadVars *, Packet *, void *, PacketQueue *,
+                        PacketQueue *);
+
 typedef struct TmSlot_ {
     /* the TV holding this slot */
     ThreadVars *tv;
 
     /* function pointers */
-    TmEcode (*SlotFunc)(ThreadVars *, Packet *, void *, PacketQueue *,
-                        PacketQueue *);
+    SC_ATOMIC_DECLARE(TmSlotFunc, SlotFunc);
 
     TmEcode (*PktAcqLoop)(ThreadVars *, void *, void *);
 
@@ -72,6 +74,7 @@ extern ThreadVars *tv_root[TVT_MAX];
 extern SCMutex tv_root_lock;
 
 void TmSlotSetFuncAppend(ThreadVars *, TmModule *, void *);
+void TmSlotSetFuncAppendDelayed(ThreadVars *, TmModule *, void *, int delayed);
 TmSlot *TmSlotGetSlotForTM(int);
 
 ThreadVars *TmThreadCreate(char *, char *, char *, char *, char *, char *,
@@ -79,11 +82,14 @@ ThreadVars *TmThreadCreate(char *, char *, char *, char *, char *, char *,
 ThreadVars *TmThreadCreatePacketHandler(char *, char *, char *, char *, char *,
                                         char *);
 ThreadVars *TmThreadCreateMgmtThread(char *name, void *(fn_p)(void *), int);
+ThreadVars *TmThreadCreateCmdThread(char *name, void *(fn_p)(void *), int);
 TmEcode TmThreadSpawn(ThreadVars *);
 void TmThreadSetFlags(ThreadVars *, uint8_t);
 void TmThreadSetAOF(ThreadVars *, uint8_t);
 void TmThreadKillThread(ThreadVars *);
+void TmThreadKillThreadsFamily(int family);
 void TmThreadKillThreads(void);
+void TmThreadClearThreadsFamily(int family);
 void TmThreadAppend(ThreadVars *, int);
 void TmThreadRemove(ThreadVars *, int);
 
@@ -104,6 +110,9 @@ void TmThreadCheckThreadState(void);
 TmEcode TmThreadWaitOnThreadInit(void);
 ThreadVars *TmThreadsGetCallingThread(void);
 
+void TmThreadActivateDummySlot(void);
+void TmThreadDeActivateDummySlot(void);
+
 int TmThreadsCheckFlag(ThreadVars *, uint8_t);
 void TmThreadsSetFlag(ThreadVars *, uint8_t);
 void TmThreadsUnsetFlag(ThreadVars *, uint8_t);
@@ -112,8 +121,7 @@ void TmThreadWaitForFlag(ThreadVars *, uint8_t);
 TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *slot);
 
 ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *);
-void TmThreadDisableReceiveThreads(void);
-void TmThreadDisableUptoDetectThreads(void);
+void TmThreadDisableThreadsWithTMS(uint8_t tm_flags);
 TmSlot *TmThreadGetFirstTmSlotForPartialPattern(const char *);
 
 /**

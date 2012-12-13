@@ -370,15 +370,15 @@ DetectBytejumpData *DetectBytejumpParse(char *optstr, char **offset)
      * and *yes* this *is* ugly.
      */
     end_ptr = str_ptr;
-    while (!(isspace(*end_ptr) || (*end_ptr == ','))) end_ptr++;
+    while (!(isspace((unsigned char)*end_ptr) || (*end_ptr == ','))) end_ptr++;
     *(end_ptr++) = '\0';
     args[0] = str_ptr;
     numargs++;
 
     str_ptr = end_ptr;
-    while (isspace(*str_ptr) || (*str_ptr == ',')) str_ptr++;
+    while (isspace((unsigned char)*str_ptr) || (*str_ptr == ',')) str_ptr++;
     end_ptr = str_ptr;
-    while (!(isspace(*end_ptr) || (*end_ptr == ',')) && (*end_ptr != '\0'))
+    while (!(isspace((unsigned char)*end_ptr) || (*end_ptr == ',')) && (*end_ptr != '\0'))
         end_ptr++;
     *(end_ptr++) = '\0';
     args[1] = str_ptr;
@@ -397,7 +397,7 @@ DetectBytejumpData *DetectBytejumpParse(char *optstr, char **offset)
 
     /* Initialize the data */
     data = SCMalloc(sizeof(DetectBytejumpData));
-    if (data == NULL)
+    if (unlikely(data == NULL))
         goto error;
     data->base = DETECT_BYTEJUMP_BASE_UNSET;
     data->flags = 0;
@@ -416,7 +416,7 @@ DetectBytejumpData *DetectBytejumpParse(char *optstr, char **offset)
     }
 
     /* Offset */
-    if (args[1][0] != '-' && isalpha(args[1][0])) {
+    if (args[1][0] != '-' && isalpha((unsigned char)args[1][0])) {
         if (offset == NULL) {
             SCLogError(SC_ERR_INVALID_ARGUMENT, "byte_jump supplied with "
                        "var name for offset.  \"value\" argument supplied to "
@@ -584,7 +584,7 @@ int DetectBytejumpSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
             SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSBDMATCH);
         }
     } else if (s->alproto == ALPROTO_DCERPC &&
-        data->flags & DETECT_BYTEJUMP_RELATIVE) {
+        (data->flags & DETECT_BYTEJUMP_RELATIVE)) {
         SigMatch *pm = NULL;
         SigMatch *dm = NULL;
 
@@ -1225,7 +1225,7 @@ int DetectByteJumpTestPacket03(void)
     uint8_t *buf = NULL;
     uint16_t buflen = 0;
     buf = SCMalloc(4);
-    if (buf == NULL) {
+    if (unlikely(buf == NULL)) {
         printf("malloc failed\n");
         exit(EXIT_FAILURE);
     }
@@ -1252,7 +1252,7 @@ end:
 }
 
 /**
- * \test check matches of with from_beginning (bug 626)
+ * \test check matches of with from_beginning (bug 626/627)
  */
 int DetectByteJumpTestPacket04 (void) {
     int result = 0;
@@ -1274,7 +1274,7 @@ end:
 }
 
 /**
- * \test check matches of with from_beginning (bug 626)
+ * \test check matches of with from_beginning (bug 626/627)
  */
 int DetectByteJumpTestPacket05 (void) {
     int result = 0;
@@ -1296,7 +1296,7 @@ end:
 }
 
 /**
- * \test check matches of with from_beginning (bug 626)
+ * \test check matches of with from_beginning (bug 626/627)
  */
 int DetectByteJumpTestPacket06 (void) {
     int result = 0;
@@ -1318,7 +1318,7 @@ end:
 }
 
 /**
- * \test check matches of with from_beginning (bug 626)
+ * \test check matches of with from_beginning (bug 626/627)
  */
 int DetectByteJumpTestPacket07 (void) {
     int result = 0;

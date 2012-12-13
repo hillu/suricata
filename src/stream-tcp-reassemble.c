@@ -92,6 +92,7 @@ static uint64_t segment_pool_cnt = 0;
 #endif
 /* index to the right pool for all packet sizes. */
 static uint16_t segment_pool_idx[65536]; /* O(1) lookups of the pool */
+static int check_overlap_different_data = 0;
 
 /* Memory use counter */
 SC_ATOMIC_DECLARE(uint64_t, ra_memuse);
@@ -108,6 +109,12 @@ void StreamTcpSegmentDataCopy(TcpSegment *, TcpSegment *);
 TcpSegment* StreamTcpGetSegment(ThreadVars *tv, TcpReassemblyThreadCtx *, uint16_t);
 void StreamTcpCreateTestPacket(uint8_t *, uint8_t, uint8_t, uint8_t);
 void StreamTcpReassemblePseudoPacketCreate(TcpStream *, Packet *, PacketQueue *);
+static int StreamTcpSegmentDataCompare(TcpSegment *dst_seg, TcpSegment *src_seg,
+                                 uint32_t start_point, uint16_t len);
+
+void StreamTcpReassembleConfigEnableOverlapCheck(void) {
+    check_overlap_different_data = 1;
+}
 
 /**
  *  \brief  Function to Increment the memory usage counter for the TCP reassembly
@@ -153,16 +160,24 @@ int StreamTcpReassembleCheckMemcap(uint32_t size) {
 }
 
 /** \brief alloc a tcp segment pool entry */
-void *TcpSegmentPoolAlloc(void *payload_len) {
-    if (StreamTcpReassembleCheckMemcap((uint32_t)sizeof(TcpSegment) +
-                                            *((uint16_t *) payload_len)) == 0)
+void *TcpSegmentPoolAlloc()
+{
+    if (StreamTcpReassembleCheckMemcap((uint32_t)sizeof(TcpSegment)) == 0)
     {
         return NULL;
     }
 
-    TcpSegment *seg = SCMalloc(sizeof (TcpSegment));
-    if (seg == NULL)
+    TcpSegment *seg = NULL;
+
+    seg = SCMalloc(sizeof (TcpSegment));
+    if (unlikely(seg == NULL))
         return NULL;
+    return seg;
+}
+
+int TcpSegmentPoolInit(void *data, void *payload_len)
+{
+    TcpSegment *seg = (TcpSegment *) data;
 
     memset(seg, 0, sizeof (TcpSegment));
 
@@ -172,7 +187,7 @@ void *TcpSegmentPoolAlloc(void *payload_len) {
     seg->payload = SCMalloc(seg->payload_len);
     if (seg->payload == NULL) {
         SCFree(seg);
-        return NULL;
+        return 0;
     }
 
 #ifdef DEBUG
@@ -184,11 +199,11 @@ void *TcpSegmentPoolAlloc(void *payload_len) {
 #endif
 
     StreamTcpReassembleIncrMemuse((uint32_t)seg->pool_size + sizeof(TcpSegment));
-    return seg;
+    return 1;
 }
 
-/** \brief free a tcp segment pool entry */
-void TcpSegmentPoolFree(void *ptr) {
+/** \brief clean up a tcp segment pool entry */
+void TcpSegmentPoolCleanup(void *ptr) {
     if (ptr == NULL)
         return;
 
@@ -205,7 +220,6 @@ void TcpSegmentPoolFree(void *ptr) {
 #endif
 
     SCFree(seg->payload);
-    SCFree(seg);
     return;
 }
 
@@ -276,9 +290,10 @@ int StreamTcpReassembleInit(char quiet)
         SCMutexLock(&segment_pool_mutex[u16]);
         segment_pool[u16] = PoolInit(segment_pool_poolsizes[u16],
                                      segment_pool_poolsizes_prealloc[u16],
-                                     TcpSegmentPoolAlloc, (void *) &
-                                     segment_pool_pktsizes[u16],
-                                     TcpSegmentPoolFree);
+                                     sizeof (TcpSegment),
+                                     TcpSegmentPoolAlloc, TcpSegmentPoolInit,
+                                     (void *) &segment_pool_pktsizes[u16],
+                                     TcpSegmentPoolCleanup, NULL);
         SCMutexUnlock(&segment_pool_mutex[u16]);
     }
 
@@ -314,7 +329,6 @@ void StreamTcpReassembleFree(char quiet)
     uint16_t u16 = 0;
     for (u16 = 0; u16 < segment_pool_num; u16++) {
         SCMutexLock(&segment_pool_mutex[u16]);
-        PoolPrintSaturation(segment_pool[u16]);
 
         if (quiet == FALSE) {
             PoolPrintSaturation(segment_pool[u16]);
@@ -349,7 +363,7 @@ TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(void)
 {
     SCEnter();
     TcpReassemblyThreadCtx *ra_ctx = SCMalloc(sizeof(TcpReassemblyThreadCtx));
-    if (ra_ctx == NULL)
+    if (unlikely(ra_ctx == NULL))
         return NULL;
 
     memset(ra_ctx, 0x00, sizeof(TcpReassemblyThreadCtx));
@@ -1059,6 +1073,12 @@ static int HandleSegmentStartsBeforeListSegment(ThreadVars *tv, TcpReassemblyThr
             }
         }
 
+        if (check_overlap_different_data &&
+                !StreamTcpSegmentDataCompare(seg, list_seg, list_seg->seq, overlap)) {
+            /* interesting, overlap with different data */
+            StreamTcpSetEvent(p, STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA);
+        }
+
         if (StreamTcpInlineMode()) {
             if (StreamTcpInlineSegmentCompare(seg, list_seg) != 0) {
                 StreamTcpInlineSegmentReplacePacket(p, list_seg);
@@ -1249,6 +1269,12 @@ static int HandleSegmentStartsAtSameListSegment(ThreadVars *tv, TcpReassemblyThr
                 if (stream->seg_list_tail == list_seg)
                     stream->seg_list_tail = new_seg;
             }
+        }
+
+        if (check_overlap_different_data &&
+                !StreamTcpSegmentDataCompare(list_seg, seg, seg->seq, overlap)) {
+            /* interesting, overlap with different data */
+            StreamTcpSetEvent(p, STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA);
         }
 
         if (StreamTcpInlineMode()) {
@@ -1450,6 +1476,12 @@ static int HandleSegmentStartsAfterListSegment(ThreadVars *tv, TcpReassemblyThre
                 if (stream->seg_list_tail == list_seg)
                     stream->seg_list_tail = new_seg;
             }
+        }
+
+        if (check_overlap_different_data &&
+                !StreamTcpSegmentDataCompare(list_seg, seg, seg->seq, overlap)) {
+            /* interesting, overlap with different data */
+            StreamTcpSetEvent(p, STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA);
         }
 
         if (StreamTcpInlineMode()) {
@@ -1656,6 +1688,9 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
     } else { \
         flag |= STREAM_TOSERVER; \
     } \
+    if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) {    \
+        flag |= STREAM_DEPTH; \
+    } \
 }
 
 #define STREAM_SET_INLINE_FLAGS(ssn, stream, p, flag) { \
@@ -1670,6 +1705,9 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
         flag |= STREAM_TOSERVER; \
     } else { \
         flag |= STREAM_TOCLIENT; \
+    } \
+    if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) {    \
+        flag |= STREAM_DEPTH; \
     } \
 }
 
@@ -1689,8 +1727,8 @@ static void StreamTcpSetupMsg(TcpSession *ssn, TcpStream *stream, Packet *p,
         smsg->flags |= STREAM_EOF;
     }
 
-    if ((!StreamTcpInlineMode() && p->flowflags & FLOW_PKT_TOSERVER) ||
-        ( StreamTcpInlineMode() && p->flowflags & FLOW_PKT_TOCLIENT))
+    if ((!StreamTcpInlineMode() && (p->flowflags & FLOW_PKT_TOSERVER)) ||
+        ( StreamTcpInlineMode() && (p->flowflags & FLOW_PKT_TOCLIENT)))
     {
         smsg->flags |= STREAM_TOCLIENT;
         SCLogDebug("stream mesage is to_client");
@@ -1811,8 +1849,8 @@ static void StreamTcpRemoveSegmentFromStream(TcpStream *stream, TcpSegment *seg)
  *  \retval 0 not done yet
  */
 #define StreamTcpAppLayerSegmentProcessed(stream, segment) \
-    (((stream)->flags & STREAMTCP_STREAM_FLAG_GAP || \
-      (segment)->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) ? 1 :0)
+    (( ( (stream)->flags & STREAMTCP_STREAM_FLAG_GAP ) || \
+       ( (segment)->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED ) ? 1 :0 ))
 
 /**
  *  \brief Update the stream reassembly upon receiving a data segment
@@ -2527,8 +2565,8 @@ void StreamTcpPruneSession(Flow *f, uint8_t flags) {
                 (uint32_t)(seg->seq + seg->payload_len));
 
         if (SEQ_LEQ((seg->seq + seg->payload_len), (ra_base_seq+1)) &&
-                   seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
-                   seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) {
+                   (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
+                   (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED)) {
             if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
                 seg = seg->next;
                 break;
@@ -2593,7 +2631,7 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
     {
         /* send an empty EOF msg if we have no segments but TCP state
          * is beyond ESTABLISHED */
-        if (ssn->state > TCP_ESTABLISHED) {
+        if (ssn->state >= TCP_CLOSING || (p->flags & PKT_PSEUDO_STREAM_END)) {
             SCLogDebug("sending empty eof message");
             /* send EOF to app layer */
             STREAM_SET_FLAGS(ssn, stream, p, flags);
@@ -2661,8 +2699,8 @@ static int StreamTcpReassembleAppLayer (ThreadVars *tv,
             /* Remove the segments which are either completely before the
              * ra_base_seq and processed by both app layer and raw reassembly. */
         } else if (SEQ_LEQ((seg->seq + seg->payload_len), (ra_base_seq+1)) &&
-                   seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED &&
-                   seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) {
+                   (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
+                   (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED)) {
             if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
                 seg = seg->next;
                 continue;
@@ -3047,8 +3085,8 @@ static int StreamTcpReassembleRaw (TcpReassemblyThreadCtx *ra_ctx,
          * If the stream is in GAP state the app layer flag won't be set */
         if ((ssn->flags & STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED) &&
                 (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
-                (seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED ||
-                 stream->flags & STREAMTCP_STREAM_FLAG_GAP))
+                ((seg->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED) ||
+                 (stream->flags & STREAMTCP_STREAM_FLAG_GAP)))
         {
             if (StreamTcpReturnSegmentCheck(ssn, stream, seg) == 0) {
                 seg = seg->next;
@@ -3440,7 +3478,7 @@ void StreamTcpSegmentDataReplace(TcpSegment *dst_seg, TcpSegment *src_seg,
 
     if (SEQ_GT(start_point, dst_seg->seq)) {
         dst_pos = start_point - dst_seg->seq;
-    } else if (SEQ_LT(dst_seg->seq, start_point)) {
+    } else if (SEQ_LT(start_point, dst_seg->seq)) {
         dst_pos = dst_seg->seq - start_point;
     }
 
@@ -3464,6 +3502,60 @@ void StreamTcpSegmentDataReplace(TcpSegment *dst_seg, TcpSegment *src_seg,
 
     SCLogDebug("Replaced data of size %"PRIu16" up to src_pos %"PRIu16
             " dst_pos %"PRIu16, len, src_pos, dst_pos);
+}
+
+/**
+ *  \brief  Function to compare the data from a specific point up to given length.
+ *
+ *  \param  dst_seg     Destination segment to compare the data
+ *  \param  src_seg     Source segment of which data is to be compared to destination
+ *  \param  start_point Starting point to compare the data onwards
+ *  \param  len         Length up to which data is need to be compared
+ *
+ *  \retval 1 same
+ *  \retval 0 different
+ */
+static int StreamTcpSegmentDataCompare(TcpSegment *dst_seg, TcpSegment *src_seg,
+                                 uint32_t start_point, uint16_t len)
+{
+    uint32_t seq;
+    uint16_t src_pos = 0;
+    uint16_t dst_pos = 0;
+
+    SCLogDebug("start_point %u dst_seg %u src_seg %u", start_point, dst_seg->seq, src_seg->seq);
+
+    if (SEQ_GT(start_point, dst_seg->seq)) {
+        SCLogDebug("start_point %u > dst %u", start_point, dst_seg->seq);
+        dst_pos = start_point - dst_seg->seq;
+    } else if (SEQ_LT(start_point, dst_seg->seq)) {
+        SCLogDebug("start_point %u < dst %u", start_point, dst_seg->seq);
+        dst_pos = dst_seg->seq - start_point;
+    }
+
+    if (SCLogDebugEnabled()) {
+        BUG_ON(((len + dst_pos) - 1) > dst_seg->payload_len);
+    } else {
+        if (((len + dst_pos) - 1) > dst_seg->payload_len)
+            return 1;
+    }
+
+    src_pos = (uint16_t)(start_point - src_seg->seq);
+
+    SCLogDebug("Comparing data from dst_pos %"PRIu16", src_pos %u", dst_pos, src_pos);
+
+    for (seq = start_point; SEQ_LT(seq, (start_point + len)) &&
+            src_pos < src_seg->payload_len && dst_pos < dst_seg->payload_len;
+            seq++, dst_pos++, src_pos++)
+    {
+        if (dst_seg->payload[dst_pos] != src_seg->payload[src_pos]) {
+            SCLogDebug("data is different %02x != %02x, dst_pos %u, src_pos %u", dst_seg->payload[dst_pos], src_seg->payload[src_pos], dst_pos, src_pos);
+            return 0;
+        }
+    }
+
+    SCLogDebug("Compared data of size %"PRIu16" up to src_pos %"PRIu16
+            " dst_pos %"PRIu16, len, src_pos, dst_pos);
+    return 1;
 }
 
 /**
@@ -3591,7 +3683,7 @@ static int StreamTcpReassembleStreamTest(TcpStream *stream) {
 
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
     return 0;
     Flow f;
     uint8_t payload[4];
@@ -3951,7 +4043,7 @@ static int StreamTcpCheckQueue (uint8_t *stream_contents, StreamMsgQueue *q, uin
 static int StreamTcpTestStartsBeforeListSegment(TcpStream *stream) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     uint8_t payload[4];
@@ -4068,7 +4160,7 @@ static int StreamTcpTestStartsBeforeListSegment(TcpStream *stream) {
 static int StreamTcpTestStartsAtSameListSegment(TcpStream *stream) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     uint8_t payload[4];
@@ -4184,7 +4276,7 @@ static int StreamTcpTestStartsAtSameListSegment(TcpStream *stream) {
 static int StreamTcpTestStartsAfterListSegment(TcpStream *stream) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     uint8_t payload[4];
@@ -4903,7 +4995,7 @@ static int StreamTcpTestMissedPacket (TcpReassemblyThreadCtx *ra_ctx,
         uint16_t len, uint8_t th_flags, uint8_t flowflags, uint8_t state)
 {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return -1;
     Flow f;
     TCPHdr tcph;
@@ -5501,7 +5593,7 @@ end:
 static int StreamTcpReassembleTest32(void) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -5591,7 +5683,7 @@ end:
 static int StreamTcpReassembleTest33(void) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -5672,7 +5764,7 @@ static int StreamTcpReassembleTest33(void) {
 static int StreamTcpReassembleTest34(void) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -5754,7 +5846,7 @@ static int StreamTcpReassembleTest34(void) {
 static int StreamTcpReassembleTest35(void) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -5823,7 +5915,7 @@ static int StreamTcpReassembleTest35(void) {
 static int StreamTcpReassembleTest36(void) {
     TcpSession ssn;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -5899,7 +5991,7 @@ static int StreamTcpReassembleTest37(void) {
     ThreadVars tv;
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
 
     StreamTcpInitConfig(TRUE);
@@ -5984,7 +6076,7 @@ static int StreamTcpReassembleTest37(void) {
 static int StreamTcpReassembleTest38 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow f;
     TCPHdr tcph;
@@ -6142,7 +6234,7 @@ static int StreamTcpReassembleTest39 (void) {
 
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -6351,7 +6443,7 @@ end:
 static int StreamTcpReassembleTest40 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -6593,7 +6685,7 @@ end:
 static int StreamTcpReassembleTest41 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -6782,7 +6874,7 @@ end:
 static int StreamTcpReassembleTest42 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -6936,7 +7028,7 @@ end:
 static int StreamTcpReassembleTest43 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -7174,7 +7266,7 @@ end:
 static int StreamTcpReassembleTest45 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -7292,7 +7384,7 @@ end:
 static int StreamTcpReassembleTest46 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;
@@ -7414,7 +7506,7 @@ end:
 static int StreamTcpReassembleTest47 (void) {
     int ret = 0;
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Flow *f = NULL;
     TCPHdr tcph;

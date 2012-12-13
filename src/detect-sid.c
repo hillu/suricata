@@ -32,6 +32,8 @@ static int DetectSidSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectSidRegister (void) {
     sigmatch_table[DETECT_SID].name = "sid";
+    sigmatch_table[DETECT_SID].desc = "set rule id";
+    sigmatch_table[DETECT_SID].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Sid-signature-id";
     sigmatch_table[DETECT_SID].Match = NULL;
     sigmatch_table[DETECT_SID].Setup = DetectSidSetup;
     sigmatch_table[DETECT_SID].Free = NULL;
@@ -46,7 +48,7 @@ static int DetectSidSetup (DetectEngineCtx *de_ctx, Signature *s, char *sidstr)
     /* strip "'s */
     if (sidstr[0] == '\"' && sidstr[strlen(sidstr)-1] == '\"') {
         str = SCStrdup(sidstr+1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             return -1;
 
         str[strlen(sidstr)-2] = '\0';

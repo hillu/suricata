@@ -62,6 +62,7 @@
 #include "app-layer-parser.h"
 
 #include "host-timeout.h"
+#include "defrag-timeout.h"
 
 /* Run mode selected at suricata.c */
 extern int run_mode;
@@ -135,7 +136,7 @@ static inline int FlowGetFlowState(Flow *f) {
     if (flow_proto[f->protomap].GetProtoState != NULL) {
         return flow_proto[f->protomap].GetProtoState(f->protoctx);
     } else {
-        if (f->flags & FLOW_TO_SRC_SEEN && f->flags & FLOW_TO_DST_SEEN)
+        if ((f->flags & FLOW_TO_SRC_SEEN) && (f->flags & FLOW_TO_DST_SEEN))
             return FLOW_STATE_ESTABLISHED;
         else
             return FLOW_STATE_NEW;
@@ -418,6 +419,9 @@ void *FlowManagerThread(void *td)
             SC_PERF_TYPE_UINT64,
             "NULL");
 
+    if (th_v->thread_setup_flags != 0)
+        TmThreadSetupOptions(th_v);
+
     memset(&ts, 0, sizeof(ts));
 
     FlowForceReassemblySetup();
@@ -473,6 +477,7 @@ void *FlowManagerThread(void *td)
         FlowTimeoutHash(&ts, 0 /* check all */, &counters);
 
 
+        DefragTimeoutHash(&ts);
         //uint32_t hosts_pruned =
         HostTimeoutHash(&ts);
 /*
@@ -550,6 +555,7 @@ void *FlowManagerThread(void *td)
 
     TmThreadsSetFlag(th_v, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 /** \brief spawn the flow manager thread */
@@ -562,6 +568,8 @@ void FlowManagerThreadSpawn()
 
     tv_flowmgr = TmThreadCreateMgmtThread("FlowManagerThread",
                                           FlowManagerThread, 0);
+
+    TmThreadSetCPU(tv_flowmgr, MANAGEMENT_CPU_SET);
 
     if (tv_flowmgr == NULL) {
         printf("ERROR: TmThreadsCreate failed\n");

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -20,7 +20,7 @@
  *
  * \author Victor Julien <victor@inliniac.net>
  * \author Anoop Saldanha <anoopsaldanha@gmail.com>
- * \author Eric Leblond <eleblond@edenwall.com>
+ * \author Eric Leblond <eric@regit.org>
  *
  * Thread management functions.
  */
@@ -36,13 +36,12 @@
 #include "tmqh-packetpool.h"
 #include "threads.h"
 #include "util-debug.h"
-#include <pthread.h>
-#include <unistd.h>
 #include "util-privs.h"
 #include "util-cpu.h"
 #include "util-optimize.h"
 #include "util-profiling.h"
 #include "util-signal.h"
+#include "queue.h"
 
 #ifdef PROFILE_LOCKING
 __thread uint64_t mutex_lock_contention;
@@ -119,6 +118,16 @@ void TmThreadsUnsetFlag(ThreadVars *tv, uint8_t flag)
     SC_ATOMIC_AND(tv->flags, ~flag);
 }
 
+/**
+ * \brief Function to use as dummy stack function
+ *
+ * \retval TM_ECODE_OK
+ */
+TmEcode TmDummyFunc(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
+{
+    return TM_ECODE_OK;
+}
+
 /* 1 slot functions */
 void *TmThreadsSlot1NoIn(void *td)
 {
@@ -135,11 +144,11 @@ void *TmThreadsSlot1NoIn(void *td)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (s->SlotThreadInit != NULL) {
         void *slot_data = NULL;
@@ -149,8 +158,9 @@ void *TmThreadsSlot1NoIn(void *td)
 
             TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
             pthread_exit((void *) -1);
+            return NULL;
         }
-        SC_ATOMIC_SET(s->slot_data, slot_data);
+        (void)SC_ATOMIC_SET(s->slot_data, slot_data);
     }
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
@@ -159,8 +169,9 @@ void *TmThreadsSlot1NoIn(void *td)
 
     while (run) {
         TmThreadTestThreadUnPaused(tv);
+        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
 
-        r = s->SlotFunc(tv, NULL, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, &s->slot_post_pq);
+        r = SlotFunc(tv, NULL, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, &s->slot_post_pq);
 
         /* handle error */
         if (r == TM_ECODE_FAILED) {
@@ -210,11 +221,13 @@ void *TmThreadsSlot1NoIn(void *td)
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
+            return NULL;
         }
     }
 
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 void *TmThreadsSlot1NoOut(void *td)
@@ -233,11 +246,11 @@ void *TmThreadsSlot1NoOut(void *td)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     if (s->SlotThreadInit != NULL) {
         void *slot_data = NULL;
@@ -247,8 +260,9 @@ void *TmThreadsSlot1NoOut(void *td)
 
             TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
             pthread_exit((void *) -1);
+            return NULL;
         }
-        SC_ATOMIC_SET(s->slot_data, slot_data);
+        (void)SC_ATOMIC_SET(s->slot_data, slot_data);
     }
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
@@ -257,11 +271,12 @@ void *TmThreadsSlot1NoOut(void *td)
 
     while (run) {
         TmThreadTestThreadUnPaused(tv);
+        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
 
         p = tv->tmqh_in(tv);
 
         PACKET_PROFILING_TMM_START(p, s->tm_id);
-        r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), /* no outqh no pq */ NULL,
+        r = SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), /* no outqh no pq */ NULL,
                         /* no outqh no pq */ NULL);
         PACKET_PROFILING_TMM_END(p, s->tm_id);
 
@@ -290,11 +305,13 @@ void *TmThreadsSlot1NoOut(void *td)
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
+            return NULL;
         }
     }
 
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 void *TmThreadsSlot1NoInOut(void *td)
@@ -312,11 +329,11 @@ void *TmThreadsSlot1NoInOut(void *td)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     SCLogDebug("%s starting", tv->name);
 
@@ -328,8 +345,9 @@ void *TmThreadsSlot1NoInOut(void *td)
 
             TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
             pthread_exit((void *) -1);
+            return NULL;
         }
-        SC_ATOMIC_SET(s->slot_data, slot_data);
+        (void)SC_ATOMIC_SET(s->slot_data, slot_data);
     }
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
@@ -337,9 +355,10 @@ void *TmThreadsSlot1NoInOut(void *td)
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while (run) {
+        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
         TmThreadTestThreadUnPaused(tv);
 
-        r = s->SlotFunc(tv, NULL, SC_ATOMIC_GET(s->slot_data), /* no outqh, no pq */NULL, NULL);
+        r = SlotFunc(tv, NULL, SC_ATOMIC_GET(s->slot_data), /* no outqh, no pq */NULL, NULL);
 
         /* handle error */
         if (r == TM_ECODE_FAILED) {
@@ -365,11 +384,13 @@ void *TmThreadsSlot1NoInOut(void *td)
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
+            return NULL;
         }
     }
 
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 void *TmThreadsSlot1(void *td)
@@ -388,11 +409,11 @@ void *TmThreadsSlot1(void *td)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     SCLogDebug("%s starting", tv->name);
 
@@ -404,8 +425,9 @@ void *TmThreadsSlot1(void *td)
 
             TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
             pthread_exit((void *) -1);
+            return NULL;
         }
-        SC_ATOMIC_SET(s->slot_data, slot_data);
+        (void)SC_ATOMIC_SET(s->slot_data, slot_data);
     }
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     SCMutexInit(&s->slot_pre_pq.mutex_q, NULL);
@@ -420,8 +442,9 @@ void *TmThreadsSlot1(void *td)
         p = tv->tmqh_in(tv);
 
         if (p != NULL) {
+            TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
             PACKET_PROFILING_TMM_START(p, s->tm_id);
-            r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
+            r = SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq,
                             &s->slot_post_pq);
             PACKET_PROFILING_TMM_END(p, s->tm_id);
 
@@ -479,12 +502,14 @@ void *TmThreadsSlot1(void *td)
         if (r != TM_ECODE_OK) {
             TmThreadsSetFlag(tv, THV_CLOSED);
             pthread_exit((void *) -1);
+            return NULL;
         }
     }
 
     SCLogDebug("%s ending", tv->name);
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 /**
@@ -500,12 +525,13 @@ TmEcode TmThreadsSlotVarRun(ThreadVars *tv, Packet *p,
     Packet *extra_p;
 
     for (s = slot; s != NULL; s = s->slot_next) {
+        TmSlotFunc SlotFunc = SC_ATOMIC_GET(s->SlotFunc);
         PACKET_PROFILING_TMM_START(p, s->tm_id);
 
         if (unlikely(s->id == 0)) {
-            r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, &s->slot_post_pq);
+            r = SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, &s->slot_post_pq);
         } else {
-            r = s->SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, NULL);
+            r = SlotFunc(tv, p, SC_ATOMIC_GET(s->slot_data), &s->slot_pre_pq, NULL);
         }
 
         PACKET_PROFILING_TMM_END(p, s->tm_id);
@@ -593,11 +619,11 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     /* check if we are setup properly */
     if (s == NULL || s->PktAcqLoop == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
@@ -609,6 +635,7 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
 
         TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
         pthread_exit((void *) -1);
+        return NULL;
     }
 
     for (slot = s; slot != NULL; slot = slot->slot_next) {
@@ -616,12 +643,18 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
             void *slot_data = NULL;
             r = slot->SlotThreadInit(tv, slot->slot_initdata, &slot_data);
             if (r != TM_ECODE_OK) {
-                EngineKill();
-
-                TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
-                pthread_exit((void *) -1);
+                if (r == TM_ECODE_DONE) {
+                    EngineDone();
+                    TmThreadsSetFlag(tv, THV_CLOSED | THV_INIT_DONE | THV_RUNNING_DONE);
+                    pthread_exit((void *) -1);
+                } else {
+                    EngineKill();
+                    TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
+                    pthread_exit((void *) -1);
+                    return NULL;
+                }
             }
-            SC_ATOMIC_SET(slot->slot_data, slot_data);
+            (void)SC_ATOMIC_SET(slot->slot_data, slot_data);
         }
         memset(&slot->slot_pre_pq, 0, sizeof(PacketQueue));
         SCMutexInit(&slot->slot_pre_pq.mutex_q, NULL);
@@ -636,7 +669,11 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
 
         r = s->PktAcqLoop(tv, SC_ATOMIC_GET(s->slot_data), s);
 
-        if (r == TM_ECODE_FAILED || TmThreadsCheckFlag(tv, THV_KILL)) {
+        if (r == TM_ECODE_FAILED || TmThreadsCheckFlag(tv, THV_KILL)
+            || suricata_ctl_flags) {
+            run = 0;
+        }
+        if (r == TM_ECODE_DONE) {
             run = 0;
         }
     }
@@ -655,6 +692,7 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
             if (r != TM_ECODE_OK) {
                 TmThreadsSetFlag(tv, THV_CLOSED);
                 pthread_exit((void *) -1);
+                return NULL;
             }
         }
     }
@@ -662,6 +700,7 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
     SCLogDebug("%s ending", tv->name);
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 
@@ -685,11 +724,11 @@ void *TmThreadsSlotVar(void *td)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
-    /* Drop the capabilities for this thread */
-    SCDropCaps(tv);
-
     if (tv->thread_setup_flags != 0)
         TmThreadSetupOptions(tv);
+
+    /* Drop the capabilities for this thread */
+    SCDropCaps(tv);
 
     /* check if we are setup properly */
     if (s == NULL || tv->tmqh_in == NULL || tv->tmqh_out == NULL) {
@@ -697,6 +736,7 @@ void *TmThreadsSlotVar(void *td)
 
         TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
         pthread_exit((void *) -1);
+        return NULL;
     }
 
     for (; s != NULL; s = s->slot_next) {
@@ -708,8 +748,9 @@ void *TmThreadsSlotVar(void *td)
 
                 TmThreadsSetFlag(tv, THV_CLOSED | THV_RUNNING_DONE);
                 pthread_exit((void *) -1);
+                return NULL;
             }
-            SC_ATOMIC_SET(s->slot_data, slot_data);
+            (void)SC_ATOMIC_SET(s->slot_data, slot_data);
         }
         memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
         SCMutexInit(&s->slot_pre_pq.mutex_q, NULL);
@@ -792,6 +833,7 @@ void *TmThreadsSlotVar(void *td)
             if (r != TM_ECODE_OK) {
                 TmThreadsSetFlag(tv, THV_CLOSED);
                 pthread_exit((void *) -1);
+                return NULL;
             }
         }
     }
@@ -799,6 +841,7 @@ void *TmThreadsSlotVar(void *td)
     SCLogDebug("%s ending", tv->name);
     TmThreadsSetFlag(tv, THV_CLOSED);
     pthread_exit((void *) 0);
+    return NULL;
 }
 
 /**
@@ -884,20 +927,21 @@ ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *tm_slot)
  * \param tv   TV the slot is attached to.
  * \param tm   TM to append.
  * \param data Data to be passed on to the slot init function.
+ *
+ * \retval The allocated TmSlot or NULL if there is an error
  */
-void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
+static inline TmSlot * _TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
 {
-    TmSlot *s = (TmSlot *)tv->tm_slots;
-
     TmSlot *slot = SCMalloc(sizeof(TmSlot));
-    if (slot == NULL)
-        return;
+    if (unlikely(slot == NULL))
+        return NULL;
     memset(slot, 0, sizeof(TmSlot));
     SC_ATOMIC_INIT(slot->slot_data);
     slot->tv = tv;
     slot->SlotThreadInit = tm->ThreadInit;
     slot->slot_initdata = data;
-    slot->SlotFunc = tm->Func;
+    SC_ATOMIC_INIT(slot->SlotFunc);
+    (void)SC_ATOMIC_SET(slot->SlotFunc, tm->Func);
     slot->PktAcqLoop = tm->PktAcqLoop;
     slot->SlotThreadExitPrintStats = tm->ThreadExitPrintStats;
     slot->SlotThreadDeinit = tm->ThreadDeinit;
@@ -907,11 +951,11 @@ void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
 
     tv->cap_flags |= tm->cap_flags;
 
-    if (s == NULL) {
+    if (tv->tm_slots == NULL) {
         tv->tm_slots = slot;
         slot->id = 0;
     } else {
-        TmSlot *a = s, *b = NULL;
+        TmSlot *a = (TmSlot *)tv->tm_slots, *b = NULL;
 
         /* get the last slot */
         for ( ; a != NULL; a = a->slot_next) {
@@ -924,7 +968,104 @@ void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
         }
     }
 
+    return slot;
+}
+
+/**
+ * \brief Appends a new entry to the slots.
+ *
+ * \param tv   TV the slot is attached to.
+ * \param tm   TM to append.
+ * \param data Data to be passed on to the slot init function.
+ */
+void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
+{
+    _TmSlotSetFuncAppend(tv, tm, data);
+}
+
+typedef struct TmDummySlot_ {
+    TmSlot *slot;
+    TmEcode (*SlotFunc)(ThreadVars *, Packet *, void *, PacketQueue *,
+                        PacketQueue *);
+    TmEcode (*SlotThreadInit)(ThreadVars *, void *, void **);
+    TAILQ_ENTRY(TmDummySlot_) next;
+} TmDummySlot;
+
+static TAILQ_HEAD(, TmDummySlot_) dummy_slots =
+    TAILQ_HEAD_INITIALIZER(dummy_slots);
+
+/**
+ * \brief Appends a new entry to the slots with a delayed option.
+ *
+ * \param tv   TV the slot is attached to.
+ * \param tm   TM to append.
+ * \param data Data to be passed on to the slot init function.
+ * \param delayed Delayed start of slot if equal to 1
+ */
+void TmSlotSetFuncAppendDelayed(ThreadVars *tv, TmModule *tm, void *data,
+                                int delayed)
+{
+    TmSlot *slot = _TmSlotSetFuncAppend(tv, tm, data);
+    TmDummySlot *dslot = NULL;
+
+    if ((slot == NULL) || (delayed == 0)) {
+        return;
+    }
+
+    dslot = SCMalloc(sizeof(TmDummySlot));
+    if (unlikely(dslot == NULL)) {
+        return;
+    }
+
+    memset(dslot, 0, sizeof(*dslot));
+
+    dslot->SlotFunc = SC_ATOMIC_GET(slot->SlotFunc);
+    (void)SC_ATOMIC_SET(slot->SlotFunc, TmDummyFunc);
+    dslot->SlotThreadInit = slot->SlotThreadInit;
+    slot->SlotThreadInit = NULL;
+    dslot->slot = slot;
+
+    TAILQ_INSERT_TAIL(&dummy_slots, dslot, next);
+
     return;
+}
+
+/**
+ * \brief Activate slots that have been started in delayed mode
+ */
+void TmThreadActivateDummySlot()
+{
+    TmDummySlot *dslot;
+    TmSlot *s;
+    TmEcode r = TM_ECODE_OK;
+
+    TAILQ_FOREACH(dslot, &dummy_slots, next) {
+        void *slot_data = NULL;
+        s = dslot->slot;
+        if (dslot->SlotThreadInit != NULL) {
+            s->SlotThreadInit = dslot->SlotThreadInit;
+            r = s->SlotThreadInit(s->tv, s->slot_initdata, &slot_data);
+            if (r != TM_ECODE_OK) {
+                EngineKill();
+                TmThreadsSetFlag(s->tv, THV_CLOSED | THV_RUNNING_DONE);
+            }
+            (void)SC_ATOMIC_SET(s->slot_data, slot_data);
+        }
+        (void)SC_ATOMIC_CAS(&s->SlotFunc, TmDummyFunc, dslot->SlotFunc);
+    }
+}
+
+/**
+ * \brief Deactivate slots that have been started in delayed mode.
+ */
+void TmThreadDeActivateDummySlot()
+{
+    TmDummySlot *dslot;
+
+    TAILQ_FOREACH(dslot, &dummy_slots, next) {
+        (void)SC_ATOMIC_CAS(&dslot->slot->SlotFunc, dslot->SlotFunc, TmDummyFunc);
+        dslot->slot->SlotThreadInit = NULL;
+    }
 }
 
 /**
@@ -995,23 +1136,14 @@ static int SetCPUAffinitySet(cpu_set_t *cs) {
  */
 static int SetCPUAffinity(uint16_t cpuid)
 {
-#ifndef __CYGWIN__
-#if !defined __OpenBSD__
-    int cpu = (int)cpuid;
-#endif
-
-#ifdef OS_WIN32
-	DWORD cs = 1 << cpu;
-#elif defined __OpenBSD__
+#if defined __OpenBSD__
     return 0;
 #else
-    cpu_set_t cs;
+    int cpu = (int)cpuid;
 
-    CPU_ZERO(&cs);
-    CPU_SET(cpu, &cs);
-#endif /* OS_WIN32 */
+#if defined OS_WIN32 || defined __CYGWIN__
+    DWORD cs = 1 << cpu;
 
-#ifdef OS_WIN32
     int r = (0 == SetThreadAffinityMask(GetCurrentThread(), cs));
     if (r != 0) {
         printf("Warning: sched_setaffinity failed (%" PRId32 "): %s\n", r,
@@ -1022,10 +1154,15 @@ static int SetCPUAffinity(uint16_t cpuid)
                SCGetThreadIdLong(), cpu);
 
     return 0;
-#elif !defined __OpenBSD__
+
+#else
+    cpu_set_t cs;
+
+    CPU_ZERO(&cs);
+    CPU_SET(cpu, &cs);
     return SetCPUAffinitySet(&cs);
-#endif /* OS_WIN32 */
-#endif
+#endif /* windows */
+#endif /* not supported */
 }
 
 
@@ -1156,6 +1293,9 @@ TmEcode TmThreadSetupOptions(ThreadVars *tv)
         } else {
             SetCPUAffinitySet(&taf->cpu_set);
             tv->thread_priority = taf->prio;
+            SCLogInfo("Setting prio %d for \"%s\" thread "
+                      ", thread id %lu", tv->thread_priority,
+                      tv->name, SCGetThreadIdLong());
         }
         TmThreadSetPrio(tv);
     }
@@ -1191,7 +1331,7 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
 
     /* XXX create separate function for this: allocate a thread container */
     tv = SCMalloc(sizeof(ThreadVars));
-    if (tv == NULL)
+    if (unlikely(tv == NULL))
         goto error;
     memset(tv, 0, sizeof(ThreadVars));
 
@@ -1333,10 +1473,37 @@ ThreadVars *TmThreadCreateMgmtThread(char *name, void *(fn_p)(void *),
 
     tv = TmThreadCreate(name, NULL, NULL, NULL, NULL, "custom", fn_p, mucond);
 
-    TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
-
-    if (tv != NULL)
+    if (tv != NULL) {
         tv->type = TVT_MGMT;
+        TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
+    }
+
+    return tv;
+}
+
+/**
+ * \brief Creates and returns the TV instance for a CMD thread.
+ *        This function supports only custom slot functions and hence a
+ *        function pointer should be sent as an argument.
+ *
+ * \param name       Name of this TV instance
+ * \param fn_p       Pointer to function when \"slots\" is of type \"custom\"
+ * \param mucond     Flag to indicate whether to initialize the condition
+ *                   and the mutex variables for this newly created TV.
+ *
+ * \retval the newly created TV instance, or NULL on error
+ */
+ThreadVars *TmThreadCreateCmdThread(char *name, void *(fn_p)(void *),
+                                     int mucond)
+{
+    ThreadVars *tv = NULL;
+
+    tv = TmThreadCreate(name, NULL, NULL, NULL, NULL, "custom", fn_p, mucond);
+
+    if (tv != NULL) {
+        tv->type = TVT_CMD;
+        TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
+    }
 
     return tv;
 }
@@ -1493,65 +1660,9 @@ void TmThreadKillThread(ThreadVars *tv)
 }
 
 /**
- * \brief Disable receive threads.
+ * \brief Disable all threads having the specified TMs.
  */
-void TmThreadDisableReceiveThreads(void)
-{
-    /* value in seconds */
-#define THREAD_KILL_MAX_WAIT_TIME 60
-    /* value in microseconds */
-#define WAIT_TIME 100
-
-    double total_wait_time = 0;
-
-    ThreadVars *tv = NULL;
-
-    SCMutexLock(&tv_root_lock);
-
-    /* all receive threads are part of packet processing threads */
-    tv = tv_root[TVT_PPT];
-
-    /* we do have to keep in mind that TVs are arranged in the order
-     * right from receive to log.  The moment we fail to find a
-     * receive TM amongst the slots in a tv, it indicates we are done
-     * with all receive threads */
-    while (tv) {
-        /* obtain the slots for this TV */
-        TmSlot *slots = tv->tm_slots;
-        TmModule *tm = TmModuleGetById(slots->tm_id);
-
-        if (!(tm->flags & TM_FLAG_RECEIVE_TM)) {
-            tv = tv->next;
-            continue;
-        }
-
-        /* we found our receive TV.  Send it a KILL signal.  This is all
-         * we need to do to kill receive threads */
-        TmThreadsSetFlag(tv, THV_KILL);
-
-        while (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
-            usleep(WAIT_TIME);
-            total_wait_time += WAIT_TIME / 1000000.0;
-            if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
-                SCLogError(SC_ERR_FATAL, "Engine unable to "
-                          "disable receive thread - \"%s\".  "
-                          "Killing engine", tv->name);
-                exit(EXIT_FAILURE);
-            }
-        }
-
-        tv = tv->next;
-    }
-
-    SCMutexUnlock(&tv_root_lock);
-
-    return;
-}
-
-/**
- * \brief Disable all threads <= detect.
- */
-void TmThreadDisableUptoDetectThreads(void)
+void TmThreadDisableThreadsWithTMS(uint8_t tm_flags)
 {
     /* value in seconds */
 #define THREAD_KILL_MAX_WAIT_TIME 60
@@ -1578,8 +1689,7 @@ void TmThreadDisableUptoDetectThreads(void)
         while (slots != NULL) {
             TmModule *tm = TmModuleGetById(slots->tm_id);
 
-            if (tm->flags & (TM_FLAG_RECEIVE_TM | TM_FLAG_DECODE_TM |
-                             TM_FLAG_STREAM_TM | TM_FLAG_DETECT_TM)) {
+            if (tm->flags & tm_flags) {
                 disable = 1;
                 break;
             }
@@ -1668,22 +1778,69 @@ TmSlot *TmThreadGetFirstTmSlotForPartialPattern(const char *tm_name)
     return slots;
 }
 
-void TmThreadKillThreads(void)
+void TmThreadKillThreadsFamily(int family)
 {
     ThreadVars *tv = NULL;
+
+    if ((family < 0) || (family >= TVT_MAX))
+        return;
+
+    tv = tv_root[family];
+
+    while (tv) {
+        TmThreadKillThread(tv);
+
+        tv = tv->next;
+    }
+}
+
+void TmThreadKillThreads(void)
+{
     int i = 0;
 
     for (i = 0; i < TVT_MAX; i++) {
-        tv = tv_root[i];
-
-        while (tv) {
-            TmThreadKillThread(tv);
-
-            tv = tv->next;
-        }
+        TmThreadKillThreadsFamily(i);
     }
 
     return;
+}
+
+void TmThreadFree(ThreadVars *tv)
+{
+    TmSlot *s;
+    TmSlot *ps;
+    if (tv == NULL)
+        return;
+
+    SCLogDebug("Freeing thread '%s'.", tv->name);
+
+    SCMutexDestroy(&tv->sc_perf_pctx.m);
+
+    s = (TmSlot *)tv->tm_slots;
+    while (s) {
+        ps = s;
+        s = s->slot_next;
+        SCFree(ps);
+    }
+    SCFree(tv);
+}
+
+void TmThreadClearThreadsFamily(int family)
+{
+    ThreadVars *tv = NULL;
+    ThreadVars *ptv = NULL;
+
+    if ((family < 0) || (family >= TVT_MAX))
+        return;
+
+    tv = tv_root[family];
+
+    while (tv) {
+        ptv = tv;
+        tv = tv->next;
+        TmThreadFree(ptv);
+    }
+    tv_root[family] = NULL;
 }
 
 /**
@@ -1709,6 +1866,8 @@ TmEcode TmThreadSpawn(ThreadVars *tv)
         printf("ERROR; return code from pthread_create() is %" PRId32 "\n", rc);
         return TM_ECODE_FAILED;
     }
+
+    TmThreadWaitForFlag(tv, THV_INIT_DONE | THV_RUNNING_DONE);
 
     TmThreadAppend(tv, tv->type);
 
@@ -1920,14 +2079,14 @@ void TmThreadCheckThreadState(void)
             if (TmThreadsCheckFlag(tv, THV_FAILED)) {
                 TmThreadsSetFlag(tv, THV_DEINIT);
                 pthread_join(tv->t, NULL);
-                if (tv_aof & THV_ENGINE_EXIT || tv->aof & THV_ENGINE_EXIT) {
+                if ((tv_aof & THV_ENGINE_EXIT) || (tv->aof & THV_ENGINE_EXIT)) {
                     EngineKill();
                     return;
                 } else {
                     /* if the engine kill-stop has been received by now, chuck
                      * restarting and return to kill the engine */
-                    if (suricata_ctl_flags & SURICATA_KILL ||
-                        suricata_ctl_flags & SURICATA_STOP) {
+                    if ((suricata_ctl_flags & SURICATA_KILL) ||
+                        (suricata_ctl_flags & SURICATA_STOP)) {
                         return;
                     }
                     TmThreadRestartThread(tv);

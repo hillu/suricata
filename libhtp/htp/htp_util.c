@@ -647,6 +647,7 @@ uint8_t bestfit_codepoint(htp_cfg_t *cfg, uint32_t codepoint) {
         // Move to the next triplet
         p += 3;
     }
+    return cfg->path_replacement_char;
 }
 
 /**
@@ -1740,7 +1741,7 @@ char *htp_tx_progress_as_string(htp_tx_t *tx) {
             return "DONE";
     }
 
-    return "UNKOWN";
+    return "UNKNOWN";
 }
 
 bstr *htp_unparse_uri_noencode(htp_uri_t *uri) {

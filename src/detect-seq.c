@@ -48,6 +48,8 @@ static void DetectSeqFree(void *);
 
 void DetectSeqRegister(void) {
     sigmatch_table[DETECT_SEQ].name = "seq";
+    sigmatch_table[DETECT_SEQ].desc = "check for a specific TCP sequence number";
+    sigmatch_table[DETECT_SEQ].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#seq";
     sigmatch_table[DETECT_SEQ].Match = DetectSeqMatch;
     sigmatch_table[DETECT_SEQ].Setup = DetectSeqSetup;
     sigmatch_table[DETECT_SEQ].Free = DetectSeqFree;
@@ -96,7 +98,7 @@ static int DetectSeqSetup (DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     SigMatch *sm = NULL;
 
     data = SCMalloc(sizeof(DetectSeqData));
-    if (data == NULL)
+    if (unlikely(data == NULL))
         goto error;
 
     sm = SigMatchAlloc();

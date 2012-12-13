@@ -44,6 +44,8 @@ static int DetectDepthSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectDepthRegister (void) {
     sigmatch_table[DETECT_DEPTH].name = "depth";
+    sigmatch_table[DETECT_DEPTH].desc = "designate how many bytes from the beginning of the payload will be checked";
+    sigmatch_table[DETECT_DEPTH].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Depth";
     sigmatch_table[DETECT_DEPTH].Match = NULL;
     sigmatch_table[DETECT_DEPTH].Setup = DetectDepthSetup;
     sigmatch_table[DETECT_DEPTH].Free  = NULL;
@@ -62,7 +64,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
     /* strip "'s */
     if (depthstr[0] == '\"' && depthstr[strlen(depthstr) - 1] == '\"') {
         str = SCStrdup(depthstr + 1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             goto error;
         str[strlen(depthstr) - 2] = '\0';
         dubbed = 1;
@@ -76,7 +78,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
             if (pm == NULL) {
                 SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "depth needs "
-                           "preceeding content option for dcerpc sig");
+                           "preceding content option for dcerpc sig");
                 if (dubbed)
                     SCFree(str);
                 return -1;
@@ -100,7 +102,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]);
             if (pm == NULL) {
                 SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "depth needs "
-                        "preceeding content, uricontent option, http_client_body, "
+                        "preceding content, uricontent option, http_client_body, "
                         "http_server_body, http_header option, http_raw_header option, "
                         "http_method option, http_cookie, http_raw_uri, "
                         "http_stat_msg, http_stat_code or http_user_agent option");
@@ -137,7 +139,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
                 }
             }
 
-            if (cd->flags & DETECT_CONTENT_WITHIN || cd->flags & DETECT_CONTENT_DISTANCE) {
+            if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
                 SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use a relative keyword "
                                "with a non-relative keyword for the same content." );
                 goto error;
@@ -148,7 +150,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
                 goto error;
             }
 
-            if (str[0] != '-' && isalpha(str[0])) {
+            if (str[0] != '-' && isalpha((unsigned char)str[0])) {
                 SigMatch *bed_sm =
                     DetectByteExtractRetrieveSMVar(str, s,
                                                    SigMatchListSMBelongsTo(s, pm));
@@ -177,7 +179,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
             break;
 
         default:
-            SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "depth needs a preceeding "
+            SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "depth needs a preceding "
                     "content (or uricontent) option");
             goto error;
     }

@@ -56,6 +56,8 @@ void DetectFlowintRegisterTests(void);
 void DetectFlowintRegister(void)
 {
     sigmatch_table[DETECT_FLOWINT].name = "flowint";
+    sigmatch_table[DETECT_FLOWINT].desc = "operate on a per-flow integer";
+    sigmatch_table[DETECT_FLOWINT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flowint";
     sigmatch_table[DETECT_FLOWINT].Match = DetectFlowintMatch;
     sigmatch_table[DETECT_FLOWINT].Setup = DetectFlowintSetup;
     sigmatch_table[DETECT_FLOWINT].Free = DetectFlowintFree;
@@ -291,7 +293,7 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
     }
 
     sfd = SCMalloc(sizeof(DetectFlowintData));
-    if (sfd == NULL)
+    if (unlikely(sfd == NULL))
         goto error;
 
     /* If we need another arg, check it out(isset doesn't need another arg) */
@@ -311,7 +313,7 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
         /* get the target value to operate with
         *(it should be a value or another var) */
         str = SCStrdup(varval);
-        if (str == NULL) {
+        if (unlikely(str == NULL)) {
             SCLogError(SC_ERR_MEM_ALLOC, "malloc from strdup failed");
             goto error;
         }
@@ -1322,7 +1324,7 @@ int DetectFlowintTestPacket01Real()
     };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
     ThreadVars th_v;
@@ -1656,7 +1658,7 @@ int DetectFlowintTestPacket02Real()
     };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
 
@@ -1994,7 +1996,7 @@ int DetectFlowintTestPacket03Real()
     };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
 

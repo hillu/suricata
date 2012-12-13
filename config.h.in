@@ -1,4 +1,7 @@
-/* config.h.in.  Generated from configure.in by autoheader.  */
+/* config.h.in.  Generated from configure.ac by autoheader.  */
+
+/* Unix socket support enabled */
+#undef BUILD_UNIX_SOCKET
 
 /* Our CONFIG_DIR */
 #undef CONFIG_DIR
@@ -9,8 +12,23 @@
 /* Define to 1 if you have the <arpa/inet.h> header file. */
 #undef HAVE_ARPA_INET_H
 
+/* Define to 1 if you have the <assert.h> header file. */
+#undef HAVE_ASSERT_H
+
+/* Define to 1 if you have the <ctype.h> header file. */
+#undef HAVE_CTYPE_H
+
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
+
+/* Define to 1 if you have the <errno.h> header file. */
+#undef HAVE_ERRNO_H
+
+/* Define to 1 if you have the <fcntl.h> header file. */
+#undef HAVE_FCNTL_H
+
+/* Define to 1 if you have the <getopt.h> header file. */
+#undef HAVE_GETOPT_H
 
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
@@ -36,6 +54,12 @@
 
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
+
+/* Define to 1 if you have the `jansson' library (-ljansson). */
+#undef HAVE_LIBJANSSON
+
+/* Define to 1 if you have the `luajit-5.1' library (-lluajit-5.1). */
+#undef HAVE_LIBLUAJIT_5_1
 
 /* Define to 1 if you have the `magic' library (-lmagic). */
 #undef HAVE_LIBMAGIC
@@ -74,6 +98,21 @@
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
 
+/* Define to 1 if you have the <linux/filter.h> header file. */
+#undef HAVE_LINUX_FILTER_H
+
+/* Define to 1 if you have the <linux/if_arp.h> header file. */
+#undef HAVE_LINUX_IF_ARP_H
+
+/* Define to 1 if you have the <linux/if_ether.h> header file. */
+#undef HAVE_LINUX_IF_ETHER_H
+
+/* Define to 1 if you have the <linux/if_packet.h> header file. */
+#undef HAVE_LINUX_IF_PACKET_H
+
+/* libluajit available */
+#undef HAVE_LUAJIT
+
 /* Define to 1 if your system has a GNU libc compatible `malloc' function, and
    to 0 otherwise. */
 #undef HAVE_MALLOC
@@ -99,6 +138,9 @@
 /* Found queue max length support in netfilter_queue */
 #undef HAVE_NFQ_MAXLEN
 
+/* Found nfq_set_queue_flags function in netfilter_queue */
+#undef HAVE_NFQ_SET_QUEUE_FLAGS
+
 /* Found nfq_set_verdict2 function in netfilter_queue */
 #undef HAVE_NFQ_SET_VERDICT2
 
@@ -107,6 +149,9 @@
 
 /* Packet fanout support is available */
 #undef HAVE_PACKET_FANOUT
+
+/* Define to 1 if you have the <pcap/bpf.h> header file. */
+#undef HAVE_PCAP_BPF_H
 
 /* Define to 1 if you have the <pcap.h> header file. */
 #undef HAVE_PCAP_H
@@ -136,14 +181,23 @@
    and to 0 otherwise. */
 #undef HAVE_REALLOC
 
+/* Define to 1 if you have the <sched.h> header file. */
+#undef HAVE_SCHED_H
+
 /* Define to 1 if you have the <signal.h> header file. */
 #undef HAVE_SIGNAL_H
+
+/* Define to 1 if you have the <stdarg.h> header file. */
+#undef HAVE_STDARG_H
 
 /* Define to 1 if stdbool.h conforms to C99. */
 #undef HAVE_STDBOOL_H
 
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
+
+/* Define to 1 if you have the <stdio.h> header file. */
+#undef HAVE_STDIO_H
 
 /* Define to 1 if you have the <stdlib.h> header file. */
 #undef HAVE_STDLIB_H
@@ -202,8 +256,14 @@
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
 
+/* Define to 1 if you have the <time.h> header file. */
+#undef HAVE_TIME_H
+
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
+
+/* Define to 1 if you have the <w32api/winbase.h> header file. */
+#undef HAVE_W32API_WINBASE_H
 
 /* Define to 1 if you have the <windows.h> header file. */
 #undef HAVE_WINDOWS_H
@@ -282,6 +342,18 @@
    <pthread.h>, or <semaphore.h> is not used. If the typedef was allowed, the
    #define below would cause a syntax error. */
 #undef _UINT8_T
+
+/* Fake GCC atomic support */
+#undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1
+
+/* Fake GCC atomic support */
+#undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_2
+
+/* Fake GCC atomic support */
+#undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_4
+
+/* Fake GCC atomic support */
+#undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
 
 /* Define to `__inline__' or `__inline' if that's what the C compiler
    calls it, or to nothing if 'inline' is not supported under any name.  */

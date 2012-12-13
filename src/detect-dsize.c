@@ -54,6 +54,8 @@ static void DetectDsizeFree(void *);
  */
 void DetectDsizeRegister (void) {
     sigmatch_table[DETECT_DSIZE].name = "dsize";
+    sigmatch_table[DETECT_DSIZE].desc = "match on the size of the packet payload";
+    sigmatch_table[DETECT_DSIZE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Dsize";
     sigmatch_table[DETECT_DSIZE].Match = DetectDsizeMatch;
     sigmatch_table[DETECT_DSIZE].Setup = DetectDsizeSetup;
     sigmatch_table[DETECT_DSIZE].Free  = DetectDsizeFree;
@@ -184,7 +186,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
     }
 
     dd = SCMalloc(sizeof(DetectDsizeData));
-    if (dd == NULL)
+    if (unlikely(dd == NULL))
         goto error;
     dd->dsize = 0;
     dd->dsize2 = 0;
@@ -231,7 +233,7 @@ DetectDsizeData *DetectDsizeParse (char *rawstr)
         }
     }
 
-    SCLogDebug("dsize parsed succesfully dsize: %"PRIu16" dsize2: %"PRIu16"",dd->dsize,dd->dsize2);
+    SCLogDebug("dsize parsed successfully dsize: %"PRIu16" dsize2: %"PRIu16"",dd->dsize,dd->dsize2);
 
     SCFree(value1);
     SCFree(mode);
@@ -306,6 +308,11 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
             dd->dsize, dd->dsize2, dd->mode);
     /* tell the sig it has a dsize to speed up engine init */
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
+    s->flags |= SIG_FLAG_DSIZE;
+
+    if (s->dsize_sm == NULL) {
+        s->dsize_sm = sm;
+    }
 
     return 0;
 
@@ -720,7 +727,7 @@ int DetectDsizeIcmpv6Test01 (void) {
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01 };
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     IPV6Hdr ip6h;
     ThreadVars tv;

@@ -42,7 +42,21 @@
 #include "detect-engine-iponly.h"
 #include "detect-engine-tag.h"
 
+#include "detect-engine-uri.h"
+#include "detect-engine-hcbd.h"
+#include "detect-engine-hsbd.h"
+#include "detect-engine-hhd.h"
+#include "detect-engine-hrhd.h"
+#include "detect-engine-hmd.h"
+#include "detect-engine-hcd.h"
+#include "detect-engine-hrud.h"
+#include "detect-engine-hsmd.h"
+#include "detect-engine-hscd.h"
+#include "detect-engine-hua.h"
+#include "detect-engine-file.h"
+
 #include "detect-engine.h"
+#include "detect-engine-state.h"
 
 #include "detect-byte-extract.h"
 #include "detect-content.h"
@@ -64,6 +78,13 @@
 #include "util-var-name.h"
 
 #include "tm-threads.h"
+#include "runmodes.h"
+
+#ifdef PROFILING
+#include "util-profiling.h"
+#endif
+
+#include "reputation.h"
 
 #define DETECT_ENGINE_DEFAULT_INSPECTION_RECURSION_LIMIT 3000
 
@@ -72,6 +93,256 @@ static uint32_t detect_engine_ctx_id = 1;
 static TmEcode DetectEngineThreadCtxInitForLiveRuleSwap(ThreadVars *, void *, void **);
 
 static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *);
+
+/* 2 - for each direction */
+DetectEngineAppInspectionEngine *app_inspection_engine[ALPROTO_MAX][2];
+
+#if 0
+
+static void DetectEnginePrintAppInspectionEngines(DetectEngineAppInspectionEngine *list[][2])
+{
+    printf("\n");
+
+    uint16_t alproto = ALPROTO_UNKNOWN + 1;
+    for ( ; alproto < ALPROTO_MAX; alproto++) {
+        printf("alproto - %d\n", alproto);
+        int dir = 0;
+        for ( ; dir < 2; dir++) {
+            printf("  direction - %d\n", dir);
+            DetectEngineAppInspectionEngine *engine = list[alproto][dir];
+            while (engine != NULL) {
+                printf("    engine->alproto - %"PRIu16"\n", engine->alproto);
+                printf("    engine->dir - %"PRIu16"\n", engine->dir);
+                printf("    engine->sm_list - %d\n", engine->sm_list);
+                printf("    engine->inspect_flags - %"PRIu32"\n", engine->inspect_flags);
+                printf("    engine->match_flags - %"PRIu32"\n", engine->match_flags);
+                printf("\n");
+
+                engine = engine->next;
+            }
+        } /* for ( ; dir < 2; dir++) */
+    } /* for ( ; alproto < ALPROTO_MAX; alproto++) */
+
+    return;
+}
+
+#endif
+
+void DetectEngineRegisterAppInspectionEngines(void)
+{
+    struct tmp_t {
+        uint16_t alproto;
+        int32_t sm_list;
+        uint32_t inspect_flags;
+        uint32_t match_flags;
+        uint16_t dir;
+        int (*Callback)(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx,
+                        DetectEngineThreadCtx *det_ctx,
+                        Signature *sig, Flow *f,
+                        uint8_t flags, void *alstate,
+                        int32_t tx_id);
+
+    };
+
+    struct tmp_t data_toserver[] = {
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_UMATCH,
+          DE_STATE_FLAG_URI_INSPECT,
+          DE_STATE_FLAG_URI_MATCH,
+          0,
+          DetectEngineInspectPacketUris },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HCBDMATCH,
+          DE_STATE_FLAG_HCBD_INSPECT,
+          DE_STATE_FLAG_HCBD_MATCH,
+          0,
+          DetectEngineInspectHttpClientBody },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HHDMATCH,
+          DE_STATE_FLAG_HHD_INSPECT,
+          DE_STATE_FLAG_HHD_MATCH,
+          0,
+          DetectEngineInspectHttpHeader },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HRHDMATCH,
+          DE_STATE_FLAG_HRHD_INSPECT,
+          DE_STATE_FLAG_HRHD_MATCH,
+          0,
+          DetectEngineInspectHttpRawHeader },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HMDMATCH,
+          DE_STATE_FLAG_HMD_INSPECT,
+          DE_STATE_FLAG_HMD_MATCH,
+          0,
+          DetectEngineInspectHttpMethod },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HCDMATCH,
+          DE_STATE_FLAG_HCD_INSPECT,
+          DE_STATE_FLAG_HCD_MATCH,
+          0,
+          DetectEngineInspectHttpCookie },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HRUDMATCH,
+          DE_STATE_FLAG_HRUD_INSPECT,
+          DE_STATE_FLAG_HRUD_MATCH,
+          0,
+          DetectEngineInspectHttpRawUri },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_FILEMATCH,
+          DE_STATE_FLAG_FILE_TS_INSPECT,
+          DE_STATE_FLAG_FILE_TS_MATCH,
+          0,
+          DetectFileInspectHttp },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HUADMATCH,
+          DE_STATE_FLAG_HUAD_INSPECT,
+          DE_STATE_FLAG_HUAD_MATCH,
+          0,
+          DetectEngineInspectHttpUA },
+    };
+
+    struct tmp_t data_toclient[] = {
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HSBDMATCH,
+          DE_STATE_FLAG_HSBD_INSPECT,
+          DE_STATE_FLAG_HSBD_MATCH,
+          1,
+          DetectEngineInspectHttpServerBody },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HHDMATCH,
+          DE_STATE_FLAG_HHD_INSPECT,
+          DE_STATE_FLAG_HHD_MATCH,
+          1,
+          DetectEngineInspectHttpHeader },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HRHDMATCH,
+          DE_STATE_FLAG_HRHD_INSPECT,
+          DE_STATE_FLAG_HRHD_MATCH,
+          1,
+          DetectEngineInspectHttpRawHeader },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HCDMATCH,
+          DE_STATE_FLAG_HCD_INSPECT,
+          DE_STATE_FLAG_HCD_MATCH,
+          1,
+          DetectEngineInspectHttpCookie },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_FILEMATCH,
+          DE_STATE_FLAG_FILE_TC_INSPECT,
+          DE_STATE_FLAG_FILE_TC_MATCH,
+          1,
+          DetectFileInspectHttp },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HSMDMATCH,
+          DE_STATE_FLAG_HSMD_INSPECT,
+          DE_STATE_FLAG_HSMD_MATCH,
+          1,
+          DetectEngineInspectHttpStatMsg },
+        { ALPROTO_HTTP,
+          DETECT_SM_LIST_HSCDMATCH,
+          DE_STATE_FLAG_HSCD_INSPECT,
+          DE_STATE_FLAG_HSCD_MATCH,
+          1,
+          DetectEngineInspectHttpStatCode }
+    };
+
+    size_t i;
+    for (i = 0 ; i < sizeof(data_toserver) / sizeof(struct tmp_t); i++) {
+        DetectEngineRegisterAppInspectionEngine(data_toserver[i].alproto,
+                                                data_toserver[i].dir,
+                                                data_toserver[i].sm_list,
+                                                data_toserver[i].inspect_flags,
+                                                data_toserver[i].match_flags,
+                                                data_toserver[i].Callback,
+                                                app_inspection_engine);
+    }
+
+    for (i = 0 ; i < sizeof(data_toclient) / sizeof(struct tmp_t); i++) {
+        DetectEngineRegisterAppInspectionEngine(data_toclient[i].alproto,
+                                                data_toclient[i].dir,
+                                                data_toclient[i].sm_list,
+                                                data_toclient[i].inspect_flags,
+                                                data_toclient[i].match_flags,
+                                                data_toclient[i].Callback,
+                                                app_inspection_engine);
+    }
+
+#if 0
+    DetectEnginePrintAppInspectionEngines(app_inspection_engine);
+#endif
+
+    return;
+}
+
+static void AppendAppInspectionEngine(DetectEngineAppInspectionEngine *engine,
+                                      DetectEngineAppInspectionEngine *list[][2])
+{
+    /* append to the list */
+    DetectEngineAppInspectionEngine *tmp = list[engine->alproto][engine->dir];
+    DetectEngineAppInspectionEngine *insert = NULL;
+    while (tmp != NULL) {
+        if (tmp->dir == engine->dir &&
+            (tmp->sm_list == engine->sm_list ||
+             tmp->inspect_flags == engine->inspect_flags ||
+             tmp->match_flags == engine->match_flags)) {
+            SCLogError(SC_ERR_DETECT_PREPARE, "App Inspection Engine already "
+                       "registered for this direction(%"PRIu16") ||"
+                       "sm_list(%d) || "
+                       "[match(%"PRIu32")|inspect(%"PRIu32")]_flags",
+                       tmp->dir, tmp->sm_list, tmp->inspect_flags,
+                       tmp->match_flags);
+            exit(EXIT_FAILURE);
+        }
+        insert = tmp;
+        tmp = tmp->next;
+    }
+    if (insert == NULL)
+        list[engine->alproto][engine->dir] = engine;
+    else
+        insert->next = engine;
+
+    return;
+}
+
+void DetectEngineRegisterAppInspectionEngine(uint16_t alproto,
+                                             uint16_t dir,
+                                             int32_t sm_list,
+                                             uint32_t inspect_flags,
+                                             uint32_t match_flags,
+                                             int (*Callback)(ThreadVars *tv,
+                                                             DetectEngineCtx *de_ctx,
+                                                             DetectEngineThreadCtx *det_ctx,
+                                                             Signature *sig, Flow *f,
+                                                             uint8_t flags, void *alstate,
+                                                             int32_t tx_id),
+                                             DetectEngineAppInspectionEngine *list[][2])
+{
+    if ((list == NULL) ||
+        (alproto <= ALPROTO_UNKNOWN && alproto >= ALPROTO_FAILED) ||
+        (dir > 1) ||
+        (sm_list < DETECT_SM_LIST_MATCH || sm_list >= DETECT_SM_LIST_MAX) ||
+        (Callback == NULL)) {
+        SCLogError(SC_ERR_INVALID_ARGUMENTS, "Invalid arguments");
+        exit(EXIT_FAILURE);
+    }
+
+    DetectEngineAppInspectionEngine *new_engine = SCMalloc(sizeof(DetectEngineAppInspectionEngine));
+    if (unlikely(new_engine == NULL)) {
+        exit(EXIT_FAILURE);
+    }
+    memset(new_engine, 0, sizeof(*new_engine));
+    new_engine->alproto = alproto;
+    new_engine->dir = dir;
+    new_engine->sm_list = sm_list;
+    new_engine->inspect_flags = inspect_flags;
+    new_engine->match_flags = match_flags;
+    new_engine->Callback = Callback;
+
+    AppendAppInspectionEngine(new_engine, list);
+
+    return;
+}
 
 static void *DetectEngineLiveRuleSwap(void *arg)
 {
@@ -87,6 +358,12 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
     /* block usr2.  usr2 to be handled by the main thread only */
     UtilSignalBlock(SIGUSR2);
+
+    if (tv_local->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv_local);
+
+    /* release TmThreadSpawn */
+    TmThreadsSetFlag(tv_local, THV_INIT_DONE);
 
     ConfDeInit();
     ConfInit();
@@ -126,30 +403,10 @@ static void *DetectEngineLiveRuleSwap(void *arg)
         exit(EXIT_FAILURE);
     }
 
-    uint8_t local_need_htp_request_body = need_htp_request_body;
-    uint8_t local_need_htp_request_multipart_hdr = need_htp_request_multipart_hdr;
-    uint8_t local_need_htp_request_file = need_htp_request_file;
-    uint8_t local_need_htp_response_body = need_htp_response_body;
-
     if (SigLoadSignatures(de_ctx, NULL, FALSE) < 0) {
         SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
         if (de_ctx->failure_fatal)
             exit(EXIT_FAILURE);
-    }
-
-    if (local_need_htp_request_body != need_htp_request_body ||
-        local_need_htp_request_multipart_hdr != need_htp_request_multipart_hdr ||
-        local_need_htp_request_file != need_htp_request_file ||
-        local_need_htp_response_body != need_htp_response_body) {
-        SCLogInfo("===== New ruleset requires enabling htp features that "
-                  "can't be enabled at runtime.  You will have to restart "
-                  "engine to load the new ruleset =====");
-        DetectEngineCtxFree(de_ctx);
-        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-
-        TmThreadsSetFlag(tv_local, THV_CLOSED);
-
-        pthread_exit(NULL);
     }
 
     SCThresholdConfInitContext(de_ctx, NULL);
@@ -192,6 +449,7 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
     DetectEngineThreadCtx *old_det_ctx[no_of_detect_tvs];
     DetectEngineThreadCtx *new_det_ctx[no_of_detect_tvs];
+    ThreadVars *detect_tvs[no_of_detect_tvs];
 
     /* all receive threads are part of packet processing threads */
     tv = tv_root[TVT_PPT];
@@ -208,6 +466,7 @@ static void *DetectEngineLiveRuleSwap(void *arg)
             }
 
             old_det_ctx[i] = SC_ATOMIC_GET(slots->slot_data);
+            detect_tvs[i] = tv;
 
             DetectEngineThreadCtx *det_ctx = NULL;
             DetectEngineThreadCtxInitForLiveRuleSwap(tv, (void *)de_ctx,
@@ -220,7 +479,7 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
             SCLogDebug("swapping new det_ctx - %p with older one - %p", det_ctx,
                        SC_ATOMIC_GET(slots->slot_data));
-            SC_ATOMIC_SET(slots->slot_data, det_ctx);
+            (void)SC_ATOMIC_SET(slots->slot_data, det_ctx);
 
             slots = slots->slot_next;
         }
@@ -235,12 +494,28 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
     for (i = 0; i < no_of_detect_tvs; i++) {
         int break_out = 0;
+        int pseudo_pkt_inserted = 0;
+        usleep(1000);
         while (SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) != 1) {
             if (suricata_ctl_flags != 0) {
                 break_out = 1;
                 break;
             }
 
+            if (pseudo_pkt_inserted == 0) {
+                pseudo_pkt_inserted = 1;
+                if (detect_tvs[i]->inq != NULL) {
+                    Packet *p = PacketGetFromAlloc();
+                    if (p != NULL) {
+                        PacketQueue *q = &trans_q[detect_tvs[i]->inq->id];
+                        SCMutexLock(&q->mutex_q);
+
+                        PacketEnqueue(q, p);
+                        SCCondSignal(&q->cond_q);
+                        SCMutexUnlock(&q->mutex_q);
+                    }
+                }
+            }
             usleep(1000);
         }
         if (break_out)
@@ -286,6 +561,8 @@ static void *DetectEngineLiveRuleSwap(void *arg)
     }
     DetectEngineCtxFree(old_de_ctx);
 
+    SRepReloadComplete();
+
     /* reset the handler */
     UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
 
@@ -294,6 +571,7 @@ static void *DetectEngineLiveRuleSwap(void *arg)
     SCLogInfo("===== Live rule swap DONE =====");
 
     pthread_exit(NULL);
+    return NULL;
 }
 
 void DetectEngineSpawnLiveRuleSwapMgmtThread(void)
@@ -308,6 +586,9 @@ void DetectEngineSpawnLiveRuleSwapMgmtThread(void)
         SCLogError(SC_ERR_THREAD_CREATE, "Live rule swap thread spawn failed");
         exit(EXIT_FAILURE);
     }
+
+    TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
+
     if (TmThreadSpawn(tv) != 0) {
         SCLogError(SC_ERR_THREAD_SPAWN, "TmThreadSpawn failed for "
                    "DetectEngineLiveRuleSwap");
@@ -356,7 +637,7 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     char *insp_recursion_limit = NULL;
 
     de_ctx = SCMalloc(sizeof(DetectEngineCtx));
-    if (de_ctx == NULL)
+    if (unlikely(de_ctx == NULL))
         goto error;
 
     memset(de_ctx,0,sizeof(DetectEngineCtx));
@@ -419,9 +700,22 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
 
     de_ctx->id = detect_engine_ctx_id++;
 
+    /* init iprep... ignore errors for now */
+    (void)SRepInit(de_ctx);
+
     return de_ctx;
 error:
     return NULL;
+}
+
+static void DetectEngineCtxFreeThreadKeywordData(DetectEngineCtx *de_ctx) {
+    DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
+    while (item) {
+        DetectEngineThreadKeywordCtxItem *next = item->next;
+        SCFree(item);
+        item = next;
+    }
+    de_ctx->keyword_list = NULL;
 }
 
 void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
@@ -429,6 +723,12 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
     if (de_ctx == NULL)
         return;
 
+#ifdef PROFILING
+    if (de_ctx->profile_ctx != NULL) {
+        SCProfilingRuleDestroyCtx(de_ctx->profile_ctx);
+        de_ctx->profile_ctx = NULL;
+    }
+#endif
 
     /* Normally the hashes are freed elsewhere, but
      * to be sure look at them again here.
@@ -460,6 +760,7 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
         MpmFactoryDeRegisterAllMpmCtxProfiles(de_ctx);
     }
 
+    DetectEngineCtxFreeThreadKeywordData(de_ctx);
     SCFree(de_ctx);
     //DetectAddressGroupPrintMemory();
     //DetectSigGroupPrintMemory();
@@ -492,7 +793,7 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
 
     if (de_ctx_custom != NULL) {
         TAILQ_FOREACH(opt, &de_ctx_custom->head, next) {
-            if (strncmp(opt->val, "profile", 3) == 0) {
+            if (strcmp(opt->val, "profile") == 0) {
                 de_ctx_profile = opt->head.tqh_first->val;
             } else if (strcmp(opt->val, "sgh-mpm-context") == 0) {
                 sgh_mpm_context = opt->head.tqh_first->val;
@@ -501,13 +802,13 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
     }
 
     if (de_ctx_profile != NULL) {
-        if (strncmp(de_ctx_profile, "low", 3) == 0) {
+        if (strcmp(de_ctx_profile, "low") == 0) {
             profile = ENGINE_PROFILE_LOW;
-        } else if (strncmp(de_ctx_profile, "medium", 6) == 0) {
+        } else if (strcmp(de_ctx_profile, "medium") == 0) {
             profile = ENGINE_PROFILE_MEDIUM;
-        } else if (strncmp(de_ctx_profile, "high", 4) == 0) {
+        } else if (strcmp(de_ctx_profile, "high") == 0) {
             profile = ENGINE_PROFILE_HIGH;
-        } else if (strncmp(de_ctx_profile, "custom", 4) == 0) {
+        } else if (strcmp(de_ctx_profile, "custom") == 0) {
             profile = ENGINE_PROFILE_CUSTOM;
         }
 
@@ -538,6 +839,10 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
                       "%s", sgh_mpm_context);
            exit(EXIT_FAILURE);
         }
+    }
+
+    if (run_mode == RUNMODE_UNITTEST) {
+        de_ctx->sgh_mpm_context = ENGINE_SGH_MPM_FACTORY_CONTEXT_FULL;
     }
 
     opt = NULL;
@@ -684,13 +989,54 @@ void DetectEngineResetMaxSigId(DetectEngineCtx *de_ctx) {
     de_ctx->signum = 0;
 }
 
+static int DetectEngineThreadCtxInitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+    if (de_ctx->keyword_id > 0) {
+        det_ctx->keyword_ctxs_array = SCMalloc(de_ctx->keyword_id * sizeof(void *));
+        if (det_ctx->keyword_ctxs_array == NULL) {
+            SCLogError(SC_ERR_DETECT_PREPARE, "setting up thread local detect ctx");
+            return TM_ECODE_FAILED;
+        }
+
+        memset(det_ctx->keyword_ctxs_array, 0x00, de_ctx->keyword_id * sizeof(void *));
+
+        det_ctx->keyword_ctxs_size = de_ctx->keyword_id;
+
+        DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
+        while (item) {
+            det_ctx->keyword_ctxs_array[item->id] = item->InitFunc(item->data);
+            if (det_ctx->keyword_ctxs_array[item->id] == NULL) {
+                SCLogError(SC_ERR_DETECT_PREPARE, "setting up thread local detect ctx "
+                        "for keyword \"%s\" failed", item->name);
+                return TM_ECODE_FAILED;
+            }
+            item = item->next;
+        }
+    }
+    return TM_ECODE_OK;
+}
+
+static void DetectEngineThreadCtxDeinitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+    if (de_ctx->keyword_id > 0) {
+        DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
+        while (item) {
+            if (det_ctx->keyword_ctxs_array[item->id] != NULL)
+                item->FreeFunc(det_ctx->keyword_ctxs_array[item->id]);
+
+            item = item->next;
+        }
+        det_ctx->keyword_ctxs_size = 0;
+        SCFree(det_ctx->keyword_ctxs_array);
+        det_ctx->keyword_ctxs_array = NULL;
+    }
+}
+
 TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
     DetectEngineCtx *de_ctx = (DetectEngineCtx *)initdata;
     if (de_ctx == NULL)
         return TM_ECODE_FAILED;
 
     DetectEngineThreadCtx *det_ctx = SCMalloc(sizeof(DetectEngineThreadCtx));
-    if (det_ctx == NULL)
+    if (unlikely(det_ctx == NULL))
         return TM_ECODE_FAILED;
     memset(det_ctx, 0, sizeof(DetectEngineThreadCtx));
 
@@ -751,6 +1097,11 @@ TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data) {
         return TM_ECODE_FAILED;
     }
 
+    DetectEngineThreadCtxInitKeywords(de_ctx, det_ctx);
+#ifdef PROFILING
+    SCProfilingRuleThreadSetup(de_ctx->profile_ctx, det_ctx);
+#endif
+
     SC_ATOMIC_INIT(det_ctx->so_far_used_by_detect);
 
     *data = (void *)det_ctx;
@@ -772,7 +1123,7 @@ static TmEcode DetectEngineThreadCtxInitForLiveRuleSwap(ThreadVars *tv, void *in
         return TM_ECODE_FAILED;
 
     DetectEngineThreadCtx *det_ctx = SCMalloc(sizeof(DetectEngineThreadCtx));
-    if (det_ctx == NULL)
+    if (unlikely(det_ctx == NULL))
         return TM_ECODE_FAILED;
     memset(det_ctx, 0, sizeof(DetectEngineThreadCtx));
 
@@ -831,6 +1182,11 @@ static TmEcode DetectEngineThreadCtxInitForLiveRuleSwap(ThreadVars *tv, void *in
         return TM_ECODE_FAILED;
     }
 
+    DetectEngineThreadCtxInitKeywords(de_ctx, det_ctx);
+#ifdef PROFILING
+    SCProfilingRuleThreadSetup(de_ctx->profile_ctx, det_ctx);
+#endif
+
     SC_ATOMIC_INIT(det_ctx->so_far_used_by_detect);
 
     *data = (void *)det_ctx;
@@ -845,6 +1201,10 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
         SCLogWarning(SC_ERR_INVALID_ARGUMENTS, "argument \"data\" NULL");
         return TM_ECODE_OK;
     }
+
+#ifdef PROFILING
+    SCProfilingRuleThreadCleanup(det_ctx);
+#endif
 
     DetectEngineIPOnlyThreadDeinit(&det_ctx->io_ctx);
 
@@ -885,6 +1245,7 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
         SCFree(det_ctx->hcbd);
     }
 
+    DetectEngineThreadCtxDeinitKeywords(det_ctx->de_ctx, det_ctx);
     SCFree(det_ctx);
 
     return TM_ECODE_OK;
@@ -895,6 +1256,69 @@ void DetectEngineThreadCtxInfo(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
     PatternMatchThreadPrint(&det_ctx->mtc, det_ctx->de_ctx->mpm_matcher);
     PatternMatchThreadPrint(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
 }
+
+/** \brief Register Thread keyword context Funcs
+ *
+ *  \param de_ctx detection engine to register in
+ *  \param name keyword name for error printing
+ *  \param InitFunc function ptr
+ *  \param data keyword init data to pass to Func
+ *  \param FreeFunc function ptr
+ *  \param mode 0 normal (ctx per keyword instance) 1 shared (one ctx per det_ct)
+ *
+ *  \retval id for retrieval of ctx at runtime
+ *  \retval -1 on error
+ *
+ *  \note make sure "data" remains valid and it free'd elsewhere. It's
+ *        recommended to store it in the keywords global ctx so that
+ *        it's freed when the de_ctx is freed.
+ */
+int DetectRegisterThreadCtxFuncs(DetectEngineCtx *de_ctx, const char *name, void *(*InitFunc)(void *), void *data, void (*FreeFunc)(void *), int mode) {
+    BUG_ON(de_ctx == NULL || InitFunc == NULL || FreeFunc == NULL || data == NULL);
+
+    if (mode) {
+        DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
+        while (item != NULL) {
+            if (strcmp(name, item->name) == 0) {
+                return item->id;
+            }
+
+            item = item->next;
+        }
+    }
+
+    DetectEngineThreadKeywordCtxItem *item = SCMalloc(sizeof(DetectEngineThreadKeywordCtxItem));
+    if (unlikely(item == NULL))
+        return -1;
+    memset(item, 0x00, sizeof(DetectEngineThreadKeywordCtxItem));
+
+    item->InitFunc = InitFunc;
+    item->FreeFunc = FreeFunc;
+    item->data = data;
+    item->name = name;
+
+    item->next = de_ctx->keyword_list;
+    de_ctx->keyword_list = item;
+    item->id = de_ctx->keyword_id++;
+
+    return item->id;
+}
+
+/** \brief Retrieve thread local keyword ctx by id
+ *
+ *  \param det_ctx detection engine thread ctx to retrieve the ctx from
+ *  \param id id of the ctx returned by DetectRegisterThreadCtxInitFunc at
+ *            keyword init.
+ *
+ *  \retval ctx or NULL on error
+ */
+void *DetectThreadCtxGetKeywordThreadCtx(DetectEngineThreadCtx *det_ctx, int id) {
+    if (id < 0 || id > det_ctx->keyword_ctxs_size || det_ctx->keyword_ctxs_array == NULL)
+        return NULL;
+
+    return det_ctx->keyword_ctxs_array[id];
+}
+
 
 /*************************************Unittest*********************************/
 
@@ -1067,6 +1491,309 @@ static int DetectEngineTest04(void)
     return result;
 }
 
+int DummyTestAppInspectionEngine01(ThreadVars *tv,
+                                   DetectEngineCtx *de_ctx,
+                                   DetectEngineThreadCtx *det_ctx,
+                                   Signature *sig,
+                                   Flow *f,
+                                   uint8_t flags,
+                                   void *alstate,
+                                   int32_t tx_id)
+{
+    return 0;
+}
+
+int DummyTestAppInspectionEngine02(ThreadVars *tv,
+                                   DetectEngineCtx *de_ctx,
+                                   DetectEngineThreadCtx *det_ctx,
+                                   Signature *sig,
+                                   Flow *f,
+                                   uint8_t flags,
+                                   void *alstate,
+                                   int32_t tx_id)
+{
+    return 0;
+}
+
+int DetectEngineTest05(void)
+{
+    int result = 0;
+
+    DetectEngineAppInspectionEngine *engine_list[ALPROTO_MAX][2];
+    memset(engine_list, 0, sizeof(engine_list));
+
+    DetectEngineRegisterAppInspectionEngine(ALPROTO_HTTP,
+                                            0 /* STREAM_TOSERVER */,
+                                            DETECT_SM_LIST_UMATCH,
+                                            DE_STATE_FLAG_URI_INSPECT,
+                                            DE_STATE_FLAG_URI_MATCH,
+                                            DummyTestAppInspectionEngine01,
+                                            engine_list);
+
+    int alproto = ALPROTO_UNKNOWN + 1;
+    for ( ; alproto < ALPROTO_FAILED; alproto++) {
+        int dir = 0;
+        for ( ; dir < 2; dir++) {
+            if (alproto == ALPROTO_HTTP && dir == 0) {
+                if (engine_list[alproto][dir]->next != NULL) {
+                    printf("more than one entry found\n");
+                    goto end;
+                }
+
+                DetectEngineAppInspectionEngine *engine = engine_list[alproto][dir];
+
+                if (engine->alproto != alproto ||
+                    engine->dir != dir ||
+                    engine->sm_list != DETECT_SM_LIST_UMATCH ||
+                    engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
+                    engine->match_flags != DE_STATE_FLAG_URI_MATCH ||
+                    engine->Callback != DummyTestAppInspectionEngine01) {
+                    printf("failed for http and dir(0-toserver)\n");
+                    goto end;
+                }
+            } /* if (alproto == ALPROTO_HTTP && dir == 0) */
+
+            if (alproto == ALPROTO_HTTP && dir == 1) {
+                if (engine_list[alproto][dir] != NULL) {
+                    printf("failed for http and dir(1-toclient)\n");
+                    goto end;
+                }
+            }
+
+            if (alproto != ALPROTO_HTTP &&
+                engine_list[alproto][0] != NULL &&
+                engine_list[alproto][1] != NULL) {
+                printf("failed for protocol %d\n", alproto);
+                goto end;
+            }
+        } /* for ( ; dir < 2 ..)*/
+    } /* for ( ; alproto < ALPROTO_FAILED; ..) */
+
+    result = 1;
+ end:
+    return result;
+}
+
+int DetectEngineTest06(void)
+{
+    int result = 0;
+
+    DetectEngineAppInspectionEngine *engine_list[ALPROTO_MAX][2];
+    memset(engine_list, 0, sizeof(engine_list));
+
+    DetectEngineRegisterAppInspectionEngine(ALPROTO_HTTP,
+                                            0 /* STREAM_TOSERVER */,
+                                            DETECT_SM_LIST_UMATCH,
+                                            DE_STATE_FLAG_URI_INSPECT,
+                                            DE_STATE_FLAG_URI_MATCH,
+                                            DummyTestAppInspectionEngine01,
+                                            engine_list);
+    DetectEngineRegisterAppInspectionEngine(ALPROTO_HTTP,
+                                            1 /* STREAM_TOCLIENT */,
+                                            DETECT_SM_LIST_UMATCH,
+                                            DE_STATE_FLAG_URI_INSPECT,
+                                            DE_STATE_FLAG_URI_MATCH,
+                                            DummyTestAppInspectionEngine02,
+                                            engine_list);
+
+    int alproto = ALPROTO_UNKNOWN + 1;
+    for ( ; alproto < ALPROTO_FAILED; alproto++) {
+        int dir = 0;
+        for ( ; dir < 2; dir++) {
+            if (alproto == ALPROTO_HTTP && dir == 0) {
+                if (engine_list[alproto][dir]->next != NULL) {
+                    printf("more than one entry found\n");
+                    goto end;
+                }
+
+                DetectEngineAppInspectionEngine *engine = engine_list[alproto][dir];
+
+                if (engine->alproto != alproto ||
+                    engine->dir != dir ||
+                    engine->sm_list != DETECT_SM_LIST_UMATCH ||
+                    engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
+                    engine->match_flags != DE_STATE_FLAG_URI_MATCH ||
+                    engine->Callback != DummyTestAppInspectionEngine01) {
+                    printf("failed for http and dir(0-toserver)\n");
+                    goto end;
+                }
+            } /* if (alproto == ALPROTO_HTTP && dir == 0) */
+
+            if (alproto == ALPROTO_HTTP && dir == 1) {
+                if (engine_list[alproto][dir]->next != NULL) {
+                    printf("more than one entry found\n");
+                    goto end;
+                }
+
+                DetectEngineAppInspectionEngine *engine = engine_list[alproto][dir];
+
+                if (engine->alproto != alproto ||
+                    engine->dir != dir ||
+                    engine->sm_list != DETECT_SM_LIST_UMATCH ||
+                    engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
+                    engine->match_flags != DE_STATE_FLAG_URI_MATCH ||
+                    engine->Callback != DummyTestAppInspectionEngine02) {
+                    printf("failed for http and dir(0-toclient)\n");
+                    goto end;
+                }
+            } /* if (alproto == ALPROTO_HTTP && dir == 1) */
+
+            if (alproto != ALPROTO_HTTP &&
+                engine_list[alproto][0] != NULL &&
+                engine_list[alproto][1] != NULL) {
+                printf("failed for protocol %d\n", alproto);
+                goto end;
+            }
+        } /* for ( ; dir < 2 ..)*/
+    } /* for ( ; alproto < ALPROTO_FAILED; ..) */
+
+    result = 1;
+ end:
+    return result;
+}
+
+int DetectEngineTest07(void)
+{
+    int result = 0;
+
+    DetectEngineAppInspectionEngine *engine_list[ALPROTO_MAX][2];
+    memset(engine_list, 0, sizeof(engine_list));
+
+    struct test_data_t {
+        int32_t sm_list;
+        uint32_t inspect_flags;
+        uint32_t match_flags;
+        uint16_t dir;
+        int (*Callback)(ThreadVars *tv,
+                        DetectEngineCtx *de_ctx,
+                        DetectEngineThreadCtx *det_ctx,
+                        Signature *sig, Flow *f,
+                        uint8_t flags, void *alstate,
+                        int32_t tx_id);
+
+    };
+
+    struct test_data_t data[] = {
+        { DETECT_SM_LIST_UMATCH,
+          DE_STATE_FLAG_URI_INSPECT,
+          DE_STATE_FLAG_URI_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HCBDMATCH,
+          DE_STATE_FLAG_HCBD_INSPECT,
+          DE_STATE_FLAG_HCBD_MATCH,
+          0,
+          DummyTestAppInspectionEngine02 },
+        { DETECT_SM_LIST_HSBDMATCH,
+          DE_STATE_FLAG_HSBD_INSPECT,
+          DE_STATE_FLAG_HSBD_MATCH,
+          1,
+          DummyTestAppInspectionEngine02 },
+        { DETECT_SM_LIST_HHDMATCH,
+          DE_STATE_FLAG_HHD_INSPECT,
+          DE_STATE_FLAG_HHD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HRHDMATCH,
+          DE_STATE_FLAG_HRHD_INSPECT,
+          DE_STATE_FLAG_HRHD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HMDMATCH,
+          DE_STATE_FLAG_HMD_INSPECT,
+          DE_STATE_FLAG_HMD_MATCH,
+          0,
+          DummyTestAppInspectionEngine02 },
+        { DETECT_SM_LIST_HCDMATCH,
+          DE_STATE_FLAG_HCD_INSPECT,
+          DE_STATE_FLAG_HCD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HRUDMATCH,
+          DE_STATE_FLAG_HRUD_INSPECT,
+          DE_STATE_FLAG_HRUD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_FILEMATCH,
+          DE_STATE_FLAG_FILE_TS_INSPECT,
+          DE_STATE_FLAG_FILE_TS_MATCH,
+          0,
+          DummyTestAppInspectionEngine02 },
+        { DETECT_SM_LIST_FILEMATCH,
+          DE_STATE_FLAG_FILE_TC_INSPECT,
+          DE_STATE_FLAG_FILE_TC_MATCH,
+          1,
+          DummyTestAppInspectionEngine02 },
+        { DETECT_SM_LIST_HSMDMATCH,
+          DE_STATE_FLAG_HSMD_INSPECT,
+          DE_STATE_FLAG_HSMD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HSCDMATCH,
+          DE_STATE_FLAG_HSCD_INSPECT,
+          DE_STATE_FLAG_HSCD_MATCH,
+          0,
+          DummyTestAppInspectionEngine01 },
+        { DETECT_SM_LIST_HUADMATCH,
+          DE_STATE_FLAG_HUAD_INSPECT,
+          DE_STATE_FLAG_HUAD_MATCH,
+          0,
+          DummyTestAppInspectionEngine02 },
+    };
+
+    size_t i = 0;
+    for ( ; i < sizeof(data) / sizeof(struct test_data_t); i++) {
+        DetectEngineRegisterAppInspectionEngine(ALPROTO_HTTP,
+                                                data[i].dir /* STREAM_TOCLIENT */,
+                                                data[i].sm_list,
+                                                data[i].inspect_flags,
+                                                data[i].match_flags,
+                                                data[i].Callback,
+                                                engine_list);
+    }
+
+#if 0
+    DetectEnginePrintAppInspectionEngines(engine_list);
+#endif
+
+    int alproto = ALPROTO_UNKNOWN + 1;
+    for ( ; alproto < ALPROTO_FAILED; alproto++) {
+        int dir = 0;
+        for ( ; dir < 2; dir++) {
+            if (alproto == ALPROTO_HTTP) {
+                DetectEngineAppInspectionEngine *engine = engine_list[alproto][dir];
+
+                size_t i = 0;
+                for ( ; i < (sizeof(data) / sizeof(struct test_data_t)); i++) {
+                    if (data[i].dir != dir)
+                        continue;
+
+                    if (engine->alproto != ALPROTO_HTTP ||
+                        engine->dir != data[i].dir ||
+                        engine->sm_list != data[i].sm_list ||
+                        engine->inspect_flags != data[i].inspect_flags ||
+                        engine->match_flags != data[i].match_flags ||
+                        engine->Callback != data[i].Callback) {
+                        printf("failed for http\n");
+                        goto end;
+                    }
+                    engine = engine->next;
+                }
+            } else {
+                if (engine_list[alproto][0] != NULL &&
+                    engine_list[alproto][1] != NULL) {
+                    printf("failed for protocol %d\n", alproto);
+                    goto end;
+                }
+            } /* else */
+        } /* for ( ; dir < 2; dir++) */
+    } /* for ( ; alproto < ALPROTO_FAILED; ..) */
+
+    result = 1;
+ end:
+    return result;
+}
+
 #endif
 
 void DetectEngineRegisterTests()
@@ -1077,6 +1804,9 @@ void DetectEngineRegisterTests()
     UtRegisterTest("DetectEngineTest02", DetectEngineTest02, 1);
     UtRegisterTest("DetectEngineTest03", DetectEngineTest03, 1);
     UtRegisterTest("DetectEngineTest04", DetectEngineTest04, 1);
+    UtRegisterTest("DetectEngineTest05", DetectEngineTest05, 1);
+    UtRegisterTest("DetectEngineTest06", DetectEngineTest06, 1);
+    UtRegisterTest("DetectEngineTest07", DetectEngineTest07, 1);
 #endif
 
     return;

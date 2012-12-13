@@ -34,6 +34,9 @@
 
 #include "util-debug.h"
 
+#include "stream-tcp.h"
+
+
 /* Need to get the DEvents[] array */
 #define DETECT_EVENTS
 
@@ -168,10 +171,14 @@ DetectEngineEventData *DetectEngineEventParse (char *rawstr)
     }
 
     de = SCMalloc(sizeof(DetectEngineEventData));
-    if (de == NULL)
+    if (unlikely(de == NULL))
         goto error;
 
     de->event = DEvents[i].code;
+
+    if (de->event == STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA) {
+        StreamTcpReassembleConfigEnableOverlapCheck();
+    }
     return de;
 
 error:
@@ -335,7 +342,7 @@ int EngineEventTestParse05 (void) {
  */
 int EngineEventTestParse06 (void) {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     int ret = 0;

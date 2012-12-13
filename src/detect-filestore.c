@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2012 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -20,6 +20,7 @@
  *
  * \author Victor Julien <victor@inliniac.net>
  *
+ * Implements the filestore keyword
  */
 
 #include "suricata-common.h"
@@ -57,7 +58,8 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectFilestoreMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
+static int DetectFilestoreMatch (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, File *, Signature *, SigMatch *);
 static int DetectFilestoreSetup (DetectEngineCtx *, Signature *, char *);
 static void DetectFilestoreFree(void *);
 
@@ -66,8 +68,9 @@ static void DetectFilestoreFree(void *);
  */
 void DetectFilestoreRegister(void) {
     sigmatch_table[DETECT_FILESTORE].name = "filestore";
-    sigmatch_table[DETECT_FILESTORE].Match = NULL;
-    sigmatch_table[DETECT_FILESTORE].AppLayerMatch = DetectFilestoreMatch;
+    sigmatch_table[DETECT_FILESTORE].desc = "stores files to disk if the rule matched";
+    sigmatch_table[DETECT_FILESTORE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filestore";
+    sigmatch_table[DETECT_FILESTORE].FileMatch = DetectFilestoreMatch;
     sigmatch_table[DETECT_FILESTORE].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILESTORE].Setup = DetectFilestoreSetup;
     sigmatch_table[DETECT_FILESTORE].Free  = DetectFilestoreFree;
@@ -134,9 +137,9 @@ static int FilestorePostMatchWithOptions(Packet *p, Flow *f, DetectFilestoreData
         case FILESTORE_SCOPE_DEFAULT:
             if (rule_dir) {
                 this_file = 1;
-            } else if (p->flowflags & FLOW_PKT_TOCLIENT && toclient_dir) {
+            } else if ((p->flowflags & FLOW_PKT_TOCLIENT) && toclient_dir) {
                 this_file = 1;
-            } else if (p->flowflags & FLOW_PKT_TOSERVER && toserver_dir) {
+            } else if ((p->flowflags & FLOW_PKT_TOSERVER) && toserver_dir) {
                 this_file = 1;
             }
             break;
@@ -186,6 +189,10 @@ static int FilestorePostMatchWithOptions(Packet *p, Flow *f, DetectFilestoreData
 
 /**
  *  \brief post-match function for filestore
+ *
+ *  \param t thread local vars
+ *  \param det_ctx pattern matcher thread local data
+ *  \param p packet
  *
  *  The match function for filestore records store candidates in the det_ctx.
  *  When we are sure all parts of the signature matched, we run this function
@@ -240,10 +247,13 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
 /**
  * \brief match the specified filestore
  *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectFilestoreData
+ * \param t thread local vars
+ * \param det_ctx pattern matcher thread local data
+ * \param f *LOCKED* flow
+ * \param flags direction flags
+ * \param file file being inspected
+ * \param s signature being inspected
+ * \param m sigmatch that we will cast into DetectFilestoreData
  *
  * \retval 0 no match
  * \retval 1 match
@@ -251,8 +261,8 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
  * \todo when we start supporting more protocols, the logic in this function
  *       needs to be put behind a api.
  */
-int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-        uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
+        uint8_t flags, File *file, Signature *s, SigMatch *m)
 {
     uint16_t file_id = 0;
 
@@ -264,7 +274,6 @@ int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f
 
     /* file can be NULL when a rule with filestore scope > file
      * matches. */
-    File *file = (File *)state;
     if (file != NULL) {
         file_id = file->file_id;
     }
@@ -345,7 +354,7 @@ static int DetectFilestoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *st
         }
 
         fd = SCMalloc(sizeof(DetectFilestoreData));
-        if (fd == NULL)
+        if (unlikely(fd == NULL))
             goto error;
         memset(fd, 0x00, sizeof(DetectFilestoreData));
 

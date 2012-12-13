@@ -39,8 +39,12 @@
 #include <htp/htp.h>
 
 /* default request body limit */
-#define HTP_CONFIG_DEFAULT_REQUEST_BODY_LIMIT       4096U
-#define HTP_CONFIG_DEFAULT_RESPONSE_BODY_LIMIT      4096U
+#define HTP_CONFIG_DEFAULT_REQUEST_BODY_LIMIT           4096U
+#define HTP_CONFIG_DEFAULT_RESPONSE_BODY_LIMIT          4096U
+#define HTP_CONFIG_DEFAULT_REQUEST_INSPECT_MIN_SIZE     32768U
+#define HTP_CONFIG_DEFAULT_REQUEST_INSPECT_WINDOW       4096U
+#define HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_MIN_SIZE    32768U
+#define HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_WINDOW      4096U
 
 /** a boundary should be smaller in size */
 #define HTP_BOUNDARY_MAX                            200U
@@ -108,6 +112,7 @@ enum {
     HTTP_DECODER_EVENT_INVALID_RESPONSE_FIELD_FOLDING,
     HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG,
     HTTP_DECODER_EVENT_RESPONSE_FIELD_TOO_LONG,
+    HTTP_DECODER_EVENT_REQUEST_SERVER_PORT_TCP_PORT_MISMATCH,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
@@ -121,6 +126,22 @@ enum {
                                              chunks */
 #define HTP_PCRE_HAS_MATCH      0x02    /**< Flag to indicate that the chunks
                                              matched on some rule */
+
+/** Need a linked list in order to keep track of these */
+typedef struct HTPCfgRec_ {
+    htp_cfg_t           *cfg;
+    struct HTPCfgRec_   *next;
+
+    /** max size of the client body we inspect */
+    uint32_t            request_body_limit;
+    uint32_t            response_body_limit;
+
+    uint32_t            request_inspect_min_size;
+    uint32_t            request_inspect_window;
+
+    uint32_t            response_inspect_min_size;
+    uint32_t            response_inspect_window;
+} HTPCfgRec;
 
 /** Struct used to hold chunks of a body on a request */
 struct HtpBodyChunk_ {
@@ -197,21 +218,22 @@ typedef struct HtpState_ {
     uint16_t transaction_cnt;
     uint16_t transaction_done;
     uint16_t store_tx_id;
-    uint32_t request_body_limit;
-    uint32_t response_body_limit;
     FileContainer *files_ts;
     FileContainer *files_tc;
+    struct HTPCfgRec_ *cfg;
 } HtpState;
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */
-extern uint8_t need_htp_request_body;
+#define HTP_REQUIRE_REQUEST_BODY        (1 << 0)
 /** part of the engine needs the request body multipart header (e.g. filename
  *  and / or fileext keywords) */
-extern uint8_t need_htp_request_multipart_hdr;
+#define HTP_REQUIRE_REQUEST_MULTIPART   (1 << 1)
 /** part of the engine needs the request file (e.g. log-file module) */
-extern uint8_t need_htp_request_file;
+#define HTP_REQUIRE_REQUEST_FILE        (1 << 2)
 /** part of the engine needs the request body (e.g. file_data keyword) */
-extern uint8_t need_htp_response_body;
+#define HTP_REQUIRE_RESPONSE_BODY       (1 << 3)
+
+SC_ATOMIC_DECLARE(uint32_t, htp_config_flags);
 
 void RegisterHTPParsers(void);
 void HTPParserRegisterTests(void);
@@ -224,7 +246,6 @@ int HTPCallbackRequestBodyData(htp_tx_data_t *);
 int HtpTransactionGetLoggableId(Flow *);
 void HtpBodyPrint(HtpBody *);
 void HtpBodyFree(HtpBody *);
-void AppLayerHtpRegisterExtraCallbacks(void);
 /* To free the state from unittests using app-layer-htp */
 void HTPStateFree(void *);
 void AppLayerHtpEnableRequestBodyCallback(void);

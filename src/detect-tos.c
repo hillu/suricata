@@ -153,7 +153,7 @@ DetectTosData *DetectTosParse(char *arg)
         negated = 1;
     }
 
-    while (isspace(*str_ptr))
+    while (isspace((unsigned char)*str_ptr))
         str_ptr++;
 
     if (*str_ptr == 'x' || *str_ptr == 'X') {
@@ -175,7 +175,7 @@ DetectTosData *DetectTosParse(char *arg)
     }
 
     tosd = SCMalloc(sizeof(DetectTosData));
-    if (tosd == NULL)
+    if (unlikely(tosd == NULL))
         goto error;
     tosd->tos = (uint8_t)tos;
     tosd->negated = negated;

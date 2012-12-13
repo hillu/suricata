@@ -163,6 +163,30 @@ static void LogFileMetaGetReferer(FILE *fp, Packet *p, File *ff) {
     fprintf(fp, "<unknown>");
 }
 
+static void LogFileMetaGetUserAgent(FILE *fp, Packet *p, File *ff) {
+    HtpState *htp_state = (HtpState *)p->flow->alstate;
+    if (htp_state != NULL) {
+        htp_tx_t *tx = list_get(htp_state->connp->conn->transactions, ff->txid);
+        if (tx != NULL) {
+            table_t *headers;
+            headers = tx->request_headers;
+            htp_header_t *h = NULL;
+
+            table_iterator_reset(headers);
+            while (table_iterator_next(headers, (void **)&h) != NULL) {
+                if (bstr_len(h->name) >= 10 &&
+                        SCMemcmpLowercase((uint8_t *)"user-agent", (uint8_t *)bstr_ptr(h->name), bstr_len(h->name)) == 0) {
+                    PrintRawJsonFp(fp, (uint8_t *)bstr_ptr(h->value),
+                        bstr_len(h->value));
+                    return;
+                }
+            }
+        }
+    }
+
+    fprintf(fp, "<unknown>");
+}
+
 /**
  *  \internal
  *  \brief Write meta data on a single line json record
@@ -225,6 +249,10 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, Packet *p, File *ff, i
 
     fprintf(fp, "\"http_referer\": \"");
     LogFileMetaGetReferer(fp, p, ff);
+    fprintf(fp, "\", ");
+
+    fprintf(fp, "\"http_user_agent\": \"");
+    LogFileMetaGetUserAgent(fp, p, ff);
     fprintf(fp, "\", ");
 
     fprintf(fp, "\"filename\": \"");
@@ -301,7 +329,7 @@ static TmEcode LogFileLogWrap(ThreadVars *tv, Packet *p, void *data, PacketQueue
                 continue;
 
             if (FileForceMagic() && ff->magic == NULL) {
-                FilemagicLookup(ff);
+                FilemagicGlobalLookup(ff);
             }
 
             SCLogDebug("ff %p", ff);
@@ -363,7 +391,7 @@ TmEcode LogFileLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
 TmEcode LogFileLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     LogFileLogThread *aft = SCMalloc(sizeof(LogFileLogThread));
-    if (aft == NULL)
+    if (unlikely(aft == NULL))
         return TM_ECODE_FAILED;
     memset(aft, 0, sizeof(LogFileLogThread));
 
@@ -422,7 +450,7 @@ static OutputCtx *LogFileLogInitCtx(ConfNode *conf)
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (output_ctx == NULL)
+    if (unlikely(output_ctx == NULL))
         return NULL;
 
     output_ctx->data = logfile_ctx;

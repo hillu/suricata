@@ -136,7 +136,7 @@ static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
 
     if (varcontent[0] == '\"' && varcontent[strlen(varcontent)-1] == '\"') {
         str = SCStrdup(varcontent+1);
-        if (str == NULL) {
+        if (unlikely(str == NULL)) {
             return -1;
         }
         str[strlen(varcontent)-2] = '\0';
@@ -150,7 +150,7 @@ static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
     }
 
     cd = SCMalloc(sizeof(DetectPktvarData));
-    if (cd == NULL)
+    if (unlikely(cd == NULL))
         goto error;
 
     char converted = 0;
@@ -168,7 +168,7 @@ static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
                 }
             } else {
                 if (bin) {
-                    if (isdigit(str[i]) ||
+                    if (isdigit((unsigned char)str[i]) ||
                         str[i] == 'A' || str[i] == 'a' ||
                         str[i] == 'B' || str[i] == 'b' ||
                         str[i] == 'C' || str[i] == 'c' ||
@@ -199,8 +199,8 @@ static int DetectPktvarSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
 #ifdef DEBUG
     if (SCLogDebugEnabled()) {
         for (i = 0; i < x; i++) {
-            if (isprint(str[i])) printf("%c", str[i]);
-            else                 printf("\\x%02u", str[i]);
+            if (isprint((unsigned char)str[i])) printf("%c", str[i]);
+            else printf("\\x%02u", str[i]);
         }
         printf("\n");
     }

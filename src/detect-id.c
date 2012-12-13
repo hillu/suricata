@@ -59,6 +59,8 @@ void DetectIdFree(void *);
  */
 void DetectIdRegister (void) {
     sigmatch_table[DETECT_ID].name = "id";
+    sigmatch_table[DETECT_ID].desc = "match on a specific IP ID value";
+    sigmatch_table[DETECT_ID].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Id";
     sigmatch_table[DETECT_ID].Match = DetectIdMatch;
     sigmatch_table[DETECT_ID].Setup = DetectIdSetup;
     sigmatch_table[DETECT_ID].Free  = DetectIdFree;
@@ -161,14 +163,14 @@ DetectIdData *DetectIdParse (char *idstr)
 
         /* We have a correct id option */
         id_d = SCMalloc(sizeof(DetectIdData));
-        if (id_d == NULL)
+        if (unlikely(id_d == NULL))
             goto error;
 
         orig = SCStrdup((char*)str_ptr);
-        tmp_str=orig;
-        if (tmp_str == NULL) {
+        if (unlikely(orig == NULL)) {
             goto error;
         }
+        tmp_str=orig;
 
         /* Let's see if we need to scape "'s */
         if (tmp_str[0] == '"')

@@ -745,7 +745,7 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
             /* fresh record */
             case 0:
                 /* only SSLv2, has one of the top 2 bits set */
-                if (input[0] & 0x80 || input[0] & 0x40) {
+                if ((input[0] & 0x80) || (input[0] & 0x40)) {
                     SCLogDebug("SSLv2 detected");
                     ssl_state->curr_connp->version = SSL_VERSION_2;
                     retval = SSLv2Decode(direction, ssl_state, pstate, input,
@@ -855,9 +855,12 @@ int SSLParseServerRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
 void *SSLStateAlloc(void)
 {
     void *ssl_state = SCMalloc(sizeof(SSLState));
-    if (ssl_state == NULL)
+    if (unlikely(ssl_state == NULL))
         return NULL;
     memset(ssl_state, 0, sizeof(SSLState));
+    ((SSLState*)ssl_state)->client_connp.cert_log_flag = 0;
+    ((SSLState*)ssl_state)->server_connp.cert_log_flag = 0;
+    TAILQ_INIT(&((SSLState*)ssl_state)->server_connp.certs);
 
     return ssl_state;
 }
@@ -869,6 +872,7 @@ void *SSLStateAlloc(void)
 void SSLStateFree(void *p)
 {
     SSLState *ssl_state = (SSLState *)p;
+    SSLCertsChain *item;
 
     if (ssl_state->client_connp.trec)
         SCFree(ssl_state->client_connp.trec);
@@ -876,6 +880,8 @@ void SSLStateFree(void *p)
         SCFree(ssl_state->client_connp.cert0_subject);
     if (ssl_state->client_connp.cert0_issuerdn)
         SCFree(ssl_state->client_connp.cert0_issuerdn);
+    if (ssl_state->client_connp.cert0_fingerprint)
+        SCFree(ssl_state->client_connp.cert0_fingerprint);
 
     if (ssl_state->server_connp.trec)
         SCFree(ssl_state->server_connp.trec);
@@ -883,6 +889,15 @@ void SSLStateFree(void *p)
         SCFree(ssl_state->server_connp.cert0_subject);
     if (ssl_state->server_connp.cert0_issuerdn)
         SCFree(ssl_state->server_connp.cert0_issuerdn);
+    if (ssl_state->server_connp.cert0_fingerprint)
+        SCFree(ssl_state->server_connp.cert0_fingerprint);
+
+    /* Free certificate chain */
+    while ((item = TAILQ_FIRST(&ssl_state->server_connp.certs))) {
+        TAILQ_REMOVE(&ssl_state->server_connp.certs, item, next);
+        SCFree(item);
+    }
+    TAILQ_INIT(&ssl_state->server_connp.certs);
 
     SCFree(ssl_state);
 

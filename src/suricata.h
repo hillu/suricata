@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "1.3.5"
+#define PROG_VER "1.4"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -81,12 +81,16 @@
 
 #define DEFAULT_CONF_FILE CONFIG_DIR "/suricata.yaml"
 
+#define DEFAULT_PID_DIR LOCAL_STATE_DIR "/run/"
+#define DEFAULT_PID_BASENAME "suricata.pid"
+#define DEFAULT_PID_FILENAME DEFAULT_PID_DIR DEFAULT_PID_BASENAME
 
 /* runtime engine control flags */
-#define SURICATA_STOP    0x01   /**< gracefully stop the engine: process all
+#define SURICATA_STOP    (1 << 0)   /**< gracefully stop the engine: process all
                                      outstanding packets first */
-#define SURICATA_KILL    0x02   /**< shut down asap, discarding outstanding
+#define SURICATA_KILL    (1 << 1)   /**< shut down asap, discarding outstanding
                                      packets. */
+#define SURICATA_DONE    (1 << 2)   /**< packets capture ended */
 
 /* Engine stage/status*/
 enum {
@@ -139,12 +143,16 @@ extern char *conf_filename;
 
 void EngineStop(void);
 void EngineKill(void);
+void EngineDone(void);
 
 /* live rule swap required this to be made static */
 void SignalHandlerSigusr2(int);
 void SignalHandlerSigusr2EngineShutdown(int);
+void SignalHandlerSigusr2Idle(int sig);
 
 int RunmodeIsUnittests(void);
+
+extern int run_mode;
 
 #endif /* __SURICATA_H__ */
 

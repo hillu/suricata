@@ -39,9 +39,22 @@ typedef enum {
     CHECKSUM_VALIDATION_KERNEL,
 } ChecksumValidationMode;
 
+enum {
+    PKT_SRC_WIRE = 1,
+    PKT_SRC_DECODER_GRE,
+    PKT_SRC_DECODER_IPV4,
+    PKT_SRC_DECODER_IPV6,
+    PKT_SRC_DECODER_TEREDO,
+    PKT_SRC_DEFRAG,
+    PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO,
+    PKT_SRC_FFR_V2,
+    PKT_SRC_FFR_SHUTDOWN,
+};
+
 #include "source-nfq.h"
 #include "source-ipfw.h"
 #include "source-pcap.h"
+#include "source-af-packet.h"
 
 #include "action-globals.h"
 
@@ -355,9 +368,13 @@ typedef struct Packet_
     uint8_t recursion_level;
 
     /* Pkt Flags */
-    uint16_t flags;
+    uint32_t flags;
+
     /* flow */
     uint8_t flowflags;
+
+    uint8_t pkt_src;
+
     struct Flow_ *flow;
 
     struct timeval ts;
@@ -370,6 +387,9 @@ typedef struct Packet_
 #ifdef IPFW
         IPFWPacketVars ipfw_v;
 #endif /* IPFW */
+#ifdef AF_PACKET
+        AFPPacketVars afp_v;
+#endif
 
         /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
         PcapPacketVars pcap_v;
@@ -384,6 +404,9 @@ typedef struct Packet_
     /* used to hold flowbits only if debuglog is enabled */
     int debuglog_flowbits_names_len;
     const char **debuglog_flowbits_names;
+
+    /** The release function for packet data */
+    TmEcode (*ReleaseData)(ThreadVars *, struct Packet_ *);
 
     /* pkt vars */
     PktVar *pktvar;
@@ -434,6 +457,9 @@ typedef struct Packet_
     struct LiveDevice_ *livedev;
 
     PacketAlerts alerts;
+
+    struct Host_ *host_src;
+    struct Host_ *host_dst;
 
     /** packet number in the pcap file, matches wireshark */
     uint64_t pcap_cnt;
@@ -554,6 +580,9 @@ typedef struct DecodeThreadVars_
     uint16_t counter_gre;
     uint16_t counter_vlan;
     uint16_t counter_pppoe;
+    uint16_t counter_teredo;
+    uint16_t counter_ipv4inipv6;
+    uint16_t counter_ipv6inipv6;
     uint16_t counter_avg_pkt_size;
     uint16_t counter_max_pkt_size;
 
@@ -614,6 +643,7 @@ typedef struct DecodeThreadVars_
         (p)->recursion_level = 0;               \
         (p)->flags = 0;                         \
         (p)->flowflags = 0;                     \
+        (p)->pkt_src = 0;                       \
         FlowDeReference(&((p)->flow));          \
         (p)->ts.tv_sec = 0;                     \
         (p)->ts.tv_usec = 0;                    \
@@ -636,8 +666,8 @@ typedef struct DecodeThreadVars_
         if ((p)->udph != NULL) {                \
             CLEAR_UDP_PACKET((p));              \
         }                                       \
-        if ((p)->sctph != NULL) {                \
-            CLEAR_SCTP_PACKET((p));              \
+        if ((p)->sctph != NULL) {               \
+            CLEAR_SCTP_PACKET((p));             \
         }                                       \
         if ((p)->icmpv4h != NULL) {             \
             CLEAR_ICMPV4_PACKET((p));           \
@@ -654,6 +684,8 @@ typedef struct DecodeThreadVars_
         (p)->payload_len = 0;                   \
         (p)->pktlen = 0;                        \
         (p)->alerts.cnt = 0;                    \
+        HostDeReference(&((p)->host_src));      \
+        HostDeReference(&((p)->host_dst));      \
         (p)->pcap_cnt = 0;                      \
         (p)->tunnel_rtv_cnt = 0;                \
         (p)->tunnel_tpr_cnt = 0;                \
@@ -663,7 +695,8 @@ typedef struct DecodeThreadVars_
         (p)->next = NULL;                       \
         (p)->prev = NULL;                       \
         (p)->root = NULL;                       \
-        (p)->livedev = NULL;                      \
+        (p)->livedev = NULL;                    \
+        (p)->ReleaseData = NULL;                \
         PACKET_RESET_CHECKSUMS((p));            \
         PACKET_PROFILING_RESET((p));            \
     } while (0)
@@ -830,6 +863,7 @@ void AddressDebugPrint(Address *);
 
 
 #define ENGINE_SET_EVENT(p, e) do { \
+    SCLogDebug("p %p event %d", (p), e); \
     if ((p)->events.cnt < PACKET_ENGINE_EVENT_MAX) { \
         (p)->events.events[(p)->events.cnt] = e; \
         (p)->events.cnt++; \
@@ -888,27 +922,32 @@ void AddressDebugPrint(Address *);
 #define VLAN_OVER_GRE       13
 
 /*Packet Flags*/
-#define PKT_NOPACKET_INSPECTION         0x0001    /**< Flag to indicate that packet header or contents should not be inspected*/
-#define PKT_NOPAYLOAD_INSPECTION        0x0002    /**< Flag to indicate that packet contents should not be inspected*/
-#define PKT_ALLOC                       0x0004    /**< Packet was alloc'd this run, needs to be freed */
-#define PKT_HAS_TAG                     0x0008    /**< Packet has matched a tag */
-#define PKT_STREAM_ADD                  0x0010    /**< Packet payload was added to reassembled stream */
-#define PKT_STREAM_EST                  0x0020    /**< Packet is part of establised stream */
-#define PKT_STREAM_EOF                  0x0040    /**< Stream is in eof state */
-#define PKT_HAS_FLOW                    0x0080
-#define PKT_PSEUDO_STREAM_END           0x0100    /**< Pseudo packet to end the stream */
-#define PKT_STREAM_MODIFIED             0x0200    /**< Packet is modified by the stream engine, we need to recalc the csum and reinject/replace */
-#define PKT_MARK_MODIFIED               0x0400    /**< Packet mark is modified */
-#define PKT_STREAM_NOPCAPLOG            0x0800    /**< Exclude packet from pcap logging as it's part of a stream that has reassembly depth reached. */
+#define PKT_NOPACKET_INSPECTION         (1)         /**< Flag to indicate that packet header or contents should not be inspected*/
+#define PKT_NOPAYLOAD_INSPECTION        (1<<2)      /**< Flag to indicate that packet contents should not be inspected*/
+#define PKT_ALLOC                       (1<<3)      /**< Packet was alloc'd this run, needs to be freed */
+#define PKT_HAS_TAG                     (1<<4)      /**< Packet has matched a tag */
+#define PKT_STREAM_ADD                  (1<<5)      /**< Packet payload was added to reassembled stream */
+#define PKT_STREAM_EST                  (1<<6)      /**< Packet is part of establised stream */
+#define PKT_STREAM_EOF                  (1<<7)      /**< Stream is in eof state */
+#define PKT_HAS_FLOW                    (1<<8)
+#define PKT_PSEUDO_STREAM_END           (1<<9)      /**< Pseudo packet to end the stream */
+#define PKT_STREAM_MODIFIED             (1<<10)     /**< Packet is modified by the stream engine, we need to recalc the csum and reinject/replace */
+#define PKT_MARK_MODIFIED               (1<<11)     /**< Packet mark is modified */
+#define PKT_STREAM_NOPCAPLOG            (1<<12)     /**< Exclude packet from pcap logging as it's part of a stream that has reassembly depth reached. */
 
-#define PKT_TUNNEL                      0x1000
-#define PKT_TUNNEL_VERDICTED            0x2000
+#define PKT_TUNNEL                      (1<<13)
+#define PKT_TUNNEL_VERDICTED            (1<<14)
 
-#define PKT_IGNORE_CHECKSUM             0x4000    /**< Packet checksum is not computed (TX packet for example) */
-#define PKT_ZERO_COPY                   0x8000    /**< Packet comes from zero copy (ext_pkt must not be freed) */
+#define PKT_IGNORE_CHECKSUM             (1<<15)     /**< Packet checksum is not computed (TX packet for example) */
+#define PKT_ZERO_COPY                   (1<<16)     /**< Packet comes from zero copy (ext_pkt must not be freed) */
+
+#define PKT_HOST_SRC_LOOKED_UP          (1<<17)
+#define PKT_HOST_DST_LOOKED_UP          (1<<18)
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)
+
+#define PKT_SET_SRC(p, src_val) ((p)->pkt_src = src_val)
 
 #endif /* __DECODE_H__ */
 

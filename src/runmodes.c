@@ -83,7 +83,7 @@ TAILQ_HEAD(, RunModeOutput_) RunModeOutputs =
 
 static RunModes runmodes[RUNMODE_MAX];
 
-static char *active_runmode = NULL;
+static char *active_runmode;
 
 /**
  * \internal
@@ -120,6 +120,8 @@ static const char *RunModeTranslateModeToName(int runmode)
             return "UNITTEST";
         case RUNMODE_AFP_DEV:
             return "AF_PACKET_DEV";
+        case RUNMODE_UNIX_SOCKET:
+            return "UNIX_SOCKET";
         default:
             SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
             exit(EXIT_FAILURE);
@@ -176,6 +178,7 @@ void RunModeRegisterRunModes(void)
     RunModeErfDagRegister();
     RunModeNapatechRegister();
     RunModeIdsAFPRegister();
+    RunModeUnixSocketRegister();
 #ifdef UNITTESTS
     UtRunModeRegister();
 #endif
@@ -266,6 +269,9 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
             case RUNMODE_AFP_DEV:
                 custom_mode = RunModeAFPGetDefaultMode();
                 break;
+            case RUNMODE_UNIX_SOCKET:
+                custom_mode = RunModeUnixSocketGetDefaultMode();
+                break;
             default:
                 SCLogError(SC_ERR_UNKNOWN_RUN_MODE, "Unknown runtime mode. Aborting");
                 exit(EXIT_FAILURE);
@@ -276,6 +282,10 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
             SCLogWarning(SC_ERR_RUNMODE, "'worker' mode have been renamed "
                          "to 'workers', please modify your setup.");
             custom_mode = SCStrdup("workers");
+            if (unlikely(custom_mode == NULL)) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup custom mode");
+                exit(EXIT_FAILURE);
+            }
         }
     }
 
@@ -290,6 +300,10 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
 
     /* Export the custom mode */
     active_runmode = SCStrdup(custom_mode);
+    if (unlikely(active_runmode == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup active mode");
+        exit(EXIT_FAILURE);
+    }
 
     mode->RunModeFunc(de_ctx);
 
@@ -425,7 +439,7 @@ void RunModeInitializeOutputs(void)
             debuglog_enabled = 1;
 
         RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
-        if (runmode_output == NULL)
+        if (unlikely(runmode_output == NULL))
             return;
         runmode_output->tm_module = tm_module;
         runmode_output->output_ctx = output_ctx;

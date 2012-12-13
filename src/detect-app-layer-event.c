@@ -100,7 +100,7 @@ static DetectAppLayerEventData *DetectAppLayerEventParse(const char *arg)
         return NULL;
     }
 
-    while (*arg != '\0' && isspace(*arg)) {
+    while (*arg != '\0' && isspace((unsigned char)*arg)) {
         arg++;
     }
 
@@ -125,7 +125,7 @@ static DetectAppLayerEventData *DetectAppLayerEventParse(const char *arg)
         return NULL;
 
     DetectAppLayerEventData *aled = SCMalloc(sizeof(DetectAppLayerEventData));
-    if (aled == NULL)
+    if (unlikely(aled == NULL))
         return NULL;
     aled->alproto = alproto;
     aled->event_id = event_id;

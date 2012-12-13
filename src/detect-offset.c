@@ -43,6 +43,8 @@ static int DetectOffsetSetup (DetectEngineCtx *, Signature *, char *);
 
 void DetectOffsetRegister (void) {
     sigmatch_table[DETECT_OFFSET].name = "offset";
+    sigmatch_table[DETECT_OFFSET].desc = "designate from which byte in the payload will be checked to find a match";
+    sigmatch_table[DETECT_OFFSET].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Offset";
     sigmatch_table[DETECT_OFFSET].Match = NULL;
     sigmatch_table[DETECT_OFFSET].Setup = DetectOffsetSetup;
     sigmatch_table[DETECT_OFFSET].Free  = NULL;
@@ -60,7 +62,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
     /* strip "'s */
     if (offsetstr[0] == '\"' && offsetstr[strlen(offsetstr)-1] == '\"') {
         str = SCStrdup(offsetstr+1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             goto error;
         str[strlen(offsetstr)-2] = '\0';
         dubbed = 1;
@@ -74,7 +76,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
             if (pm == NULL) {
                 SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
-                           "preceeding content option for dcerpc sig");
+                           "preceding content option for dcerpc sig");
                 if (dubbed)
                     SCFree(str);
                 return -1;
@@ -98,7 +100,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]);
             if (pm == NULL) {
                 SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
-                           "preceeding content or uricontent option, http_client_body, "
+                           "preceding content or uricontent option, http_client_body, "
                            "http_header, http_raw_header, http_method, "
                            "http_cookie, http_raw_uri, http_stat_msg, "
                            "http_stat_code or http_user_agent option");
@@ -136,7 +138,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                 }
             }
 
-            if (cd->flags & DETECT_CONTENT_WITHIN || cd->flags & DETECT_CONTENT_DISTANCE) {
+            if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
                 SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use a relative keyword "
                                "with a non-relative keyword for the same content." );
                 goto error;
@@ -147,7 +149,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                 goto error;
             }
 
-            if (str[0] != '-' && isalpha(str[0])) {
+            if (str[0] != '-' && isalpha((unsigned char)str[0])) {
                 SigMatch *bed_sm =
                     DetectByteExtractRetrieveSMVar(str, s,
                                                    SigMatchListSMBelongsTo(s, pm));
@@ -176,7 +178,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
             break;
 
         default:
-            SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs a preceeding"
+            SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs a preceding"
                     " content keyword");
             goto error;
     }

@@ -420,6 +420,7 @@ static void SCPerfReleaseOPCtx()
     }
 
     SCFree(sc_perf_op_ctx);
+    sc_perf_op_ctx = NULL;
 
     return;
 }
@@ -446,10 +447,14 @@ static void *SCPerfMgmtThread(void *arg)
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
 
+    if (tv_local->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv_local);
+
     /* Set the threads capability */
     tv_local->cap_flags = 0;
 
     SCDropCaps(tv_local);
+
 
     if (sc_perf_op_ctx == NULL) {
         SCLogError(SC_ERR_PERF_STATS_NOT_INIT, "Perf Counter API not init"
@@ -506,6 +511,9 @@ static void *SCPerfWakeupThread(void *arg)
     if (SCSetThreadName(tv_local->name) < 0) {
         SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
     }
+
+    if (tv_local->thread_setup_flags != 0)
+        TmThreadSetupOptions(tv_local);
 
     /* Set the threads capability */
     tv_local->cap_flags = 0;
@@ -1214,6 +1222,7 @@ void SCPerfSpawnThreads(void)
                    "failed");
         exit(EXIT_FAILURE);
     }
+
     if (TmThreadSpawn(tv_wakeup) != 0) {
         SCLogError(SC_ERR_THREAD_SPAWN, "TmThreadSpawn failed for "
                    "SCPerfWakeupThread");
@@ -1228,6 +1237,7 @@ void SCPerfSpawnThreads(void)
                    "TmThreadCreateMgmtThread failed");
         exit(EXIT_FAILURE);
     }
+
     if (TmThreadSpawn(tv_mgmt) != 0) {
         SCLogError(SC_ERR_THREAD_SPAWN, "TmThreadSpawn failed for "
                    "SCPerfWakeupThread");

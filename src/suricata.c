@@ -24,9 +24,13 @@
 #include "suricata-common.h"
 #include "config.h"
 
+#if HAVE_GETOPT_H
 #include <getopt.h>
+#endif
+
+#if HAVE_SIGNAL_H
 #include <signal.h>
-#include <pthread.h>
+#endif
 
 #ifdef HAVE_NSS
 #include <prinit.h>
@@ -97,6 +101,7 @@
 
 #include "log-droplog.h"
 #include "log-httplog.h"
+#include "log-tlslog.h"
 #include "log-pcap.h"
 #include "log-file.h"
 #include "log-filestore.h"
@@ -130,6 +135,7 @@
 #include "pkt-var.h"
 
 #include "host.h"
+#include "unix-manager.h"
 
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
@@ -203,6 +209,8 @@ SC_ATOMIC_DECLARE(unsigned int, engine_stage);
 /* Max packets processed simultaniously. */
 #define DEFAULT_MAX_PENDING_PACKETS 1024
 
+int rule_reload = 0;
+
 /** suricata engine control flags */
 uint8_t suricata_ctl_flags = 0;
 
@@ -255,7 +263,7 @@ void SignalHandlerSigusr2SigFileStartup(int sig)
     return;
 }
 
-static void SignalHandlerSigusr2Idle(int sig)
+void SignalHandlerSigusr2Idle(int sig)
 {
     if (run_mode == RUNMODE_UNKNOWN || run_mode == RUNMODE_UNITTEST) {
         SCLogInfo("Ruleset load signal USR2 triggered for wrong runmode");
@@ -341,6 +349,16 @@ void EngineKill(void) {
     suricata_ctl_flags |= SURICATA_KILL;
 }
 
+/**
+ * \brief Used to indicate that the current task is done.
+ *
+ * This is mainly used by pcap-file to tell it has finished
+ * to treat a pcap files when running in unix-socket mode.
+ */
+void EngineDone(void) {
+    suricata_ctl_flags |= SURICATA_DONE;
+}
+
 static void SetBpfString(int optind, char *argv[]) {
     char *bpf_filter = NULL;
     uint32_t bpf_len = 0;
@@ -357,7 +375,7 @@ static void SetBpfString(int optind, char *argv[]) {
         return;
 
     bpf_filter = SCMalloc(bpf_len);
-    if (bpf_filter == NULL)
+    if (unlikely(bpf_filter == NULL))
         return;
     memset(bpf_filter, 0x00, bpf_len);
 
@@ -408,9 +426,8 @@ static void SetBpfStringFromFile(char *filename) {
     }
 
     bpf_filter = SCMalloc(bpf_len * sizeof(char));
-    if (bpf_filter == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,
-                "Failed to allocate buffer for bpf filter in file %s", filename);
+    if (unlikely(bpf_filter == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate buffer for bpf filter in file %s", filename);
         exit(EXIT_FAILURE);
     }
     memset(bpf_filter, 0x00, bpf_len);
@@ -455,72 +472,77 @@ void usage(const char *progname)
 #else
     printf("%s %s\n", PROG_NAME, PROG_VER);
 #endif
-    printf("USAGE: %s\n\n", progname);
-    printf("\t-c <path>                    : path to configuration file\n");
-    printf("\t-T                           : test configuration file (use with -c)\n");
-    printf("\t-i <dev or ip>               : run in pcap live mode\n");
-    printf("\t-F <bpf filter file>         : bpf filter file\n");
-    printf("\t-r <path>                    : run in pcap file/offline mode\n");
+    printf("USAGE: %s [OPTIONS] [BPF FILTER]\n\n", progname);
+    printf("\t-c <path>                            : path to configuration file\n");
+    printf("\t-T                                   : test configuration file (use with -c)\n");
+    printf("\t-i <dev or ip>                       : run in pcap live mode\n");
+    printf("\t-F <bpf filter file>                 : bpf filter file\n");
+    printf("\t-r <path>                            : run in pcap file/offline mode\n");
 #ifdef NFQ
-    printf("\t-q <qid>                     : run in inline nfqueue mode\n");
+    printf("\t-q <qid>                             : run in inline nfqueue mode\n");
 #endif /* NFQ */
 #ifdef IPFW
-    printf("\t-d <divert port>             : run in inline ipfw divert mode\n");
+    printf("\t-d <divert port>                     : run in inline ipfw divert mode\n");
 #endif /* IPFW */
-    printf("\t-s <path>                    : path to signature file loaded in addition to suricata.yaml settings (optional)\n");
-    printf("\t-S <path>                    : path to signature file loaded exclusively (optional)\n");
-    printf("\t-l <dir>                     : default log directory\n");
+    printf("\t-s <path>                            : path to signature file loaded in addition to suricata.yaml settings (optional)\n");
+    printf("\t-S <path>                            : path to signature file loaded exclusively (optional)\n");
+    printf("\t-l <dir>                             : default log directory\n");
 #ifndef OS_WIN32
-    printf("\t-D                           : run as daemon\n");
+    printf("\t-D                                   : run as daemon\n");
 #else
-	printf("\t--service-install            : install as service\n");
-	printf("\t--service-remove             : remove service\n");
-	printf("\t--service-change-params      : change service startup parameters\n");
+	printf("\t--service-install                    : install as service\n");
+	printf("\t--service-remove                     : remove service\n");
+	printf("\t--service-change-params              : change service startup parameters\n");
 #endif /* OS_WIN32 */
+    printf("\t-V                                   : display Suricata version\n");
 #ifdef UNITTESTS
-    printf("\t-u                           : run the unittests and exit\n");
-    printf("\t-U, --unittest-filter=REGEX  : filter unittests with a regex\n");
-    printf("\t--list-app-layer-protos      : list supported app layer protocols\n");
-    printf("\t--list-unittests             : list unit tests\n");
-    printf("\t--list-keywords              : list all keywords implemented by the engine\n");
-    printf("\t--fatal-unittests            : enable fatal failure on unittest error\n");
+    printf("\t-u                                   : run the unittests and exit\n");
+    printf("\t-U, --unittest-filter=REGEX          : filter unittests with a regex\n");
+    printf("\t--list-unittests                     : list unit tests\n");
+    printf("\t--fatal-unittests                    : enable fatal failure on unittest error\n");
 #endif /* UNITTESTS */
+    printf("\t--list-app-layer-protos              : list supported app layer protocols\n");
+    printf("\t--list-keywords[=all|csv|<kword>]    : list keywords implemented by the engine\n");
 #ifdef __SC_CUDA_SUPPORT__
-    printf("\t--list-cuda-cards            : list cuda supported cards\n");
+    printf("\t--list-cuda-cards                    : list cuda supported cards\n");
 #endif
-    printf("\t--list-runmodes              : list supported runmodes\n");
-    printf("\t--runmode <runmode_id>       : specific runmode modification the engine should run.  The argument\n"
-           "\t                               supplied should be the id for the runmode obtained by running\n"
-           "\t                               --list-runmodes\n");
-    printf("\t--engine-analysis            : print reports on analysis of different sections in the engine and exit.\n"
-           "\t                               Please have a look at the conf parameter engine-analysis on what reports\n"
-           "\t                               can be printed\n");
-    printf("\t--pidfile <file>             : write pid to this file (only for daemon mode)\n");
-    printf("\t--init-errors-fatal          : enable fatal failure on signature init error\n");
-    printf("\t--dump-config                : show the running configuration\n");
-    printf("\t--pcap[=<dev>]               : run in pcap mode, no value select interfaces from suricata.yaml\n");
+    printf("\t--list-runmodes                      : list supported runmodes\n");
+    printf("\t--runmode <runmode_id>               : specific runmode modification the engine should run.  The argument\n"
+           "\t                                       supplied should be the id for the runmode obtained by running\n"
+           "\t                                       --list-runmodes\n");
+    printf("\t--engine-analysis                    : print reports on analysis of different sections in the engine and exit.\n"
+           "\t                                       Please have a look at the conf parameter engine-analysis on what reports\n"
+           "\t                                       can be printed\n");
+    printf("\t--pidfile <file>                     : write pid to this file (only for daemon mode)\n");
+    printf("\t--init-errors-fatal                  : enable fatal failure on signature init error\n");
+    printf("\t--dump-config                        : show the running configuration\n");
+    printf("\t--build-info                         : display build information\n");
+    printf("\t--pcap[=<dev>]                       : run in pcap mode, no value select interfaces from suricata.yaml\n");
 #ifdef HAVE_PCAP_SET_BUFF
-    printf("\t--pcap-buffer-size           : size of the pcap buffer value from 0 - %i\n",INT_MAX);
+    printf("\t--pcap-buffer-size                   : size of the pcap buffer value from 0 - %i\n",INT_MAX);
 #endif /* HAVE_SET_PCAP_BUFF */
 #ifdef HAVE_AF_PACKET
-    printf("\t--af-packet[=<dev>]          : run in af-packet mode, no value select interfaces from suricata.yaml\n");
+    printf("\t--af-packet[=<dev>]                  : run in af-packet mode, no value select interfaces from suricata.yaml\n");
 #endif
 #ifdef HAVE_PFRING
-    printf("\t--pfring[=<dev>]               : run in pfring mode, use interfaces from suricata.yaml\n");
-    printf("\t--pfring-int <dev>           : run in pfring mode, use interface <dev>\n");
-    printf("\t--pfring-cluster-id <id>     : pfring cluster id \n");
-    printf("\t--pfring-cluster-type <type> : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow\n");
+    printf("\t--pfring[=<dev>]                     : run in pfring mode, use interfaces from suricata.yaml\n");
+    printf("\t--pfring-int <dev>                   : run in pfring mode, use interface <dev>\n");
+    printf("\t--pfring-cluster-id <id>             : pfring cluster id \n");
+    printf("\t--pfring-cluster-type <type>         : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow\n");
 #endif /* HAVE_PFRING */
 #ifdef HAVE_LIBCAP_NG
-    printf("\t--user <user>                : run suricata as this user after init\n");
-    printf("\t--group <group>              : run suricata as this group after init\n");
+    printf("\t--user <user>                        : run suricata as this user after init\n");
+    printf("\t--group <group>                      : run suricata as this group after init\n");
 #endif /* HAVE_LIBCAP_NG */
-    printf("\t--erf-in <path>              : process an ERF file\n");
+    printf("\t--erf-in <path>                      : process an ERF file\n");
 #ifdef HAVE_DAG
-    printf("\t--dag <dagX:Y>               : process ERF records from DAG interface X, stream Y\n");
+    printf("\t--dag <dagX:Y>                       : process ERF records from DAG interface X, stream Y\n");
 #endif
 #ifdef HAVE_NAPATECH
-    printf("\t--napatech <adapter>          : run Napatech feeds using <adapter>\n");
+    printf("\t--napatech                           : run Napatech Streams using the API\n");
+#endif
+#ifdef BUILD_UNIX_SOCKET
+    printf("\t--unix-socket[=<file>]       : use unix socket to control suricata work\n");
 #endif
     printf("\n");
     printf("\nTo run the engine with default configuration on "
@@ -654,6 +676,8 @@ void SCPrintBuildInfo(void) {
 #ifdef _FORTIFY_SOURCE
     SCLogInfo("compiled with _FORTIFY_SOURCE=%d", _FORTIFY_SOURCE);
 #endif
+
+    SCLogInfo("compiled with libhtp %s, linked against %s", HTP_BASE_VERSION_TEXT, htp_get_version());
 }
 
 int main(int argc, char **argv)
@@ -673,6 +697,7 @@ int main(int argc, char **argv)
     int list_cuda_cards = 0;
     int list_runmodes = 0;
     int list_keywords = 0;
+    const char *keyword_info = NULL;
     const char *runmode_custom_mode = NULL;
     int daemon = 0;
 #ifndef OS_WIN32
@@ -684,7 +709,7 @@ int main(int argc, char **argv)
     uint32_t groupid = 0;
 #endif /* OS_WIN32 */
     int build_info = 0;
-    int rule_reload = 0;
+    int delayed_detect = 0;
 
     char *log_dir;
 #ifdef OS_WIN32
@@ -749,13 +774,16 @@ int main(int argc, char **argv)
         {"pfring-cluster-type", required_argument, 0, 0},
         {"af-packet", optional_argument, 0, 0},
         {"pcap", optional_argument, 0, 0},
+#ifdef BUILD_UNIX_SOCKET
+        {"unix-socket", optional_argument, 0, 0},
+#endif
         {"pcap-buffer-size", required_argument, 0, 0},
         {"unittest-filter", required_argument, 0, 'U'},
         {"list-app-layer-protos", 0, &list_app_layer_protocols, 1},
         {"list-unittests", 0, &list_unittests, 1},
         {"list-cuda-cards", 0, &list_cuda_cards, 1},
         {"list-runmodes", 0, &list_runmodes, 1},
-        {"list-keywords", 0, &list_keywords, 1},
+        {"list-keywords", optional_argument, &list_keywords, 1},
         {"runmode", required_argument, NULL, 0},
         {"engine-analysis", 0, &engine_analysis, 1},
 #ifdef OS_WIN32
@@ -770,7 +798,7 @@ int main(int argc, char **argv)
         {"group", required_argument, 0, 0},
         {"erf-in", required_argument, 0, 0},
         {"dag", required_argument, 0, 0},
-        {"napatech", required_argument, 0, 0},
+        {"napatech", 0, 0, 0},
         {"build-info", 0, &build_info, 1},
         {NULL, 0, NULL, 0}
     };
@@ -887,6 +915,24 @@ int main(int argc, char **argv)
                     fprintf(stderr, "ERROR: Failed to set engine init-failure-fatal.\n");
                     exit(EXIT_FAILURE);
                 }
+#ifdef BUILD_UNIX_SOCKET
+            } else if (strcmp((long_opts[option_index]).name , "unix-socket") == 0) {
+                if (run_mode == RUNMODE_UNKNOWN) {
+                    run_mode = RUNMODE_UNIX_SOCKET;
+                    if (optarg) {
+                        if (ConfSet("unix-command.filename", optarg, 0) != 1) {
+                            fprintf(stderr, "ERROR: Failed to set unix-command.filename.\n");
+                            exit(EXIT_FAILURE);
+                        }
+
+                    }
+                } else {
+                    SCLogError(SC_ERR_MULTIPLE_RUN_MODE, "more than one run mode "
+                            "has been specified");
+                    usage(argv[0]);
+                    exit(EXIT_FAILURE);
+                }
+#endif
             }
             else if(strcmp((long_opts[option_index]).name, "list-app-layer-protocols") == 0) {
                 /* listing all supported app layer protocols */
@@ -909,7 +955,11 @@ int main(int argc, char **argv)
                 RunModeListRunmodes();
                 exit(EXIT_SUCCESS);
             } else if (strcmp((long_opts[option_index]).name, "list-keywords") == 0) {
-                // do nothing
+                if (optarg) {
+                    if (strcmp("short",optarg)) {
+                        keyword_info = optarg;
+                    }
+                }
             } else if (strcmp((long_opts[option_index]).name, "runmode") == 0) {
                 runmode_custom_mode = optarg;
             } else if(strcmp((long_opts[option_index]).name, "engine-analysis") == 0) {
@@ -997,17 +1047,13 @@ int main(int argc, char **argv)
                 exit(EXIT_FAILURE);
 #endif /* HAVE_DAG */
 		}
-                else if (strcmp((long_opts[option_index]).name, "napatech") == 0) {
+        else if (strcmp((long_opts[option_index]).name, "napatech") == 0) {
 #ifdef HAVE_NAPATECH
-                run_mode = RUNMODE_NAPATECH;
-                if (ConfSet("napatech.adapter", optarg, 0) != 1) {
-                    fprintf(stderr, "ERROR: Failed to set napatech.adapter\n");
-                    exit(EXIT_FAILURE);
-                }
+            run_mode = RUNMODE_NAPATECH;
 #else
-                SCLogError(SC_ERR_NAPATECH_REQUIRED, "libntcommoninterface and a Napatech adapter are required"
-                                                    " to capture packets using --napatech.");
-                exit(EXIT_FAILURE);
+            SCLogError(SC_ERR_NAPATECH_REQUIRED, "libntapi and a Napatech adapter are required"
+                                                 " to capture packets using --napatech.");
+            exit(EXIT_FAILURE);
 #endif /* HAVE_NAPATECH */
 			}
             else if(strcmp((long_opts[option_index]).name, "pcap-buffer-size") == 0) {
@@ -1048,12 +1094,19 @@ int main(int argc, char **argv)
             break;
         case 'i':
             memset(pcap_dev, 0, sizeof(pcap_dev));
-            strlcpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)+1) : (sizeof(pcap_dev))));
-            PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
+
+            /* some windows shells require escaping of the \ in \Device. Otherwise
+             * the backslashes are stripped. We put them back here. */
+            if (strlen(optarg) > 9 && strncmp(optarg, "DeviceNPF", 9) == 0) {
+                snprintf(pcap_dev, sizeof(pcap_dev), "\\Device\\NPF%s", optarg+9);
+            } else {
+                strlcpy(pcap_dev, optarg, ((strlen(optarg) < sizeof(pcap_dev)) ? (strlen(optarg)+1) : (sizeof(pcap_dev))));
+                PcapTranslateIPToDevice(pcap_dev, sizeof(pcap_dev));
+            }
 
             if (strcmp(pcap_dev, optarg) != 0) {
                 SCLogInfo("translated %s to pcap device %s", optarg, pcap_dev);
-            } else if (strlen(pcap_dev) > 0 && isdigit(pcap_dev[0])) {
+            } else if (strlen(pcap_dev) > 0 && isdigit((unsigned char)pcap_dev[0])) {
                 SCLogError(SC_ERR_PCAP_TRANSLATE, "failed to find a pcap device for IP %s", optarg);
                 exit(EXIT_FAILURE);
             }
@@ -1202,13 +1255,15 @@ int main(int argc, char **argv)
         }
     }
 
+    if (!list_keywords && !list_app_layer_protocols) {
 #ifdef REVISION
-    SCLogInfo("This is %s version %s (rev %s)", PROG_NAME, PROG_VER, xstr(REVISION));
+        SCLogInfo("This is %s version %s (rev %s)", PROG_NAME, PROG_VER, xstr(REVISION));
 #elif defined RELEASE
-    SCLogInfo("This is %s version %s RELEASE", PROG_NAME, PROG_VER);
+        SCLogInfo("This is %s version %s RELEASE", PROG_NAME, PROG_VER);
 #else
-    SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
+        SCLogInfo("This is %s version %s", PROG_NAME, PROG_VER);
 #endif
+    }
 
 #ifndef HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW
     SCLogWarning(SC_WARN_OUTDATED_LIBHTP, "libhtp < 0.2.7 detected. Keyword "
@@ -1217,7 +1272,8 @@ int main(int argc, char **argv)
 
     SetBpfString(optind, argv);
 
-    UtilCpuPrintSummary();
+    if (!list_keywords && !list_app_layer_protocols)
+        UtilCpuPrintSummary();
 
 #ifdef __SC_CUDA_SUPPORT__
     /* Init the CUDA environment */
@@ -1311,15 +1367,18 @@ int main(int argc, char **argv)
         log_dir = DEFAULT_LOG_DIR;
 #endif /* OS_WIN32 */
     }
+
+    if (!list_keywords && !list_app_layer_protocols) {
 #ifdef OS_WIN32
-    if (_stat(log_dir, &buf) != 0) {
+        if (_stat(log_dir, &buf) != 0) {
 #else
-    if (stat(log_dir, &buf) != 0) {
+        if (stat(log_dir, &buf) != 0) {
 #endif /* OS_WIN32 */
-        SCLogError(SC_ERR_LOGDIR_CONFIG, "The logging directory \"%s\" "
-                    "supplied by %s (default-log-dir) doesn't exist. "
-                    "Shutting down the engine", log_dir, conf_filename);
-        exit(EXIT_FAILURE);
+            SCLogError(SC_ERR_LOGDIR_CONFIG, "The logging directory \"%s\" "
+                        "supplied by %s (default-log-dir) doesn't exist. "
+                        "Shutting down the engine", log_dir, conf_filename);
+            exit(EXIT_FAILURE);
+        }
     }
 
     /* Pull the max pending packets from the config, if not found fall
@@ -1369,7 +1428,7 @@ int main(int argc, char **argv)
 
     /* Since our config is now loaded we can finish configurating the
      * logging module. */
-    SCLogLoadConfig();
+    SCLogLoadConfig(daemon);
 
 #ifdef __SC_CUDA_SUPPORT__
     /* load the cuda configuration */
@@ -1378,7 +1437,10 @@ int main(int argc, char **argv)
 
     /* Load the Host-OS lookup. */
     SCHInfoLoadFromConfig();
-    DefragInit();
+    if (!list_keywords && !list_app_layer_protocols &&
+        (run_mode != RUNMODE_UNIX_SOCKET)) {
+        DefragInit();
+    }
 
     if (run_mode == RUNMODE_UNKNOWN) {
         if (!engine_analysis && !list_keywords && !conf_test) {
@@ -1412,7 +1474,7 @@ int main(int argc, char **argv)
     /* hardcoded initialization code */
     SigTableSetup(); /* load the rule keywords */
     if (list_keywords) {
-        SigTableList();
+        SigTableList(keyword_info);
         exit(EXIT_FAILURE);
     }
     TmqhSetup();
@@ -1420,8 +1482,11 @@ int main(int argc, char **argv)
     CIDRInit();
     SigParsePrepare();
     //PatternMatchPrepare(mpm_ctx, MPM_B2G);
-    SCPerfInitCounterApi();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        SCPerfInitCounterApi();
+    }
 #ifdef PROFILING
+    SCProfilingRulesGlobalInit();
     SCProfilingInit();
 #endif /* PROFILING */
     SCReputationInitCtx();
@@ -1441,53 +1506,83 @@ int main(int argc, char **argv)
     }
 
 
+    /* nfq */
     TmModuleReceiveNFQRegister();
     TmModuleVerdictNFQRegister();
     TmModuleDecodeNFQRegister();
+    /* ipfw */
     TmModuleReceiveIPFWRegister();
     TmModuleVerdictIPFWRegister();
     TmModuleDecodeIPFWRegister();
+    /* pcap live */
     TmModuleReceivePcapRegister();
     TmModuleDecodePcapRegister();
-    TmModuleReceiveAFPRegister();
-    TmModuleDecodeAFPRegister();
-    TmModuleReceivePfringRegister();
-    TmModuleDecodePfringRegister();
+    /* pcap file */
     TmModuleReceivePcapFileRegister();
     TmModuleDecodePcapFileRegister();
+    /* af-packet */
+    TmModuleReceiveAFPRegister();
+    TmModuleDecodeAFPRegister();
+    /* pfring */
+    TmModuleReceivePfringRegister();
+    TmModuleDecodePfringRegister();
+    /* dag file */
+    TmModuleReceiveErfFileRegister();
+    TmModuleDecodeErfFileRegister();
+    /* dag live */
+    TmModuleReceiveErfDagRegister();
+    TmModuleDecodeErfDagRegister();
+    /* napatech */
+    TmModuleNapatechStreamRegister();
+    TmModuleNapatechDecodeRegister();
+
+    /* stream engine */
+    TmModuleStreamTcpRegister();
+    /* detection */
     TmModuleDetectRegister();
-    TmModuleAlertFastLogRegister();
-    TmModuleAlertDebugLogRegister();
-    TmModuleAlertPreludeRegister();
+    /* respond-reject */
     TmModuleRespondRejectRegister();
+
+    /* fast log */
+    TmModuleAlertFastLogRegister();
     TmModuleAlertFastLogIPv4Register();
     TmModuleAlertFastLogIPv6Register();
+    /* debug log */
+    TmModuleAlertDebugLogRegister();
+    /* prelue log */
+    TmModuleAlertPreludeRegister();
+    /* syslog log */
+    TmModuleAlertSyslogRegister();
     TmModuleAlertSyslogIPv4Register();
     TmModuleAlertSyslogIPv6Register();
+    /* unified2 log */
     TmModuleUnified2AlertRegister();
-    TmModuleAlertSyslogRegister();
+    /* pcap info log */
     TmModuleAlertPcapInfoRegister();
+    /* drop log */
     TmModuleLogDropLogRegister();
-    TmModuleStreamTcpRegister();
+    /* http log */
     TmModuleLogHttpLogRegister();
     TmModuleLogHttpLogIPv4Register();
     TmModuleLogHttpLogIPv6Register();
+    TmModuleLogTlsLogRegister();
+    TmModuleLogTlsLogIPv4Register();
+    TmModuleLogTlsLogIPv6Register();
+    /* pcap log */
     TmModulePcapLogRegister();
+    /* file log */
     TmModuleLogFileLogRegister();
     TmModuleLogFilestoreRegister();
+    /* cuda */
 #ifdef __SC_CUDA_SUPPORT__
     TmModuleCudaMpmB2gRegister();
     TmModuleCudaPacketBatcherRegister();
 #endif
-    TmModuleReceiveErfFileRegister();
-    TmModuleDecodeErfFileRegister();
-    TmModuleReceiveErfDagRegister();
-    TmModuleDecodeErfDagRegister();
-    TmModuleNapatechFeedRegister();
-    TmModuleNapatechDecodeRegister();
     TmModuleDebugList();
 
     AppLayerHtpNeedFileInspection();
+
+    DetectEngineRegisterAppInspectionEngines();
 
     if (rule_reload) {
         if (sig_file == NULL)
@@ -1512,7 +1607,6 @@ int main(int argc, char **argv)
 
         AppLayerHtpEnableRequestBodyCallback();
         AppLayerHtpNeedFileInspection();
-        AppLayerHtpRegisterExtraCallbacks();
 
         UtInitialize();
         UTHRegisterTests();
@@ -1628,17 +1722,30 @@ int main(int argc, char **argv)
     TmModuleRunInit();
 
     if (daemon == 1) {
-        Daemonize();
         if (pid_filename == NULL) {
             if (ConfGet("pid-file", &pid_filename) == 1) {
                 SCLogInfo("Use pid file %s from config file.", pid_filename);
+           } else {
+                pid_filename = DEFAULT_PID_FILENAME;
            }
         }
-        if (pid_filename != NULL) {
-            if (SCPidfileCreate(pid_filename) != 0) {
-                pid_filename = NULL;
-                exit(EXIT_FAILURE);
-            }
+        if (SCPidfileTestRunning(pid_filename) != 0) {
+            pid_filename = NULL;
+            exit(EXIT_FAILURE);
+        }
+        Daemonize();
+        if (SCPidfileCreate(pid_filename) != 0) {
+            pid_filename = NULL;
+#if 1
+            SCLogError(SC_ERR_PIDFILE_DAEMON,
+                       "Unable to create PID file, concurrent run of"
+                       " Suricata can occur.");
+            SCLogError(SC_ERR_PIDFILE_DAEMON,
+                       "PID file creation WILL be mandatory for daemon mode"
+                       " in future version");
+#else
+            exit(EXIT_FAILURE);
+#endif
         }
     } else {
         if (pid_filename != NULL) {
@@ -1665,6 +1772,19 @@ int main(int argc, char **argv)
 	/* SIGHUP is not implemnetd on WIN32 */
     //UtilSignalHandlerSetup(SIGHUP, SignalHandlerSighup);
 
+    /* Try to get user/group to run suricata as if
+       command line as not decide of that */
+    if (do_setuid == FALSE && do_setgid == FALSE) {
+        char *id;
+        if (ConfGet("run-as.user", &id) == 1) {
+            do_setuid = TRUE;
+            user_name = id;
+        }
+        if (ConfGet("run-as.group", &id) == 1) {
+            do_setgid = TRUE;
+            group_name = id;
+        }
+    }
     /* Get the suricata user ID to given user ID */
     if (do_setuid == TRUE) {
         if (SCGetUserID(user_name, group_name, &userid, &groupid) != 0) {
@@ -1686,7 +1806,9 @@ int main(int argc, char **argv)
 
     PacketPoolInit(max_pending_packets);
     HostInitConfig(HOST_VERBOSE);
-    FlowInitConfig(FLOW_VERBOSE);
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        FlowInitConfig(FLOW_VERBOSE);
+    }
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL) {
@@ -1705,18 +1827,42 @@ int main(int argc, char **argv)
     if (MagicInit() != 0)
         exit(EXIT_FAILURE);
 
-    if (SigLoadSignatures(de_ctx, sig_file, sig_file_exclusive) < 0) {
-        if (sig_file == NULL) {
-            SCLogError(SC_ERR_OPENING_FILE, "Signature file has not been provided");
-        } else {
-            SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
+    /* In offline mode delayed init of detect is a bad idea */
+    if ((run_mode == RUNMODE_PCAP_FILE) ||
+        (run_mode == RUNMODE_ERF_FILE) ||
+        engine_analysis) {
+        delayed_detect = 0;
+    } else {
+        ConfNode *denode = NULL;
+        ConfNode *decnf = ConfGetNode("detect-engine");
+        if (decnf != NULL) {
+            TAILQ_FOREACH(denode, &decnf->head, next) {
+                if (strcmp(denode->val, "delayed-detect") == 0) {
+                    (void)ConfGetChildValueBool(denode, "delayed-detect", &delayed_detect);
+                }
+            }
         }
-        if (de_ctx->failure_fatal)
-            exit(EXIT_FAILURE);
+    }
+    de_ctx->delayed_detect = delayed_detect;
+
+    SCLogInfo("Delayed detect %s", delayed_detect ? "enabled" : "disabled");
+    if (delayed_detect) {
+        SCLogInfo("Packets will start being processed before signatures are active.");
     }
 
-    if (engine_analysis) {
-        exit(EXIT_SUCCESS);
+    if (!delayed_detect) {
+        if (SigLoadSignatures(de_ctx, sig_file, sig_file_exclusive) < 0) {
+            if (sig_file == NULL) {
+                SCLogError(SC_ERR_OPENING_FILE, "Signature file has not been provided");
+            } else {
+                SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
+            }
+            if (de_ctx->failure_fatal)
+                exit(EXIT_FAILURE);
+        }
+        if (engine_analysis) {
+            exit(EXIT_SUCCESS);
+        }
     }
 
     /* registering singal handlers we use.  We register usr2 here, so that one
@@ -1724,15 +1870,10 @@ int main(int argc, char **argv)
     if (sig_file == NULL && rule_reload == 1)
         UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
 
-#ifdef PROFILING
-    SCProfilingInitRuleCounters(de_ctx);
-#endif /* PROFILING */
-
 #ifdef __SC_CUDA_SUPPORT__
     SCCudaPBSetUpQueuesAndBuffers();
 #endif /* __SC_CUDA_SUPPORT__ */
 
-    AppLayerHtpRegisterExtraCallbacks();
     SCThresholdConfInitContext(de_ctx,NULL);
     SCAsn1LoadConfig();
 
@@ -1744,7 +1885,9 @@ int main(int argc, char **argv)
 
     SCDropMainThreadCaps(userid, groupid);
 
-    RunModeInitializeOutputs();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        RunModeInitializeOutputs();
+    }
 
     /* run the selected runmode */
     if (run_mode == RUNMODE_PCAP_DEV) {
@@ -1800,16 +1943,32 @@ int main(int argc, char **argv)
     }
 #endif
 
-    /* Spawn the flow manager thread */
-    FlowManagerThreadSpawn();
-
-    StreamTcpInitConfig(STREAM_VERBOSE);
+    /* In Unix socket runmode, Flow manager is started on demand */
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        /* Spawn the unix socket manager thread */
+        int unix_socket = 0;
+        if (ConfGetBool("unix-command.enabled", &unix_socket) != 1)
+            unix_socket = 0;
+        if (unix_socket == 1) {
+            UnixManagerThreadSpawn(de_ctx, 0);
+#ifdef BUILD_UNIX_SOCKET
+            UnixManagerRegisterCommand("iface-stat", LiveDeviceIfaceStat, NULL,
+                                       UNIX_CMD_TAKE_ARGS);
+            UnixManagerRegisterCommand("iface-list", LiveDeviceIfaceList, NULL, 0);
+#endif
+        }
+        /* Spawn the flow manager thread */
+        FlowManagerThreadSpawn();
+        StreamTcpInitConfig(STREAM_VERBOSE);
+    }
 
     /* Spawn the L7 App Detect thread */
     //AppLayerDetectProtoThreadSpawn();
 
     /* Spawn the perf counter threads.  Let these be the last one spawned */
-    SCPerfSpawnThreads();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        SCPerfSpawnThreads();
+    }
 
     /* Check if the alloted queues have at least 1 reader and writer */
     TmValidateQueueState();
@@ -1826,6 +1985,21 @@ int main(int argc, char **argv)
     /* Un-pause all the paused threads */
     TmThreadContinueThreads();
 
+    if (delayed_detect) {
+        if (SigLoadSignatures(de_ctx, sig_file, sig_file_exclusive) < 0) {
+            if (sig_file == NULL) {
+                SCLogError(SC_ERR_OPENING_FILE, "Signature file has not been provided");
+            } else {
+                SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
+            }
+            if (de_ctx->failure_fatal)
+                exit(EXIT_FAILURE);
+        }
+        TmThreadActivateDummySlot();
+        SCLogInfo("Signature(s) loaded, Detect thread(s) activated.");
+    }
+
+
 #ifdef DBG_MEM_ALLOC
     SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
 #ifdef DBG_MEM_ALLOC_SKIP_STARTUP
@@ -1835,53 +2009,8 @@ int main(int argc, char **argv)
 
     int engine_retval = EXIT_SUCCESS;
     while(1) {
-        if (suricata_ctl_flags != 0) {
-            SCLogDebug("signal received");
-
-            if (suricata_ctl_flags & SURICATA_STOP)  {
-                struct timeval ts_start;
-                struct timeval ts_cur;
-
-                memset(&ts_start, 0x00, sizeof(ts_start));
-                gettimeofday(&ts_start, NULL);
-
-                SCLogInfo("stopping engine, waiting for outstanding packets");
-
-                /* Stop the engine so it quits after processing the pcap file
-                 * but first make sure all packets are processed by all other
-                 * threads. */
-                char done = 0;
-                do {
-                    if (suricata_ctl_flags & SURICATA_KILL)
-                        break;
-
-                    /* if all packets are returned to the packetpool
-                     * we are done */
-                    if (PacketPoolSize() == max_pending_packets)
-                        done = 1;
-
-                    if (done == 0) {
-                        memset(&ts_cur, 0x00, sizeof(ts_cur));
-                        gettimeofday(&ts_cur, NULL);
-
-                        if (ts_cur.tv_sec - ts_start.tv_sec >= 120) {
-                            SCLogError(SC_ERR_SHUTDOWN, "shutdown taking too "
-                                    "long, likely a bug! (%"PRIuMAX
-                                    " != %"PRIuMAX").", (uintmax_t)PacketPoolSize(),
-                                    (uintmax_t)max_pending_packets);
-#ifdef DEBUG
-                            BUG_ON(1);
-#endif
-                            engine_retval = EXIT_FAILURE;
-                            break;
-                        }
-
-                        usleep(100);
-                    }
-                } while (done == 0);
-
-                SCLogInfo("all packets processed by threads, stopping engine");
-            }
+        if (suricata_ctl_flags & (SURICATA_KILL | SURICATA_STOP)) {
+            SCLogInfo("Signal Received.  Stopping engine.");
 
             break;
         }
@@ -1894,18 +2023,23 @@ int main(int argc, char **argv)
     /* Update the engine stage/status flag */
     (void) SC_ATOMIC_CAS(&engine_stage, SURICATA_RUNTIME, SURICATA_DEINIT);
 
-
 #ifdef __SC_CUDA_SUPPORT__
     SCCudaPBKillBatchingPackets();
 #endif
 
-    /* First we need to kill the flow manager thread */
-    FlowKillFlowManagerThread();
+    UnixSocketKillSocketThread();
+
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        /* First we need to kill the flow manager thread */
+        FlowKillFlowManagerThread();
+    }
 
     /* Disable packet acquire thread first */
-    TmThreadDisableReceiveThreads();
+    TmThreadDisableThreadsWithTMS(TM_FLAG_RECEIVE_TM | TM_FLAG_DECODE_TM);
 
-    FlowForceReassembly();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        FlowForceReassembly();
+    }
 
     struct timeval end_time;
     memset(&end_time, 0, sizeof(end_time));
@@ -1916,7 +2050,8 @@ int main(int argc, char **argv)
 
     if (rule_reload == 1) {
         /* Disable detect threads first.  This is required by live rule swap */
-        TmThreadDisableUptoDetectThreads();
+        TmThreadDisableThreadsWithTMS(TM_FLAG_RECEIVE_TM | TM_FLAG_DECODE_TM |
+                                      TM_FLAG_STREAM_TM | TM_FLAG_DETECT_TM);
 
         /* wait if live rule swap is in progress */
         if (UtilSignalIsHandler(SIGUSR2, SignalHandlerSigusr2Idle)) {
@@ -1932,14 +2067,19 @@ int main(int argc, char **argv)
     }
 
     DetectEngineCtx *global_de_ctx = DetectEngineGetGlobalDeCtx();
-    BUG_ON(global_de_ctx == NULL);
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        BUG_ON(global_de_ctx == NULL);
+    }
 
     TmThreadKillThreads();
 
-    SCPerfReleaseResources();
-    FlowShutdown();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        SCPerfReleaseResources();
+        FlowShutdown();
+        StreamTcpFreeConfig(STREAM_VERBOSE);
+    }
     HostShutdown();
-    StreamTcpFreeConfig(STREAM_VERBOSE);
+
     HTPFreeConfig();
     HTPAtExitPrintStats();
 
@@ -1978,7 +2118,9 @@ int main(int argc, char **argv)
 
     AppLayerHtpPrintStats();
 
-    DetectEngineCtxFree(global_de_ctx);
+    if (global_de_ctx) {
+        DetectEngineCtxFree(global_de_ctx);
+    }
     AlpProtoDestroy();
 
     TagDestroyCtx();
@@ -1987,11 +2129,17 @@ int main(int argc, char **argv)
     OutputDeregisterAll();
     TimeDeinit();
     SCProtoNameDeInit();
-    DefragDestroy();
+    if (run_mode != RUNMODE_UNIX_SOCKET) {
+        DefragDestroy();
+    }
     PacketPoolDestroy();
     MagicDeinit();
     TmqhCleanup();
     TmModuleRunDeInit();
+
+#ifdef HAVE_AF_PACKET
+    AFPPeersListClean();
+#endif
 
 #ifdef PROFILING
     if (profiling_rules_enabled)

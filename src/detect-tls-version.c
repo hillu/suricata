@@ -68,6 +68,8 @@ void DetectTlsVersionFree(void *);
  */
 void DetectTlsVersionRegister (void) {
     sigmatch_table[DETECT_AL_TLS_VERSION].name = "tls.version";
+    sigmatch_table[DETECT_AL_TLS_VERSION].desc = "match on TLS/SSL version";
+    sigmatch_table[DETECT_AL_TLS_VERSION].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlsversion";
     sigmatch_table[DETECT_AL_TLS_VERSION].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_VERSION].AppLayerMatch = DetectTlsVersionMatch;
     sigmatch_table[DETECT_AL_TLS_VERSION].alproto = ALPROTO_TLS;
@@ -175,14 +177,14 @@ DetectTlsVersionData *DetectTlsVersionParse (char *str)
 
         /* We have a correct id option */
         tls = SCMalloc(sizeof(DetectTlsVersionData));
-        if (tls == NULL)
+        if (unlikely(tls == NULL))
             goto error;
 
         orig = SCStrdup((char*)str_ptr);
-        tmp_str=orig;
-        if (tmp_str == NULL) {
+        if (unlikely(orig == NULL)) {
             goto error;
         }
+        tmp_str=orig;
 
         /* Let's see if we need to scape "'s */
         if (tmp_str[0] == '"')

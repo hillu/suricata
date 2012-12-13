@@ -38,6 +38,8 @@ void DetectMsgRegisterTests(void);
 
 void DetectMsgRegister (void) {
     sigmatch_table[DETECT_MSG].name = "msg";
+    sigmatch_table[DETECT_MSG].desc = "information about the rule and the possible alert";
+    sigmatch_table[DETECT_MSG].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#msg-message";
     sigmatch_table[DETECT_MSG].Match = NULL;
     sigmatch_table[DETECT_MSG].Setup = DetectMsgSetup;
     sigmatch_table[DETECT_MSG].Free = NULL;
@@ -55,13 +57,13 @@ static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
     /* strip "'s */
     if (msgstr[0] == '\"' && msgstr[strlen(msgstr)-1] == '\"') {
         str = SCStrdup(msgstr+1);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             goto error;
         str[strlen(msgstr)-2] = '\0';
     } else if (msgstr[1] == '\"' && msgstr[strlen(msgstr)-1] == '\"') {
         /* XXX do this parsing in a better way */
         str = SCStrdup(msgstr+2);
-        if (str == NULL)
+        if (unlikely(str == NULL))
             goto error;
         str[strlen(msgstr)-3] = '\0';
         //printf("DetectMsgSetup: format hack applied: \'%s\'\n", str);

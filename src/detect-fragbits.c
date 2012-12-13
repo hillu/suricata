@@ -70,6 +70,8 @@ static void DetectFragBitsFree(void *);
 
 void DetectFragBitsRegister (void) {
     sigmatch_table[DETECT_FRAGBITS].name = "fragbits";
+    sigmatch_table[DETECT_FRAGBITS].desc = "check if the fragmentation and reserved bits are set in the IP header";
+    sigmatch_table[DETECT_FRAGBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Fragbits";
     sigmatch_table[DETECT_FRAGBITS].Match = DetectFragBitsMatch;
     sigmatch_table[DETECT_FRAGBITS].Setup = DetectFragBitsSetup;
     sigmatch_table[DETECT_FRAGBITS].Free  = DetectFragBitsFree;
@@ -193,7 +195,7 @@ static DetectFragBitsData *DetectFragBitsParse (char *rawstr)
     }
 
     de = SCMalloc(sizeof(DetectFragBitsData));
-    if (de == NULL)
+    if (unlikely(de == NULL))
         goto error;
 
     memset(de,0,sizeof(DetectFragBitsData));
@@ -403,7 +405,7 @@ static int FragBitsTestParse03 (void) {
         0x00 ,0x0e ,0x10 ,0x00 ,0x04 ,0x81 ,0x6f ,0x0b,
         0x51};
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
@@ -500,7 +502,7 @@ static int FragBitsTestParse04 (void) {
         0x00 ,0x0e ,0x10 ,0x00 ,0x04 ,0x81 ,0x6f ,0x0b,
         0x51};
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;

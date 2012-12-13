@@ -57,6 +57,8 @@ void FlowBitsRegisterTests(void);
 
 void DetectFlowbitsRegister (void) {
     sigmatch_table[DETECT_FLOWBITS].name = "flowbits";
+    sigmatch_table[DETECT_FLOWBITS].desc = "operate on flow flag";
+    sigmatch_table[DETECT_FLOWBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#Flowbits";
     sigmatch_table[DETECT_FLOWBITS].Match = DetectFlowbitMatch;
     sigmatch_table[DETECT_FLOWBITS].Setup = DetectFlowbitSetup;
     sigmatch_table[DETECT_FLOWBITS].Free  = DetectFlowbitFree;
@@ -226,7 +228,7 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     }
 
     cd = SCMalloc(sizeof(DetectFlowbitsData));
-    if (cd == NULL)
+    if (unlikely(cd == NULL))
         goto error;
 
     cd->idx = VariableNameGetIdx(de_ctx, fb_name, DETECT_FLOWBITS);
@@ -306,7 +308,7 @@ static int FlowBitsTestSig01(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -381,7 +383,7 @@ static int FlowBitsTestSig02(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -503,7 +505,7 @@ static int FlowBitsTestSig03(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -581,7 +583,7 @@ static int FlowBitsTestSig04(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -663,7 +665,7 @@ static int FlowBitsTestSig05(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -742,7 +744,7 @@ static int FlowBitsTestSig06(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -846,7 +848,7 @@ static int FlowBitsTestSig07(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -953,7 +955,7 @@ static int FlowBitsTestSig08(void) {
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (p == NULL)
+    if (unlikely(p == NULL))
         return 0;
     Signature *s = NULL;
     ThreadVars th_v;

@@ -316,8 +316,8 @@ TmEcode AlertDebugLogger(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
             PrintRawDataToBuffer(aft->buffer->buffer, &aft->buffer->offset, aft->buffer->size,
                                  p->payload, p->payload_len);
         }
-        if (pa->flags & PACKET_ALERT_FLAG_STATE_MATCH ||
-            pa->flags & PACKET_ALERT_FLAG_STREAM_MATCH) {
+        if ((pa->flags & PACKET_ALERT_FLAG_STATE_MATCH) ||
+            (pa->flags & PACKET_ALERT_FLAG_STREAM_MATCH)) {
             /* This is an app layer or stream alert */
             int ret;
             uint8_t flag;
@@ -426,7 +426,7 @@ TmEcode AlertDebugLog (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, P
 TmEcode AlertDebugLogThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     AlertDebugLogThread *aft = SCMalloc(sizeof(AlertDebugLogThread));
-    if (aft == NULL)
+    if (unlikely(aft == NULL))
         return TM_ECODE_FAILED;
     memset(aft, 0, sizeof(AlertDebugLogThread));
 
@@ -507,7 +507,7 @@ OutputCtx *AlertDebugLogInitCtx(ConfNode *conf)
     }
 
     OutputCtx *output_ctx = SCMalloc(sizeof(OutputCtx));
-    if (output_ctx == NULL)
+    if (unlikely(output_ctx == NULL))
         goto error;
 
     memset(output_ctx, 0x00, sizeof(OutputCtx));
