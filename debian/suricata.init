@@ -49,6 +49,13 @@ if [ ! -e /proc/net/netfilter/nf_queue ]; then
 fi
 }
 
+check_run_dir() {
+    if [ ! -d /var/run/suricata ]; then
+	mkdir /var/run/suricata
+	chmod 0755 /var/run/suricata
+    fi
+}
+
 
 
 check_root
@@ -81,6 +88,7 @@ case "$1" in
                exit 0
            fi
        fi
+       check_run_dir
        echo -n "Starting suricata in $IDMODE mode..."
        if [ -f /usr/lib/libtcmalloc_minimal.so.0 ] && [ "x$TCMALLOC" = "xYES" ]; then
            export LD_PRELOAD="/usr/lib/libtcmalloc_minimal.so.0"
