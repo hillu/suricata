@@ -95,8 +95,6 @@ case "$1" in
            #echo "Using googles tcmalloc for minor performance boost!?!"
        fi
        $DAEMON $SURICATA_OPTIONS > /var/log/suricata/suricata-start.log  2>&1 &
-       PID1=$!
-       echo "$PID1" > $PIDFILE
        echo " done."
        ;;
   stop)
