@@ -1,3 +1,11 @@
+suricata (1.4-2) unstable; urgency=low
+
+  * Fix error in init script, stop trying to manage suricata pid file
+  * Use arch-specific build dependencies for libluajit-5.1-dev, it is not
+    available on all architectures
+
+ -- Pierre Chifflier <pollux@debian.org>  Sat, 22 Dec 2012 15:39:57 +0100
+
 suricata (1.4-1) unstable; urgency=low
 
   * Imported Upstream version 1.4
