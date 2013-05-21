@@ -70,6 +70,10 @@ case "$LISTENMODE" in
     IDMODE="IDS (pcap)"
     LISTEN_OPTIONS=" -i $IFACE"
     ;;
+  af-packet)
+    IDMODE="IDS (af-packet)"
+    LISTEN_OPTIONS=" --af-packet"
+    ;;
   *)
     echo "Unsupported listen mode $LISTENMODE, aborting"
     exit 1

@@ -6,9 +6,9 @@ RUN=no
 # Configuration file to load
 SURCONF=/etc/suricata/suricata-debian.yaml
 
-# Listen mode: pcap or nfqueue
+# Listen mode: pcap, nfqueue or af-packet
 # depending on this value, only one of the two following options
-# will be used
+# will be used (af-packet uses neither).
 # Please note that IPS mode is only available when using nfqueue
 LISTENMODE=nfqueue
 
