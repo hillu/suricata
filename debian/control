@@ -17,14 +17,17 @@ Build-Depends: debhelper (>= 9),
     libcap-ng-dev,
     libmagic-dev,
     libjansson-dev,
-    libluajit-5.1-dev [i386 amd64 powerpc mips armel armhf]
+    libluajit-5.1-dev [i386 amd64 powerpc mips armel armhf],
+    python
+X-Python-Version: >= 2.6
 Standards-Version: 3.9.3
 Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
 Architecture: any
 Depends: ${shlibs:Depends},
-    ${misc:Depends}
+    ${misc:Depends},
+    ${python:Depends}
 Recommends: oinkmaster, snort-rules-default, python
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
