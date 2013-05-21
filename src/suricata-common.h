@@ -246,6 +246,25 @@
     #endif
 #endif
 
+/** darwin doesn't defined __BYTE_ORDER and friends, but BYTE_ORDER */
+#ifndef __BYTE_ORDER
+#ifdef BYTE_ORDER
+#define __BYTE_ORDER BYTE_ORDER
+#endif
+#endif
+
+#ifndef __LITTLE_ENDIAN
+#ifdef LITTLE_ENDIAN
+#define __LITTLE_ENDIAN LITTLE_ENDIAN
+#endif
+#endif
+
+#ifndef __BIG_ENDIAN
+#ifdef BIG_ENDIAN
+#define __BIG_ENDIAN BIG_ENDIAN
+#endif
+#endif
+
 typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM,
     PROF_DETECT_MPM_PACKET,         /* PKT MPM */
@@ -262,6 +281,8 @@ typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM_HSMD,
     PROF_DETECT_MPM_HSCD,
     PROF_DETECT_MPM_HUAD,
+    PROF_DETECT_MPM_HHHD,
+    PROF_DETECT_MPM_HRHHD,
     PROF_DETECT_IPONLY,
     PROF_DETECT_RULES,
     PROF_DETECT_STATEFUL,

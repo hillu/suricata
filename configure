@@ -654,6 +654,8 @@ NVCC
 BUILD_LIBHTP_FALSE
 BUILD_LIBHTP_TRUE
 subdirs
+LIBHTPMAXVERSION_LIBS
+LIBHTPMAXVERSION_CFLAGS
 LIBHTPMINVERSION_LIBS
 LIBHTPMINVERSION_CFLAGS
 PKG_CONFIG_LIBDIR
@@ -670,6 +672,9 @@ LIBPRELUDE_CONFIG
 BUILD_UNITTESTS_FALSE
 BUILD_UNITTESTS_TRUE
 LIBOBJS
+HAVE_PYTHON_FALSE
+HAVE_PYTHON_TRUE
+HAVE_PYTHON_CONFIG
 HAVE_COCCINELLE_FALSE
 HAVE_COCCINELLE_TRUE
 HAVE_COCCINELLE_CONFIG
@@ -852,6 +857,9 @@ with_napatech_libraries
 enable_luajit
 with_libluajit_includes
 with_libluajit_libraries
+enable_geoip
+with_libgeoip_includes
+with_libgeoip_libraries
 '
       ac_precious_vars='build_alias
 host_alias
@@ -867,6 +875,8 @@ PKG_CONFIG_PATH
 PKG_CONFIG_LIBDIR
 LIBHTPMINVERSION_CFLAGS
 LIBHTPMINVERSION_LIBS
+LIBHTPMAXVERSION_CFLAGS
+LIBHTPMAXVERSION_LIBS
 PYTHON
 LUAJIT_CFLAGS
 LUAJIT_LIBS'
@@ -1518,6 +1528,7 @@ Optional Features:
   --enable-dag  Enable DAG capture
   --enable-napatech   Enabled Napatech Devices
   --enable-luajit  Enable Luajit support
+  --enable-geoip  Enable GeoIP support
 
 Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
@@ -1567,6 +1578,8 @@ Optional Packages:
   --with-napatech-libraries=DIR  napatech library directory
   --with-libluajit-includes=DIR  libluajit include directory
   --with-libluajit-libraries=DIR    libluajit library directory
+  --with-libgeoip-includes=DIR  libgeoip include directory
+  --with-libgeoip-libraries=DIR    libgeoip library directory
 
 Some influential environment variables:
   CC          C compiler command
@@ -1586,6 +1599,10 @@ Some influential environment variables:
               C compiler flags for LIBHTPMINVERSION, overriding pkg-config
   LIBHTPMINVERSION_LIBS
               linker flags for LIBHTPMINVERSION, overriding pkg-config
+  LIBHTPMAXVERSION_CFLAGS
+              C compiler flags for LIBHTPMAXVERSION, overriding pkg-config
+  LIBHTPMAXVERSION_LIBS
+              linker flags for LIBHTPMAXVERSION, overriding pkg-config
   PYTHON      the Python interpreter
   LUAJIT_CFLAGS
               C compiler flags for LUAJIT, overriding pkg-config
@@ -2940,7 +2957,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=1.4
+ VERSION=1.4.1
 
 
 cat >>confdefs.h <<_ACEOF
@@ -12807,6 +12824,66 @@ else
 fi
 
 
+    # Extract the first word of "python", so it can be a program name with args.
+set dummy python; ac_word=$2
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for $ac_word" >&5
+$as_echo_n "checking for $ac_word... " >&6; }
+if ${ac_cv_path_HAVE_PYTHON_CONFIG+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  case $HAVE_PYTHON_CONFIG in
+  [\\/]* | ?:[\\/]*)
+  ac_cv_path_HAVE_PYTHON_CONFIG="$HAVE_PYTHON_CONFIG" # Let the user override the test with a path.
+  ;;
+  *)
+  as_save_IFS=$IFS; IFS=$PATH_SEPARATOR
+for as_dir in $PATH
+do
+  IFS=$as_save_IFS
+  test -z "$as_dir" && as_dir=.
+    for ac_exec_ext in '' $ac_executable_extensions; do
+  if as_fn_executable_p "$as_dir/$ac_word$ac_exec_ext"; then
+    ac_cv_path_HAVE_PYTHON_CONFIG="$as_dir/$ac_word$ac_exec_ext"
+    $as_echo "$as_me:${as_lineno-$LINENO}: found $as_dir/$ac_word$ac_exec_ext" >&5
+    break 2
+  fi
+done
+  done
+IFS=$as_save_IFS
+
+  test -z "$ac_cv_path_HAVE_PYTHON_CONFIG" && ac_cv_path_HAVE_PYTHON_CONFIG=""no""
+  ;;
+esac
+fi
+HAVE_PYTHON_CONFIG=$ac_cv_path_HAVE_PYTHON_CONFIG
+if test -n "$HAVE_PYTHON_CONFIG"; then
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: $HAVE_PYTHON_CONFIG" >&5
+$as_echo "$HAVE_PYTHON_CONFIG" >&6; }
+else
+  { $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+fi
+
+
+    if test "$HAVE_PYTHON_CONFIG" = "no"; then
+        echo
+        echo "   Warning! python not found, you will not be     "
+        echo "   able to install surictasc unix socket client   "
+        echo
+        enable_python="no"
+    else
+        enable_python="yes"
+    fi
+     if test "$HAVE_PYTHON_CONFIG" != "no"; then
+  HAVE_PYTHON_TRUE=
+  HAVE_PYTHON_FALSE='#'
+else
+  HAVE_PYTHON_TRUE='#'
+  HAVE_PYTHON_FALSE=
+fi
+
+
+
 
     # Checks for libraries.
 
@@ -16600,6 +16677,83 @@ fi
             exit 1
         fi
 
+pkg_failed=no
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for LIBHTPMAXVERSION" >&5
+$as_echo_n "checking for LIBHTPMAXVERSION... " >&6; }
+
+if test -n "$LIBHTPMAXVERSION_CFLAGS"; then
+    pkg_cv_LIBHTPMAXVERSION_CFLAGS="$LIBHTPMAXVERSION_CFLAGS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"htp <= 0.3.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "htp <= 0.3.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBHTPMAXVERSION_CFLAGS=`$PKG_CONFIG --cflags "htp <= 0.3.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+if test -n "$LIBHTPMAXVERSION_LIBS"; then
+    pkg_cv_LIBHTPMAXVERSION_LIBS="$LIBHTPMAXVERSION_LIBS"
+ elif test -n "$PKG_CONFIG"; then
+    if test -n "$PKG_CONFIG" && \
+    { { $as_echo "$as_me:${as_lineno-$LINENO}: \$PKG_CONFIG --exists --print-errors \"htp <= 0.3.0\""; } >&5
+  ($PKG_CONFIG --exists --print-errors "htp <= 0.3.0") 2>&5
+  ac_status=$?
+  $as_echo "$as_me:${as_lineno-$LINENO}: \$? = $ac_status" >&5
+  test $ac_status = 0; }; then
+  pkg_cv_LIBHTPMAXVERSION_LIBS=`$PKG_CONFIG --libs "htp <= 0.3.0" 2>/dev/null`
+		      test "x$?" != "x0" && pkg_failed=yes
+else
+  pkg_failed=yes
+fi
+ else
+    pkg_failed=untried
+fi
+
+
+
+if test $pkg_failed = yes; then
+   	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+
+if $PKG_CONFIG --atleast-pkgconfig-version 0.20; then
+        _pkg_short_errors_supported=yes
+else
+        _pkg_short_errors_supported=no
+fi
+        if test $_pkg_short_errors_supported = yes; then
+	        LIBHTPMAXVERSION_PKG_ERRORS=`$PKG_CONFIG --short-errors --print-errors --cflags --libs "htp <= 0.3.0" 2>&1`
+        else
+	        LIBHTPMAXVERSION_PKG_ERRORS=`$PKG_CONFIG --print-errors --cflags --libs "htp <= 0.3.0" 2>&1`
+        fi
+	# Put the nasty error message in config.log where it belongs
+	echo "$LIBHTPMAXVERSION_PKG_ERRORS" >&5
+
+	libhtp_maxver_found="no"
+elif test $pkg_failed = untried; then
+     	{ $as_echo "$as_me:${as_lineno-$LINENO}: result: no" >&5
+$as_echo "no" >&6; }
+	libhtp_maxver_found="no"
+else
+	LIBHTPMAXVERSION_CFLAGS=$pkg_cv_LIBHTPMAXVERSION_CFLAGS
+	LIBHTPMAXVERSION_LIBS=$pkg_cv_LIBHTPMAXVERSION_LIBS
+        { $as_echo "$as_me:${as_lineno-$LINENO}: result: yes" >&5
+$as_echo "yes" >&6; }
+	libhtp_maxver_found="yes"
+fi
+        if test "$libhtp_maxver_found" = "no"; then
+            echo
+            echo "   ERROR! libhtp 0.3.x was found but only 0.2.x is supported"
+            echo
+            exit 1
+        fi
+
         { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_config_register_request_uri_normalize in -lhtp" >&5
 $as_echo_n "checking for htp_config_register_request_uri_normalize in -lhtp... " >&6; }
 if ${ac_cv_lib_htp_htp_config_register_request_uri_normalize+:} false; then :
@@ -16689,6 +16843,64 @@ _ACEOF
 
 fi
 
+        { $as_echo "$as_me:${as_lineno-$LINENO}: checking for htp_decode_query_inplace in -lhtp" >&5
+$as_echo_n "checking for htp_decode_query_inplace in -lhtp... " >&6; }
+if ${ac_cv_lib_htp_htp_decode_query_inplace+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lhtp -lhtp $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char htp_decode_query_inplace ();
+int
+main ()
+{
+return htp_decode_query_inplace ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_htp_htp_decode_query_inplace=yes
+else
+  ac_cv_lib_htp_htp_decode_query_inplace=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_htp_htp_decode_query_inplace" >&5
+$as_echo "$ac_cv_lib_htp_htp_decode_query_inplace" >&6; }
+if test "x$ac_cv_lib_htp_htp_decode_query_inplace" = xyes; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_HTP_DECODE_QUERY_INPLACE 1
+_ACEOF
+
+fi
+
+        cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+#include <htp/htp.h>
+
+_ACEOF
+if (eval "$ac_cpp conftest.$ac_ext") 2>&5 |
+  $EGREP "htp_config_set_path_decode_u_encoding" >/dev/null 2>&1; then :
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_HTP_SET_PATH_DECODE_U_ENCODING 1
+_ACEOF
+
+fi
+rm -f conftest*
 
 
 fi
@@ -16716,6 +16928,11 @@ _ACEOF
 
 cat >>confdefs.h <<_ACEOF
 #define HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW 1
+_ACEOF
+
+
+cat >>confdefs.h <<_ACEOF
+#define HAVE_HTP_DECODE_QUERY_INPLACE 1
 _ACEOF
 
 
@@ -17983,6 +18200,115 @@ $as_echo "#define HAVE_LUAJIT 1" >>confdefs.h
         fi
     fi
 
+  # libgeoip
+    # Check whether --enable-geoip was given.
+if test "${enable_geoip+set}" = set; then :
+  enableval=$enable_geoip;  enable_geoip="yes"
+else
+   enable_geoip="no"
+fi
+
+
+# Check whether --with-libgeoip_includes was given.
+if test "${with_libgeoip_includes+set}" = set; then :
+  withval=$with_libgeoip_includes; with_libgeoip_includes="$withval"
+else
+  with_libgeoip_includes="no"
+fi
+
+
+# Check whether --with-libgeoip_libraries was given.
+if test "${with_libgeoip_libraries+set}" = set; then :
+  withval=$with_libgeoip_libraries; with_libgeoip_libraries="$withval"
+else
+  with_libgeoip_libraries="no"
+fi
+
+
+    if test "$enable_geoip" = "yes"; then
+        if test "$with_libgeoip_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_libgeoip_includes}"
+        fi
+
+        ac_fn_c_check_header_mongrel "$LINENO" "GeoIP.h" "ac_cv_header_GeoIP_h" "$ac_includes_default"
+if test "x$ac_cv_header_GeoIP_h" = xyes; then :
+  GEOIP="yes"
+else
+  GEOIP="no"
+fi
+
+
+        if test "$GEOIP" = "yes"; then
+            if test "$with_libgeoip_libraries" != "no"; then
+                LDFLAGS="${LDFLAGS}  -L${with_libgeoip_libraries}"
+            fi
+            { $as_echo "$as_me:${as_lineno-$LINENO}: checking for GeoIP_country_code_by_ipnum in -lGeoIP" >&5
+$as_echo_n "checking for GeoIP_country_code_by_ipnum in -lGeoIP... " >&6; }
+if ${ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_check_lib_save_LIBS=$LIBS
+LIBS="-lGeoIP  $LIBS"
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+/* Override any GCC internal prototype to avoid an error.
+   Use char because int might match the return type of a GCC
+   builtin and then its argument prototype would still apply.  */
+#ifdef __cplusplus
+extern "C"
+#endif
+char GeoIP_country_code_by_ipnum ();
+int
+main ()
+{
+return GeoIP_country_code_by_ipnum ();
+  ;
+  return 0;
+}
+_ACEOF
+if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum=yes
+else
+  ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum=no
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext conftest.$ac_ext
+LIBS=$ac_check_lib_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum" >&5
+$as_echo "$ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum" >&6; }
+if test "x$ac_cv_lib_GeoIP_GeoIP_country_code_by_ipnum" = xyes; then :
+  cat >>confdefs.h <<_ACEOF
+#define HAVE_LIBGEOIP 1
+_ACEOF
+
+  LIBS="-lGeoIP $LIBS"
+
+else
+  GEOIP="no"
+fi
+
+        fi
+        if test "$GEOIP" = "no"; then
+            echo
+            echo "   ERROR!  libgeoip library not found, go get it"
+            echo "   from http://www.maxmind.com/en/geolite or your distribution:"
+            echo
+            echo "   Ubuntu: apt-get install libgeoip-dev"
+            echo "   Fedora: yum install GeoIP-devel"
+            echo
+            exit 1
+        fi
+        if test "$GEOIP" = "yes"; then
+
+$as_echo "#define HAVE_GEOIP 1" >>confdefs.h
+
+            enable_geoip="yes"
+        fi
+    fi
+
+
 # get revision
     if test -f ./revision; then
         REVISION=`cat ./revision`
@@ -18279,6 +18605,10 @@ Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${HAVE_COCCINELLE_TRUE}" && test -z "${HAVE_COCCINELLE_FALSE}"; then
   as_fn_error $? "conditional \"HAVE_COCCINELLE\" was never defined.
+Usually this means the macro was only invoked conditionally." "$LINENO" 5
+fi
+if test -z "${HAVE_PYTHON_TRUE}" && test -z "${HAVE_PYTHON_FALSE}"; then
+  as_fn_error $? "conditional \"HAVE_PYTHON\" was never defined.
 Usually this means the macro was only invoked conditionally." "$LINENO" 5
 fi
 if test -z "${BUILD_UNITTESTS_TRUE}" && test -z "${BUILD_UNITTESTS_FALSE}"; then
@@ -20681,8 +21011,7 @@ $as_echo "$as_me: WARNING: unrecognized options: $ac_unrecognized_opts" >&2;}
 fi
 
 
-echo "
-Suricata Configuration:
+SURICATA_BUILD_CONF="Suricata Configuration:
   AF_PACKET support:                       ${enable_af_packet}
   PF_RING support:                         ${enable_pfring}
   NFQueue support:                         ${enable_nfqueue}
@@ -20697,9 +21026,12 @@ Suricata Configuration:
   Prelude support:                         ${enable_prelude}
   PCRE jit:                                ${pcre_jit_available}
   libluajit:                               ${enable_luajit}
+  libgeoip:                                ${enable_geoip}
   Non-bundled htp:                         ${enable_non_bundled_htp}
   Old barnyard2 support:                   ${enable_old_barnyard2}
   CUDA enabled:                            ${enable_cuda}
+
+  Suricatasc install:                      ${enable_python}
 
   Unit tests enabled:                      ${enable_unittests}
   Debug output enabled:                    ${enable_debug}
@@ -20716,8 +21048,15 @@ Generic build parameters:
   GCC binary:                              ${CC}
   GCC Protect enabled:                     ${enable_gccprotect}
   GCC march native enabled:                ${enable_gccmarch_native}
-  GCC Profile enabled:                     ${enable_gccprofile}
+  GCC Profile enabled:                     ${enable_gccprofile}"
 
+echo
+echo "$SURICATA_BUILD_CONF"
+echo "printf(" >${ac_builddir}/src/build-info.h
+echo "$SURICATA_BUILD_CONF" | sed -e 's/^/"/' | sed -e 's/$/\\n"/' >>${ac_builddir}/src/build-info.h
+echo ");" >>${ac_builddir}/src/build-info.h
+
+echo "
 To build and install run 'make' and 'make install'.
 
 You can run 'make install-conf' if you want to install initial configuration

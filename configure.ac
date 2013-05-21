@@ -2,8 +2,8 @@
 
 AC_INIT(configure.ac)
 
-    AM_CONFIG_HEADER(config.h)
-    AM_INIT_AUTOMAKE(suricata, 1.4)
+    AC_CONFIG_HEADERS([config.h])
+    AM_INIT_AUTOMAKE(suricata, 1.4.1)
     CFLAGS="${CFLAGS} -DRELEASE"
 
     AC_LANG_C
@@ -100,6 +100,19 @@ AC_INIT(configure.ac)
         echo
     fi
     AM_CONDITIONAL([HAVE_COCCINELLE], [test "$HAVE_COCCINELLE_CONFIG" != "no"])
+
+    AC_PATH_PROG(HAVE_PYTHON_CONFIG, python, "no")
+    if test "$HAVE_PYTHON_CONFIG" = "no"; then
+        echo
+        echo "   Warning! python not found, you will not be     "
+        echo "   able to install surictasc unix socket client   "
+        echo
+        enable_python="no"
+    else
+        enable_python="yes"
+    fi
+    AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON_CONFIG" != "no"])
+
 
 
     # Checks for libraries.
@@ -1014,11 +1027,19 @@ AC_INIT(configure.ac)
             echo
             exit 1
         fi
+        PKG_CHECK_MODULES(LIBHTPMAXVERSION, htp <= 0.3.0,[libhtp_maxver_found="yes"],[libhtp_maxver_found="no"])
+        if test "$libhtp_maxver_found" = "no"; then
+            echo
+            echo "   ERROR! libhtp 0.3.x was found but only 0.2.x is supported"
+            echo
+            exit 1
+        fi
 
         AC_CHECK_LIB([htp], [htp_config_register_request_uri_normalize],AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Found htp_config_register_request_uri_normalize function in libhtp]) ,,[-lhtp])
         # check for htp_tx_get_response_headers_raw
         AC_CHECK_LIB([htp], [htp_tx_get_response_headers_raw],AC_DEFINE_UNQUOTED([HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW],[1],[Found htp_tx_get_response_headers_raw in libhtp]) ,,[-lhtp])
-
+        AC_CHECK_LIB([htp], [htp_decode_query_inplace],AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Found htp_decode_query_inplace function in libhtp]) ,,[-lhtp])
+        AC_EGREP_HEADER(htp_config_set_path_decode_u_encoding, htp/htp.h, AC_DEFINE_UNQUOTED([HAVE_HTP_SET_PATH_DECODE_U_ENCODING],[1],[Found usable htp_config_set_path_decode_u_encoding function in libhtp]) )
     ])
 
     # even if we are using an installed htp lib we still need to gen Makefiles inside of htp
@@ -1027,6 +1048,7 @@ AC_INIT(configure.ac)
     AS_IF([test "x$enable_non_bundled_htp" = "xno"], [
         AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Assuming htp_config_register_request_uri_normalize function in bundled libhtp])
         AC_DEFINE_UNQUOTED([HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW],[1],[Assuming htp_tx_get_response_headers_raw function in bundled libhtp])
+        AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Assuming htp_decode_query_inplace function in bundled libhtp])
     ])
 
 
@@ -1384,6 +1406,47 @@ AC_INIT(configure.ac)
         fi
     fi
 
+  # libgeoip
+    AC_ARG_ENABLE(geoip,
+	        [  --enable-geoip  Enable GeoIP support],
+	        [ enable_geoip="yes"],
+	        [ enable_geoip="no"])
+    AC_ARG_WITH(libgeoip_includes,
+            [  --with-libgeoip-includes=DIR  libgeoip include directory],
+            [with_libgeoip_includes="$withval"],[with_libgeoip_includes="no"])
+    AC_ARG_WITH(libgeoip_libraries,
+            [  --with-libgeoip-libraries=DIR    libgeoip library directory],
+            [with_libgeoip_libraries="$withval"],[with_libgeoip_libraries="no"])
+
+    if test "$enable_geoip" = "yes"; then
+        if test "$with_libgeoip_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_libgeoip_includes}"
+        fi
+
+        AC_CHECK_HEADER(GeoIP.h,GEOIP="yes",GEOIP="no")
+        if test "$GEOIP" = "yes"; then
+            if test "$with_libgeoip_libraries" != "no"; then
+                LDFLAGS="${LDFLAGS}  -L${with_libgeoip_libraries}"
+            fi
+            AC_CHECK_LIB(GeoIP, GeoIP_country_code_by_ipnum,, GEOIP="no")
+        fi
+        if test "$GEOIP" = "no"; then
+            echo
+            echo "   ERROR!  libgeoip library not found, go get it"
+            echo "   from http://www.maxmind.com/en/geolite or your distribution:"
+            echo
+            echo "   Ubuntu: apt-get install libgeoip-dev"
+            echo "   Fedora: yum install GeoIP-devel"
+            echo
+            exit 1
+        fi
+        if test "$GEOIP" = "yes"; then
+            AC_DEFINE([HAVE_GEOIP],[1],[libgeoip available])
+            enable_geoip="yes"
+        fi
+    fi
+
+
 # get revision
     if test -f ./revision; then
         REVISION=`cat ./revision`
@@ -1452,8 +1515,7 @@ AC_SUBST(e_magic_file)
 
 AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
 
-echo "
-Suricata Configuration:
+SURICATA_BUILD_CONF="Suricata Configuration:
   AF_PACKET support:                       ${enable_af_packet}
   PF_RING support:                         ${enable_pfring}
   NFQueue support:                         ${enable_nfqueue}
@@ -1468,9 +1530,12 @@ Suricata Configuration:
   Prelude support:                         ${enable_prelude}
   PCRE jit:                                ${pcre_jit_available}
   libluajit:                               ${enable_luajit}
+  libgeoip:                                ${enable_geoip}
   Non-bundled htp:                         ${enable_non_bundled_htp}
   Old barnyard2 support:                   ${enable_old_barnyard2}
   CUDA enabled:                            ${enable_cuda}
+
+  Suricatasc install:                      ${enable_python}
 
   Unit tests enabled:                      ${enable_unittests}
   Debug output enabled:                    ${enable_debug}
@@ -1487,8 +1552,15 @@ Generic build parameters:
   GCC binary:                              ${CC}
   GCC Protect enabled:                     ${enable_gccprotect}
   GCC march native enabled:                ${enable_gccmarch_native}
-  GCC Profile enabled:                     ${enable_gccprofile}
+  GCC Profile enabled:                     ${enable_gccprofile}"
 
+echo
+echo "$SURICATA_BUILD_CONF"
+echo "printf(" >${ac_builddir}/src/build-info.h
+echo "$SURICATA_BUILD_CONF" | sed -e 's/^/"/' | sed -e 's/$/\\n"/' >>${ac_builddir}/src/build-info.h
+echo ");" >>${ac_builddir}/src/build-info.h
+
+echo "
 To build and install run 'make' and 'make install'.
 
 You can run 'make install-conf' if you want to install initial configuration

@@ -27,11 +27,20 @@
 /* Define to 1 if you have the <fcntl.h> header file. */
 #undef HAVE_FCNTL_H
 
+/* libgeoip available */
+#undef HAVE_GEOIP
+
 /* Define to 1 if you have the <getopt.h> header file. */
 #undef HAVE_GETOPT_H
 
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
+
+/* Assuming htp_decode_query_inplace function in bundled libhtp */
+#undef HAVE_HTP_DECODE_QUERY_INPLACE
+
+/* Found usable htp_config_set_path_decode_u_encoding function in libhtp */
+#undef HAVE_HTP_SET_PATH_DECODE_U_ENCODING
 
 /* Assuming htp_tx_get_response_headers_raw function in bundled libhtp */
 #undef HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW
@@ -51,6 +60,9 @@
 
 /* Define to 1 if you have the `dag' library (-ldag). */
 #undef HAVE_LIBDAG
+
+/* Define to 1 if you have the `GeoIP' library (-lGeoIP). */
+#undef HAVE_LIBGEOIP
 
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
