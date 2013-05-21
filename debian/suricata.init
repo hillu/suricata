@@ -126,7 +126,9 @@ case "$1" in
                done
            fi
        fi
-       rm $PIDFILE > /dev/null 2>&1
+       if [ -e $PIDFILE ]; then
+           rm $PIDFILE > /dev/null 2>&1
+       fi
        echo " done."
     ;;
   status)
