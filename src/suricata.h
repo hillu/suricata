@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "1.4"
+#define PROG_VER "1.4.1"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -151,6 +151,7 @@ void SignalHandlerSigusr2EngineShutdown(int);
 void SignalHandlerSigusr2Idle(int sig);
 
 int RunmodeIsUnittests(void);
+int RunmodeGetCurrent(void);
 
 extern int run_mode;
 

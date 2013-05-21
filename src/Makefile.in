@@ -123,8 +123,10 @@ am__suricata_SOURCES_DIST = alert-debuglog.c alert-debuglog.h \
 	detect-engine-event.h detect-engine-file.c \
 	detect-engine-file.h detect-engine-hcbd.c detect-engine-hcbd.h \
 	detect-engine-hcd.c detect-engine-hcd.h detect-engine-hhd.c \
-	detect-engine-hhd.h detect-engine-hmd.c detect-engine-hmd.h \
-	detect-engine-hrhd.c detect-engine-hrhd.h detect-engine-hrud.c \
+	detect-engine-hhd.h detect-engine-hhhd.c detect-engine-hhhd.h \
+	detect-engine-hmd.c detect-engine-hmd.h detect-engine-hrhd.c \
+	detect-engine-hrhd.h detect-engine-hrhhd.c \
+	detect-engine-hrhhd.h detect-engine-hrud.c \
 	detect-engine-hrud.h detect-engine-hsbd.c detect-engine-hsbd.h \
 	detect-engine-hscd.c detect-engine-hscd.h detect-engine-hsmd.c \
 	detect-engine-hsmd.h detect-engine-hua.c detect-engine-hua.h \
@@ -149,19 +151,21 @@ am__suricata_SOURCES_DIST = alert-debuglog.c alert-debuglog.h \
 	detect-flowint.h detect-flowvar.c detect-flowvar.h \
 	detect-fragbits.c detect-fragbits.h detect-fragoffset.c \
 	detect-fragoffset.h detect-ftpbounce.c detect-ftpbounce.h \
-	detect-gid.c detect-gid.h detect-http-client-body.c \
-	detect-http-client-body.h detect-http-cookie.c \
-	detect-http-cookie.h detect-http-header.c detect-http-header.h \
-	detect-http-method.c detect-http-method.h \
-	detect-http-raw-header.c detect-http-raw-header.h \
-	detect-http-raw-uri.c detect-http-raw-uri.h \
-	detect-http-server-body.c detect-http-server-body.h \
-	detect-http-stat-code.c detect-http-stat-code.h \
-	detect-http-stat-msg.c detect-http-stat-msg.h detect-http-ua.c \
-	detect-http-ua.h detect-http-uri.c detect-http-uri.h \
-	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
-	detect-icmp-seq.h detect-icode.c detect-icode.h detect-id.c \
-	detect-id.h detect-ipopts.c detect-ipopts.h detect-ipproto.c \
+	detect-geoip.c detect-geoip.h detect-gid.c detect-gid.h \
+	detect-http-client-body.c detect-http-client-body.h \
+	detect-http-cookie.c detect-http-cookie.h detect-http-header.c \
+	detect-http-header.h detect-http-hh.c detect-http-hh.h \
+	detect-http-hrh.c detect-http-hrh.h detect-http-method.c \
+	detect-http-method.h detect-http-raw-header.c \
+	detect-http-raw-header.h detect-http-raw-uri.c \
+	detect-http-raw-uri.h detect-http-server-body.c \
+	detect-http-server-body.h detect-http-stat-code.c \
+	detect-http-stat-code.h detect-http-stat-msg.c \
+	detect-http-stat-msg.h detect-http-ua.c detect-http-ua.h \
+	detect-http-uri.c detect-http-uri.h detect-icmp-id.c \
+	detect-icmp-id.h detect-icmp-seq.c detect-icmp-seq.h \
+	detect-icode.c detect-icode.h detect-id.c detect-id.h \
+	detect-ipopts.c detect-ipopts.h detect-ipproto.c \
 	detect-ipproto.h detect-iprep.c detect-iprep.h \
 	detect-isdataat.c detect-isdataat.h detect-itype.c \
 	detect-itype.h detect-l3proto.c detect-l3proto.h \
@@ -310,8 +314,9 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-engine-dcepayload.$(OBJEXT) \
 	detect-engine-event.$(OBJEXT) detect-engine-file.$(OBJEXT) \
 	detect-engine-hcbd.$(OBJEXT) detect-engine-hcd.$(OBJEXT) \
-	detect-engine-hhd.$(OBJEXT) detect-engine-hmd.$(OBJEXT) \
-	detect-engine-hrhd.$(OBJEXT) detect-engine-hrud.$(OBJEXT) \
+	detect-engine-hhd.$(OBJEXT) detect-engine-hhhd.$(OBJEXT) \
+	detect-engine-hmd.$(OBJEXT) detect-engine-hrhd.$(OBJEXT) \
+	detect-engine-hrhhd.$(OBJEXT) detect-engine-hrud.$(OBJEXT) \
 	detect-engine-hsbd.$(OBJEXT) detect-engine-hscd.$(OBJEXT) \
 	detect-engine-hsmd.$(OBJEXT) detect-engine-hua.$(OBJEXT) \
 	detect-engine-iponly.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
@@ -327,10 +332,12 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-flowbits.$(OBJEXT) detect-flow.$(OBJEXT) \
 	detect-flowint.$(OBJEXT) detect-flowvar.$(OBJEXT) \
 	detect-fragbits.$(OBJEXT) detect-fragoffset.$(OBJEXT) \
-	detect-ftpbounce.$(OBJEXT) detect-gid.$(OBJEXT) \
-	detect-http-client-body.$(OBJEXT) detect-http-cookie.$(OBJEXT) \
-	detect-http-header.$(OBJEXT) detect-http-method.$(OBJEXT) \
-	detect-http-raw-header.$(OBJEXT) detect-http-raw-uri.$(OBJEXT) \
+	detect-ftpbounce.$(OBJEXT) detect-geoip.$(OBJEXT) \
+	detect-gid.$(OBJEXT) detect-http-client-body.$(OBJEXT) \
+	detect-http-cookie.$(OBJEXT) detect-http-header.$(OBJEXT) \
+	detect-http-hh.$(OBJEXT) detect-http-hrh.$(OBJEXT) \
+	detect-http-method.$(OBJEXT) detect-http-raw-header.$(OBJEXT) \
+	detect-http-raw-uri.$(OBJEXT) \
 	detect-http-server-body.$(OBJEXT) \
 	detect-http-stat-code.$(OBJEXT) detect-http-stat-msg.$(OBJEXT) \
 	detect-http-ua.$(OBJEXT) detect-http-uri.$(OBJEXT) \
@@ -482,6 +489,7 @@ HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
+HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -489,6 +497,8 @@ INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 LD = @LD@
 LDFLAGS = @LDFLAGS@
+LIBHTPMAXVERSION_CFLAGS = @LIBHTPMAXVERSION_CFLAGS@
+LIBHTPMAXVERSION_LIBS = @LIBHTPMAXVERSION_LIBS@
 LIBHTPMINVERSION_CFLAGS = @LIBHTPMINVERSION_CFLAGS@
 LIBHTPMINVERSION_LIBS = @LIBHTPMINVERSION_LIBS@
 LIBOBJS = @LIBOBJS@
@@ -661,8 +671,10 @@ suricata_SOURCES = alert-debuglog.c alert-debuglog.h alert-fastlog.c \
 	detect-engine-event.h detect-engine-file.c \
 	detect-engine-file.h detect-engine-hcbd.c detect-engine-hcbd.h \
 	detect-engine-hcd.c detect-engine-hcd.h detect-engine-hhd.c \
-	detect-engine-hhd.h detect-engine-hmd.c detect-engine-hmd.h \
-	detect-engine-hrhd.c detect-engine-hrhd.h detect-engine-hrud.c \
+	detect-engine-hhd.h detect-engine-hhhd.c detect-engine-hhhd.h \
+	detect-engine-hmd.c detect-engine-hmd.h detect-engine-hrhd.c \
+	detect-engine-hrhd.h detect-engine-hrhhd.c \
+	detect-engine-hrhhd.h detect-engine-hrud.c \
 	detect-engine-hrud.h detect-engine-hsbd.c detect-engine-hsbd.h \
 	detect-engine-hscd.c detect-engine-hscd.h detect-engine-hsmd.c \
 	detect-engine-hsmd.h detect-engine-hua.c detect-engine-hua.h \
@@ -687,19 +699,21 @@ suricata_SOURCES = alert-debuglog.c alert-debuglog.h alert-fastlog.c \
 	detect-flowint.h detect-flowvar.c detect-flowvar.h \
 	detect-fragbits.c detect-fragbits.h detect-fragoffset.c \
 	detect-fragoffset.h detect-ftpbounce.c detect-ftpbounce.h \
-	detect-gid.c detect-gid.h detect-http-client-body.c \
-	detect-http-client-body.h detect-http-cookie.c \
-	detect-http-cookie.h detect-http-header.c detect-http-header.h \
-	detect-http-method.c detect-http-method.h \
-	detect-http-raw-header.c detect-http-raw-header.h \
-	detect-http-raw-uri.c detect-http-raw-uri.h \
-	detect-http-server-body.c detect-http-server-body.h \
-	detect-http-stat-code.c detect-http-stat-code.h \
-	detect-http-stat-msg.c detect-http-stat-msg.h detect-http-ua.c \
-	detect-http-ua.h detect-http-uri.c detect-http-uri.h \
-	detect-icmp-id.c detect-icmp-id.h detect-icmp-seq.c \
-	detect-icmp-seq.h detect-icode.c detect-icode.h detect-id.c \
-	detect-id.h detect-ipopts.c detect-ipopts.h detect-ipproto.c \
+	detect-geoip.c detect-geoip.h detect-gid.c detect-gid.h \
+	detect-http-client-body.c detect-http-client-body.h \
+	detect-http-cookie.c detect-http-cookie.h detect-http-header.c \
+	detect-http-header.h detect-http-hh.c detect-http-hh.h \
+	detect-http-hrh.c detect-http-hrh.h detect-http-method.c \
+	detect-http-method.h detect-http-raw-header.c \
+	detect-http-raw-header.h detect-http-raw-uri.c \
+	detect-http-raw-uri.h detect-http-server-body.c \
+	detect-http-server-body.h detect-http-stat-code.c \
+	detect-http-stat-code.h detect-http-stat-msg.c \
+	detect-http-stat-msg.h detect-http-ua.c detect-http-ua.h \
+	detect-http-uri.c detect-http-uri.h detect-icmp-id.c \
+	detect-icmp-id.h detect-icmp-seq.c detect-icmp-seq.h \
+	detect-icode.c detect-icode.h detect-id.c detect-id.h \
+	detect-ipopts.c detect-ipopts.h detect-ipproto.c \
 	detect-ipproto.h detect-iprep.c detect-iprep.h \
 	detect-isdataat.c detect-isdataat.h detect-itype.c \
 	detect-itype.h detect-l3proto.c detect-l3proto.h \
@@ -1006,8 +1020,10 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hcbd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hcd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hhd.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hhhd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hmd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhd.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhhd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrud.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hsbd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hscd.Po@am__quote@
@@ -1041,10 +1057,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-fragbits.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-fragoffset.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ftpbounce.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-geoip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-gid.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-client-body.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-cookie.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-header.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-hh.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-hrh.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-method.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-raw-header.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-raw-uri.Po@am__quote@
@@ -1398,7 +1417,7 @@ distclean: distclean-am
 	-rm -rf ./$(DEPDIR)
 	-rm -f Makefile
 distclean-am: clean-am distclean-compile distclean-generic \
-	distclean-tags
+	distclean-local distclean-tags
 
 dvi: dvi-am
 
@@ -1464,17 +1483,17 @@ uninstall-am: uninstall-binPROGRAMS
 
 .PHONY: CTAGS GTAGS all all-am check check-am clean clean-binPROGRAMS \
 	clean-generic clean-libtool ctags distclean distclean-compile \
-	distclean-generic distclean-libtool distclean-tags distdir dvi \
-	dvi-am html html-am info info-am install install-am \
-	install-binPROGRAMS install-data install-data-am install-dvi \
-	install-dvi-am install-exec install-exec-am install-html \
-	install-html-am install-info install-info-am install-man \
-	install-pdf install-pdf-am install-ps install-ps-am \
-	install-strip installcheck installcheck-am installdirs \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-compile mostlyclean-generic mostlyclean-libtool \
-	pdf pdf-am ps ps-am tags uninstall uninstall-am \
-	uninstall-binPROGRAMS
+	distclean-generic distclean-libtool distclean-local \
+	distclean-tags distdir dvi dvi-am html html-am info info-am \
+	install install-am install-binPROGRAMS install-data \
+	install-data-am install-dvi install-dvi-am install-exec \
+	install-exec-am install-html install-html-am install-info \
+	install-info-am install-man install-pdf install-pdf-am \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-compile \
+	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
+	tags uninstall uninstall-am uninstall-binPROGRAMS
 
 
 @BUILD_CUDA_TRUE@.cu.ptx_sm_10:
@@ -1500,6 +1519,9 @@ uninstall-am: uninstall-binPROGRAMS
 
 @BUILD_UNITTESTS_TRUE@check-am:
 @BUILD_UNITTESTS_TRUE@	$(top_builddir)/src/suricata -u
+
+distclean-local:
+	-rm -rf $(top_builddir)/src/build-info.h
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

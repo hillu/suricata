@@ -84,6 +84,9 @@ outputs:
       # is parsed as bytes.
       #limit: 32mb
 
+      # Sensor ID field of unified2 alerts.
+      #sensor-id: 0
+
   # a line based log of HTTP requests (no alerts)
   - http-log:
       enabled: yes
@@ -289,6 +292,10 @@ af-packet:
     defrag: yes
     # buffer-size: 32768
     # disable-promisc: no
+  # Put default values here
+  - interface: default
+    #threads: 2
+    #use-mmap: yes
 
 # You can specify a threshold config file by setting "threshold-file"
 # to the path of the threshold config file:
@@ -676,10 +683,16 @@ pfring:
   #  threads: 3
   #  cluster-id: 93
   #  cluster-type: cluster_flow
+  # Put default values here
+  - interface: default
+    #threads: 2
 
 pcap:
   - interface: eth0
-    #buffer-size: 32768
+    # On Linux, pcap will try to use mmaped capture and will use buffer-size
+    # as total of memory used by the ring. So set this to something bigger
+    # than 1% of your bandwidth.
+    #buffer-size: 16777216
     #bpf-filter: "tcp and port 25"
     # Choose checksum verification mode for the interface. At the moment
     # of the capture, some packets may be with an invalid checksum due to
@@ -696,6 +709,14 @@ pcap:
     # rings. In this case, set up the threads variable to N to start N threads
     # listening on the same interface.
     #threads: 16
+    # set to no to disable promiscuous mode:
+    #promisc: no
+    # set snaplen, if not set it defaults to MTU if MTU can be known
+    # via ioctl call and to full capture if not.
+    #snaplen: 1518
+  # Put default values here
+  - interface: default
+    #checksum-checks: auto
 
 # For FreeBSD ipfw(8) divert(4) support.
 # Please make sure you have ipfw_load="YES" and ipdivert_load="YES"
@@ -1017,3 +1038,16 @@ profiling:
 
 coredump:
   max-dump: unlimited
+
+napatech:
+    # The Host Buffer Allowance for all streams
+    # (-1 = OFF, 1 - 100 = percentage of the host buffer that can be held back)
+    hba: -1
+
+    # use_all_streams set to "yes" will query the Napatech service for all configured
+    # streams and listen on all of them. When set to "no" the streams config array
+    # will be used.
+    use-all-streams: yes
+
+    # The streams to listen on
+    streams: [1, 2, 3]
