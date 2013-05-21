@@ -1,3 +1,16 @@
+suricata (1.4.1-1) unstable; urgency=low
+
+  * Imported Upstream version 1.4.1
+  * Install python control script (add dependency on python, and use
+    dh_python2 for build)
+  * Bump Standards Version to 3.9.4
+  * Fix removal of pid file in init script (Closes: #700547)
+    Thanks to Игорь Козинов <madvampik@gmail.com>.
+  * Add support for af-packet mode in init script (Closes: #697928).
+    Thanks to Jamie Strandboge <jamie@ubuntu.com>.
+
+ -- Pierre Chifflier <pollux@debian.org>  Tue, 21 May 2013 12:42:45 +0200
+
 suricata (1.4-3) unstable; urgency=low
 
   * Add configure flag for luajit only on supported architectures
