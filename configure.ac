@@ -3,7 +3,7 @@
 AC_INIT(configure.ac)
 
     AC_CONFIG_HEADERS([config.h])
-    AM_INIT_AUTOMAKE(suricata, 1.4.1)
+    AM_INIT_AUTOMAKE(suricata, 1.4.2)
     CFLAGS="${CFLAGS} -DRELEASE"
 
     AC_LANG_C
@@ -570,11 +570,11 @@ AC_INIT(configure.ac)
             LDFLAGS="${LDFLAGS}  -L${with_libjansson_libraries}"
         fi
 
-	    AC_CHECK_LIB(jansson, json_loads,, JANSSON="no")
+	    AC_CHECK_LIB(jansson, json_dump_callback,, JANSSON="no")
         enable_jansson="yes"
         if test "$JANSSON" = "no"; then
             echo
-            echo "   Jansson is required for features like unix socket"
+            echo "   Jansson >= 2.2 is required for features like unix socket"
             echo "   Go get it from your distribution of from:"
 	        echo "     http://www.digip.org/jansson/"
             echo
