@@ -385,8 +385,6 @@ typedef struct Signature_ {
         uint32_t hdr_copy3;
     };
 
-    SigIntId order_id;
-
     /** inline -- action */
     uint8_t action;
     uint8_t file_flags;
@@ -467,6 +465,16 @@ typedef struct DetectReplaceList_ {
     uint8_t *found;
     struct DetectReplaceList_ *next;
 } DetectReplaceList;
+
+/** list for flowvar store candidates, to be stored from
+ *  post-match function */
+typedef struct DetectFlowvarList_ {
+    uint16_t idx;                       /**< flowvar name idx */
+    uint16_t len;                       /**< data len */
+    uint8_t *buffer;                    /**< alloc'd buffer, may be freed by
+                                             post-match, post-non-match */
+    struct DetectFlowvarList_ *next;
+} DetectFlowvarList;
 
 typedef struct DetectEngineIPOnlyThreadCtx_ {
     uint8_t *sig_match_array; /* bit array of sig nums */
@@ -812,6 +820,8 @@ typedef struct DetectionEngineThreadCtx_ {
 
     /* string to replace */
     DetectReplaceList *replist;
+    /* flowvars to store in post match function */
+    DetectFlowvarList *flowvarlist;
 
     /* Array in which the filestore keyword stores file id and tx id. If the
      * full signature matches, these are processed by a post-match filestore
@@ -1034,6 +1044,7 @@ enum {
     DETECT_RPC,
     DETECT_DSIZE,
     DETECT_FLOWVAR,
+    DETECT_FLOWVAR_POSTMATCH,
     DETECT_FLOWINT,
     DETECT_PKTVAR,
     DETECT_NOALERT,

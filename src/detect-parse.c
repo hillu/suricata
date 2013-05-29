@@ -991,6 +991,9 @@ static void SigBuildAddressMatchArray(Signature *s) {
  *  \retval 1 valid
  */
 static int SigValidate(Signature *s) {
+    uint32_t u = 0;
+    SigMatch *sm, *pm;
+
     SCEnter();
 
     if ((s->flags & SIG_FLAG_REQUIRE_PACKET) &&
@@ -1000,7 +1003,6 @@ static int SigValidate(Signature *s) {
         SCReturnInt(0);
     }
 
-    SigMatch *sm;
     for (sm = s->sm_lists[DETECT_SM_LIST_MATCH]; sm != NULL; sm = sm->next) {
         if (sm->type == DETECT_FLOW) {
             DetectFlowData *fd = (DetectFlowData *)sm->ctx;
@@ -1082,29 +1084,36 @@ static int SigValidate(Signature *s) {
     }
 
     if (s->sm_lists[DETECT_SM_LIST_HHHDMATCH] != NULL) {
-        for (SigMatch *sm = s->sm_lists[DETECT_SM_LIST_HHHDMATCH];
+        for (sm = s->sm_lists[DETECT_SM_LIST_HHHDMATCH];
              sm != NULL; sm = sm->next) {
             if (sm->type == DETECT_CONTENT) {
                 DetectContentData *cd = (DetectContentData *)sm->ctx;
-                if (!(cd->flags & DETECT_CONTENT_NOCASE)) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "http_host keyword "
-                               "requires the \"nocase\" modifier to be set.");
-                    SCReturnInt(0);
-                }
-            } else if (sm->type == DETECT_PCRE) {
-                DetectPcreData *pd = (DetectPcreData *)sm->ctx;
-                if (!(pd->flags & DETECT_PCRE_CASELESS)) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "pcre http_host "
-                               "modifier requires the nocase modifier "
-                               "\"i\"to be set");
-                    SCReturnInt(0);
+                if (cd->flags & DETECT_CONTENT_NOCASE) {
+                    SCLogWarning(SC_ERR_INVALID_SIGNATURE, "http_host keyword "
+                                 "specified along with \"nocase\". "
+                                 "Since the hostname buffer we match against "
+                                 "is actually lowercase.  So having a "
+                                 "nocase is redundant.");
+                } else {
+                    for (u = 0; u < cd->content_len; u++) {
+                        if (isupper(cd->content[u]))
+                            break;
+                    }
+                    if (u != cd->content_len) {
+                        SCLogWarning(SC_ERR_INVALID_SIGNATURE, "A pattern with "
+                                     "uppercase chars detected for http_host.  "
+                                     "Since the hostname buffer we match against "
+                                     "is lowercase only, please specify a "
+                                     "lowercase pattern.");
+                        SCReturnInt(0);
+                    }
                 }
             }
         }
     }
 
     if (s->flags & SIG_FLAG_REQUIRE_PACKET) {
-        SigMatch *pm =  SigMatchGetLastSMFromLists(s, 24,
+        pm =  SigMatchGetLastSMFromLists(s, 24,
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
                 DETECT_REPLACE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
@@ -1152,7 +1161,7 @@ static int SigValidate(Signature *s) {
     if (s->proto.proto[IPPROTO_TCP / 8] & (1 << (IPPROTO_TCP % 8))) {
         if (!(s->flags & (SIG_FLAG_REQUIRE_PACKET | SIG_FLAG_REQUIRE_STREAM))) {
             s->flags |= SIG_FLAG_REQUIRE_STREAM;
-            SigMatch *sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
+            sm = s->sm_lists[DETECT_SM_LIST_PMATCH];
             while (sm != NULL) {
                 if (sm->type == DETECT_CONTENT &&
                         (((DetectContentData *)(sm->ctx))->flags &
@@ -1169,7 +1178,6 @@ static int SigValidate(Signature *s) {
     int i;
     for (i = 0; i < DETECT_SM_LIST_MAX; i++) {
         if (s->sm_lists[i] != NULL) {
-            SigMatch *sm;
             for (sm = s->sm_lists[i]; sm != NULL; sm = sm->next) {
                 BUG_ON(sm == sm->prev);
                 BUG_ON(sm == sm->next);

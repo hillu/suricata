@@ -71,7 +71,7 @@ int DetectEngineInspectPacketPayload(DetectEngineCtx *de_ctx,
     //det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
 
     r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH],
-                                      f, p->payload, p->payload_len,
+                                      f, p->payload, p->payload_len, 0,
                                       DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD, p);
     //r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], p, f, p->payload, p->payload_len);
     //det_ctx->flags &= ~DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
@@ -115,7 +115,7 @@ int DetectEngineInspectStreamPayload(DetectEngineCtx *de_ctx,
     //det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM;
 
     r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH],
-                                      f, payload, payload_len,
+                                      f, payload, payload_len, 0,
                                       DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
 
     //r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], NULL, f, payload, payload_len);
@@ -955,6 +955,48 @@ end:
     return result;
 }
 
+static int PayloadTestSig30(void)
+{
+    uint8_t *buf = (uint8_t *)
+                    "xyonexxxxxxtwojunkonetwo";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (content:\"one\"; pcre:\"/^two/R\"; sid:1;)";
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
+static int PayloadTestSig31(void)
+{
+    uint8_t *buf = (uint8_t *)
+                    "xyonexxxxxxtwojunkonetwo";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
+    int result = 0;
+
+    char sig[] = "alert tcp any any -> any any (content:\"one\"; pcre:\"/(fiv|^two)/R\"; sid:1;)";
+    if (UTHPacketMatchSigMpm(p, sig, MPM_B2G) == 0) {
+        result = 0;
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (p != NULL)
+        UTHFreePacket(p);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void PayloadRegisterTests(void) {
@@ -989,6 +1031,9 @@ void PayloadRegisterTests(void) {
     UtRegisterTest("PayloadTestSig27", PayloadTestSig27, 1);
     UtRegisterTest("PayloadTestSig28", PayloadTestSig28, 1);
     UtRegisterTest("PayloadTestSig29", PayloadTestSig29, 1);
+
+    UtRegisterTest("PayloadTestSig30", PayloadTestSig30, 1);
+    UtRegisterTest("PayloadTestSig31", PayloadTestSig31, 1);
 #endif /* UNITTESTS */
 
     return;
