@@ -1,3 +1,10 @@
+suricata (1.4.5-1) unstable; urgency=low
+
+  * Imported Upstream version 1.4.5
+  * Prepare transition for suricata 2.0 by conflicting with libhtp >= 0.5
+
+ -- Pierre Chifflier <pollux@debian.org>  Tue, 20 Aug 2013 16:44:45 +0200
+
 suricata (1.4.3-1) unstable; urgency=low
 
   * Imported Upstream version 1.4.3
