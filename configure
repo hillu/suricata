@@ -817,6 +817,7 @@ with_libpthread_includes
 with_libpthread_libraries
 with_libjansson_includes
 with_libjansson_libraries
+enable_unix_socket
 enable_nfqueue
 with_libnfnetlink_includes
 with_libnfnetlink_libraries
@@ -1517,6 +1518,7 @@ Optional Features:
   --enable-profiling-locks
                           Enable performance profiling for locks
   --enable-ipfw           Enable FreeBSD IPFW support for inline IDP
+  --enable-unix-socket    Enable unix socket [default=test]
   --enable-nfqueue        Enable NFQUEUE support for inline IDP
   --enable-prelude        Enable Prelude support for alerts
   --enable-pfring         Enable Native PF_RING support
@@ -2957,7 +2959,7 @@ fi
 
 # Define the identity of the package.
  PACKAGE=suricata
- VERSION=1.4.3
+ VERSION=1.4.5
 
 
 cat >>confdefs.h <<_ACEOF
@@ -14677,6 +14679,15 @@ fi
 
     enable_jansson="no"
     enable_unixsocket="no"
+
+    # Check whether --enable-unix-socket was given.
+if test "${enable_unix_socket+set}" = set; then :
+  enableval=$enable_unix_socket; enable_unixsocket="$enableval"
+else
+  enable_unixsocket=test
+fi
+
+
     ac_fn_c_check_header_mongrel "$LINENO" "jansson.h" "ac_cv_header_jansson_h" "$ac_includes_default"
 if test "x$ac_cv_header_jansson_h" = xyes; then :
   JANSSON="yes"
@@ -14744,6 +14755,9 @@ fi
             echo "   Go get it from your distribution of from:"
 	        echo "     http://www.digip.org/jansson/"
             echo
+            if test "x$enable_unixsocket" = "xyes"; then
+                exit 1
+            fi
             enable_unixsocket="no"
             enable_jansson="no"
         else
@@ -14753,10 +14767,22 @@ fi
                 *-*-cygwin)
                 ;;
                 *)
-                enable_unixsocket="yes"
+                if test "x$enable_unixsocket" = "xtest"; then
+                    enable_unixsocket="yes"
+                fi
                 ;;
             esac
         fi
+    else
+        if test "x$enable_unixsocket" = "xyes"; then
+            echo
+            echo "   Jansson >= 2.2 is required for features like unix socket"
+            echo "   Go get it from your distribution of from:"
+            echo "     http://www.digip.org/jansson/"
+            echo
+            exit 1
+        fi
+        enable_unixsocket="no"
     fi
 
     if test "x$enable_unixsocket" = "xyes"; then :
