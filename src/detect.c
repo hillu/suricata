@@ -1421,6 +1421,8 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
         /* check the source & dst port in the sig */
         if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP || p->proto == IPPROTO_SCTP) {
             if (!(s->flags & SIG_FLAG_DP_ANY)) {
+                if (p->flags & PKT_IS_FRAGMENT)
+                    goto next;
                 DetectPort *dport = DetectPortLookupGroup(s->dp,p->dp);
                 if (dport == NULL) {
                     SCLogDebug("dport didn't match.");
@@ -1428,6 +1430,8 @@ int SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineTh
                 }
             }
             if (!(s->flags & SIG_FLAG_SP_ANY)) {
+                if (p->flags & PKT_IS_FRAGMENT)
+                    goto next;
                 DetectPort *sport = DetectPortLookupGroup(s->sp,p->sp);
                 if (sport == NULL) {
                     SCLogDebug("sport didn't match.");
@@ -1760,7 +1764,7 @@ TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQue
     DEBUG_VALIDATE_PACKET(p);
 
     /* No need to perform any detection on this packet, if the the given flag is set.*/
-    if ((p->flags & PKT_NOPACKET_INSPECTION) || (p->action & ACTION_DROP))
+    if ((p->flags & PKT_NOPACKET_INSPECTION) || (PACKET_TEST_ACTION(p, ACTION_DROP)))
         return 0;
 
     DetectEngineThreadCtx *det_ctx = (DetectEngineThreadCtx *)data;
@@ -10910,7 +10914,7 @@ static int SigTestDropFlow03(void)
         goto end;
     }
 
-    if ( !(p2->action & ACTION_DROP)) {
+    if ( !(PACKET_TEST_ACTION(p2, ACTION_DROP))) {
         printf("A \"drop\" action should be set from the flow to the packet: ");
         goto end;
     }
@@ -11041,7 +11045,7 @@ static int SigTestDropFlow04(void)
         goto end;
     }
 
-    if (!(p1->action & ACTION_DROP)) {
+    if (!(PACKET_TEST_ACTION(p1, ACTION_DROP))) {
         printf("A \"drop\" action was set from the flow to the packet "
                "which is right, but setting the flag shouldn't disable "
                "inspection on the packet in IDS mode");
@@ -11082,7 +11086,7 @@ static int SigTestDropFlow04(void)
         goto end;
     }
 
-    if (!(p2->action & ACTION_DROP)) {
+    if (!(PACKET_TEST_ACTION(p2, ACTION_DROP))) {
         printf("A \"drop\" action was set from the flow to the packet "
                "which is right, but setting the flag shouldn't disable "
                "inspection on the packet in IDS mode");

@@ -787,6 +787,11 @@ typedef struct DecodeThreadVars_
      ((p)->action |= a)); \
 } while (0)
 
+#define PACKET_TEST_ACTION(p, a) \
+    ((p)->root ? \
+     ((p)->root->action & a) : \
+     ((p)->action & a))
+
 #define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
         SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
         ((p)->root ? (p)->root->tunnel_rtv_cnt++ : (p)->tunnel_rtv_cnt++);          \
@@ -949,6 +954,8 @@ void AddressDebugPrint(Address *);
 
 #define PKT_HOST_SRC_LOOKED_UP          (1<<17)
 #define PKT_HOST_DST_LOOKED_UP          (1<<18)
+
+#define PKT_IS_FRAGMENT                 (1<<19)     /**< Packet is a fragment */
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)
