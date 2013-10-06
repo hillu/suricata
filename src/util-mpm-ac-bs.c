@@ -49,11 +49,14 @@
 #include "suricata.h"
 
 #include "detect.h"
+#include "detect-parse.h"
+#include "detect-engine.h"
 #include "util-mpm-ac-bs.h"
 
 #include "conf.h"
 #include "util-debug.h"
 #include "util-unittest.h"
+#include "util-unittest-helper.h"
 #include "util-memcmp.h"
 
 void SCACBSInitCtx(MpmCtx *, int);
@@ -1497,6 +1500,8 @@ uint32_t SCACBSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
+                        if ((i + 1) < pid_pat_list[pids[k] & 0x0000FFFF].patlen)
+                            continue;
                         if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
                                      buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
                                      pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
@@ -1580,6 +1585,8 @@ uint32_t SCACBSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
+                        if ((i + 1) < pid_pat_list[pids[k] & 0x0000FFFF].patlen)
+                            continue;
                         if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
                                      buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
                                      pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
@@ -2703,6 +2710,61 @@ static int SCACBSTest29(void)
     return result;
 }
 
+static int SCACBSTest30(void)
+{
+    uint8_t *buf = (uint8_t *)"onetwothreefourfivesixseveneightnine";
+    uint16_t buflen = strlen((char *)buf);
+    Packet *p = NULL;
+    ThreadVars th_v;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    int result = 0;
+
+    memset(&th_v, 0, sizeof(th_v));
+    p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+    de_ctx->mpm_matcher = MPM_AC_BS;
+
+    de_ctx->flags |= DE_QUIET;
+
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(content:\"onetwothreefourfivesixseveneightnine\"; sid:1;)");
+    if (de_ctx->sig_list == NULL)
+        goto end;
+    de_ctx->sig_list->next = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(content:\"onetwothreefourfivesixseveneightnine\"; fast_pattern:3,3; sid:2;)");
+    if (de_ctx->sig_list->next == NULL)
+        goto end;
+
+    SigGroupBuild(de_ctx);
+    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
+    if (PacketAlertCheck(p, 1) != 1) {
+        printf("if (PacketAlertCheck(p, 1) != 1) failure\n");
+        goto end;
+    }
+    if (PacketAlertCheck(p, 2) != 1) {
+        printf("if (PacketAlertCheck(p, 1) != 2) failure\n");
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (de_ctx != NULL) {
+        SigGroupCleanup(de_ctx);
+        SigCleanSignatures(de_ctx);
+
+        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+        DetectEngineCtxFree(de_ctx);
+    }
+
+    UTHFreePackets(&p, 1);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 void SCACBSRegisterTests(void)
@@ -2738,6 +2800,7 @@ void SCACBSRegisterTests(void)
     UtRegisterTest("SCACBSTest27", SCACBSTest27, 1);
     UtRegisterTest("SCACBSTest28", SCACBSTest28, 1);
     UtRegisterTest("SCACBSTest29", SCACBSTest29, 1);
+    UtRegisterTest("SCACBSTest30", SCACBSTest30, 1);
 #endif
 
     return;

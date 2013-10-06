@@ -265,6 +265,12 @@ static DetectGeoipData *DetectGeoipDataParse (char *str)
                     geoipdata->flags |= GEOIP_MATCH_NEGATED;
                     prevpos++; /* dot not copy the ! */
                 }
+
+                if (geoipdata->nlocations >= GEOOPTION_MAXLOCATIONS) {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT, "too many arguements for geoip keyword");
+                    goto error;
+                }
+
                 if (pos-prevpos > GEOOPTION_MAXSIZE)
                     strlcpy((char *)geoipdata->location[geoipdata->nlocations], &str[prevpos],
                                                                             GEOOPTION_MAXSIZE);
@@ -292,7 +298,7 @@ static DetectGeoipData *DetectGeoipDataParse (char *str)
 
     /* Initialize the geolocation engine */
     geoipdata->geoengine = InitGeolocationEngine();
-    if (geoipdata==NULL)
+    if (geoipdata->geoengine == NULL)
         goto error;
 
     return geoipdata;

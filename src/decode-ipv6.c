@@ -91,7 +91,7 @@ static void DecodeIP6inIP6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uin
             if (tp != NULL) {
                 PKT_SET_SRC(tp, PKT_SRC_DECODER_IPV6);
                 DecodeTunnel(tv, dtv, tp, GET_PKT_DATA(tp),
-                             GET_PKT_LEN(tp), pq, IPPROTO_IP);
+                             GET_PKT_LEN(tp), pq, IPPROTO_IPV6);
                 PacketEnqueue(pq,tp);
                 SCPerfCounterIncr(dtv->counter_ipv6inipv6, tv->sc_perf_pca);
                 return;
@@ -555,22 +555,28 @@ void DecodeIPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
     switch(IPV6_GET_NH(p)) {
         case IPPROTO_TCP:
             IPV6_SET_L4PROTO (p, IPPROTO_TCP);
-            return DecodeTCP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeTCP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
         case IPPROTO_UDP:
             IPV6_SET_L4PROTO (p, IPPROTO_UDP);
-            return DecodeUDP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeUDP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
             break;
         case IPPROTO_ICMPV6:
             IPV6_SET_L4PROTO (p, IPPROTO_ICMPV6);
-            return DecodeICMPV6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeICMPV6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
         case IPPROTO_SCTP:
             IPV6_SET_L4PROTO (p, IPPROTO_SCTP);
-            return DecodeSCTP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeSCTP(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
         case IPPROTO_IPIP:
             IPV6_SET_L4PROTO(p, IPPROTO_IPIP);
-            return DecodeIPv4inIPv6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeIPv4inIPv6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
         case IPPROTO_IPV6:
-            return DecodeIP6inIP6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            DecodeIP6inIP6(tv, dtv, p, pkt + IPV6_HEADER_LEN, IPV6_GET_PLEN(p), pq);
+            return;
         case IPPROTO_FRAGMENT:
         case IPPROTO_HOPOPTS:
         case IPPROTO_ROUTING:
