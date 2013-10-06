@@ -3,7 +3,7 @@
 AC_INIT(configure.ac)
 
     AC_CONFIG_HEADERS([config.h])
-    AM_INIT_AUTOMAKE(suricata, 1.4.5)
+    AM_INIT_AUTOMAKE(suricata, 1.4.6)
     CFLAGS="${CFLAGS} -DRELEASE"
 
     AC_LANG_C
