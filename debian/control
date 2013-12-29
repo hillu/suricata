@@ -21,7 +21,7 @@ Build-Depends: debhelper (>= 9),
     libluajit-5.1-dev [i386 amd64 powerpc mips armel armhf],
     python
 X-Python-Version: >= 2.6
-Standards-Version: 3.9.4
+Standards-Version: 3.9.5
 Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
