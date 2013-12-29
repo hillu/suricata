@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Build-Depends: debhelper (>= 9),
     autotools-dev,
+    dh-autoreconf,
     libhtp-dev (>= 0.2.3),
     libhtp-dev (<< 0.5),
     libnet1-dev | libnet-dev,
