@@ -39,7 +39,6 @@
 #include "runmode-af-packet.h"
 #include "log-httplog.h"
 #include "output.h"
-#include "cuda-packet-batcher.h"
 #include "detect-engine-mpm.h"
 
 #include "alert-fastlog.h"
@@ -58,7 +57,6 @@
 
 extern int max_pending_packets;
 
-static const char *default_mode_auto = NULL;
 static const char *default_mode_autofp = NULL;
 
 const char *RunModeAFPGetDefaultMode(void)
@@ -68,7 +66,6 @@ const char *RunModeAFPGetDefaultMode(void)
 
 void RunModeIdsAFPRegister(void)
 {
-    default_mode_auto = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_AFP_DEV, "auto",
                               "Multi threaded af-packet mode",
                               RunModeIdsAFPAuto);
@@ -144,6 +141,7 @@ void *ParseAFPConfig(const char *iface)
     aconf->flags = 0;
     aconf->bpf_filter = NULL;
     aconf->out_iface = NULL;
+    aconf->copy_mode = AFP_COPY_MODE_NONE;
 
     if (ConfGet("bpf-filter", &bpf_filter) == 1) {
         if (strlen(bpf_filter) > 0) {
@@ -253,10 +251,11 @@ void *ParseAFPConfig(const char *iface)
         /* In hash mode, we also ask for defragmentation needed to
          * compute the hash */
         uint16_t defrag = 0;
+        int conf_val = 0;
         SCLogInfo("Using flow cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
-        ConfGetChildValueBoolWithDefault(if_root, if_default, "defrag", (int *)&defrag);
-        if (defrag) {
+        ConfGetChildValueBoolWithDefault(if_root, if_default, "defrag", &conf_val);
+        if (conf_val) {
             SCLogInfo("Using defrag kernel functionality for AF_PACKET (iface %s)",
                     aconf->iface);
             defrag = PACKET_FANOUT_FLAG_DEFRAG;

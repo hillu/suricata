@@ -27,6 +27,7 @@
 #include "util-host-os-info.h"
 #include "util-error.h"
 #include "util-debug.h"
+#include "util-ip.h"
 #include "util-radix-tree.h"
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
@@ -59,61 +60,6 @@ SCEnumCharMap sc_hinfo_os_policy_map[ ] = {
 /** Radix tree that holds the host OS information */
 static SCRadixTree *sc_hinfo_tree = NULL;
 
-/**
- * \brief Validates an IPV4 address and returns the network endian arranged
- *        version of the IPV4 address
- *
- * \param addr Pointer to a character string containing an IPV4 address.  A
- *             valid IPV4 address is a character string containing a dotted
- *             format of "ddd.ddd.ddd.ddd"
- *
- * \retval Pointer to an in_addr instance containing the network endian format
- *         of the IPV4 address
- * \retval NULL if the IPV4 address is invalid
- */
-static struct in_addr *SCHInfoValidateIPV4Address(const char *addr_str)
-{
-    struct in_addr *addr = NULL;
-
-    if ( (addr = SCMalloc(sizeof(struct in_addr))) == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC, "Fatal error encountered in SCHInfoValidateIPV4Address. Mem not allocated");
-        return NULL;
-    }
-
-    if (inet_pton(AF_INET, addr_str, addr) <= 0) {
-        SCFree(addr);
-        return NULL;
-    }
-
-    return addr;
-}
-
-/**
- * \brief Validates an IPV6 address and returns the network endian arranged
- *        version of the IPV6 addresss
- *
- * \param addr Pointer to a character string containing an IPV6 address
- *
- * \retval Pointer to a in6_addr instance containing the network endian format
- *         of the IPV6 address
- * \retval NULL if the IPV6 address is invalid
- */
-static struct in6_addr *SCHInfoValidateIPV6Address(const char *addr_str)
-{
-    struct in6_addr *addr = NULL;
-
-    if ( (addr = SCMalloc(sizeof(struct in6_addr))) == NULL) {
-        SCLogError(SC_ERR_FATAL, "Fatal error encountered in SCHInfoValidateIPV6Address. Exiting...");
-        exit(EXIT_FAILURE);
-    }
-
-    if (inet_pton(AF_INET6, addr_str, addr) <= 0) {
-        SCFree(addr);
-        return NULL;
-    }
-
-    return addr;
-}
 
 /**
  * \brief Allocates the host_os flavour wrapped in user_data variable to be sent
@@ -155,37 +101,6 @@ static void SCHInfoFreeUserDataOSPolicy(void *data)
 {
     if (data != NULL)
         SCFree(data);
-
-    return;
-}
-
-/**
- * \brief Culls the non-netmask portion of the ip address.
- *
- *        This function can also be used for any general purpose use, to mask
- *        the first netmask bits of the stream data sent as argument
- *
- * \param stream  Pointer to the data to be masked
- * \param netmask The mask length(netmask)
- * \param bitlen  The bitlen of the stream
- */
-static void SCHInfoMaskIPNetblock(uint8_t *stream, int netmask, int bitlen)
-{
-    int bytes = 0;
-    int mask = 0;
-    int i = 0;
-
-    bytes = bitlen / 8;
-    for (i = 0; i < bytes; i++) {
-        mask = -1;
-        if ( ((i + 1) * 8) > netmask) {
-            if ( ((i + 1) * 8 - netmask) < 8)
-                mask = -1 << ((i + 1) * 8 - netmask);
-            else
-                mask = 0;
-        }
-        stream[i] &= mask;
-    }
 
     return;
 }
@@ -259,8 +174,10 @@ int SCHInfoAddHostOSInfo(char *host_os, char *host_os_ip_range, int is_ipv4)
 
     if (index(ip_str, ':') == NULL) {
         /* if we are here, we have an IPV4 address */
-        if ( (ipv4_addr = SCHInfoValidateIPV4Address(ip_str)) == NULL) {
+        if ( (ipv4_addr = ValidateIPV4Address(ip_str)) == NULL) {
             SCLogError(SC_ERR_INVALID_IPV4_ADDR, "Invalid IPV4 address");
+            SCHInfoFreeUserDataOSPolicy(user_data);
+            SCFree(ip_str);
             return -1;
         }
 
@@ -271,18 +188,22 @@ int SCHInfoAddHostOSInfo(char *host_os, char *host_os_ip_range, int is_ipv4)
             netmask_value = atoi(netmask_str);
             if (netmask_value < 0 || netmask_value > 32) {
                 SCLogError(SC_ERR_INVALID_IP_NETBLOCK, "Invalid IPV4 Netblock");
+                SCHInfoFreeUserDataOSPolicy(user_data);
                 SCFree(ipv4_addr);
+                SCFree(ip_str);
                 return -1;
             }
 
-            SCHInfoMaskIPNetblock((uint8_t *)ipv4_addr, netmask_value, 32);
+            MaskIPNetblock((uint8_t *)ipv4_addr, netmask_value, 32);
             SCRadixAddKeyIPV4Netblock((uint8_t *)ipv4_addr, sc_hinfo_tree,
                                       (void *)user_data, netmask_value);
         }
     } else {
         /* if we are here, we have an IPV6 address */
-        if ( (ipv6_addr = SCHInfoValidateIPV6Address(ip_str)) == NULL) {
+        if ( (ipv6_addr = ValidateIPV6Address(ip_str)) == NULL) {
             SCLogError(SC_ERR_INVALID_IPV6_ADDR, "Invalid IPV6 address inside");
+            SCHInfoFreeUserDataOSPolicy(user_data);
+            SCFree(ip_str);
             return -1;
         }
 
@@ -293,11 +214,13 @@ int SCHInfoAddHostOSInfo(char *host_os, char *host_os_ip_range, int is_ipv4)
             netmask_value = atoi(netmask_str);
             if (netmask_value < 0 || netmask_value > 128) {
                 SCLogError(SC_ERR_INVALID_IP_NETBLOCK, "Invalid IPV6 Netblock");
+                SCHInfoFreeUserDataOSPolicy(user_data);
                 SCFree(ipv6_addr);
+                SCFree(ip_str);
                 return -1;
             }
 
-            SCHInfoMaskIPNetblock((uint8_t *)ipv6_addr, netmask_value, 128);
+            MaskIPNetblock((uint8_t *)ipv6_addr, netmask_value, 128);
             SCRadixAddKeyIPV6Netblock((uint8_t *)ipv6_addr, sc_hinfo_tree,
                                       (void *)user_data, netmask_value);
         }
@@ -325,33 +248,35 @@ int SCHInfoAddHostOSInfo(char *host_os, char *host_os_ip_range, int is_ipv4)
  */
 int SCHInfoGetHostOSFlavour(char *ip_addr_str)
 {
-    SCRadixNode *node = NULL;
     struct in_addr *ipv4_addr = NULL;
     struct in6_addr *ipv6_addr = NULL;
+    void *user_data = NULL;
 
     if (ip_addr_str == NULL || index(ip_addr_str, '/') != NULL)
         return -1;
 
     if (index(ip_addr_str, ':') != NULL) {
-        if ( (ipv6_addr = SCHInfoValidateIPV6Address(ip_addr_str)) == NULL) {
+        if ( (ipv6_addr = ValidateIPV6Address(ip_addr_str)) == NULL) {
             SCLogError(SC_ERR_INVALID_IPV4_ADDR, "Invalid IPV4 address");
             return -1;
         }
 
-        if ( (node = SCRadixFindKeyIPV6BestMatch((uint8_t *)ipv6_addr, sc_hinfo_tree)) == NULL)
+        (void)SCRadixFindKeyIPV6BestMatch((uint8_t *)ipv6_addr, sc_hinfo_tree, &user_data);
+        if (user_data == NULL)
             return -1;
         else
-            return *((int *)node->prefix->user_data_result);
+            return *((int *)user_data);
     } else {
-        if ( (ipv4_addr = SCHInfoValidateIPV4Address(ip_addr_str)) == NULL) {
+        if ( (ipv4_addr = ValidateIPV4Address(ip_addr_str)) == NULL) {
             SCLogError(SC_ERR_INVALID_IPV4_ADDR, "Invalid IPV4 address");
             return -1;
         }
 
-        if ( (node = SCRadixFindKeyIPV4BestMatch((uint8_t *)ipv4_addr, sc_hinfo_tree)) == NULL)
+        (void)SCRadixFindKeyIPV4BestMatch((uint8_t *)ipv4_addr, sc_hinfo_tree, &user_data);
+        if (user_data == NULL)
             return -1;
         else
-            return *((int *)node->prefix->user_data_result);
+            return *((int *)user_data);
     }
 }
 
@@ -365,11 +290,12 @@ int SCHInfoGetHostOSFlavour(char *ip_addr_str)
  */
 int SCHInfoGetIPv4HostOSFlavour(uint8_t *ipv4_addr)
 {
-    SCRadixNode *node = SCRadixFindKeyIPV4BestMatch(ipv4_addr, sc_hinfo_tree);
-    if (node == NULL)
+    void *user_data = NULL;
+    (void)SCRadixFindKeyIPV4BestMatch(ipv4_addr, sc_hinfo_tree, &user_data);
+    if (user_data == NULL)
         return -1;
     else
-        return *((int *)node->prefix->user_data_result);
+        return *((int *)user_data);
 }
 
 /**
@@ -382,11 +308,12 @@ int SCHInfoGetIPv4HostOSFlavour(uint8_t *ipv4_addr)
  */
 int SCHInfoGetIPv6HostOSFlavour(uint8_t *ipv6_addr)
 {
-    SCRadixNode *node = SCRadixFindKeyIPV6BestMatch(ipv6_addr, sc_hinfo_tree);
-    if (node == NULL)
+    void *user_data = NULL;
+    (void)SCRadixFindKeyIPV6BestMatch(ipv6_addr, sc_hinfo_tree, &user_data);
+    if (user_data == NULL)
         return -1;
     else
-        return *((int *)node->prefix->user_data_result);
+        return *((int *)user_data);
 }
 
 void SCHInfoCleanResources(void)

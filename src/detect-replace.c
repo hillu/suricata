@@ -1,4 +1,4 @@
-/* Copyright (C) 2011 Open Information Security Foundation
+/* Copyright (C) 2011-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -55,6 +55,10 @@ extern int run_mode;
 
 #include "util-debug.h"
 
+#include "pkt-var.h"
+#include "host.h"
+#include "util-profiling.h"
+
 static int DetectReplaceSetup (DetectEngineCtx *, Signature *, char *);
 void DetectReplaceRegisterTests(void);
 
@@ -70,13 +74,13 @@ void DetectReplaceRegister (void) {
 
 int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
 {
-    char *str = NULL;
+    uint8_t *content = NULL;
     uint16_t len = 0;
-    int flags;
+    uint32_t flags = 0;
     SigMatch *pm = NULL;
     DetectContentData *ud = NULL;
 
-    int ret = DetectContentDataParse("replace", replacestr, &str, &len, &flags);
+    int ret = DetectContentDataParse("replace", replacestr, &content, &len, &flags);
     if (ret == -1)
         goto error;
 
@@ -104,7 +108,7 @@ int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
     if (pm == NULL) {
         SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "replace needs"
                 "preceding content option for raw sig");
-        SCFree(str);
+        SCFree(content);
         return -1;
     }
 
@@ -112,7 +116,7 @@ int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
     ud = (DetectContentData *)pm->ctx;
     if (ud == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid argument");
-        SCFree(str);
+        SCFree(content);
         return -1;
     }
     if (ud->flags & DETECT_CONTENT_NEGATED) {
@@ -130,19 +134,19 @@ int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
     if (ud->replace == NULL) {
         goto error;
     }
-    memcpy(ud->replace, str, len);
+    memcpy(ud->replace, content, len);
     ud->replace_len = len;
     ud->flags |= DETECT_CONTENT_REPLACE;
     /* want packet matching only won't be able to replace data with
      * a flow.
      */
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
-    SCFree(str);
+    SCFree(content);
 
     return 0;
 
 error:
-    SCFree(str);
+    SCFree(content);
     return -1;
 }
 
@@ -217,7 +221,7 @@ int DetectReplaceLongPatternMatchTest(uint8_t *raw_eth_pkt, uint16_t pktsize, ch
     int result = 0;
 
     Packet *p = NULL;
-    p = SCMalloc(SIZE_OF_PACKET);
+    p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
 
@@ -230,12 +234,10 @@ int DetectReplaceLongPatternMatchTest(uint8_t *raw_eth_pkt, uint16_t pktsize, ch
         SCLogDebug("replace: looks like a second run");
     }
 
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     PacketCopyData(p, raw_eth_pkt, pktsize);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(th_v));
-
+    dtv.app_tctx = AppLayerGetCtxThread(&th_v);
 
     FlowInitConfig(FLOW_QUIET);
     DecodeEthernet(&th_v, &dtv, p, GET_PKT_DATA(p), pktsize, NULL);
@@ -279,6 +281,8 @@ int DetectReplaceLongPatternMatchTest(uint8_t *raw_eth_pkt, uint16_t pktsize, ch
 
     result = 1;
 end:
+    if (dtv.app_tctx != NULL)
+        AppLayerDestroyCtxThread(dtv.app_tctx);
     if (de_ctx != NULL)
     {
         SigGroupCleanup(de_ctx);
@@ -287,6 +291,7 @@ end:
             DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
         DetectEngineCtxFree(de_ctx);
     }
+    PACKET_RECYCLE(p);
     FlowShutdown();
     SCFree(p);
 

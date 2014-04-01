@@ -164,11 +164,11 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
     DetectFlowbitsData *cd = NULL;
     SigMatch *sm = NULL;
-    char *fb_cmd_str = NULL, *fb_name = NULL;
     uint8_t fb_cmd = 0;
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
+    char fb_cmd_str[16] = "", fb_name[256] = "";
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 2 && ret != 3) {
@@ -176,21 +176,18 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         return -1;
     }
 
-    const char *str_ptr;
-    res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
+    res = pcre_copy_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 1, fb_cmd_str, sizeof(fb_cmd_str));
     if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
         return -1;
     }
-    fb_cmd_str = (char *)str_ptr;
 
     if (ret == 3) {
-        res = pcre_get_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+        res = pcre_copy_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, fb_name, sizeof(fb_name));
         if (res < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
             goto error;
         }
-        fb_name = (char *)str_ptr;
     }
 
     if (strcmp(fb_cmd_str,"noalert") == 0) {
@@ -212,7 +209,7 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 
     switch (fb_cmd) {
         case DETECT_FLOWBITS_CMD_NOALERT:
-            if(fb_name != NULL)
+            if (strlen(fb_name) != 0)
                 goto error;
             s->flags |= SIG_FLAG_NOALERT;
             return 0;
@@ -222,7 +219,7 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         case DETECT_FLOWBITS_CMD_UNSET:
         case DETECT_FLOWBITS_CMD_TOGGLE:
         default:
-            if(fb_name == NULL)
+            if (strlen(fb_name) == 0)
                 goto error;
             break;
     }
@@ -235,12 +232,7 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     cd->cmd = fb_cmd;
 
     SCLogDebug("idx %" PRIu32 ", cmd %s, name %s",
-        cd->idx, fb_cmd_str, fb_name ? fb_name : "(null)");
-
-    pcre_free_substring(fb_name);
-    fb_name = NULL;
-    pcre_free_substring(fb_cmd_str);
-    fb_cmd_str = NULL;
+        cd->idx, fb_cmd_str, strlen(fb_name) ? fb_name : "(none)");
 
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
@@ -273,10 +265,6 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     return 0;
 
 error:
-    if (fb_name != NULL)
-        pcre_free_substring(fb_name);
-    if (fb_cmd_str != NULL)
-        pcre_free_substring(fb_cmd_str);
     if (cd != NULL)
         SCFree(cd);
     if (sm != NULL)
@@ -318,7 +306,6 @@ static int FlowBitsTestSig01(void) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = buf;
@@ -394,7 +381,6 @@ static int FlowBitsTestSig02(void) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = buf;
@@ -515,7 +501,6 @@ static int FlowBitsTestSig03(void) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = buf;
@@ -594,7 +579,6 @@ static int FlowBitsTestSig04(void) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = buf;
@@ -675,7 +659,6 @@ static int FlowBitsTestSig05(void) {
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     p->src.family = AF_INET;
     p->dst.family = AF_INET;
     p->payload = buf;
@@ -756,7 +739,6 @@ static int FlowBitsTestSig06(void) {
     int idx = 0;
 
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
@@ -860,7 +842,6 @@ static int FlowBitsTestSig07(void) {
     int idx = 0;
 
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));
@@ -967,7 +948,6 @@ static int FlowBitsTestSig08(void) {
     int idx = 0;
 
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(Flow));
     memset(&flowvar, 0, sizeof(GenericVar));

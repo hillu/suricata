@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -49,36 +49,67 @@
 
 #include "suricata-common.h"
 #include "suricata.h"
+#include "conf.h"
 #include "decode.h"
 #include "util-debug.h"
 #include "util-mem.h"
 #include "app-layer-detect-proto.h"
+#include "app-layer.h"
 #include "tm-threads.h"
 #include "util-error.h"
 #include "util-print.h"
 #include "tmqh-packetpool.h"
 #include "util-profiling.h"
+#include "pkt-var.h"
+#include "util-mpm-ac.h"
 
-void DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+int DecodeTunnel(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         uint8_t *pkt, uint16_t len, PacketQueue *pq, uint8_t proto)
 {
     switch (proto) {
         case PPP_OVER_GRE:
-            DecodePPP(tv, dtv, p, pkt, len, pq);
-            return;
+            return DecodePPP(tv, dtv, p, pkt, len, pq);
         case IPPROTO_IP:
-            DecodeIPV4(tv, dtv, p, pkt, len, pq);
-            return;
+            return DecodeIPV4(tv, dtv, p, pkt, len, pq);
         case IPPROTO_IPV6:
-            DecodeIPV6(tv, dtv, p, pkt, len, pq);
-            return;
+            return DecodeIPV6(tv, dtv, p, pkt, len, pq);
        case VLAN_OVER_GRE:
-            DecodeVLAN(tv, dtv, p, pkt, len, pq);
-            return;
+            return DecodeVLAN(tv, dtv, p, pkt, len, pq);
         default:
             SCLogInfo("FIXME: DecodeTunnel: protocol %" PRIu32 " not supported.", proto);
             break;
     }
+    return TM_ECODE_OK;
+}
+
+/**
+ * \brief Return a malloced packet.
+ */
+void PacketFree(Packet *p)
+{
+    PACKET_CLEANUP(p);
+    SCFree(p);
+}
+
+/**
+ * \brief Finalize decoding of a packet
+ *
+ * This function needs to be call at the end of decode
+ * functions when decoding has been succesful.
+ *
+ */
+
+void PacketDecodeFinalize(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p)
+{
+
+    if (p->flags & PKT_IS_INVALID)
+        SCPerfCounterIncr(dtv->counter_invalid, tv->sc_perf_pca);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (dtv->cuda_vars.mpm_is_cuda)
+        CudaBufferPacket(&dtv->cuda_vars, p);
+#endif
+
 }
 
 /**
@@ -93,13 +124,26 @@ Packet *PacketGetFromAlloc(void)
         return NULL;
     }
 
+    memset(p, 0, SIZE_OF_PACKET);
     PACKET_INITIALIZE(p);
+    p->ReleasePacket = PacketFree;
     p->flags |= PKT_ALLOC;
 
     SCLogDebug("allocated a new packet only using alloc...");
 
     PACKET_PROFILING_START(p);
     return p;
+}
+
+/**
+ * \brief Return a packet to where it was allocated.
+ */
+void PacketFreeOrRelease(Packet *p)
+{
+    if (p->flags & PKT_ALLOC)
+        PacketFree(p);
+    else
+        PacketPoolReturnPacket(p);
 }
 
 /**
@@ -144,7 +188,7 @@ Packet *PacketGetFromQueueOrAlloc(void)
  */
 inline int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen)
 {
-    if (offset + datalen > MAX_PAYLOAD_SIZE) {
+    if (unlikely(offset + datalen > MAX_PAYLOAD_SIZE)) {
         /* too big */
         return -1;
     }
@@ -153,11 +197,11 @@ inline int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datale
     if (! p->ext_pkt) {
         if (offset + datalen <= (int)default_packet_size) {
             /* data will fit in memory allocated with packet */
-            memcpy(p->pkt + offset, data, datalen);
+            memcpy(GET_PKT_DIRECT_DATA(p) + offset, data, datalen);
         } else {
             /* here we need a dynamic allocation */
             p->ext_pkt = SCMalloc(MAX_PAYLOAD_SIZE);
-            if (p->ext_pkt == NULL) {
+            if (unlikely(p->ext_pkt == NULL)) {
                 SET_PKT_LEN(p, 0);
                 return -1;
             }
@@ -185,8 +229,6 @@ inline int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen)
     return PacketCopyDataOffset(p, 0, pktdata, pktlen);
 }
 
-
-
 /**
  *  \brief Setup a pseudo packet (tunnel)
  *
@@ -197,21 +239,18 @@ inline int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen)
  *
  *  \retval p the pseudo packet or NULL if out of memory
  */
-Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto)
+Packet *PacketTunnelPktSetup(ThreadVars *tv, DecodeThreadVars *dtv, Packet *parent,
+                             uint8_t *pkt, uint16_t len, uint8_t proto, PacketQueue *pq)
 {
+    int ret;
+
     SCEnter();
 
     /* get us a packet */
     Packet *p = PacketGetFromQueueOrAlloc();
-    if (p == NULL) {
+    if (unlikely(p == NULL)) {
         SCReturnPtr(NULL, "Packet");
     }
-
-    /* set the root ptr to the lowest layer */
-    if (parent->root != NULL)
-        p->root = parent->root;
-    else
-        p->root = parent;
 
     /* copy packet and set lenght, proto */
     PacketCopyData(p, pkt, len);
@@ -220,10 +259,27 @@ Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
     p->ts.tv_usec = parent->ts.tv_usec;
     p->datalink = DLT_RAW;
 
-    /* set tunnel flags */
+    /* set the root ptr to the lowest layer */
+    if (parent->root != NULL)
+        p->root = parent->root;
+    else
+        p->root = parent;
 
     /* tell new packet it's part of a tunnel */
     SET_TUNNEL_PKT(p);
+
+    ret = DecodeTunnel(tv, dtv, p, GET_PKT_DATA(p),
+                       GET_PKT_LEN(p), pq, proto);
+
+    if (unlikely(ret != TM_ECODE_OK)) {
+        /* Not a tunnel packet, just a pseudo packet */
+        p->root = NULL;
+        UNSET_TUNNEL_PKT(p);
+        TmqhOutputPacketpool(tv, p);
+        SCReturnPtr(NULL, "Packet");
+    }
+
+
     /* tell parent packet it's part of a tunnel */
     SET_TUNNEL_PKT(parent);
 
@@ -251,12 +307,13 @@ Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
  *
  *  \retval p the pseudo packet or NULL if out of memory
  */
-Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto) {
+Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto)
+{
     SCEnter();
 
     /* get us a packet */
     Packet *p = PacketGetFromQueueOrAlloc();
-    if (p == NULL) {
+    if (unlikely(p == NULL)) {
         SCReturnPtr(NULL, "Packet");
     }
 
@@ -272,22 +329,31 @@ Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
     p->ts.tv_sec = parent->ts.tv_sec;
     p->ts.tv_usec = parent->ts.tv_usec;
     p->datalink = DLT_RAW;
-
-    /* set tunnel flags */
-
     /* tell new packet it's part of a tunnel */
     SET_TUNNEL_PKT(p);
+    p->vlan_id[0] = parent->vlan_id[0];
+    p->vlan_id[1] = parent->vlan_id[1];
+    p->vlan_idx = parent->vlan_idx;
+
+    SCReturnPtr(p, "Packet");
+}
+
+/**
+ *  \brief inform defrag "parent" that a pseudo packet is
+ *         now assosiated to it.
+ */
+void PacketDefragPktSetupParent(Packet *parent)
+{
     /* tell parent packet it's part of a tunnel */
     SET_TUNNEL_PKT(parent);
 
     /* increment tunnel packet refcnt in the root packet */
-    TUNNEL_INCR_PKT_TPR(p);
+    TUNNEL_INCR_PKT_TPR(parent);
 
     /* disable payload (not packet) inspection on the parent, as the payload
      * is the packet we will now run through the system separately. We do
      * check it against the ip/port/other header checks though */
     DecodeSetNoPayloadInspectionFlag(parent);
-    SCReturnPtr(p, "Packet");
 }
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
@@ -295,21 +361,10 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     /* register counters */
     dtv->counter_pkts = SCPerfTVRegisterCounter("decoder.pkts", tv,
                                                 SC_PERF_TYPE_UINT64, "NULL");
-#if 0
-    dtv->counter_pkts_per_sec = SCPerfTVRegisterIntervalCounter("decoder.pkts_per_sec",
-                                                                tv, SC_PERF_TYPE_DOUBLE,
-                                                                "NULL", "1s");
-#endif
     dtv->counter_bytes = SCPerfTVRegisterCounter("decoder.bytes", tv,
                                                  SC_PERF_TYPE_UINT64, "NULL");
-#if 0
-    dtv->counter_bytes_per_sec = SCPerfTVRegisterIntervalCounter("decoder.bytes_per_sec",
-                                                                tv, SC_PERF_TYPE_DOUBLE,
-                                                                "NULL", "1s");
-    dtv->counter_mbit_per_sec = SCPerfTVRegisterIntervalCounter("decoder.mbit_per_sec",
-                                                                tv, SC_PERF_TYPE_DOUBLE,
-                                                                "NULL", "1s");
-#endif
+    dtv->counter_invalid = SCPerfTVRegisterCounter("decoder.invalid", tv,
+                                                 SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_ipv4 = SCPerfTVRegisterCounter("decoder.ipv4", tv,
                                                 SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_ipv6 = SCPerfTVRegisterCounter("decoder.ipv6", tv,
@@ -338,6 +393,8 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_vlan = SCPerfTVRegisterCounter("decoder.vlan", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
+    dtv->counter_vlan_qinq = SCPerfTVRegisterCounter("decoder.vlan_qinq", tv,
+                                               SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_teredo = SCPerfTVRegisterCounter("decoder.teredo", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_ipv4inipv6 = SCPerfTVRegisterCounter("decoder.ipv4_in_ipv6", tv,
@@ -345,7 +402,7 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     dtv->counter_ipv6inipv6 = SCPerfTVRegisterCounter("decoder.ipv6_in_ipv6", tv,
                                                SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_avg_pkt_size = SCPerfTVRegisterAvgCounter("decoder.avg_pkt_size", tv,
-                                                           SC_PERF_TYPE_DOUBLE, "NULL");
+                                                           SC_PERF_TYPE_UINT64, "NULL");
     dtv->counter_max_pkt_size = SCPerfTVRegisterMaxCounter("decoder.max_pkt_size", tv,
                                                            SC_PERF_TYPE_UINT64, "NULL");
 
@@ -371,9 +428,6 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
         SCPerfTVRegisterCounter("defrag.max_frag_hits", tv,
             SC_PERF_TYPE_UINT64, "NULL");
 
-    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
-    SCPerfAddToClubbedTMTable(tv->name, &tv->sc_perf_pctx);
-
     return;
 }
 
@@ -384,7 +438,8 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
  *
  *  \todo IPv6
  */
-void AddressDebugPrint(Address *a) {
+void AddressDebugPrint(Address *a)
+{
     if (a == NULL)
         return;
 
@@ -400,21 +455,25 @@ void AddressDebugPrint(Address *a) {
 }
 
 /** \brief Alloc and setup DecodeThreadVars */
-DecodeThreadVars *DecodeThreadVarsAlloc() {
-
+DecodeThreadVars *DecodeThreadVarsAlloc(ThreadVars *tv)
+{
     DecodeThreadVars *dtv = NULL;
 
     if ( (dtv = SCMalloc(sizeof(DecodeThreadVars))) == NULL)
         return NULL;
-
     memset(dtv, 0, sizeof(DecodeThreadVars));
 
-    /* initialize UDP app layer code */
-    AlpProtoFinalize2Thread(&dtv->udp_dp_ctx);
+    dtv->app_tctx = AppLayerGetCtxThread(tv);
+
+    /** set config defaults */
+    int vlanbool = 0;
+    if ((ConfGetBool("vlan.use-for-tracking", &vlanbool)) == 1 && vlanbool == 0) {
+        dtv->vlan_disabled = 1;
+    }
+    SCLogDebug("vlan tracking is %s", dtv->vlan_disabled == 0 ? "enabled" : "disabled");
 
     return dtv;
 }
-
 
 /**
  * \brief Set data for Packet and set length when zeo copy is used
@@ -426,13 +485,48 @@ DecodeThreadVars *DecodeThreadVarsAlloc() {
 inline int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen)
 {
     SET_PKT_LEN(p, (size_t)pktlen);
-    if (!pktdata) {
+    if (unlikely(!pktdata)) {
         return -1;
     }
     p->ext_pkt = pktdata;
     p->flags |= PKT_ZERO_COPY;
 
     return 0;
+}
+
+const char *PktSrcToString(enum PktSrcEnum pkt_src)
+{
+    char *pkt_src_str = "<unknown>";
+    switch (pkt_src) {
+        case PKT_SRC_WIRE:
+            pkt_src_str = "wire/pcap";
+            break;
+        case PKT_SRC_DECODER_GRE:
+            pkt_src_str = "gre tunnel";
+            break;
+        case PKT_SRC_DECODER_IPV4:
+            pkt_src_str = "ipv4 tunnel";
+            break;
+        case PKT_SRC_DECODER_IPV6:
+            pkt_src_str = "ipv6 tunnel";
+            break;
+        case PKT_SRC_DECODER_TEREDO:
+            pkt_src_str = "teredo tunnel";
+            break;
+        case PKT_SRC_DEFRAG:
+            pkt_src_str = "defrag";
+            break;
+        case PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO:
+            pkt_src_str = "stream";
+            break;
+        case PKT_SRC_FFR_V2:
+            pkt_src_str = "stream (flow timeout)";
+            break;
+        case PKT_SRC_FFR_SHUTDOWN:
+            pkt_src_str = "stream (engine shutdown)";
+            break;
+    }
+    return pkt_src_str;
 }
 
 /**

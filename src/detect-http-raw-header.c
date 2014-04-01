@@ -53,6 +53,7 @@
 #include "util-print.h"
 
 #include "app-layer.h"
+#include "app-layer-parser.h"
 
 #include "app-layer-htp.h"
 #include "detect-http-raw-header.h"
@@ -114,99 +115,11 @@ void DetectHttpRawHeaderFree(void *ptr)
  */
 int DetectHttpRawHeaderSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
 {
-    DetectContentData *cd = NULL;
-    SigMatch *sm = NULL;
-
-    if (arg != NULL && strcmp(arg, "") != 0) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT, "http_raw_header supplied with no args");
-        return -1;
-    }
-
-    sm =  SigMatchGetLastSMFromLists(s, 2,
-                                     DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
-    /* if still we are unable to find any previous content keywords, it is an
-     * invalid rule */
-    if (sm == NULL) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "\"http_raw_header\" keyword "
-                   "found inside the rule without a content context.  "
-                   "Please use a \"content\" keyword before using the "
-                   "\"http_header\" keyword");
-        return -1;
-    }
-
-    cd = (DetectContentData *)sm->ctx;
-
-    /* http_header should not be used with the rawbytes rule */
-    if (cd->flags & DETECT_CONTENT_RAWBYTES) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "http_header rule can not "
-                   "be used with the rawbytes rule keyword");
-        return -1;
-    }
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains a non http "
-                   "alproto set");
-        goto error;
-    }
-
-    if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
-        SigMatch *pm =  SigMatchGetLastSMFromLists(s, 4,
-                                                   DETECT_CONTENT, sm->prev,
-                                                   DETECT_PCRE, sm->prev);
-        if (pm != NULL) {
-            /* pm is never NULL.  So no NULL check */
-            if (pm->type == DETECT_CONTENT) {
-                DetectContentData *tmp_cd = (DetectContentData *)pm->ctx;
-                tmp_cd->flags &= ~DETECT_CONTENT_RELATIVE_NEXT;
-            } else {
-                DetectPcreData *tmp_pd = (DetectPcreData *)pm->ctx;
-                tmp_pd->flags &= ~DETECT_PCRE_RELATIVE_NEXT;
-            }
-        } /* if (pm != NULL) */
-
-        /* please note.  reassigning pm */
-        pm = SigMatchGetLastSMFromLists(s, 4,
-                                        DETECT_CONTENT,
-                                        s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                        DETECT_PCRE,
-                                        s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "http_raw_header seen with a "
-                       "distance or within without a previous http_raw_header "
-                       "content.  Invalidating signature.");
-            goto error;
-        }
-        if (pm->type == DETECT_PCRE) {
-            DetectPcreData *tmp_pd = (DetectPcreData *)pm->ctx;
-            tmp_pd->flags |= DETECT_PCRE_RELATIVE_NEXT;
-        } else {
-            DetectContentData *tmp_cd = (DetectContentData *)pm->ctx;
-            tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
-        }
-    }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_HRUDMATCH);
-    sm->type = DETECT_CONTENT;
-
-    /* transfer the sm from the pmatch list to hrhdmatch list */
-    SigMatchTransferSigMatchAcrossLists(sm,
-                                        &s->sm_lists[DETECT_SM_LIST_PMATCH],
-                                        &s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                        &s->sm_lists[DETECT_SM_LIST_HRHDMATCH],
-                                        &s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]);
-
-    /* flag the signature to indicate that we scan the app layer data */
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_HTTP;
-
-    return 0;
-
-error:
-    //if (cd != NULL)
-    //    DetectHttpRawHeaderFree(cd);
-    //if (sm != NULL)
-    //    SCFree(sm);
-
-    return -1;
+    return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
+                                                  DETECT_AL_HTTP_RAW_HEADER,
+                                                  DETECT_SM_LIST_HRHDMATCH,
+                                                  ALPROTO_HTTP,
+                                                  NULL);
 }
 
 /************************************Unittests*********************************/
@@ -401,6 +314,7 @@ static int DetectHttpRawHeaderTest06(void)
         "This is dummy message body\r\n";
     uint32_t http_len = sizeof(http_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -410,6 +324,7 @@ static int DetectHttpRawHeaderTest06(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
@@ -435,12 +350,15 @@ static int DetectHttpRawHeaderTest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -459,6 +377,8 @@ static int DetectHttpRawHeaderTest06(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -498,7 +418,7 @@ static int DetectHttpRawHeaderTest07(void)
     uint32_t http1_len = sizeof(http1_buf) - 1;
     uint32_t http2_len = sizeof(http2_buf) - 1;
     int result = 0;
-
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -509,6 +429,7 @@ static int DetectHttpRawHeaderTest07(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p1->flow = &f;
     p1->flowflags |= FLOW_PKT_TOSERVER;
@@ -538,12 +459,15 @@ static int DetectHttpRawHeaderTest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -560,12 +484,15 @@ static int DetectHttpRawHeaderTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -577,6 +504,8 @@ static int DetectHttpRawHeaderTest07(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -616,6 +545,7 @@ static int DetectHttpRawHeaderTest08(void)
     uint32_t http1_len = sizeof(http1_buf) - 1;
     uint32_t http2_len = sizeof(http2_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -626,6 +556,7 @@ static int DetectHttpRawHeaderTest08(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p1->flow = &f;
     p1->flowflags |= FLOW_PKT_TOSERVER;
@@ -655,12 +586,15 @@ static int DetectHttpRawHeaderTest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -677,12 +611,15 @@ static int DetectHttpRawHeaderTest08(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -694,6 +631,8 @@ static int DetectHttpRawHeaderTest08(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -734,6 +673,7 @@ static int DetectHttpRawHeaderTest09(void)
     uint32_t http1_len = sizeof(http1_buf) - 1;
     uint32_t http2_len = sizeof(http2_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -744,6 +684,7 @@ static int DetectHttpRawHeaderTest09(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p1->flow = &f;
     p1->flowflags |= FLOW_PKT_TOSERVER;
@@ -773,12 +714,15 @@ static int DetectHttpRawHeaderTest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -795,12 +739,15 @@ static int DetectHttpRawHeaderTest09(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -812,6 +759,8 @@ static int DetectHttpRawHeaderTest09(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -852,6 +801,7 @@ static int DetectHttpRawHeaderTest10(void)
     uint32_t http1_len = sizeof(http1_buf) - 1;
     uint32_t http2_len = sizeof(http2_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -862,6 +812,7 @@ static int DetectHttpRawHeaderTest10(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p1->flow = &f;
     p1->flowflags |= FLOW_PKT_TOSERVER;
@@ -891,12 +842,15 @@ static int DetectHttpRawHeaderTest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -913,12 +867,15 @@ static int DetectHttpRawHeaderTest10(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -930,6 +887,8 @@ static int DetectHttpRawHeaderTest10(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -967,6 +926,7 @@ static int DetectHttpRawHeaderTest11(void)
         "This is dummy message body\r\n";
     uint32_t http_len = sizeof(http_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -976,6 +936,7 @@ static int DetectHttpRawHeaderTest11(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
@@ -1001,12 +962,15 @@ static int DetectHttpRawHeaderTest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1025,6 +989,8 @@ static int DetectHttpRawHeaderTest11(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -1061,6 +1027,7 @@ static int DetectHttpRawHeaderTest12(void)
         "This is dummy message body\r\n";
     uint32_t http_len = sizeof(http_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -1070,6 +1037,7 @@ static int DetectHttpRawHeaderTest12(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
@@ -1095,12 +1063,15 @@ static int DetectHttpRawHeaderTest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1119,6 +1090,8 @@ static int DetectHttpRawHeaderTest12(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -1155,6 +1128,7 @@ static int DetectHttpRawHeaderTest13(void)
         "longbufferabcdefghijklmnopqrstuvwxyz0123456789bufferend\r\n";
     uint32_t http_len = sizeof(http_buf) - 1;
     int result = 0;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -1164,6 +1138,7 @@ static int DetectHttpRawHeaderTest13(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -1190,12 +1165,15 @@ static int DetectHttpRawHeaderTest13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1214,6 +1192,9 @@ static int DetectHttpRawHeaderTest13(void)
 
     result = 1;
 end:
+
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
         SigGroupCleanup(de_ctx);
     if (de_ctx != NULL)
@@ -1224,244 +1205,6 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
-    return result;
-}
-
-int DetectHttpRawHeaderTest14(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; content:\"one\"; http_raw_header; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (cd->id == hrhd->id)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpRawHeaderTest15(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; http_raw_header; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (cd->id == hrhd->id)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpRawHeaderTest16(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; content:\"one\"; content:\"one\"; http_raw_header; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (cd->id != 0 || hrhd->id != 1)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpRawHeaderTest17(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; http_raw_header; content:\"one\"; content:\"one\"; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (cd->id != 1 || hrhd->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpRawHeaderTest18(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; http_raw_header; "
-                               "content:\"one\"; content:\"one\"; http_raw_header; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    DetectContentData *hrhd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
-    if (cd->id != 1 || hrhd1->id != 0 || hrhd2->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpRawHeaderTest19(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                               "(flow:to_server; content:\"one\"; http_raw_header; "
-                               "content:\"one\"; content:\"one\"; http_raw_header; content:\"two\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hrhd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    DetectContentData *hrhd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
-    if (cd->id != 2 || hrhd1->id != 0 || hrhd2->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -1564,8 +1307,8 @@ int DetectHttpRawHeaderTest22(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
                                "(flow:to_server; content:\"one\"; within:5; http_raw_header; sid:1;)");
-    if (de_ctx->sig_list != NULL) {
-        printf("de_ctx->sig_list != NULL\n");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
         goto end;
     }
 
@@ -1612,8 +1355,8 @@ int DetectHttpRawHeaderTest24(void)
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
                                "(flow:to_server; content:\"one\"; within:5; sid:1;)");
-    if (de_ctx->sig_list != NULL) {
-        printf("de_ctx->sig_list != NULL\n");
+    if (de_ctx->sig_list == NULL) {
+        printf("de_ctx->sig_list == NULL\n");
         goto end;
     }
 
@@ -1662,7 +1405,7 @@ int DetectHttpRawHeaderTest25(void)
 
     DetectPcreData *pd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
     DetectContentData *hhd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT | DETECT_PCRE_RAW_HEADER) ||
+    if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         hhd2->flags != DETECT_CONTENT_WITHIN ||
         memcmp(hhd2->content, "two", hhd2->content_len) != 0) {
         goto end;
@@ -1713,7 +1456,7 @@ int DetectHttpRawHeaderTest26(void)
 
     DetectContentData *hhd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
     DetectPcreData *pd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (pd2->flags != (DETECT_PCRE_RELATIVE | DETECT_PCRE_RAW_HEADER) ||
+    if (pd2->flags != (DETECT_PCRE_RELATIVE) ||
         hhd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(hhd1->content, "two", hhd1->content_len) != 0) {
         goto end;
@@ -1764,7 +1507,7 @@ int DetectHttpRawHeaderTest27(void)
 
     DetectPcreData *pd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
     DetectContentData *hhd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
-    if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT | DETECT_PCRE_RAW_HEADER) ||
+    if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         hhd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(hhd2->content, "two", hhd2->content_len) != 0) {
         goto end;
@@ -1796,12 +1539,6 @@ void DetectHttpRawHeaderRegisterTests(void)
     UtRegisterTest("DetectHttpRawHeaderTest11", DetectHttpRawHeaderTest11, 1);
     UtRegisterTest("DetectHttpRawHeaderTest12", DetectHttpRawHeaderTest12, 1);
     UtRegisterTest("DetectHttpRawHeaderTest13", DetectHttpRawHeaderTest13, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest14", DetectHttpRawHeaderTest14, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest15", DetectHttpRawHeaderTest15, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest16", DetectHttpRawHeaderTest16, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest17", DetectHttpRawHeaderTest17, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest18", DetectHttpRawHeaderTest18, 1);
-    UtRegisterTest("DetectHttpRawHeaderTest19", DetectHttpRawHeaderTest19, 1);
     UtRegisterTest("DetectHttpRawHeaderTest20", DetectHttpRawHeaderTest20, 1);
     UtRegisterTest("DetectHttpRawHeaderTest21", DetectHttpRawHeaderTest21, 1);
     UtRegisterTest("DetectHttpRawHeaderTest22", DetectHttpRawHeaderTest22, 1);

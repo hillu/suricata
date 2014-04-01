@@ -43,6 +43,7 @@ typedef struct NFQPacketVars_
 {
     int id; /* this nfq packets id */
     uint16_t nfq_index; /* index in NFQ array */
+    uint8_t verdicted;
 
     uint32_t mark;
     uint32_t ifi;
@@ -80,6 +81,14 @@ typedef struct NFQQueueVars_
     uint32_t accepted;
     uint32_t dropped;
     uint32_t replaced;
+    struct {
+        uint32_t packet_id; /* id of last processed packet */
+        uint32_t verdict;
+        uint32_t mark;
+        uint8_t mark_valid:1;
+        uint8_t len;
+        uint8_t maxlen;
+    } verdict_cache;
 
 } NFQQueueVars;
 

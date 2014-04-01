@@ -22,7 +22,6 @@
 #include "runmode-erf-file.h"
 #include "log-httplog.h"
 #include "output.h"
-#include "cuda-packet-batcher.h"
 #include "source-pfring.h"
 
 #include "alert-fastlog.h"
@@ -34,6 +33,8 @@
 #include "util-time.h"
 #include "util-cpu.h"
 #include "util-affinity.h"
+
+#include "util-runmodes.h"
 
 static const char *default_mode;
 
@@ -105,12 +106,14 @@ int RunModeErfFileSingle(DetectEngineCtx *de_ctx)
     }
     TmSlotSetFuncAppend(tv, tm_module, NULL);
 
-    tm_module = TmModuleGetByName("Detect");
-    if (tm_module == NULL) {
-        printf("ERROR: TmModuleGetByName Detect failed\n");
-        exit(EXIT_FAILURE);
+    if (de_ctx != NULL) {
+        tm_module = TmModuleGetByName("Detect");
+        if (tm_module == NULL) {
+            printf("ERROR: TmModuleGetByName Detect failed\n");
+            exit(EXIT_FAILURE);
+        }
+        TmSlotSetFuncAppend(tv, tm_module, (void *)de_ctx);
     }
-    TmSlotSetFuncAppend(tv, tm_module, (void *)de_ctx);
 
     SetupOutputs(tv);
 
@@ -127,12 +130,22 @@ int RunModeErfFileSingle(DetectEngineCtx *de_ctx)
 int RunModeErfFileAutoFp(DetectEngineCtx *de_ctx)
 {
     SCEnter();
-    char tname[12];
-    char qname[12];
+    char tname[TM_THREAD_NAME_MAX];
+    char qname[TM_QUEUE_NAME_MAX];
     uint16_t cpu = 0;
-    char queues[2048] = "";
+    char *queues = NULL;
+    int thread;
 
     RunModeInitialize();
+
+    char *file = NULL;
+    if (ConfGet("erf-file.file", &file) == 0) {
+        SCLogError(SC_ERR_RUNMODE,
+            "Failed retrieving erf-file.file from config");
+        exit(EXIT_FAILURE);
+    }
+
+    TimeModeSetOffline();
 
     /* Available cpus */
     uint16_t ncpus = UtilCpuGetNumProcessorsOnline();
@@ -149,24 +162,11 @@ int RunModeErfFileAutoFp(DetectEngineCtx *de_ctx)
     if (thread_max < 1)
         thread_max = 1;
 
-    int thread;
-    for (thread = 0; thread < thread_max; thread++) {
-        if (strlen(queues) > 0)
-            strlcat(queues, ",", sizeof(queues));
-
-        snprintf(qname, sizeof(qname), "pickup%"PRIu16, thread+1);
-        strlcat(queues, qname, sizeof(queues));
-    }
-    SCLogDebug("queues %s", queues);
-
-    char *file = NULL;
-    if (ConfGet("erf-file.file", &file) == 0) {
-        SCLogError(SC_ERR_RUNMODE,
-            "Failed retrieving erf-file.file from config");
+    queues = RunmodeAutoFpCreatePickupQueuesString(thread_max);
+    if (queues == NULL) {
+        SCLogError(SC_ERR_RUNMODE, "RunmodeAutoFpCreatePickupQueuesString failed");
         exit(EXIT_FAILURE);
     }
-
-    TimeModeSetOffline();
 
     /* create the threads */
     ThreadVars *tv =
@@ -174,6 +174,8 @@ int RunModeErfFileAutoFp(DetectEngineCtx *de_ctx)
                                     "packetpool", "packetpool",
                                     queues, "flow",
                                     "pktacqloop");
+    SCFree(queues);
+
     if (tv == NULL) {
         printf("ERROR: TmThreadsCreate failed\n");
         exit(EXIT_FAILURE);
@@ -232,12 +234,14 @@ int RunModeErfFileAutoFp(DetectEngineCtx *de_ctx)
         }
         TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, NULL);
 
-        tm_module = TmModuleGetByName("Detect");
-        if (tm_module == NULL) {
-            printf("ERROR: TmModuleGetByName Detect failed\n");
-            exit(EXIT_FAILURE);
+        if (de_ctx != NULL) {
+            tm_module = TmModuleGetByName("Detect");
+            if (tm_module == NULL) {
+                printf("ERROR: TmModuleGetByName Detect failed\n");
+                exit(EXIT_FAILURE);
+            }
+            TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
         }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
 
         if (threading_set_cpu_affinity) {
             TmThreadSetCPUAffinity(tv_detect_ncpu, (int)cpu);

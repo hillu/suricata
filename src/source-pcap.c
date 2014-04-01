@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -42,6 +42,18 @@
 #include "util-ioctl.h"
 #include "tmqh-packetpool.h"
 
+#ifdef __SC_CUDA_SUPPORT__
+
+#include "util-cuda.h"
+#include "util-cuda-buffer.h"
+#include "util-mpm-ac.h"
+#include "util-cuda-handlers.h"
+#include "detect-engine.h"
+#include "detect-engine-mpm.h"
+#include "util-cuda-vars.h"
+
+#endif /* __SC_CUDA_SUPPORT__ */
+
 extern uint8_t suricata_ctl_flags;
 
 #define PCAP_STATE_DOWN 0
@@ -62,6 +74,8 @@ typedef struct PcapThreadVars_
     struct bpf_program filter;
     /* ptr to string from config */
     char *bpf_filter;
+
+    time_t last_stats_dump;
 
     /* data link type for the thread */
     int datalink;
@@ -103,7 +117,7 @@ TmEcode DecodePcap(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *)
 
 /** protect pcap_compile and pcap_setfilter, as they are not thread safe:
  *  http://seclists.org/tcpdump/2009/q1/62 */
-static SCMutex pcap_bpf_compile_lock = PTHREAD_MUTEX_INITIALIZER;
+static SCMutex pcap_bpf_compile_lock = SCMUTEX_INITIALIZER;
 
 /**
  * \brief Registration Function for RecievePcap.
@@ -217,7 +231,6 @@ void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
 
     PcapThreadVars *ptv = (PcapThreadVars *)user;
     Packet *p = PacketGetFromQueueOrAlloc();
-    time_t last_dump = 0;
     struct timeval current_time;
 
     if (unlikely(p == NULL)) {
@@ -265,9 +278,9 @@ void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
 
     /* Trigger one dump of stats every second */
     TimeGet(&current_time);
-    if (current_time.tv_sec != last_dump) {
+    if (current_time.tv_sec != ptv->last_stats_dump) {
         PcapDumpCounters(ptv);
-        last_dump = current_time.tv_sec;
+        ptv->last_stats_dump = current_time.tv_sec;
     }
 
     SCReturn;
@@ -330,9 +343,11 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
             SCReturnInt(TM_ECODE_FAILED);
         }
 
-        SCPerfSyncCountersIfSignalled(tv, 0);
+        SCPerfSyncCountersIfSignalled(tv);
     }
 
+    PcapDumpCounters(ptv);
+    SCPerfSyncCountersIfSignalled(tv);
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -403,7 +418,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     if (pcapconfig->snaplen == 0) {
         /* We set snaplen if we can get the MTU */
-        ptv->pcap_snaplen = GetIfaceMTU(pcapconfig->iface);
+        ptv->pcap_snaplen = GetIfaceMaxPacketSize(pcapconfig->iface);
     } else {
         ptv->pcap_snaplen = pcapconfig->snaplen;
     }
@@ -494,6 +509,16 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
         SCMutexUnlock(&pcap_bpf_compile_lock);
     }
 
+    /* Making it conditional to Linux even if GetIfaceOffloading return 0
+     * for non Linux. */
+#ifdef HAVE_LINUX_ETHTOOL_H
+    if (GetIfaceOffloading(pcapconfig->iface) == 1) {
+        SCLogWarning(SC_ERR_PCAP_CREATE,
+                "Using Pcap capture with GRO or LRO activated can lead to "
+                "capture problems.");
+    }
+#endif /* HAVE_LINUX_ETHTOOL_H */
+
     ptv->datalink = pcap_datalink(ptv->pcap_handle);
 
     pcapconfig->DerefFunc(pcapconfig);
@@ -550,7 +575,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     if (pcapconfig->snaplen == 0) {
         /* We try to set snaplen from MTU value */
-        ptv->pcap_snaplen = GetIfaceMTU(pcapconfig->iface);
+        ptv->pcap_snaplen = GetIfaceMaxPacketSize(pcapconfig->iface);
         /* be conservative with old pcap lib to mimic old tcpdump behavior
            when MTU was not available. */
         if (ptv->pcap_snaplen <= 0)
@@ -602,7 +627,21 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     ptv->datalink = pcap_datalink(ptv->pcap_handle);
 
+    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+    ptv->capture_kernel_ifdrops = SCPerfTVRegisterCounter("capture.kernel_ifdrops",
+            ptv->tv,
+            SC_PERF_TYPE_UINT64,
+            "NULL");
+
     *data = (void *)ptv;
+
     /* Dereference config */
     pcapconfig->DerefFunc(pcapconfig);
     SCReturnInt(TM_ECODE_OK);
@@ -670,9 +709,14 @@ TmEcode DecodePcap(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
     SCEnter();
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
 
+    /* XXX HACK: flow timeout can call us for injected pseudo packets
+     *           see bug: https://redmine.openinfosecfoundation.org/issues/1107 */
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return TM_ECODE_OK;
+
     /* update counters */
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
+//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
 
     SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
 #if 0
@@ -703,6 +747,8 @@ TmEcode DecodePcap(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
             break;
     }
 
+    PacketDecodeFinalize(tv, dtv, p);
+
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -711,12 +757,17 @@ TmEcode DecodePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCEnter();
     DecodeThreadVars *dtv = NULL;
 
-    dtv = DecodeThreadVarsAlloc();
+    dtv = DecodeThreadVarsAlloc(tv);
 
     if (dtv == NULL)
         SCReturnInt(TM_ECODE_FAILED);
 
     DecodeRegisterPerfCounters(dtv, tv);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (CudaThreadVarsInit(&dtv->cuda_vars) < 0)
+        SCReturnInt(TM_ECODE_FAILED);
+#endif
 
     *data = (void *)dtv;
 

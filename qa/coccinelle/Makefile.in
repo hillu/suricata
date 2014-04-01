@@ -78,8 +78,7 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 subdir = qa/coccinelle
-DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
-	$(top_srcdir)/mkinstalldirs
+DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
@@ -87,7 +86,7 @@ am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
-mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
+mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = $(top_builddir)/config.h
 CONFIG_CLEAN_FILES =
 CONFIG_CLEAN_VPATH_FILES =
@@ -139,10 +138,15 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GREP = @GREP@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
+HAVE_CURL = @HAVE_CURL@
+HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_WGET = @HAVE_WGET@
+HTP_DIR = @HTP_DIR@
+HTP_LDADD = @HTP_LDADD@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -150,8 +154,8 @@ INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 LD = @LD@
 LDFLAGS = @LDFLAGS@
-LIBHTPMAXVERSION_CFLAGS = @LIBHTPMAXVERSION_CFLAGS@
-LIBHTPMAXVERSION_LIBS = @LIBHTPMAXVERSION_LIBS@
+LIBHTPDEVVERSION_CFLAGS = @LIBHTPDEVVERSION_CFLAGS@
+LIBHTPDEVVERSION_LIBS = @LIBHTPDEVVERSION_LIBS@
 LIBHTPMINVERSION_CFLAGS = @LIBHTPMINVERSION_CFLAGS@
 LIBHTPMINVERSION_LIBS = @LIBHTPMINVERSION_LIBS@
 LIBOBJS = @LIBOBJS@
@@ -225,6 +229,7 @@ datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
 e_localstatedir = @e_localstatedir@
+e_logcertsdir = @e_logcertsdir@
 e_logdir = @e_logdir@
 e_logfilesdir = @e_logfilesdir@
 e_magic_file = @e_magic_file@
@@ -243,6 +248,10 @@ infodir = @infodir@
 install_sh = @install_sh@
 libdir = @libdir@
 libexecdir = @libexecdir@
+libnspr_CFLAGS = @libnspr_CFLAGS@
+libnspr_LIBS = @libnspr_LIBS@
+libnss_CFLAGS = @libnss_CFLAGS@
+libnss_LIBS = @libnss_LIBS@
 localedir = @localedir@
 localstatedir = @localstatedir@
 mandir = @mandir@
@@ -265,8 +274,16 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-EXTRA_DIST = access-pkt-packet.cocci banned-functions.cocci direct-packet.cocci \
-		pktnotset-packet.cocci run_check.sh
+EXTRA_DIST = access-pkt-packet.cocci \
+    action-pkt.cocci \
+    banned-functions.cocci \
+    direct-packet.cocci \
+    malloc-error-check.cocci \
+    pktnotset-packet.cocci \
+    size_t.cocci \
+    struct-flags.cocci \
+    sz3.cocci \
+    run_check.sh struct-flags.py
 
 all: all-am
 
@@ -378,13 +395,14 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
+@HAVE_COCCINELLE_FALSE@distclean-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool mostlyclean-am
 
 distclean: distclean-am
 	-rm -f Makefile
-distclean-am: clean-am distclean-generic
+distclean-am: clean-am distclean-generic distclean-local
 
 dvi: dvi-am
 
@@ -448,19 +466,26 @@ uninstall-am:
 
 .PHONY: all all-am check check-am clean clean-generic clean-libtool \
 	cscopelist-am ctags-am distclean distclean-generic \
-	distclean-libtool distdir dvi dvi-am html html-am info info-am \
-	install install-am install-data install-data-am install-dvi \
-	install-dvi-am install-exec install-exec-am install-html \
-	install-html-am install-info install-info-am install-man \
-	install-pdf install-pdf-am install-ps install-ps-am \
-	install-strip installcheck installcheck-am installdirs \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
-	tags-am uninstall uninstall-am
+	distclean-libtool distclean-local distdir dvi dvi-am html \
+	html-am info info-am install install-am install-data \
+	install-data-am install-dvi install-dvi-am install-exec \
+	install-exec-am install-html install-html-am install-info \
+	install-info-am install-man install-pdf install-pdf-am \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-generic \
+	mostlyclean-libtool pdf pdf-am ps ps-am tags-am uninstall \
+	uninstall-am
 
+
+@HAVE_COCCINELLE_TRUE@struct-flags.cocci:
+@HAVE_COCCINELLE_TRUE@	$(srcdir)/struct-flags.py > $(top_builddir)/qa/coccinelle/struct-flags.cocci
 
 @HAVE_COCCINELLE_TRUE@check:
 @HAVE_COCCINELLE_TRUE@	$(top_srcdir)/qa/coccinelle/run_check.sh
+
+@HAVE_COCCINELLE_TRUE@distclean-local:
+@HAVE_COCCINELLE_TRUE@	-rm $(top_builddir)/qa/coccinelle/struct-flags.cocci
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

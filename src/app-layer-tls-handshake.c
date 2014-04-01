@@ -60,23 +60,28 @@ static void TLSCertificateErrCodeToWarning(SSLState *ssl_state, uint32_t errcode
         return;
 
     switch (errcode) {
-    case ERR_DER_ELEMENT_SIZE_TOO_BIG:
-    case ERR_DER_INVALID_SIZE:
-        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_CERTIFICATE_INVALID_LENGTH);
-        break;
-    case ERR_DER_UNSUPPORTED_STRING:
-        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_CERTIFICATE_INVALID_STRING);
-        break;
-    case ERR_DER_UNKNOWN_ELEMENT:
-        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_CERTIFICATE_UNKNOWN_ELEMENT);
-        break;
-    case ERR_DER_MISSING_ELEMENT:
-        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT);
-        break;
-    case ERR_DER_GENERIC:
-    default:
-        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_CERTIFICATE);
-        break;
+        case ERR_DER_ELEMENT_SIZE_TOO_BIG:
+        case ERR_DER_INVALID_SIZE:
+            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                    TLS_DECODER_EVENT_CERTIFICATE_INVALID_LENGTH);
+            break;
+        case ERR_DER_UNSUPPORTED_STRING:
+            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                    TLS_DECODER_EVENT_CERTIFICATE_INVALID_STRING);
+            break;
+        case ERR_DER_UNKNOWN_ELEMENT:
+            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                    TLS_DECODER_EVENT_CERTIFICATE_UNKNOWN_ELEMENT);
+            break;
+        case ERR_DER_MISSING_ELEMENT:
+            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                    TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT);
+            break;
+        case ERR_DER_GENERIC:
+        default:
+            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                    TLS_DECODER_EVENT_INVALID_CERTIFICATE);
+            break;
     };
 }
 
@@ -89,7 +94,7 @@ int DecodeTLSHandshakeServerCertificate(SSLState *ssl_state, uint8_t *input, uin
     int rc;
     int parsed;
     uint8_t *start_data;
-    uint32_t errcode;
+    uint32_t errcode = 0;
 
     if (input_len < 3)
         return 1;
@@ -124,8 +129,9 @@ int DecodeTLSHandshakeServerCertificate(SSLState *ssl_state, uint8_t *input, uin
             } else {
                 SSLCertsChain *ncert;
                 //SCLogInfo("TLS Cert %d: %s\n", i, buffer);
-                if (i==0) {
-                    ssl_state->server_connp.cert0_subject = SCStrdup(buffer);
+                if (i == 0) {
+                    if (ssl_state->server_connp.cert0_subject == NULL)
+                        ssl_state->server_connp.cert0_subject = SCStrdup(buffer);
                     if (ssl_state->server_connp.cert0_subject == NULL) {
                         DerFree(cert);
                         return -1;
@@ -133,8 +139,8 @@ int DecodeTLSHandshakeServerCertificate(SSLState *ssl_state, uint8_t *input, uin
                 }
                 ncert = (SSLCertsChain *)SCMalloc(sizeof(SSLCertsChain));
                 if (ncert == NULL) {
-                        DerFree(cert);
-                        return -1;
+                    DerFree(cert);
+                    return -1;
                 }
                 memset(ncert, 0, sizeof(*ncert));
                 ncert->cert_data = input;
@@ -146,8 +152,9 @@ int DecodeTLSHandshakeServerCertificate(SSLState *ssl_state, uint8_t *input, uin
                 TLSCertificateErrCodeToWarning(ssl_state, errcode);
             } else {
                 //SCLogInfo("TLS IssuerDN %d: %s\n", i, buffer);
-                if (i==0) {
-                    ssl_state->server_connp.cert0_issuerdn = SCStrdup(buffer);
+                if (i == 0) {
+                    if (ssl_state->server_connp.cert0_issuerdn == NULL)
+                        ssl_state->server_connp.cert0_issuerdn = SCStrdup(buffer);
                     if (ssl_state->server_connp.cert0_issuerdn == NULL) {
                         DerFree(cert);
                         return -1;
@@ -161,15 +168,14 @@ int DecodeTLSHandshakeServerCertificate(SSLState *ssl_state, uint8_t *input, uin
                 int hash_len = 20;
                 int out_len = 60;
                 char out[out_len];
-                unsigned char* hash;
-                hash = ComputeSHA1((unsigned char*) input, (int) msg_len);
+                unsigned char *hash;
+                hash = ComputeSHA1((unsigned char *) input, (int) msg_len);
                 char *p = out;
                 int j = 0;
 
                 if (hash == NULL) {
                     SCLogWarning(SC_ERR_MEM_ALLOC, "Can not allocate fingerprint string");
                 } else {
-
                     for (j = 0; j < hash_len; j++, p += 3) {
                         snprintf(p, 4, j == hash_len - 1 ? "%02x" : "%02x:", hash[j]);
                     }

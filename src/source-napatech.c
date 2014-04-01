@@ -156,9 +156,8 @@ TmEcode NapatechStreamThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCLogInfo("Napatech  Thread Stream ID:%lu", stream_id);
 
     NapatechThreadVars *ntv = SCMalloc(sizeof(NapatechThreadVars));
-    if (ntv == NULL) {
-        SCLogError(SC_ERR_MEM_ALLOC,
-                "Failed to allocate memory for NAPATECH  thread vars.");
+    if (unlikely(ntv == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate memory for NAPATECH  thread vars.");
         exit(EXIT_FAILURE);
     }
 
@@ -299,7 +298,7 @@ TmEcode NapatechStreamLoop(ThreadVars *tv, void *data, void *slot)
         }
 
         NT_NetRxRelease(ntv->rx_stream, packet_buffer);
-        SCPerfSyncCountersIfSignalled(tv, 0);
+        SCPerfSyncCountersIfSignalled(tv);
     }
 
     SCReturnInt(TM_ECODE_OK);
@@ -318,7 +317,7 @@ void NapatechStreamThreadExitStats(ThreadVars *tv, void *data)
     if (ntv->drops > 0)
         percent = (((double) ntv->drops) / (ntv->pkts+ntv->drops)) * 100;
 
-    SCLogInfo("Stream: %lu; Packets: %"PRIu64"; Drops: %"PRIu64" (%5.2f%%); Bytes: %"PRIu64, ntv->stream_id, ntv->pkts, ntv->drops, percent, ntv->bytes);
+    SCLogNotice("Stream: %lu; Packets: %"PRIu64"; Drops: %"PRIu64" (%5.2f%%); Bytes: %"PRIu64, ntv->stream_id, ntv->pkts, ntv->drops, percent, ntv->bytes);
 }
 
 /**
@@ -356,9 +355,14 @@ TmEcode NapatechDecode(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
 
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
 
+    /* XXX HACK: flow timeout can call us for injected pseudo packets
+     *           see bug: https://redmine.openinfosecfoundation.org/issues/1107 */
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return TM_ECODE_OK;
+
     /* update counters */
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
+//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
     SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
@@ -373,6 +377,9 @@ TmEcode NapatechDecode(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
                     p->datalink);
             break;
     }
+
+    PacketDecodeFinalize(tv, dtv, p);
+
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -381,7 +388,7 @@ TmEcode NapatechDecodeThreadInit(ThreadVars *tv, void *initdata, void **data)
     SCEnter();
     DecodeThreadVars *dtv = NULL;
 
-    dtv = DecodeThreadVarsAlloc();
+    dtv = DecodeThreadVarsAlloc(tv);
 
     if(dtv == NULL)
         SCReturnInt(TM_ECODE_FAILED);

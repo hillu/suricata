@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -40,6 +40,10 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 
+#include "pkt-var.h"
+#include "util-profiling.h"
+#include "host.h"
+
 /**
  * \internal
  * \brief this function is used to decode IEEE802.1q packets
@@ -52,23 +56,41 @@
  * \param pq pointer to the packet queue
  *
  */
-void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
+int DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
-    SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
+    uint32_t proto;
+
+    if (p->vlan_idx == 0)
+        SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
+    else if (p->vlan_idx == 1)
+        SCPerfCounterIncr(dtv->counter_vlan_qinq, tv->sc_perf_pca);
 
     if(len < VLAN_HEADER_LEN)    {
-        ENGINE_SET_EVENT(p,VLAN_HEADER_TOO_SMALL);
-        return;
+        ENGINE_SET_INVALID_EVENT(p, VLAN_HEADER_TOO_SMALL);
+        return TM_ECODE_FAILED;
+    }
+    if (p->vlan_idx >= 2) {
+        ENGINE_SET_EVENT(p,VLAN_HEADER_TOO_MANY_LAYERS);
+        return TM_ECODE_FAILED;
     }
 
-    p->vlanh = (VLANHdr *)pkt;
-    if(p->vlanh == NULL)
-        return;
+    p->vlanh[p->vlan_idx] = (VLANHdr *)pkt;
+    if(p->vlanh[p->vlan_idx] == NULL)
+        return TM_ECODE_FAILED;
+
+    proto = GET_VLAN_PROTO(p->vlanh[p->vlan_idx]);
 
     SCLogDebug("p %p pkt %p VLAN protocol %04x VLAN PRI %d VLAN CFI %d VLAN ID %d Len: %" PRId32 "",
-        p, pkt, GET_VLAN_PROTO(p->vlanh), GET_VLAN_PRIORITY(p->vlanh), GET_VLAN_CFI(p->vlanh), GET_VLAN_ID(p->vlanh), len);
+            p, pkt, proto, GET_VLAN_PRIORITY(p->vlanh[p->vlan_idx]),
+            GET_VLAN_CFI(p->vlanh[p->vlan_idx]), GET_VLAN_ID(p->vlanh[p->vlan_idx]), len);
 
-    switch (GET_VLAN_PROTO(p->vlanh))   {
+    /* only store the id for flow hashing if it's not disabled. */
+    if (dtv->vlan_disabled == 0)
+        p->vlan_id[p->vlan_idx] = (uint16_t)GET_VLAN_ID(p->vlanh[p->vlan_idx]);
+
+    p->vlan_idx++;
+
+    switch (proto)   {
         case ETHERNET_TYPE_IP:
             DecodeIPV4(tv, dtv, p, pkt + VLAN_HEADER_LEN,
                        len - VLAN_HEADER_LEN, pq);
@@ -86,16 +108,35 @@ void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
                                  len - VLAN_HEADER_LEN, pq);
             break;
         case ETHERNET_TYPE_VLAN:
-            DecodeVLAN(tv, dtv, p, pkt + VLAN_HEADER_LEN,
-                                 len - VLAN_HEADER_LEN, pq);
+        case ETHERNET_TYPE_8021AD:
+            if (p->vlan_idx >= 2) {
+                ENGINE_SET_EVENT(p,VLAN_HEADER_TOO_MANY_LAYERS);
+                return TM_ECODE_OK;
+            } else {
+                DecodeVLAN(tv, dtv, p, pkt + VLAN_HEADER_LEN,
+                        len - VLAN_HEADER_LEN, pq);
+            }
             break;
         default:
-            SCLogDebug("unknown VLAN type: %" PRIx32 "",GET_VLAN_PROTO(p->vlanh));
-            ENGINE_SET_EVENT(p,VLAN_UNKNOWN_TYPE);
-            return;
+            SCLogDebug("unknown VLAN type: %" PRIx32 "", proto);
+            ENGINE_SET_INVALID_EVENT(p, VLAN_UNKNOWN_TYPE);
+            return TM_ECODE_OK;
     }
 
-    return;
+    return TM_ECODE_OK;
+}
+
+uint16_t DecodeVLANGetId(const Packet *p, uint8_t layer)
+{
+    if (unlikely(layer > 1))
+        return 0;
+
+    if (p->vlanh[layer] == NULL && (p->vlan_idx >= (layer + 1))) {
+        return p->vlan_id[layer];
+    } else {
+        return GET_VLAN_ID(p->vlanh[layer]);
+    }
+    return 0;
 }
 
 #ifdef UNITTESTS
@@ -111,15 +152,13 @@ void DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, 
  */
 static int DecodeVLANtest01 (void)   {
     uint8_t raw_vlan[] = { 0x00, 0x20, 0x08 };
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
@@ -148,15 +187,13 @@ static int DecodeVLANtest02 (void)   {
         0x4d, 0x3d, 0x5a, 0x61, 0x80, 0x10, 0x6b, 0x50,
         0x3c, 0x4c, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a,
         0x00, 0x04, 0xf0, 0xc8, 0x01, 0x99, 0xa3, 0xf3};
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
@@ -186,40 +223,42 @@ static int DecodeVLANtest03 (void)   {
         0x4d, 0x3d, 0x5a, 0x61, 0x80, 0x10, 0x6b, 0x50,
         0x3c, 0x4c, 0x00, 0x00, 0x01, 0x01, 0x08, 0x0a,
         0x00, 0x04, 0xf0, 0xc8, 0x01, 0x99, 0xa3, 0xf3};
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
 
     FlowInitConfig(FLOW_QUIET);
 
     DecodeVLAN(&tv, &dtv, p, raw_vlan, sizeof(raw_vlan), NULL);
 
-    FlowShutdown();
 
     if(p->vlanh == NULL) {
-        SCFree(p);
-        return 0;
+        goto error;
     }
 
     if(ENGINE_ISSET_EVENT(p,VLAN_HEADER_TOO_SMALL))  {
-        SCFree(p);
-        return 0;
+        goto error;
     }
 
     if(ENGINE_ISSET_EVENT(p,VLAN_UNKNOWN_TYPE))  {
-        SCFree(p);
-        return 0;
+        goto error;
     }
 
+    PACKET_RECYCLE(p);
+    FlowShutdown();
     SCFree(p);
     return 1;
+
+error:
+    PACKET_RECYCLE(p);
+    FlowShutdown();
+    SCFree(p);
+    return 0;
 }
 #endif /* UNITTESTS */
 

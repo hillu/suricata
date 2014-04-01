@@ -25,6 +25,24 @@
 #define __STREAM_TCP_PRIVATE_H__
 
 #include "decode.h"
+#include "util-pool.h"
+#include "util-pool-thread.h"
+
+#define STREAMTCP_QUEUE_FLAG_TS     0x01
+#define STREAMTCP_QUEUE_FLAG_WS     0x02
+#define STREAMTCP_QUEUE_FLAG_SACK   0x04
+
+/** currently only SYN/ACK */
+typedef struct TcpStateQueue_ {
+    uint8_t flags;
+    uint8_t wscale;
+    uint16_t win;
+    uint32_t seq;
+    uint32_t ack;
+    uint32_t ts;
+    uint32_t pkt_ts;
+    struct TcpStateQueue_ *next;
+} TcpStateQueue;
 
 typedef struct StreamTcpSackRecord_ {
     uint32_t le;    /**< left edge, host order */
@@ -39,11 +57,13 @@ typedef struct TcpSegment_ {
     uint32_t seq;
     struct TcpSegment_ *next;
     struct TcpSegment_ *prev;
+    /* coccinelle: TcpSegment:flags:SEGMENTTCP_FLAG */
     uint8_t flags;
 } TcpSegment;
 
 typedef struct TcpStream_ {
     uint16_t flags;                 /**< Flag specific to the stream e.g. Timestamp */
+    /* coccinelle: TcpStream:flags:STREAMTCP_STREAM_FLAG_ */
     uint8_t wscale;                 /**< wscale setting in this direction */
     uint8_t os_policy;              /**< target based OS policy used for reassembly and handling packets*/
 
@@ -99,31 +119,28 @@ enum
 #define STREAMTCP_FLAG_TIMESTAMP                    0x0008
 /** Server supports wscale (even though it can be 0) */
 #define STREAMTCP_FLAG_SERVER_WSCALE                0x0010
-/** Flag to indicate the zero value of timestamp */
-#define STREAMTCP_FLAG_ZERO_TIMESTAMP               0x0020
+/** 'Raw' reassembly is disabled for this ssn. */
+#define STREAMTCP_FLAG_DISABLE_RAW                  0x0020
 /** Flag to indicate that the session is handling asynchronous stream.*/
 #define STREAMTCP_FLAG_ASYNC                        0x0040
 /** Flag to indicate we're dealing with 4WHS: SYN, SYN, SYN/ACK, ACK
  * (http://www.breakingpointsystems.com/community/blog/tcp-portals-the-three-way-handshake-is-a-lie) */
 #define STREAMTCP_FLAG_4WHS                         0x0080
-/** Flag to indicate the app layer has detected the app layer protocol on
- *  the current TCP session */
-#define STREAMTCP_FLAG_APPPROTO_DETECTION_COMPLETED 0x0100
 /** Flag to indicate that this session is possible trying to evade the detection
  *  (http://www.packetstan.com/2010/06/recently-ive-been-on-campaign-to-make.html) */
-#define STREAMTCP_FLAG_DETECTION_EVASION_ATTEMPT    0x0200
+#define STREAMTCP_FLAG_DETECTION_EVASION_ATTEMPT    0x0100
 /** Flag to indicate the client (SYN pkt) permits SACK */
-#define STREAMTCP_FLAG_CLIENT_SACKOK                0x0400
+#define STREAMTCP_FLAG_CLIENT_SACKOK                0x0200
 /** Flag to indicate both sides of the session permit SACK (SYN + SYN/ACK) */
-#define STREAMTCP_FLAG_SACKOK                       0x0800
+#define STREAMTCP_FLAG_SACKOK                       0x0400
 /** Flag for triggering RAW reassembly before the size limit is reached or
     the stream reaches EOF. */
-#define STREAMTCP_FLAG_TRIGGER_RAW_REASSEMBLY       0x1000
+#define STREAMTCP_FLAG_TRIGGER_RAW_REASSEMBLY       0x0800
 /** 3WHS confirmed by server -- if suri sees 3whs ACK but server doesn't (pkt
  *  is lost on the way to server), SYN/ACK is retransmitted. If server sends
  *  normal packet we assume 3whs to be completed. Only used for SYN/ACK resend
  *  event. */
-#define STREAMTCP_FLAG_3WHS_CONFIRMED               0x2000
+#define STREAMTCP_FLAG_3WHS_CONFIRMED               0x1000
 
 /*
  * Per STREAM flags
@@ -133,12 +150,21 @@ enum
 #define STREAMTCP_STREAM_FLAG_GAP               0x01
 /** Flag to avoid stream reassembly/app layer inspection for the stream */
 #define STREAMTCP_STREAM_FLAG_NOREASSEMBLY      0x02
-/** Flag to pause stream reassembly / app layer inspection for the stream.*/
-#define STREAMTCP_STREAM_FLAG_PAUSE_REASSEMBLY  0x04
+/** we received a keep alive */
+#define STREAMTCP_STREAM_FLAG_KEEPALIVE         0x04
 /** Stream has reached it's reassembly depth, all further packets are ignored */
 #define STREAMTCP_STREAM_FLAG_DEPTH_REACHED     0x08
 /** Stream has sent a FIN/RST */
 #define STREAMTCP_STREAM_FLAG_CLOSE_INITIATED   0x10
+/** Stream supports TIMESTAMP -- used to set ssn STREAMTCP_FLAG_TIMESTAMP
+ *  flag. */
+#define STREAMTCP_STREAM_FLAG_TIMESTAMP         0x20
+/** Flag to indicate the zero value of timestamp */
+#define STREAMTCP_STREAM_FLAG_ZERO_TIMESTAMP    0x40
+/** App proto detection completed */
+#define STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED 0x80
+/** App proto detection skipped */
+#define STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_SKIPPED 0x100
 
 /*
  * Per SEGMENT flags
@@ -178,7 +204,11 @@ enum
 }
 
 typedef struct TcpSession_ {
+    PoolThreadReserved res;
     uint8_t state;
+    uint8_t queue_len;                      /**< length of queue list below */
+    int8_t data_first_seen_dir;
+    /* coccinelle: TcpSession:flags:STREAMTCP_FLAG */
     uint16_t flags;
     TcpStream server;
     TcpStream client;
@@ -186,7 +216,15 @@ typedef struct TcpSession_ {
     struct StreamMsg_ *toserver_smsg_tail;  /**< list of stream msgs (for detection inspection) */
     struct StreamMsg_ *toclient_smsg_head;  /**< list of stream msgs (for detection inspection) */
     struct StreamMsg_ *toclient_smsg_tail;  /**< list of stream msgs (for detection inspection) */
+
+    TcpStateQueue *queue;                   /**< list of SYN/ACK candidates */
 } TcpSession;
 
-#endif /* __STREAM_TCP_PRIVATE_H__ */
+#define StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream) \
+    ((stream)->flags |= STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED)
+#define StreamTcpIsSetStreamFlagAppProtoDetectionCompleted(stream) \
+    ((stream)->flags & STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED)
+#define StreamTcpResetStreamFlagAppProtoDetectionCompleted(stream) \
+    ((stream)->flags &= ~STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED);
 
+#endif /* __STREAM_TCP_PRIVATE_H__ */

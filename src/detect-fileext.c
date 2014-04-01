@@ -110,8 +110,9 @@ static int DetectFileextMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 
     int offset = file->name_len - fileext->len;
 
+    /* fileext->ext is already in lowercase, as SCMemcmpLowercase requires */
     if (file->name[offset - 1] == '.' &&
-        SCMemcmp(file->name + offset, fileext->ext, fileext->len) == 0)
+        SCMemcmpLowercase(fileext->ext, file->name + offset, fileext->len) == 0)
     {
         if (!(fileext->flags & DETECT_CONTENT_NEGATED)) {
             ret = 1;
@@ -146,9 +147,12 @@ static DetectFileextData *DetectFileextParse (char *str)
 
     memset(fileext, 0x00, sizeof(DetectFileextData));
 
-    if (DetectParseContentString (str, &fileext->ext, &fileext->len, &fileext->flags) == -1) {
+    if (DetectContentDataParse("fileext", str, &fileext->ext, &fileext->len, &fileext->flags) == -1) {
         goto error;
     }
+    uint16_t u;
+    for (u = 0; u < fileext->len; u++)
+        fileext->ext[u] = tolower(fileext->ext[u]);
 
     SCLogDebug("flags %02X", fileext->flags);
     if (fileext->flags & DETECT_CONTENT_NEGATED) {
@@ -246,7 +250,7 @@ static void DetectFileextFree(void *ptr) {
  * \test DetectFileextTestParse01
  */
 int DetectFileextTestParse01 (void) {
-    DetectFileextData *dfd = DetectFileextParse("doc");
+    DetectFileextData *dfd = DetectFileextParse("\"doc\"");
     if (dfd != NULL) {
         DetectFileextFree(dfd);
         return 1;

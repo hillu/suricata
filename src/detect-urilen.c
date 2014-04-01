@@ -24,6 +24,7 @@
  */
 
 #include "suricata-common.h"
+#include "app-layer.h"
 #include "app-layer-protos.h"
 #include "app-layer-htp.h"
 #include "util-unittest.h"
@@ -48,8 +49,6 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectUrilenMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                       uint8_t flags, void *state, Signature *s, SigMatch *m);
 static int DetectUrilenSetup (DetectEngineCtx *, Signature *, char *);
 void DetectUrilenFree (void *);
 void DetectUrilenRegisterTests (void);
@@ -90,75 +89,11 @@ void DetectUrilenRegister(void)
     return;
 
 error:
-    if (parse_regex != NULL) SCFree(parse_regex);
-    if (parse_regex_study != NULL) SCFree(parse_regex_study);
+    if (parse_regex != NULL)
+        pcre_free(parse_regex);
+    if (parse_regex_study != NULL)
+        pcre_free_study(parse_regex_study);
     return;
-}
-
-/**
- * \brief   This function is used to match urilen rule option with the HTTP
- *          uricontent.
- *
- * \param t pointer to thread vars
- * \param det_ctx pointer to the pattern matcher thread
- * \param p pointer to the current packet
- * \param m pointer to the sigmatch that we will cast into DetectUrilenData
- *
- * \retval 0 no match
- * \retval 1 match
- */
-int DetectUrilenMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                       uint8_t flags, void *state, Signature *s, SigMatch *m)
-{
-    SCEnter();
-    int ret = 0;
-    int idx = 0;
-    DetectUrilenData *urilend = (DetectUrilenData *) m->ctx;
-
-    HtpState *htp_state = (HtpState *)state;
-    if (htp_state == NULL) {
-        SCLogDebug("no HTP state, no need to match further");
-        SCReturnInt(ret);
-    }
-
-    FLOWLOCK_RDLOCK(f);
-    htp_tx_t *tx = NULL;
-
-    idx = AppLayerTransactionGetInspectId(f);
-    if (idx == -1) {
-        goto end;
-    }
-
-    int size = (int)list_size(htp_state->connp->conn->transactions);
-    for (; idx < size; idx++)
-    {
-        tx = list_get(htp_state->connp->conn->transactions, idx);
-        if (tx == NULL || tx->request_uri_normalized == NULL)
-            goto end;
-
-        switch (urilend->mode) {
-            case DETECT_URILEN_EQ:
-                if (bstr_len(tx->request_uri_normalized) == urilend->urilen1)
-                    ret = 1;
-                break;
-            case DETECT_URILEN_LT:
-                if (bstr_len(tx->request_uri_normalized) < urilend->urilen1)
-                    ret = 1;
-                break;
-            case DETECT_URILEN_GT:
-                if (bstr_len(tx->request_uri_normalized) > urilend->urilen1)
-                    ret = 1;
-                break;
-            case DETECT_URILEN_RA:
-                if (bstr_len(tx->request_uri_normalized) > urilend->urilen1 &&
-                        bstr_len(tx->request_uri_normalized) < urilend->urilen2)
-                    ret = 1;
-                break;
-        }
-    }
-end:
-    FLOWLOCK_UNLOCK(f);
-    SCReturnInt(ret);
 }
 
 /**
@@ -240,7 +175,7 @@ DetectUrilenData *DetectUrilenParse (char *urilenstr)
 
     urilend = SCMalloc(sizeof (DetectUrilenData));
     if (unlikely(urilend == NULL))
-    goto error;
+        goto error;
     memset(urilend, 0, sizeof(DetectUrilenData));
 
     if (arg1[0] == '<')
@@ -331,14 +266,18 @@ static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, char *urile
     DetectUrilenData *urilend = NULL;
     SigMatch *sm = NULL;
 
+    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains a non http "
+                   "alproto set");
+        goto error;
+    }
+
     urilend = DetectUrilenParse(urilenstr);
     if (urilend == NULL)
         goto error;
-
     sm = SigMatchAlloc();
     if (sm == NULL)
         goto error;
-
     sm->type = DETECT_AL_URILEN;
     sm->ctx = (void *)urilend;
 
@@ -349,12 +288,12 @@ static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, char *urile
 
     /* Flagged the signature as to inspect the app layer data */
     s->flags |= SIG_FLAG_APPLAYER;
+    s->alproto = ALPROTO_HTTP;
 
     SCReturnInt(0);
 
 error:
-    if (urilend != NULL) DetectUrilenFree(urilend);
-    if (sm != NULL) SCFree(sm);
+    DetectUrilenFree(urilend);
     SCReturnInt(-1);
 }
 
@@ -365,6 +304,9 @@ error:
  */
 void DetectUrilenFree(void *ptr)
 {
+    if (ptr == NULL)
+        return;
+
     DetectUrilenData *urilend = (DetectUrilenData *)ptr;
     SCFree(urilend);
 }
@@ -645,6 +587,7 @@ static int DetectUrilenSigTest01(void)
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -654,6 +597,7 @@ static int DetectUrilenSigTest01(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -690,11 +634,14 @@ static int DetectUrilenSigTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     HtpState *htp_state = f.alstate;
     if (htp_state == NULL) {
@@ -716,6 +663,8 @@ static int DetectUrilenSigTest01(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);

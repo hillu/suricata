@@ -48,7 +48,7 @@ typedef struct FlowBucket_ {
 #else
     #error Enable FBLOCK_SPIN or FBLOCK_MUTEX
 #endif
-} FlowBucket;
+} __attribute__((aligned(CLS))) FlowBucket;
 
 #ifdef FBLOCK_SPIN
     #define FBLOCK_INIT(fb) SCSpinInit(&(fb)->s, 0)
@@ -68,7 +68,7 @@ typedef struct FlowBucket_ {
 
 /* prototypes */
 
-Flow *FlowGetFlowFromHash(Packet *);
+Flow *FlowGetFlowFromHash(const Packet *);
 
 /** enable to print stats on hash lookups in flow-debug.log */
 //#define FLOW_DEBUG_STATS

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -39,7 +39,8 @@ static SCMutex g_magic_lock;
 /**
  *  \brief Initialize the "magic" context.
  */
-int MagicInit(void) {
+int MagicInit(void)
+{
     BUG_ON(g_magic_ctx != NULL);
 
     SCEnter();
@@ -93,7 +94,8 @@ error:
  *
  *  \retval result pointer to null terminated string
  */
-char *MagicGlobalLookup(uint8_t *buf, uint32_t buflen) {
+char *MagicGlobalLookup(uint8_t *buf, uint32_t buflen)
+{
     const char *result = NULL;
     char *magic = NULL;
 
@@ -103,7 +105,7 @@ char *MagicGlobalLookup(uint8_t *buf, uint32_t buflen) {
         result = magic_buffer(g_magic_ctx, (void *)buf, (size_t)buflen);
         if (result != NULL) {
             magic = SCStrdup(result);
-            if (magic == NULL) {
+            if (unlikely(magic == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup magic");
             }
         }
@@ -121,7 +123,8 @@ char *MagicGlobalLookup(uint8_t *buf, uint32_t buflen) {
  *
  *  \retval result pointer to null terminated string
  */
-char *MagicThreadLookup(magic_t *ctx, uint8_t *buf, uint32_t buflen) {
+char *MagicThreadLookup(magic_t *ctx, uint8_t *buf, uint32_t buflen)
+{
     const char *result = NULL;
     char *magic = NULL;
 
@@ -129,7 +132,7 @@ char *MagicThreadLookup(magic_t *ctx, uint8_t *buf, uint32_t buflen) {
         result = magic_buffer(*ctx, (void *)buf, (size_t)buflen);
         if (result != NULL) {
             magic = SCStrdup(result);
-            if (magic == NULL) {
+            if (unlikely(magic == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup magic");
             }
         }
@@ -138,7 +141,8 @@ char *MagicThreadLookup(magic_t *ctx, uint8_t *buf, uint32_t buflen) {
     SCReturnPtr(magic, "const char");
 }
 
-void MagicDeinit(void) {
+void MagicDeinit(void)
+{
     SCMutexLock(&g_magic_lock);
     if (g_magic_ctx != NULL) {
         magic_close(g_magic_ctx);
@@ -150,33 +154,47 @@ void MagicDeinit(void) {
 
 #ifdef UNITTESTS
 
-#ifndef OS_FREEBSD
-#define MICROSOFT_OFFICE_DOC "Microsoft Office Document"
-#else
+#if defined OS_FREEBSD || defined OS_DARWIN
 #define MICROSOFT_OFFICE_DOC "OLE 2 Compound Document"
+#else
+#define MICROSOFT_OFFICE_DOC "Microsoft Office Document"
 #endif
 
 /** \test magic lib calls -- init */
-int MagicInitTest01(void) {
+int MagicInitTest01(void)
+{
+    int result = 0;
     magic_t magic_ctx;
 
     magic_ctx = magic_open(0);
-
-    if (magic_load(magic_ctx, NULL) == -1)
+    if (magic_ctx == NULL) {
+        printf("failure retrieving magic_ctx\n");
         return 0;
+    }
 
+    if (magic_load(magic_ctx, NULL) == -1) {
+        printf("failure magic_load\n");
+        goto end;
+    }
+
+    result = 1;
+ end:
     magic_close(magic_ctx);
-    return 1;
+    return result;
 }
 
 /** \test magic init through api */
-int MagicInitTest02(void) {
+int MagicInitTest02(void)
+{
     if (g_magic_ctx != NULL) {
         printf("g_magic_ctx != NULL at start of the test: ");
         return 0;
     }
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     if (g_magic_ctx == NULL) {
         printf("g_magic_ctx == NULL: ");
@@ -194,7 +212,8 @@ int MagicInitTest02(void) {
 }
 
 /** \test magic lib calls -- lookup */
-int MagicDetectTest01(void) {
+int MagicDetectTest01(void)
+{
     magic_t magic_ctx;
     char *result = NULL;
     char buffer[] = { 0x25, 'P', 'D', 'F', '-', '1', '.', '3', 0x0d, 0x0a};
@@ -202,9 +221,15 @@ int MagicDetectTest01(void) {
     int retval = 0;
 
     magic_ctx = magic_open(0);
-
-    if (magic_load(magic_ctx, NULL) == -1)
+    if (magic_ctx == NULL) {
+        printf("failure retrieving magic_ctx\n");
         return 0;
+    }
+
+    if (magic_load(magic_ctx, NULL) == -1) {
+        printf("magic_load failure\n");
+        goto end;
+    }
 
     result = (char *)magic_buffer(magic_ctx, (void *)buffer, buffer_len);
     if (result == NULL || strncmp(result, "PDF document", 12) != 0) {
@@ -219,7 +244,8 @@ end:
 }
 
 /** \test magic lib calls -- lookup */
-int MagicDetectTest02(void) {
+int MagicDetectTest02(void)
+{
     magic_t magic_ctx;
     char *result = NULL;
 
@@ -243,9 +269,15 @@ int MagicDetectTest02(void) {
     int retval = 0;
 
     magic_ctx = magic_open(0);
-
-    if (magic_load(magic_ctx, NULL) == -1)
+    if (magic_ctx == NULL) {
+        printf("failure retrieving magic_ctx\n");
         return 0;
+    }
+
+    if (magic_load(magic_ctx, NULL) == -1) {
+        printf("magic_load failure\n");
+        goto end;
+    }
 
     result = (char *)magic_buffer(magic_ctx, (void *)buffer, buffer_len);
     if (result == NULL || strcmp(result, MICROSOFT_OFFICE_DOC) != 0) {
@@ -260,7 +292,8 @@ end:
 }
 
 /** \test magic lib calls -- lookup */
-int MagicDetectTest03(void) {
+int MagicDetectTest03(void)
+{
     magic_t magic_ctx;
     char *result = NULL;
 
@@ -292,9 +325,15 @@ int MagicDetectTest03(void) {
     int retval = 0;
 
     magic_ctx = magic_open(0);
-
-    if (magic_load(magic_ctx, NULL) == -1)
+    if (magic_ctx == NULL) {
+        printf("failure retrieving magic_ctx\n");
         return 0;
+    }
+
+    if (magic_load(magic_ctx, NULL) == -1) {
+        printf("magic_load failure\n");
+        goto end;
+    }
 
     result = (char *)magic_buffer(magic_ctx, (void *)buffer, buffer_len);
     if (result == NULL || strcmp(result, "OpenDocument Text") != 0) {
@@ -309,7 +348,8 @@ end:
 }
 
 /** \test magic lib calls -- lookup */
-int MagicDetectTest04(void) {
+int MagicDetectTest04(void)
+{
     magic_t magic_ctx;
     char *result = NULL;
 
@@ -347,9 +387,15 @@ int MagicDetectTest04(void) {
     int retval = 0;
 
     magic_ctx = magic_open(0);
-
-    if (magic_load(magic_ctx, NULL) == -1)
+    if (magic_ctx == NULL) {
+        printf("failure retrieving magic_ctx\n");
         return 0;
+    }
+
+    if (magic_load(magic_ctx, NULL) == -1) {
+        printf("magic_load failure\n");
+        goto end;
+    }
 
     result = (char *)magic_buffer(magic_ctx, (void *)buffer, buffer_len);
     if (result == NULL || strcmp(result, "OpenOffice.org 1.x Database file") != 0) {
@@ -364,13 +410,17 @@ end:
 }
 
 /** \test magic api calls -- lookup */
-int MagicDetectTest05(void) {
+int MagicDetectTest05(void)
+{
     const char *result = NULL;
     uint8_t buffer[] = { 0x25, 'P', 'D', 'F', '-', '1', '.', '3', 0x0d, 0x0a};
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result = MagicGlobalLookup(buffer, buffer_len);
     if (result == NULL || strncmp(result, "PDF document", 12) != 0) {
@@ -385,7 +435,8 @@ end:
 }
 
 /** \test magic api calls -- lookup */
-int MagicDetectTest06(void) {
+int MagicDetectTest06(void)
+{
     const char *result = NULL;
     uint8_t buffer[] = {
         0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1,
@@ -406,7 +457,10 @@ int MagicDetectTest06(void) {
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result = MagicGlobalLookup(buffer, buffer_len);
     if (result == NULL || strcmp(result, MICROSOFT_OFFICE_DOC) != 0) {
@@ -422,7 +476,8 @@ end:
 }
 
 /** \test magic api calls -- lookup */
-int MagicDetectTest07(void) {
+int MagicDetectTest07(void)
+{
     const char *result = NULL;
     uint8_t buffer[] = {
         0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00,
@@ -451,7 +506,10 @@ int MagicDetectTest07(void) {
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result = MagicGlobalLookup(buffer, buffer_len);
     if (result == NULL || strcmp(result, "OpenDocument Text") != 0) {
@@ -466,7 +524,8 @@ end:
 }
 
 /** \test magic api calls -- lookup */
-int MagicDetectTest08(void) {
+int MagicDetectTest08(void)
+{
     const char *result = NULL;
     uint8_t buffer[] = {
         0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x08,
@@ -501,7 +560,10 @@ int MagicDetectTest08(void) {
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result = MagicGlobalLookup(buffer, buffer_len);
     if (result == NULL || strcmp(result, "OpenOffice.org 1.x Database file") != 0) {
@@ -516,14 +578,18 @@ end:
 }
 
 /** \test magic api calls -- make sure memory is shared */
-int MagicDetectTest09(void) {
+int MagicDetectTest09(void)
+{
     const char *result1 = NULL;
     const char *result2 = NULL;
     uint8_t buffer[] = { 0x25, 'P', 'D', 'F', '-', '1', '.', '3', 0x0d, 0x0a};
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result1 = MagicGlobalLookup(buffer, buffer_len);
     if (result1 == NULL || strncmp(result1, "PDF document", 12) != 0) {
@@ -550,7 +616,8 @@ end:
 
 /** \test results in valgrind warning about invalid read, tested with
  *        file 5.09 and 5.11 */
-static int MagicDetectTest10ValgrindError(void) {
+static int MagicDetectTest10ValgrindError(void)
+{
     const char *result = NULL;
     uint8_t buffer[] = {
         0xFF,0xD8,0xFF,0xE0,0x00,0x10,0x4A,0x46,0x49,0x46,0x00,0x01,0x01,0x01,0x01,0x2C,
@@ -568,7 +635,10 @@ static int MagicDetectTest10ValgrindError(void) {
     size_t buffer_len = sizeof(buffer);
     int retval = 0;
 
-    MagicInit();
+    if (MagicInit() < 0) {
+        printf("MagicInit() failure\n");
+        return 0;
+    }
 
     result = MagicGlobalLookup(buffer, buffer_len);
     if (result == NULL || strncmp(result, "JPEG", 4) != 0) {
@@ -585,7 +655,8 @@ end:
 #endif /* UNITTESTS */
 
 
-void MagicRegisterTests(void) {
+void MagicRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("MagicInitTest01", MagicInitTest01, 1);
     UtRegisterTest("MagicInitTest02", MagicInitTest02, 1);

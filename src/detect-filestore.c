@@ -45,6 +45,7 @@
 #include "util-unittest-helper.h"
 
 #include "app-layer.h"
+#include "app-layer-parser.h"
 
 #include "stream-tcp.h"
 
@@ -222,7 +223,8 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
 
     FLOWLOCK_WRLOCK(p->flow);
 
-    FileContainer *ffc = AppLayerGetFilesFromFlow(p->flow, flags);
+    FileContainer *ffc = AppLayerParserGetFiles(p->flow->proto, p->flow->alproto,
+                                                p->flow->alstate, flags);
 
     /* filestore for single files only */
     if (s->filestore_sm->ctx == NULL) {
@@ -281,7 +283,7 @@ static int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, 
     det_ctx->filestore[det_ctx->filestore_cnt].file_id = file_id;
     det_ctx->filestore[det_ctx->filestore_cnt].tx_id = det_ctx->tx_id;
 
-    SCLogDebug("%u, file %u, tx %u", det_ctx->filestore_cnt,
+    SCLogDebug("%u, file %u, tx %"PRIu64, det_ctx->filestore_cnt,
         det_ctx->filestore[det_ctx->filestore_cnt].file_id,
         det_ctx->filestore[det_ctx->filestore_cnt].tx_id);
 

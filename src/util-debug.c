@@ -404,7 +404,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
             case SC_LOG_FMT_LINE:
                 temp_fmt[0] = '\0';
                 cw = snprintf(temp, SC_LOG_MAX_LOG_MSG_LEN - (temp - *msg),
-                              "%s%d", substr, line);
+                              "%s%u", substr, line);
                 if (cw < 0)
                     goto error;
                 temp += cw;
@@ -456,7 +456,7 @@ SCError SCLogMessage(SCLogLevel log_level, char **msg, const char *file,
     return SC_OK;
 
  error:
-    if (temp_fmt != NULL)
+    if (temp_fmt_h != NULL)
         SCFree(temp_fmt_h);
     return SC_ERR_SPRINTF;
 }
@@ -850,10 +850,15 @@ static inline void SCLogSetOPIface(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
                 break;
             case SC_LOG_OP_IFACE_FILE:
                 s = getenv(SC_LOG_ENV_LOG_FILE);
-                if (s == NULL)
-                    s = SCLogGetLogFilename(SC_LOG_DEF_LOG_FILE);
-
-                op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, SC_LOG_LEVEL_MAX);
+                if (s == NULL) {
+                    char *str = SCLogGetLogFilename(SC_LOG_DEF_LOG_FILE);
+                    if (str != NULL) {
+                        op_ifaces_ctx = SCLogInitFileOPIface(str, NULL, SC_LOG_LEVEL_MAX);
+                        SCFree(str);
+                    }
+                } else {
+                    op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, SC_LOG_LEVEL_MAX);
+                }
                 break;
             case SC_LOG_OP_IFACE_SYSLOG:
                 s = getenv(SC_LOG_ENV_LOG_FACILITY);
@@ -895,8 +900,13 @@ static inline void SCLogSetOPFilter(SCLogInitData *sc_lid, SCLogConfig *sc_lc)
 
     if (filter != NULL && strcmp(filter, "") != 0) {
         sc_lc->op_filter = SCStrdup(filter);
+        if (sc_lc->op_filter == NULL) {
+            printf("pcre filter alloc failed\n");
+            return;
+        }
         sc_lc->op_filter_regex = pcre_compile(filter, opts, &ep, &eo, NULL);
         if (sc_lc->op_filter_regex == NULL) {
+            SCFree(sc_lc->op_filter);
             printf("pcre compile of \"%s\" failed at offset %d : %s\n", filter,
                    eo, ep);
             return;
@@ -1098,7 +1108,7 @@ void SCLogInitLogModule(SCLogInitData *sc_lid)
     return;
 }
 
-void SCLogLoadConfig(int daemon)
+void SCLogLoadConfig(int daemon, int verbose)
 {
     ConfNode *outputs;
     SCLogInitData *sc_lid;
@@ -1129,9 +1139,16 @@ void SCLogLoadConfig(int daemon)
     }
     else {
         SCLogWarning(SC_ERR_MISSING_CONFIG_PARAM,
-            "No default log level set, will use info.");
-        sc_lid->global_log_level = SC_LOG_INFO;
+            "No default log level set, will use notice.");
+        sc_lid->global_log_level = SC_LOG_NOTICE;
     }
+
+    if (verbose) {
+        sc_lid->global_log_level += verbose;
+        if (sc_lid->global_log_level > SC_LOG_LEVEL_MAX)
+            sc_lid->global_log_level = SC_LOG_LEVEL_MAX;
+    }
+
     if (ConfGet("logging.default-log-format", &sc_lid->global_log_format) != 1)
         sc_lid->global_log_format = SC_LOG_DEF_LOG_FORMAT;
 
@@ -1278,9 +1295,15 @@ void SCLogInitLogModuleIfEnvSet(void)
             break;
         case SC_LOG_OP_IFACE_FILE:
             s = getenv(SC_LOG_ENV_LOG_FILE);
-            if (s == NULL)
-                s = SCLogGetLogFilename(SC_LOG_DEF_LOG_FILE);
-            op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, -1);
+            if (s == NULL) {
+                char *str = SCLogGetLogFilename(SC_LOG_DEF_LOG_FILE);
+                if (str != NULL) {
+                    op_ifaces_ctx = SCLogInitFileOPIface(str, NULL, SC_LOG_LEVEL_MAX);
+                    SCFree(str);
+                }
+            } else {
+                op_ifaces_ctx = SCLogInitFileOPIface(s, NULL, -1);
+            }
             break;
         case SC_LOG_OP_IFACE_SYSLOG:
             s = getenv(SC_LOG_ENV_LOG_FACILITY);
@@ -1368,8 +1391,7 @@ static char *SCLogGetLogFilename(char *filearg)
     char *log_dir;
     char *log_filename;
 
-    if (ConfGet("default-log-dir", &log_dir) != 1)
-        log_dir = DEFAULT_LOG_DIR;
+    log_dir = ConfigGetLogDirectory();
 
     log_filename = SCMalloc(PATH_MAX);
     if (unlikely(log_filename == NULL))

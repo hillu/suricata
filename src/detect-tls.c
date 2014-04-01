@@ -64,7 +64,7 @@
  * \brief Regex for parsing "id" option, matching number or "number"
  */
 
-#define PARSE_REGEX  "^\\s*(\\!*)\\s*([A-z0-9\\s\\-\\.=,\\*]+|\"[A-z0-9\\s\\-\\.=,\\*]+\")\\s*$"
+#define PARSE_REGEX  "^\\s*(\\!*)\\s*([A-z0-9\\s\\-\\.=,\\*@]+|\"[A-z0-9\\s\\-\\.=,\\*@]+\")\\s*$"
 #define PARSE_REGEX_FINGERPRINT  "^\\s*(\\!*)\\s*([A-z0-9\\:\\*]+|\"[A-z0-9\\:\\* ]+\")\\s*$"
 
 static pcre *subject_parse_regex;
@@ -212,12 +212,6 @@ static int DetectTlsSubjectMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     int ret = 0;
     FLOWLOCK_RDLOCK(f);
 
-    if (tls_data->flags & DETECT_CONTENT_NEGATED) {
-        ret = 1;
-    } else {
-        ret = 0;
-    }
-
     SSLStateConnp *connp = NULL;
     if (flags & STREAM_TOSERVER) {
         connp = &ssl_state->client_connp;
@@ -235,7 +229,15 @@ static int DetectTlsSubjectMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
             } else {
                 ret = 1;
             }
+        } else {
+            if (tls_data->flags & DETECT_CONTENT_NEGATED) {
+                ret = 1;
+            } else {
+                ret = 0;
+            }
         }
+    } else {
+        ret = 0;
     }
 
     FLOWLOCK_UNLOCK(f);
@@ -258,7 +260,7 @@ static DetectTlsData *DetectTlsSubjectParse (char *str)
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
     const char *str_ptr;
-    char *orig;
+    char *orig = NULL;
     char *tmp_str;
     uint32_t flag = 0;
 
@@ -304,6 +306,9 @@ static DetectTlsData *DetectTlsSubjectParse (char *str)
     }
 
     tls->subject = SCStrdup(tmp_str);
+    if (unlikely(tls->subject == NULL)) {
+        goto error;
+    }
 
     SCFree(orig);
 
@@ -312,6 +317,8 @@ static DetectTlsData *DetectTlsSubjectParse (char *str)
     return tls;
 
 error:
+    if (orig != NULL)
+        SCFree(orig);
     if (tls != NULL)
         DetectTlsSubjectFree(tls);
     return NULL;
@@ -344,17 +351,19 @@ static int DetectTlsSubjectSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
     if (sm == NULL)
         goto error;
 
-    sm->type = DETECT_AL_TLS_SUBJECT;
-    sm->ctx = (void *)tls;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
+    sm->type = DETECT_AL_TLS_SUBJECT;
+    sm->ctx = (void *)tls;
+
+    s->flags |= SIG_FLAG_APPLAYER;
     s->alproto = ALPROTO_TLS;
+
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
+
     return 0;
 
 error:
@@ -411,12 +420,6 @@ static int DetectTlsIssuerDNMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx
     int ret = 0;
     FLOWLOCK_RDLOCK(f);
 
-    if (tls_data->flags & DETECT_CONTENT_NEGATED) {
-        ret = 1;
-    } else {
-        ret = 0;
-    }
-
     SSLStateConnp *connp = NULL;
     if (flags & STREAM_TOSERVER) {
         connp = &ssl_state->client_connp;
@@ -434,7 +437,15 @@ static int DetectTlsIssuerDNMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx
             } else {
                 ret = 1;
             }
+        } else {
+            if (tls_data->flags & DETECT_CONTENT_NEGATED) {
+                ret = 1;
+            } else {
+                ret = 0;
+            }
         }
+    } else {
+        ret = 0;
     }
 
     FLOWLOCK_UNLOCK(f);
@@ -457,7 +468,7 @@ static DetectTlsData *DetectTlsIssuerDNParse(char *str)
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
     const char *str_ptr;
-    char *orig;
+    char *orig = NULL;
     char *tmp_str;
     uint32_t flag = 0;
 
@@ -504,6 +515,9 @@ static DetectTlsData *DetectTlsIssuerDNParse(char *str)
     }
 
     tls->issuerdn = SCStrdup(tmp_str);
+    if (unlikely(tls->issuerdn == NULL)) {
+        goto error;
+    }
 
     SCFree(orig);
 
@@ -512,6 +526,8 @@ static DetectTlsData *DetectTlsIssuerDNParse(char *str)
     return tls;
 
 error:
+    if (orig != NULL)
+        SCFree(orig);
     if (tls != NULL)
         DetectTlsIssuerDNFree(tls);
     return NULL;
@@ -544,17 +560,19 @@ static int DetectTlsIssuerDNSetup (DetectEngineCtx *de_ctx, Signature *s, char *
     if (sm == NULL)
         goto error;
 
-    sm->type = DETECT_AL_TLS_ISSUERDN;
-    sm->ctx = (void *)tls;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
+    sm->type = DETECT_AL_TLS_ISSUERDN;
+    sm->ctx = (void *)tls;
+
+    s->flags |= SIG_FLAG_APPLAYER;
     s->alproto = ALPROTO_TLS;
+
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
+
     return 0;
 
 error:
@@ -680,11 +698,6 @@ static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_
     int ret = 0;
     FLOWLOCK_RDLOCK(f);
 
-    if (tls_data->flags & DETECT_CONTENT_NEGATED) {
-        ret = 1;
-    } else {
-        ret = 0;
-    }
     if (ssl_state->server_connp.cert0_fingerprint != NULL) {
         SCLogDebug("TLS: Fingerprint is [%s], looking for [%s]\n",
                    ssl_state->server_connp.cert0_fingerprint,
@@ -699,7 +712,15 @@ static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_
                 ret = 1;
 
             }
+        } else {
+            if (tls_data->flags & DETECT_CONTENT_NEGATED) {
+                ret = 1;
+            } else {
+                ret = 0;
+            }
         }
+    } else {
+        ret = 0;
     }
 
     FLOWLOCK_UNLOCK(f);
@@ -733,17 +754,19 @@ static int DetectTlsFingerprintSetup (DetectEngineCtx *de_ctx, Signature *s, cha
     if (sm == NULL)
         goto error;
 
-    sm->type = DETECT_AL_TLS_FINGERPRINT;
-    sm->ctx = (void *)tls;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
+    sm->type = DETECT_AL_TLS_FINGERPRINT;
+    sm->ctx = (void *)tls;
+
+    s->flags |= SIG_FLAG_APPLAYER;
     s->alproto = ALPROTO_TLS;
+
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
+
     return 0;
 
 error:
@@ -788,15 +811,17 @@ static int DetectTlsStoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *str
     if (sm == NULL)
         goto error;
 
-    sm->type = DETECT_AL_TLS_STORE;
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
     if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
+    sm->type = DETECT_AL_TLS_STORE;
+    s->flags |= SIG_FLAG_APPLAYER;
     s->alproto = ALPROTO_TLS;
+
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
+
     return 0;
 
 error:

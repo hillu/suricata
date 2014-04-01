@@ -48,8 +48,10 @@ typedef struct TcpStreamCnf_ {
     uint64_t memcap;
     uint64_t reassembly_memcap; /**< max memory usage for stream reassembly */
 
-    uint32_t max_sessions;
-    uint32_t prealloc_sessions;
+    uint32_t ssn_init_flags; /**< new ssn flags will be initialized to this */
+    uint8_t segment_init_flags; /**< new seg flags will be initialized to this */
+
+    uint32_t prealloc_sessions; /**< ssns to prealloc per stream thread */
     int midstream;
     int async_oneside;
     uint32_t reassembly_depth;  /**< Depth until when we reassemble the stream */
@@ -65,9 +67,12 @@ typedef struct TcpStreamCnf_ {
      */
     uint32_t reassembly_inline_window;
     uint8_t flags;
+    uint8_t max_synack_queued;
 } TcpStreamCnf;
 
 typedef struct StreamTcpThread_ {
+    int ssn_pool_id;
+
     uint64_t pkts;
 
     /** queue for pseudo packet(s) that were created in the stream
@@ -113,7 +118,7 @@ int StreamTcpCheckMemcap(uint64_t);
 
 Packet *StreamTcpPseudoSetup(Packet *, uint8_t *, uint32_t);
 
-int StreamTcpSegmentForEach(Packet *p, uint8_t flag,
+int StreamTcpSegmentForEach(const Packet *p, uint8_t flag,
                         StreamSegmentCallback CallbackFunc,
                         void *data);
 void StreamTcpReassembleConfigEnableOverlapCheck(void);
@@ -173,7 +178,7 @@ enum {
     STREAM_HAS_UNPROCESSED_SEGMENTS_NEED_ONLY_DETECTION = 2,
 };
 
-static inline int StreamHasUnprocessedSegments(TcpSession *ssn, int direction)
+static inline int StreamNeedsReassembly(TcpSession *ssn, int direction)
 {
     /* server tcp state */
     if (direction) {
@@ -198,6 +203,13 @@ static inline int StreamHasUnprocessedSegments(TcpSession *ssn, int direction)
         }
     }
 }
+
+TmEcode StreamTcpThreadInit(ThreadVars *, void *, void **);
+TmEcode StreamTcpThreadDeinit(ThreadVars *tv, void *data);
+int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
+                     PacketQueue *pq);
+void StreamTcpSessionClear(void *ssnptr);
+uint32_t StreamTcpGetStreamSize(TcpStream *stream);
 
 #endif /* __STREAM_TCP_H__ */
 

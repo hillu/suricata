@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -36,6 +36,7 @@
 #include "queue.h"
 #include "runmodes.h"
 #include "util-unittest.h"
+#include "util-misc.h"
 
 #include "alert-fastlog.h"
 #include "alert-prelude.h"
@@ -45,8 +46,6 @@
 #include "log-httplog.h"
 
 #include "output.h"
-
-#include "cuda-packet-batcher.h"
 
 #include "source-pfring.h"
 
@@ -81,7 +80,7 @@ typedef struct RunModeOutput_ {
 TAILQ_HEAD(, RunModeOutput_) RunModeOutputs =
     TAILQ_HEAD_INITIALIZER(RunModeOutputs);
 
-static RunModes runmodes[RUNMODE_MAX];
+static RunModes runmodes[RUNMODE_USER_MAX];
 
 static char *active_runmode;
 
@@ -118,6 +117,8 @@ static const char *RunModeTranslateModeToName(int runmode)
             return "NAPATECH";
         case RUNMODE_UNITTEST:
             return "UNITTEST";
+        case RUNMODE_TILERA_MPIPE:
+            return "MPIPE";
         case RUNMODE_AFP_DEV:
             return "AF_PACKET_DEV";
         case RUNMODE_UNIX_SOCKET:
@@ -192,6 +193,7 @@ void RunModeRegisterRunModes(void)
     RunModeErfDagRegister();
     RunModeNapatechRegister();
     RunModeIdsAFPRegister();
+    RunModeTileMpipeRegister();
     RunModeUnixSocketRegister();
 #ifdef UNITTESTS
     UtRunModeRegister();
@@ -213,7 +215,7 @@ void RunModeListRunmodes(void)
            "-----------------------\n");
     int i = RUNMODE_UNKNOWN + 1;
     int j = 0;
-    for ( ; i < RUNMODE_MAX; i++) {
+    for ( ; i < RUNMODE_USER_MAX; i++) {
         int mode_displayed = 0;
         for (j = 0; j < runmodes[i].no_of_runmodes; j++) {
             if (mode_displayed == 1) {
@@ -241,8 +243,13 @@ void RunModeListRunmodes(void)
     return;
 }
 
+/**
+ *  \param de_ctx Detection engine ctx. Can be NULL is detect is disabled.
+ */
 void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_ctx)
 {
+    char *local_custom_mode = NULL;
+
     if (custom_mode == NULL) {
         char *val = NULL;
         if (ConfGet("runmode", &val) != 1) {
@@ -277,6 +284,9 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
             case RUNMODE_DAG:
                 custom_mode = RunModeErfDagGetDefaultMode();
                 break;
+            case RUNMODE_TILERA_MPIPE:
+                custom_mode = RunModeTileMpipeGetDefaultMode();
+                break;
             case RUNMODE_NAPATECH:
                 custom_mode = RunModeNapatechGetDefaultMode();
                 break;
@@ -295,13 +305,23 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
         if (!strcmp("worker", custom_mode)) {
             SCLogWarning(SC_ERR_RUNMODE, "'worker' mode have been renamed "
                          "to 'workers', please modify your setup.");
-            custom_mode = SCStrdup("workers");
-            if (unlikely(custom_mode == NULL)) {
+            local_custom_mode = SCStrdup("workers");
+            if (unlikely(local_custom_mode == NULL)) {
                 SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup custom mode");
                 exit(EXIT_FAILURE);
             }
+            custom_mode = local_custom_mode;
         }
     }
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (PatternMatchDefaultMatcher() == MPM_AC_CUDA &&
+        strcasecmp(custom_mode, "autofp") != 0) {
+        SCLogError(SC_ERR_RUNMODE, "When using a cuda mpm, the only runmode we "
+                   "support is autofp.");
+        exit(EXIT_FAILURE);
+    }
+#endif
 
     RunMode *mode = RunModeGetCustomMode(runmode, custom_mode);
     if (mode == NULL) {
@@ -321,6 +341,8 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
 
     mode->RunModeFunc(de_ctx);
 
+    if (local_custom_mode != NULL)
+        SCFree(local_custom_mode);
     return;
 }
 
@@ -337,25 +359,36 @@ void RunModeRegisterNewRunMode(int runmode, const char *name,
                                const char *description,
                                int (*RunModeFunc)(DetectEngineCtx *))
 {
+    void *ptmp;
     if (RunModeGetCustomMode(runmode, name) != NULL) {
         SCLogError(SC_ERR_RUNMODE, "A runmode by this custom name has already "
                    "been registered.  Please use an unique name");
         return;
     }
 
-    runmodes[runmode].runmodes =
-        SCRealloc(runmodes[runmode].runmodes,
-                  (runmodes[runmode].no_of_runmodes + 1) * sizeof(RunMode));
-    if (runmodes[runmode].runmodes == NULL) {
+    ptmp = SCRealloc(runmodes[runmode].runmodes,
+                     (runmodes[runmode].no_of_runmodes + 1) * sizeof(RunMode));
+    if (ptmp == NULL) {
+        SCFree(runmodes[runmode].runmodes);
+        runmodes[runmode].runmodes = NULL;
         exit(EXIT_FAILURE);
     }
+    runmodes[runmode].runmodes = ptmp;
 
     RunMode *mode = &runmodes[runmode].runmodes[runmodes[runmode].no_of_runmodes];
     runmodes[runmode].no_of_runmodes++;
 
     mode->runmode = runmode;
     mode->name = SCStrdup(name);
+    if (unlikely(mode->name == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate string");
+        exit(EXIT_FAILURE);
+    }
     mode->description = SCStrdup(description);
+    if (unlikely(mode->description == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate string");
+        exit(EXIT_FAILURE);
+    }
     mode->RunModeFunc = RunModeFunc;
 
     return;
@@ -377,6 +410,121 @@ void RunModeShutDown(void)
     }
 }
 
+static TmModule *pkt_logger_module = NULL;
+static TmModule *tx_logger_module = NULL;
+static TmModule *file_logger_module = NULL;
+static TmModule *filedata_logger_module = NULL;
+
+/** \brief Turn output into thread module */
+static void SetupOutput(const char *name, OutputModule *module, OutputCtx *output_ctx)
+{
+    TmModule *tm_module = TmModuleGetByName(module->name);
+    if (tm_module == NULL) {
+        SCLogError(SC_ERR_INVALID_ARGUMENT,
+                "TmModuleGetByName for %s failed", module->name);
+        exit(EXIT_FAILURE);
+    }
+    if (strcmp(tmm_modules[TMM_ALERTDEBUGLOG].name, tm_module->name) == 0)
+        debuglog_enabled = 1;
+
+    if (module->PacketLogFunc) {
+        SCLogDebug("%s is a packet logger", module->name);
+        OutputRegisterPacketLogger(module->name, module->PacketLogFunc,
+                module->PacketConditionFunc, output_ctx);
+
+        /* need one instance of the packet logger module */
+        if (pkt_logger_module == NULL) {
+            pkt_logger_module = TmModuleGetByName("__packet_logger__");
+            if (pkt_logger_module == NULL) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "TmModuleGetByName for __packet_logger__ failed");
+                exit(EXIT_FAILURE);
+            }
+
+            RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+            if (unlikely(runmode_output == NULL))
+                return;
+            runmode_output->tm_module = pkt_logger_module;
+            runmode_output->output_ctx = NULL;
+            TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+            SCLogDebug("__packet_logger__ added");
+        }
+    } else if (module->TxLogFunc) {
+        SCLogDebug("%s is a tx logger", module->name);
+        OutputRegisterTxLogger(module->name, module->alproto,
+                module->TxLogFunc, output_ctx);
+
+        /* need one instance of the tx logger module */
+        if (tx_logger_module == NULL) {
+            tx_logger_module = TmModuleGetByName("__tx_logger__");
+            if (tx_logger_module == NULL) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "TmModuleGetByName for __tx_logger__ failed");
+                exit(EXIT_FAILURE);
+            }
+
+            RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+            if (unlikely(runmode_output == NULL))
+                return;
+            runmode_output->tm_module = tx_logger_module;
+            runmode_output->output_ctx = NULL;
+            TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+            SCLogDebug("__tx_logger__ added");
+        }
+    } else if (module->FileLogFunc) {
+        SCLogDebug("%s is a file logger", module->name);
+        OutputRegisterFileLogger(module->name, module->FileLogFunc, output_ctx);
+
+        /* need one instance of the tx logger module */
+        if (file_logger_module == NULL) {
+            file_logger_module = TmModuleGetByName("__file_logger__");
+            if (file_logger_module == NULL) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "TmModuleGetByName for __file_logger__ failed");
+                exit(EXIT_FAILURE);
+            }
+
+            RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+            if (unlikely(runmode_output == NULL))
+                return;
+            runmode_output->tm_module = file_logger_module;
+            runmode_output->output_ctx = NULL;
+            TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+            SCLogDebug("__file_logger__ added");
+        }
+    } else if (module->FiledataLogFunc) {
+        SCLogDebug("%s is a filedata logger", module->name);
+        OutputRegisterFiledataLogger(module->name, module->FiledataLogFunc, output_ctx);
+
+        /* need one instance of the tx logger module */
+        if (filedata_logger_module == NULL) {
+            filedata_logger_module = TmModuleGetByName("__filedata_logger__");
+            if (filedata_logger_module == NULL) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "TmModuleGetByName for __filedata_logger__ failed");
+                exit(EXIT_FAILURE);
+            }
+
+            RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+            if (unlikely(runmode_output == NULL))
+                return;
+            runmode_output->tm_module = filedata_logger_module;
+            runmode_output->output_ctx = NULL;
+            TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+            SCLogDebug("__filedata_logger__ added");
+        }
+    } else {
+        SCLogDebug("%s is a regular logger", module->name);
+
+        RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+        if (unlikely(runmode_output == NULL))
+            return;
+        runmode_output->tm_module = tm_module;
+        runmode_output->output_ctx = output_ctx;
+        TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+    }
+}
+
 /**
  * Initialize the output modules.
  */
@@ -389,7 +537,6 @@ void RunModeInitializeOutputs(void)
     }
 
     ConfNode *output, *output_config;
-    TmModule *tm_module;
     const char *enabled;
 
     TAILQ_FOREACH(output, &outputs->head, next) {
@@ -411,7 +558,7 @@ void RunModeInitializeOutputs(void)
         }
 
         if (strncmp(output->val, "unified-", sizeof("unified-") - 1) == 0) {
-            SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+            SCLogWarning(SC_ERR_NOT_SUPPORTED,
                     "Unified1 is no longer supported,"
                     " use Unified2 instead "
                     "(see https://redmine.openinfosecfoundation.org/issues/353"
@@ -419,10 +566,18 @@ void RunModeInitializeOutputs(void)
             continue;
         } else if (strcmp(output->val, "alert-prelude") == 0) {
 #ifndef PRELUDE
-            SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+            SCLogWarning(SC_ERR_NOT_SUPPORTED,
                     "Prelude support not compiled in. Reconfigure/"
                     "recompile with --enable-prelude to add Prelude "
                     "support.");
+            continue;
+#endif
+        } else if (strcmp(output->val, "eve-log") == 0) {
+#ifndef HAVE_LIBJANSSON
+            SCLogWarning(SC_ERR_NOT_SUPPORTED,
+                    "Eve-log support not compiled in. Reconfigure/"
+                    "recompile with libjansson and its development "
+                    "files installed to add eve-log support.");
             continue;
 #endif
         }
@@ -442,22 +597,56 @@ void RunModeInitializeOutputs(void)
                  * error. Maybe we should exit on init errors? */
                 continue;
             }
+        } else if (module->InitSubFunc != NULL) {
+            SCLogInfo("skipping submodule");
+            continue;
         }
-        tm_module = TmModuleGetByName(module->name);
-        if (tm_module == NULL) {
-            SCLogError(SC_ERR_INVALID_ARGUMENT,
-                    "TmModuleGetByName for %s failed", module->name);
-            exit(EXIT_FAILURE);
-        }
-        if (strcmp(tmm_modules[TMM_ALERTDEBUGLOG].name, tm_module->name) == 0)
-            debuglog_enabled = 1;
 
-        RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
-        if (unlikely(runmode_output == NULL))
-            return;
-        runmode_output->tm_module = tm_module;
-        runmode_output->output_ctx = output_ctx;
-        TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+        // TODO if module == parent, find it's children
+        if (strcmp(output->val, "eve-log") == 0) {
+            ConfNode *types = ConfNodeLookupChild(output_config, "types");
+            SCLogDebug("types %p", types);
+            if (types != NULL) {
+                ConfNode *type = NULL;
+                TAILQ_FOREACH(type, &types->head, next) {
+                    SCLogInfo("enabling 'eve-log' module '%s'", type->val);
+
+                    char subname[256];
+                    snprintf(subname, sizeof(subname), "%s.%s", output->val, type->val);
+
+                    OutputModule *sub_module = OutputGetModuleByConfName(subname);
+                    if (sub_module == NULL) {
+                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+                                "No output module named %s, ignoring", subname);
+                        continue;
+                    }
+                    if (sub_module->parent_name == NULL ||
+                            strcmp(sub_module->parent_name,output->val) != 0) {
+                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+                                "bad parent for %s, ignoring", subname);
+                        continue;
+                    }
+                    if (sub_module->InitSubFunc == NULL) {
+                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+                                "bad sub-module for %s, ignoring", subname);
+                        continue;
+                    }
+                    ConfNode *sub_output_config = ConfNodeLookupChild(type, type->val);
+                    // sub_output_config may be NULL if no config
+
+                    /* pass on parent output_ctx */
+                    OutputCtx *sub_output_ctx =
+                        sub_module->InitSubFunc(sub_output_config, output_ctx);
+                    if (sub_output_ctx == NULL) {
+                        continue;
+                    }
+
+                    SetupOutput(sub_module->name, sub_module, sub_output_ctx);
+                }
+            }
+        } else {
+            SetupOutput(module->name, module, output_ctx);
+        }
     }
 }
 
@@ -479,7 +668,7 @@ void SetupOutputs(ThreadVars *tv)
 float threading_detect_ratio = 1;
 
 /**
- * Initialize the output modules.
+ * Initialize multithreading settings.
  */
 void RunModeInitialize(void)
 {
@@ -492,6 +681,8 @@ void RunModeInitialize(void)
         AffinitySetupLoadFromConfig();
     }
     if ((ConfGetFloat("threading.detect-thread-ratio", &threading_detect_ratio)) != 1) {
+        if (ConfGetNode("threading.detect-thread-ratio") != NULL)
+            WarnInvalidConfEntry("threading.detect-thread-ratio", "%s", "1");
         threading_detect_ratio = 1;
     }
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -34,6 +34,7 @@
 
 #include "util-var.h"
 #include "util-debug.h"
+#include "flow-storage.h"
 
 #include "detect.h"
 #include "detect-engine-state.h"
@@ -48,18 +49,20 @@
 Flow *FlowAlloc(void)
 {
     Flow *f;
+    size_t size = sizeof(Flow) + FlowStorageSize();
 
-    if (!(FLOW_CHECK_MEMCAP(sizeof(Flow)))) {
+    if (!(FLOW_CHECK_MEMCAP(size))) {
         return NULL;
     }
 
-    (void) SC_ATOMIC_ADD(flow_memuse, sizeof(Flow));
+    (void) SC_ATOMIC_ADD(flow_memuse, size);
 
-    f = SCMalloc(sizeof(Flow));
+    f = SCMalloc(size);
     if (unlikely(f == NULL)) {
-        (void)SC_ATOMIC_SUB(flow_memuse, sizeof(Flow));
+        (void)SC_ATOMIC_SUB(flow_memuse, size);
         return NULL;
     }
+    memset(f, 0, size);
 
     FLOW_INITIALIZE(f);
     return f;
@@ -85,8 +88,8 @@ void FlowFree(Flow *f)
  *  \param   proto  protocol which is needed to be mapped
  */
 
-uint8_t FlowGetProtoMapping(uint8_t proto) {
-
+uint8_t FlowGetProtoMapping(uint8_t proto)
+{
     switch (proto) {
         case IPPROTO_TCP:
             return FLOW_PROTO_TCP;
@@ -101,15 +104,33 @@ uint8_t FlowGetProtoMapping(uint8_t proto) {
     }
 }
 
+uint8_t FlowGetReverseProtoMapping(uint8_t rproto)
+{
+    switch (rproto) {
+        case FLOW_PROTO_TCP:
+            return IPPROTO_TCP;
+        case FLOW_PROTO_UDP:
+            return IPPROTO_UDP;
+        case FLOW_PROTO_ICMP:
+            return IPPROTO_ICMP;
+        case FLOW_PROTO_SCTP:
+            return IPPROTO_SCTP;
+        default:
+            exit(EXIT_FAILURE);
+    }
+}
+
 /* initialize the flow from the first packet
  * we see from it. */
-void FlowInit(Flow *f, Packet *p)
+void FlowInit(Flow *f, const Packet *p)
 {
     SCEnter();
     SCLogDebug("flow %p", f);
 
     f->proto = p->proto;
     f->recursion_level = p->recursion_level;
+    f->vlan_id[0] = p->vlan_id[0];
+    f->vlan_id[1] = p->vlan_id[1];
 
     if (PKT_IS_IPV4(p)) {
         FLOW_SET_IPV4_SRC_ADDR_FROM_PACKET(p, &f->src);

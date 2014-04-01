@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -52,6 +52,7 @@
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-profiling.h"
+#include "util-device.h"
 
 static RingBuffer16 *ringbuffer = NULL;
 /**
@@ -96,7 +97,12 @@ void PacketPoolStorePacket(Packet *p) {
         exit(1);
     }
 
-    RingBufferMrMwPut(ringbuffer, (void *)p);
+    /* Clear the PKT_ALLOC flag, since that indicates to push back
+     * onto the ring buffer. */
+    p->flags &= ~PKT_ALLOC;
+    p->ReleasePacket = PacketPoolReturnPacket;
+    PacketPoolReturnPacket(p);
+
     SCLogDebug("buffersize %u", RingBufferSize(ringbuffer));
 }
 
@@ -111,19 +117,25 @@ Packet *PacketPoolGetPacket(void) {
     return p;
 }
 
+/** \brief Return packet to Packet pool
+ *
+ */
+void PacketPoolReturnPacket(Packet *p)
+{
+    PACKET_RECYCLE(p);
+    RingBufferMrMwPut(ringbuffer, (void *)p);
+}
+
 void PacketPoolInit(intmax_t max_pending_packets) {
     /* pre allocate packets */
     SCLogDebug("preallocating packets... packet size %" PRIuMAX "", (uintmax_t)SIZE_OF_PACKET);
     int i = 0;
     for (i = 0; i < max_pending_packets; i++) {
-        /* XXX pkt alloc function */
-        Packet *p = SCMalloc(SIZE_OF_PACKET);
+        Packet *p = PacketGetFromAlloc();
         if (unlikely(p == NULL)) {
             SCLogError(SC_ERR_FATAL, "Fatal error encountered while allocating a packet. Exiting...");
             exit(EXIT_FAILURE);
         }
-        PACKET_INITIALIZE(p);
-
         PacketPoolStorePacket(p);
     }
     SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
@@ -201,9 +213,8 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
                  * when we handle them */
                 SET_TUNNEL_PKT_VERDICTED(p);
 
-                SCMutexUnlock(m);
-
                 PACKET_PROFILING_END(p);
+                SCMutexUnlock(m);
                 SCReturn;
             }
         } else {
@@ -252,33 +263,14 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 
         FlowDeReference(&p->root->flow);
         /* if p->root uses extended data, free them */
-        if (p->root->ReleaseData) {
-            if (p->root->ReleaseData(t, p->root) == TM_ECODE_FAILED) {
-                SCLogWarning(SC_ERR_INVALID_ACTION,
-                        "Unable to release packet data");
-            }
-        }
         if (p->root->ext_pkt) {
             if (!(p->root->flags & PKT_ZERO_COPY)) {
                 SCFree(p->root->ext_pkt);
             }
             p->root->ext_pkt = NULL;
         }
-        if (p->root->flags & PKT_ALLOC) {
-            PACKET_CLEANUP(p->root);
-            SCFree(p->root);
-            p->root = NULL;
-        } else {
-            PACKET_RECYCLE(p->root);
-            RingBufferMrMwPut(ringbuffer, (void *)p->root);
-        }
-
-    }
-
-    if (p->ReleaseData) {
-        if (p->ReleaseData(t, p) == TM_ECODE_FAILED) {
-            SCLogWarning(SC_ERR_INVALID_ACTION, "Unable to release packet data");
-        }
+        p->root->ReleasePacket(p->root);
+        p->root = NULL;
     }
 
     /* if p uses extended data, free them */
@@ -291,14 +283,7 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 
     PACKET_PROFILING_END(p);
 
-    SCLogDebug("getting rid of tunnel pkt... alloc'd %s (root %p)", p->flags & PKT_ALLOC ? "true" : "false", p->root);
-    if (p->flags & PKT_ALLOC) {
-        PACKET_CLEANUP(p);
-        SCFree(p);
-    } else {
-        PACKET_RECYCLE(p);
-        RingBufferMrMwPut(ringbuffer, (void *)p);
-    }
+    p->ReleasePacket(p);
 
     SCReturn;
 }

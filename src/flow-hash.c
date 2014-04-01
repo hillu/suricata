@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -45,7 +45,7 @@
 #define FLOW_DEFAULT_FLOW_PRUNE 5
 
 SC_ATOMIC_EXTERN(unsigned int, flow_prune_idx);
-SC_ATOMIC_EXTERN(unsigned char, flow_flags);
+SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 static Flow *FlowGetUsedFlow(void);
 
@@ -86,7 +86,8 @@ static SCSpinlock flow_hash_count_lock;
 #define FlowHashCountInit uint64_t _flow_hash_counter = 0
 #define FlowHashCountIncr _flow_hash_counter++;
 
-void FlowHashDebugInit(void) {
+void FlowHashDebugInit(void)
+{
 #ifdef FLOW_DEBUG_STATS
     SCSpinInit(&flow_hash_count_lock, 0);
 #endif
@@ -96,7 +97,8 @@ void FlowHashDebugInit(void) {
     }
 }
 
-void FlowHashDebugPrint(uint32_t ts) {
+void FlowHashDebugPrint(uint32_t ts)
+{
 #ifdef FLOW_DEBUG_STATS
     if (flow_hash_count_fp == NULL)
         return;
@@ -121,7 +123,8 @@ void FlowHashDebugPrint(uint32_t ts) {
 #endif
 }
 
-void FlowHashDebugDeinit(void) {
+void FlowHashDebugDeinit(void)
+{
 #ifdef FLOW_DEBUG_STATS
     struct timeval ts;
     memset(&ts, 0, sizeof(ts));
@@ -151,7 +154,7 @@ void FlowHashDebugDeinit(void) {
  *           detect-engine-address-ipv6.c's AddressIPv6GtU32 is likely
  *           what you are looking for.
  */
-static inline int FlowHashRawAddressIPv6GtU32(uint32_t *a, uint32_t *b)
+static inline int FlowHashRawAddressIPv6GtU32(const uint32_t *a, const uint32_t *b)
 {
     int i;
 
@@ -172,8 +175,9 @@ typedef struct FlowHashKey4_ {
             uint16_t sp, dp;
             uint16_t proto; /**< u16 so proto and recur add up to u32 */
             uint16_t recur; /**< u16 so proto and recur add up to u32 */
+            uint16_t vlan_id[2];
         };
-        uint32_t u32[4];
+        const uint32_t u32[5];
     };
 } FlowHashKey4;
 
@@ -184,8 +188,9 @@ typedef struct FlowHashKey6_ {
             uint16_t sp, dp;
             uint16_t proto; /**< u16 so proto and recur add up to u32 */
             uint16_t recur; /**< u16 so proto and recur add up to u32 */
+            uint16_t vlan_id[2];
         };
-        uint32_t u32[10];
+        const uint32_t u32[11];
     };
 } FlowHashKey6;
 
@@ -202,7 +207,8 @@ typedef struct FlowHashKey6_ {
  *
  *  For ICMP we only consider UNREACHABLE errors atm.
  */
-static inline uint32_t FlowGetKey(Packet *p) {
+static inline uint32_t FlowGetKey(const Packet *p)
+{
     uint32_t key;
 
     if (p->ip4h != NULL) {
@@ -224,8 +230,10 @@ static inline uint32_t FlowGetKey(Packet *p) {
             }
             fhk.proto = (uint16_t)p->proto;
             fhk.recur = (uint16_t)p->recursion_level;
+            fhk.vlan_id[0] = p->vlan_id[0];
+            fhk.vlan_id[1] = p->vlan_id[1];
 
-            uint32_t hash = hashword(fhk.u32, 4, flow_config.hash_rand);
+            uint32_t hash = hashword(fhk.u32, 5, flow_config.hash_rand);
             key = hash % flow_config.hash_size;
 
         } else if (ICMPV4_DEST_UNREACH_IS_VALID(p)) {
@@ -248,8 +256,10 @@ static inline uint32_t FlowGetKey(Packet *p) {
             }
             fhk.proto = (uint16_t)ICMPV4_GET_EMB_PROTO(p);
             fhk.recur = (uint16_t)p->recursion_level;
+            fhk.vlan_id[0] = p->vlan_id[0];
+            fhk.vlan_id[1] = p->vlan_id[1];
 
-            uint32_t hash = hashword(fhk.u32, 4, flow_config.hash_rand);
+            uint32_t hash = hashword(fhk.u32, 5, flow_config.hash_rand);
             key = hash % flow_config.hash_size;
 
         } else {
@@ -265,8 +275,10 @@ static inline uint32_t FlowGetKey(Packet *p) {
             fhk.dp = 0xbeef;
             fhk.proto = (uint16_t)p->proto;
             fhk.recur = (uint16_t)p->recursion_level;
+            fhk.vlan_id[0] = p->vlan_id[0];
+            fhk.vlan_id[1] = p->vlan_id[1];
 
-            uint32_t hash = hashword(fhk.u32, 4, flow_config.hash_rand);
+            uint32_t hash = hashword(fhk.u32, 5, flow_config.hash_rand);
             key = hash % flow_config.hash_size;
         }
     } else if (p->ip6h != NULL) {
@@ -299,8 +311,10 @@ static inline uint32_t FlowGetKey(Packet *p) {
         }
         fhk.proto = (uint16_t)p->proto;
         fhk.recur = (uint16_t)p->recursion_level;
+        fhk.vlan_id[0] = p->vlan_id[0];
+        fhk.vlan_id[1] = p->vlan_id[1];
 
-        uint32_t hash = hashword(fhk.u32, 10, flow_config.hash_rand);
+        uint32_t hash = hashword(fhk.u32, 11, flow_config.hash_rand);
         key = hash % flow_config.hash_size;
     } else
         key = 0;
@@ -318,7 +332,9 @@ static inline uint32_t FlowGetKey(Packet *p) {
        CMP_ADDR(&(f1)->dst, &(f2)->src) && \
        CMP_PORT((f1)->sp, (f2)->dp) && CMP_PORT((f1)->dp, (f2)->sp))) && \
      (f1)->proto == (f2)->proto && \
-     (f1)->recursion_level == (f2)->recursion_level)
+     (f1)->recursion_level == (f2)->recursion_level && \
+     (f1)->vlan_id[0] == (f2)->vlan_id[0] && \
+     (f1)->vlan_id[1] == (f2)->vlan_id[1])
 
 /**
  *  \brief See if a ICMP packet belongs to a flow by comparing the embedded
@@ -330,7 +346,8 @@ static inline uint32_t FlowGetKey(Packet *p) {
  *  \retval 1 match
  *  \retval 0 no match
  */
-static inline int FlowCompareICMPv4(Flow *f, Packet *p) {
+static inline int FlowCompareICMPv4(Flow *f, const Packet *p)
+{
     if (ICMPV4_DEST_UNREACH_IS_VALID(p)) {
         /* first check the direction of the flow, in other words, the client ->
          * server direction as it's most likely the ICMP error will be a
@@ -340,7 +357,9 @@ static inline int FlowCompareICMPv4(Flow *f, Packet *p) {
                 f->sp == p->icmpv4vars.emb_sport &&
                 f->dp == p->icmpv4vars.emb_dport &&
                 f->proto == ICMPV4_GET_EMB_PROTO(p) &&
-                f->recursion_level == p->recursion_level)
+                f->recursion_level == p->recursion_level &&
+                f->vlan_id[0] == p->vlan_id[0] &&
+                f->vlan_id[1] == p->vlan_id[1])
         {
             return 1;
 
@@ -351,7 +370,9 @@ static inline int FlowCompareICMPv4(Flow *f, Packet *p) {
                 f->dp == p->icmpv4vars.emb_sport &&
                 f->sp == p->icmpv4vars.emb_dport &&
                 f->proto == ICMPV4_GET_EMB_PROTO(p) &&
-                f->recursion_level == p->recursion_level)
+                f->recursion_level == p->recursion_level &&
+                f->vlan_id[0] == p->vlan_id[0] &&
+                f->vlan_id[1] == p->vlan_id[1])
         {
             return 1;
         }
@@ -365,7 +386,8 @@ static inline int FlowCompareICMPv4(Flow *f, Packet *p) {
     return 0;
 }
 
-static inline int FlowCompare(Flow *f, Packet *p) {
+static inline int FlowCompare(Flow *f, const Packet *p)
+{
     if (p->proto == IPPROTO_ICMP) {
         return FlowCompareICMPv4(f, p);
     } else {
@@ -383,7 +405,8 @@ static inline int FlowCompare(Flow *f, Packet *p) {
  *  \retval 1 true
  *  \retval 0 false
  */
-static inline int FlowCreateCheck(Packet *p) {
+static inline int FlowCreateCheck(const Packet *p)
+{
     if (PKT_IS_ICMPV4(p)) {
         if (ICMPV4_IS_ERROR_MSG(p)) {
             return 0;
@@ -401,9 +424,9 @@ static inline int FlowCreateCheck(Packet *p) {
  *
  *  \retval f *LOCKED* flow on succes, NULL on error.
  */
-static Flow *FlowGetNew(Packet *p) {
+static Flow *FlowGetNew(const Packet *p)
+{
     Flow *f = NULL;
-
 
     if (FlowCreateCheck(p) == 0) {
         return NULL;
@@ -460,9 +483,11 @@ static Flow *FlowGetNew(Packet *p) {
  * the queue. FlowDequeue() will alloc new flows as long as we stay within our
  * memcap limit.
  *
+ * The p->flow pointer is updated to point to the flow.
+ *
  * returns a *LOCKED* flow or NULL
  */
-Flow *FlowGetFlowFromHash (Packet *p)
+Flow *FlowGetFlowFromHash(const Packet *p)
 {
     Flow *f = NULL;
     FlowHashCountInit;
@@ -490,10 +515,8 @@ Flow *FlowGetFlowFromHash (Packet *p)
         fb->head = f;
         fb->tail = f;
 
-        FlowReference(&p->flow, f);
-
         /* got one, now lock, initialize and return */
-        FlowInit(f,p);
+        FlowInit(f, p);
         f->fb = fb;
 
         FBLOCK_UNLOCK(fb);
@@ -527,10 +550,8 @@ Flow *FlowGetFlowFromHash (Packet *p)
 
                 f->hprev = pf;
 
-                FlowReference(&p->flow, f);
-
                 /* initialize and return */
-                FlowInit(f,p);
+                FlowInit(f, p);
                 f->fb = fb;
 
                 FBLOCK_UNLOCK(fb);
@@ -556,8 +577,6 @@ Flow *FlowGetFlowFromHash (Packet *p)
                 fb->head->hprev = f;
                 fb->head = f;
 
-                FlowReference(&p->flow, f);
-
                 /* found our flow, lock & return */
                 FLOWLOCK_WRLOCK(f);
                 FBLOCK_UNLOCK(fb);
@@ -568,7 +587,6 @@ Flow *FlowGetFlowFromHash (Packet *p)
     }
 
     /* lock & return */
-    FlowReference(&p->flow, f);
     FLOWLOCK_WRLOCK(f);
     FBLOCK_UNLOCK(fb);
     FlowHashCountUpdate;
@@ -587,7 +605,8 @@ Flow *FlowGetFlowFromHash (Packet *p)
  *
  *  \retval f flow or NULL
  */
-static Flow *FlowGetUsedFlow(void) {
+static Flow *FlowGetUsedFlow(void)
+{
     uint32_t idx = SC_ATOMIC_GET(flow_prune_idx) % flow_config.hash_size;
     uint32_t cnt = flow_config.hash_size;
 
@@ -634,7 +653,7 @@ static Flow *FlowGetUsedFlow(void) {
         f->fb = NULL;
         FBLOCK_UNLOCK(fb);
 
-        FlowClearMemory (f, f->protomap);
+        FlowClearMemory(f, f->protomap);
 
         FLOWLOCK_UNLOCK(f);
 

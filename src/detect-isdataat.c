@@ -63,7 +63,8 @@ void DetectIsdataatFree(void *);
 /**
  * \brief Registration function for isdataat: keyword
  */
-void DetectIsdataatRegister (void) {
+void DetectIsdataatRegister(void)
+{
     sigmatch_table[DETECT_ISDATAAT].name = "isdataat";
     sigmatch_table[DETECT_ISDATAAT].desc = "check if there is still data at a specific part of the payload";
     sigmatch_table[DETECT_ISDATAAT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Isadataat";
@@ -248,225 +249,174 @@ error:
  */
 int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatstr)
 {
-    DetectIsdataatData *idad = NULL;
     SigMatch *sm = NULL;
-    SigMatch *dm = NULL;
-    SigMatch *pm = NULL;
     SigMatch *prev_pm = NULL;
+    DetectIsdataatData *idad = NULL;
     char *offset = NULL;
+    int ret = -1;
 
     idad = DetectIsdataatParse(isdataatstr, &offset);
     if (idad == NULL)
-        goto error;
+        return -1;
 
-    sm = SigMatchAlloc();
-    if (sm == NULL)
-        goto error;
-
-    sm->type = DETECT_ISDATAAT;
-    sm->ctx = (void *)idad;
-
-    if (s->alproto == ALPROTO_DCERPC &&
-        (idad->flags & ISDATAAT_RELATIVE)) {
-
-        pm = SigMatchGetLastSMFromLists(s, 6,
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
-        dm = SigMatchGetLastSMFromLists(s, 6,
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
-                DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_DMATCH]);
-
-        if (pm == NULL) {
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
-        } else if (dm == NULL) {
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
-        } else if (pm->idx > dm->idx) {
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
-        } else {
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_DMATCH);
+    int sm_list;
+    if (s->list != DETECT_SM_LIST_NOTSET) {
+        if (s->list == DETECT_SM_LIST_HSBDMATCH) {
+            AppLayerHtpEnableResponseBodyCallback();
+            s->alproto = ALPROTO_HTTP;
         }
-        prev_pm = SigMatchGetLastSMFromLists(s, 6,
-                DETECT_CONTENT, sm->prev,
-                DETECT_BYTEJUMP, sm->prev,
-                DETECT_PCRE, sm->prev);
-        if (prev_pm == NULL) {
-            SCLogDebug("No preceding content or pcre keyword.  Possible "
-                       "since this is a dce alproto sig.");
-            if (offset != NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                           "seen in isdataat - %s", offset);
-                goto error;
-            }
-            return 0;
-        }
-    } else if (s->init_flags & SIG_FLAG_INIT_FILE_DATA) {
+        sm_list = s->list;
+        s->flags |= SIG_FLAG_APPLAYER;
         if (idad->flags & ISDATAAT_RELATIVE) {
-            pm = SigMatchGetLastSMFromLists(s, 10,
-                    DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                    DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                    DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                    DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                    DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]);
-            if (pm == NULL) {
-                idad->flags &= ~ISDATAAT_RELATIVE;
-            }
-
-            s->flags |= SIG_FLAG_APPLAYER;
-            AppLayerHtpEnableResponseBodyCallback();
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSBDMATCH);
-        } else {
-            s->flags |= SIG_FLAG_APPLAYER;
-            AppLayerHtpEnableResponseBodyCallback();
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HSBDMATCH);
+            prev_pm = SigMatchGetLastSMFromLists(s, 4,
+                                                 DETECT_CONTENT, s->sm_lists_tail[sm_list],
+                                                 DETECT_PCRE, s->sm_lists_tail[sm_list]);
         }
+    } else if (idad->flags & ISDATAAT_RELATIVE) {
+        prev_pm = SigMatchGetLastSMFromLists(s, 168,
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
 
-        if (pm == NULL) {
-            SCLogDebug("No preceding content or pcre keyword.  Possible "
-                       "since this is a file_data sig.");
-            if (offset != NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                           "seen in isdataat - %s", offset);
-                goto error;
-            }
-            return 0;
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
+
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
+
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
+
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
+
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
+        if (prev_pm == NULL)
+            sm_list = DETECT_SM_LIST_PMATCH;
+        else {
+            sm_list = SigMatchListSMBelongsTo(s, prev_pm);
+            if (sm_list < 0)
+                goto end;
         }
-
-        prev_pm = pm;
     } else {
-        if (!(idad->flags & ISDATAAT_RELATIVE)) {
-            SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_PMATCH);
-            if (offset != NULL) {
-                SigMatch *bed_sm =
-                    DetectByteExtractRetrieveSMVar(offset, s,
-                                                   SigMatchListSMBelongsTo(s, sm));
-                if (bed_sm == NULL) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
-                               "seen in isdataat - %s\n", offset);
-                    goto error;
-                }
-                DetectIsdataatData *isdd = sm->ctx;
-                isdd->dataat = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-                isdd->flags |= ISDATAAT_OFFSET_BE;
-                SCFree(offset);
-            }
-            return 0;
-        }
-        pm = SigMatchGetLastSMFromLists(s, 66,
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-                DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
-                DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_DMATCH],
-                DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH]);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "isdataat relative seen "
-                       "without a previous content uricontent, "
-                       "http_client_body, http_header, http_raw_header, "
-                       "http_method, http_cookie, http_raw_uri, "
-                       "http_stat_msg, http_stat_code, byte_test, "
-                       "byte_extract, byte_jump, http_user_agent, "
-                       "http_host or http_raw_host keyword");
-            goto error;
-        } else {
-            int list_type = SigMatchListSMBelongsTo(s, pm);
-            if (list_type == -1) {
-                goto error;
-            }
-
-            SigMatchAppendSMToList(s, sm, list_type);
-        } /* else - if (pm == NULL) */
-
-        prev_pm = pm;
+        sm_list = DETECT_SM_LIST_PMATCH;
     }
 
     if (offset != NULL) {
-        SigMatch *bed_sm =
-            DetectByteExtractRetrieveSMVar(offset, s,
-                                           SigMatchListSMBelongsTo(s, sm));
+        SigMatch *bed_sm = DetectByteExtractRetrieveSMVar(offset, s, sm_list);
         if (bed_sm == NULL) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown byte_extract var "
                        "seen in isdataat - %s\n", offset);
-            goto error;
+            goto end;
         }
-        DetectIsdataatData *isdd = sm->ctx;
-        isdd->dataat = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
-        isdd->flags |= ISDATAAT_OFFSET_BE;
+        idad->dataat = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
+        idad->flags |= ISDATAAT_OFFSET_BE;
         SCFree(offset);
     }
 
-    DetectContentData *cd = NULL;
-    DetectPcreData *pe = NULL;
+    sm = SigMatchAlloc();
+    if (sm == NULL)
+        goto end;
+    sm->type = DETECT_ISDATAAT;
+    sm->ctx = (void *)idad;
+    SigMatchAppendSMToList(s, sm, sm_list);
 
-    switch (prev_pm->type) {
-        case DETECT_CONTENT:
-            /* Set the relative next flag on the prev sigmatch */
-            cd = (DetectContentData *)prev_pm->ctx;
-            if (cd == NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
-                           "previous keyword!");
-                return -1;
-            }
-            cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+    if (!(idad->flags & ISDATAAT_RELATIVE)) {
+        ret = 0;
+        goto end;
+    }
 
-            break;
+    if (prev_pm == NULL) {
+        ret = 0;
+        goto end;
+    }
 
-        case DETECT_PCRE:
-            pe = (DetectPcreData *)prev_pm->ctx;
-            if (pe == NULL) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
-                           "previous keyword!");
-                return -1;
-            }
-            pe->flags |= DETECT_PCRE_RELATIVE_NEXT;
+    if (prev_pm->type == DETECT_CONTENT) {
+        DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
+        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+    } else if (prev_pm->type == DETECT_PCRE) {
+        DetectPcreData *pd = (DetectPcreData *)prev_pm->ctx;
+        pd->flags |= DETECT_PCRE_RELATIVE_NEXT;
+    }
 
-            break;
+    ret = 0;
 
-        case DETECT_BYTEJUMP:
-        case DETECT_BYTETEST:
-        case DETECT_BYTE_EXTRACT:
-            SCLogDebug("Do nothing for byte_jump, byte_test, byte_extract");
-            break;
-
-        default:
-            /* this will never hit */
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Unknown previous-"
-                       "previous keyword!");
-            return -1;
-    } /* switch */
-
-    return 0;
-
-error:
-    return -1;
+end:
+    if (ret != 0)
+        DetectIsdataatFree(idad);
+    return ret;
 }
 
 /**
@@ -548,7 +498,7 @@ int DetectIsdataatTestParse04(void)
     s->alproto = ALPROTO_DCERPC;
     /* failure since we have no preceding content/pcre/bytejump */
     result &= (DetectIsdataatSetup(NULL, s, "30,relative") == 0);
-    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] != NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL);
+    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
     SigFree(s);
 
@@ -1094,7 +1044,57 @@ static int DetectIsdataatTestParse15(void)
     }
 
     data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
-    if ( (data->flags & ISDATAAT_RELATIVE) ||
+    if ( !(data->flags & ISDATAAT_RELATIVE) ||
+         (data->flags & ISDATAAT_RAWBYTES) ||
+         !(data->flags & ISDATAAT_NEGATED) ) {
+        goto end;
+    }
+
+    result = 1;
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
+
+    return result;
+}
+
+/**
+ *  \test dns_query with isdataat relative to it
+ */
+static int DetectIsdataatTestParse16(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+    Signature *s = NULL;
+    DetectIsdataatData *data = NULL;
+
+    de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
+                               "(msg:\"Testing dns_query and isdataat\"; "
+                               "dns_query; isdataat:!4,relative; sid:1;)");
+    if (de_ctx->sig_list == NULL) {
+        printf("sig parse: ");
+        goto end;
+    }
+
+    s = de_ctx->sig_list;
+    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH] == NULL) {
+        printf("dns_query list empty: ");
+        goto end;
+    }
+
+    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH]->type != DETECT_ISDATAAT) {
+        printf("last dns_query body sm not isdataat: ");
+        goto end;
+    }
+
+    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH]->ctx;
+    if ( !(data->flags & ISDATAAT_RELATIVE) ||
          (data->flags & ISDATAAT_RAWBYTES) ||
          !(data->flags & ISDATAAT_NEGATED) ) {
         goto end;
@@ -1232,6 +1232,7 @@ void DetectIsdataatRegisterTests(void) {
     UtRegisterTest("DetectIsdataatTestParse13", DetectIsdataatTestParse13, 1);
     UtRegisterTest("DetectIsdataatTestParse14", DetectIsdataatTestParse14, 1);
     UtRegisterTest("DetectIsdataatTestParse15", DetectIsdataatTestParse15, 1);
+    UtRegisterTest("DetectIsdataatTestParse16", DetectIsdataatTestParse16, 1);
 
     UtRegisterTest("DetectIsdataatTestPacket01", DetectIsdataatTestPacket01, 1);
     UtRegisterTest("DetectIsdataatTestPacket02", DetectIsdataatTestPacket02, 1);

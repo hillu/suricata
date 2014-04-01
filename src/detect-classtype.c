@@ -86,38 +86,37 @@ void DetectClasstypeRegister(void)
  *
  * \param Pointer to the string to be parsed.
  *
- * \retval ct_name Pointer to the parsed string on Success; NULL on failure.
+ * \retval bool success or failure.
  */
-static inline const char *DetectClasstypeParseRawString(char *rawstr)
+static int DetectClasstypeParseRawString(char *rawstr, char *out, size_t outsize)
 {
-    const char *ct_name = NULL;
 #define MAX_SUBSTRINGS 30
     int ret = 0;
     int ov[MAX_SUBSTRINGS];
+    size_t len = strlen(rawstr);
 
     /* get rid of the double quotes if present */
     if (rawstr[0] == '\"' && rawstr[strlen(rawstr) - 1] == '\"') {
-        if ( (rawstr = SCStrdup(rawstr + 1)) == NULL) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-            goto end;
-        }
+        rawstr++;
         rawstr[strlen(rawstr) - 1] = '\0';
+        len -= 2;
     }
 
-    ret = pcre_exec(regex, regex_study, rawstr, strlen(rawstr), 0, 0, ov, 30);
+    ret = pcre_exec(regex, regex_study, rawstr, len, 0, 0, ov, 30);
     if (ret < 0) {
         SCLogError(SC_ERR_PCRE_MATCH, "Invalid Classtype in Signature");
         goto end;
     }
 
-    ret = pcre_get_substring((char *)rawstr, ov, 30, 1, &ct_name);
+    ret = pcre_copy_substring((char *)rawstr, ov, 30, 1, out, outsize);
     if (ret < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
         goto end;
     }
 
+    return 0;
  end:
-    return ct_name;
+    return -1;
 }
 
 /**
@@ -133,10 +132,10 @@ static inline const char *DetectClasstypeParseRawString(char *rawstr)
  */
 static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 {
-    const char *parsed_ct_name = NULL;
+    char parsed_ct_name[1024] = "";
     SCClassConfClasstype *ct = NULL;
 
-    if ( (parsed_ct_name = DetectClasstypeParseRawString(rawstr)) == NULL) {
+    if (DetectClasstypeParseRawString(rawstr, parsed_ct_name, sizeof(parsed_ct_name)) < -1) {
         SCLogError(SC_ERR_PCRE_PARSE, "Error parsing classtype argument supplied with the "
                    "classtype keyword");
         goto error;
@@ -160,12 +159,9 @@ static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
     if (s->prio == -1)
         s->prio = ct->priority;
 
-    pcre_free_substring(parsed_ct_name);
     return 0;
 
  error:
-    if (parsed_ct_name != NULL)
-        pcre_free_substring(parsed_ct_name);
     return -1;
 }
 

@@ -36,14 +36,15 @@
 #include "stream-tcp.h"
 #include "stream.h"
 
+#include "app-layer.h"
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 #include "app-layer-ssl.h"
 
 #include "app-layer-tls-handshake.h"
 
-#include "conf.h"
 #include "decode-events.h"
+#include "conf.h"
 
 #include "util-spm.h"
 #include "util-unittest.h"
@@ -119,6 +120,7 @@ static void SSLParserReset(SSLState *ssl_state)
 static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
                                    uint32_t input_len)
 {
+    void *ptmp;
     uint8_t *initial_input = input;
     uint32_t parsed = 0;
     int rc;
@@ -152,15 +154,21 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
             }
             if (ssl_state->curr_connp->trec_pos + input_len >= ssl_state->curr_connp->trec_len) {
                 ssl_state->curr_connp->trec_len = ssl_state->curr_connp->trec_len + 2 * input_len + 1;
-                ssl_state->curr_connp->trec = SCRealloc( ssl_state->curr_connp->trec, ssl_state->curr_connp->trec_len );
+                ptmp = SCRealloc(ssl_state->curr_connp->trec,
+                                 ssl_state->curr_connp->trec_len);
+                if (unlikely(ptmp == NULL)) {
+                    SCFree(ssl_state->curr_connp->trec);
+                }
+                ssl_state->curr_connp->trec = ptmp;
             }
-            if (ssl_state->curr_connp->trec == NULL) {
+            if (unlikely(ssl_state->curr_connp->trec == NULL)) {
                 ssl_state->curr_connp->trec_len = 0;
                 /* error, skip packet */
                 parsed += input_len;
                 ssl_state->curr_connp->bytes_processed += input_len;
                 return -1;
             }
+
             uint32_t write_len = 0;
             if ((ssl_state->curr_connp->bytes_processed + input_len) > ssl_state->curr_connp->record_length + (SSLV3_RECORD_HDR_LEN)) {
                 if ((ssl_state->curr_connp->record_length + SSLV3_RECORD_HDR_LEN) < ssl_state->curr_connp->bytes_processed) {
@@ -270,6 +278,7 @@ static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
             {
                 return (input - initial_input);
             }
+            /* fall through */
         case 1:
             ssl_state->curr_connp->message_length = *(input++) << 16;
             ssl_state->curr_connp->bytes_processed++;
@@ -280,6 +289,7 @@ static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
             {
                 return (input - initial_input);
             }
+            /* fall through */
         case 2:
             ssl_state->curr_connp->message_length |= *(input++) << 8;
             ssl_state->curr_connp->bytes_processed++;
@@ -290,11 +300,13 @@ static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
             {
                 return (input - initial_input);
             }
+            /* fall through */
         case 3:
             ssl_state->curr_connp->message_length |= *(input++);
             ssl_state->curr_connp->bytes_processed++;
             ssl_state->curr_connp->hs_bytes_processed++;
             --input_len;
+            /* fall through */
     }
 
     retval = SSLv3ParseHandshakeType(ssl_state, input, input_len);
@@ -330,22 +342,27 @@ static int SSLv3ParseRecord(uint8_t direction, SSLState *ssl_state,
                 if (--input_len == 0)
                     break;
             }
+            /* fall through */
         case 1:
             ssl_state->curr_connp->version = *(input++) << 8;
             if (--input_len == 0)
                 break;
+            /* fall through */
         case 2:
             ssl_state->curr_connp->version |= *(input++);
             if (--input_len == 0)
                 break;
+            /* fall through */
         case 3:
             ssl_state->curr_connp->record_length = *(input++) << 8;
             if (--input_len == 0)
                 break;
+            /* fall through */
         case 4:
             ssl_state->curr_connp->record_length |= *(input++);
             if (--input_len == 0)
                 break;
+            /* fall through */
     } /* switch (ssl_state->curr_connp->bytes_processed) */
 
     ssl_state->curr_connp->bytes_processed += (input - initial_input);
@@ -377,15 +394,18 @@ static int SSLv2ParseRecord(uint8_t direction, SSLState *ssl_state,
                         break;
                 }
 
+                /* fall through */
             case 1:
                 ssl_state->curr_connp->record_length |= *(input++);
                 if (--input_len == 0)
                     break;
+                /* fall through */
             case 2:
                 ssl_state->curr_connp->content_type = *(input++);
                 ssl_state->curr_connp->version = SSL_VERSION_2;
                 if (--input_len == 0)
                     break;
+                /* fall through */
         } /* switch (ssl_state->curr_connp->bytes_processed) */
 
     } else {
@@ -402,23 +422,26 @@ static int SSLv2ParseRecord(uint8_t direction, SSLState *ssl_state,
                     if (--input_len == 0)
                         break;
                 }
-
+                /* fall through */
             case 1:
                 ssl_state->curr_connp->record_length |= *(input++);
                 if (--input_len == 0)
                     break;
 
+                /* fall through */
             case 2:
                 /* padding */
                 input++;
                 if (--input_len == 0)
                     break;
 
+                /* fall through */
             case 3:
                 ssl_state->curr_connp->content_type = *(input++);
                 ssl_state->curr_connp->version = SSL_VERSION_2;
                 if (--input_len == 0)
                     break;
+                /* fall through */
         } /* switch (ssl_state->curr_connp->bytes_processed) */
     }
 
@@ -491,31 +514,37 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
                             if (--input_len == 0)
                                 break;
                         }
+                        /* fall through */
                     case 5:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+                        /* fall through */
                     case 6:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+                        /* fall through */
                     case 7:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+                        /* fall through */
                     case 8:
                         ssl_state->curr_connp->session_id_length = *(input++) << 8;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+                        /* fall through */
                     case 9:
                         ssl_state->curr_connp->session_id_length |= *(input++);
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+                        /* fall through */
                 } /* switch (ssl_state->curr_connp->bytes_processed) */
 
                 /* ssl_state->curr_connp->record_lengths_length is 3 */
@@ -584,6 +613,7 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
             } else {
                 ssl_state->flags |= SSL_AL_FLAG_STATE_CLIENT_KEYX;
             }
+            /* fall through */
         case SSLV2_MT_SERVER_VERIFY:
         case SSLV2_MT_SERVER_FINISHED:
             if (direction == 0 &&
@@ -591,6 +621,7 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
                 SCLogDebug("Incorrect SSL Record type sent in the toserver "
                            "direction!");
             }
+            /* fall through */
         case SSLV2_MT_CLIENT_FINISHED:
         case SSLV2_MT_REQUEST_CERTIFICATE:
             /* both ways hello seen */
@@ -612,10 +643,10 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
 
                 if ((ssl_state->flags & SSL_AL_FLAG_SSL_CLIENT_SSN_ENCRYPTED) &&
                     (ssl_state->flags & SSL_AL_FLAG_SSL_SERVER_SSN_ENCRYPTED)) {
-                    pstate->flags |= APP_LAYER_PARSER_DONE;
-                    pstate->flags |= APP_LAYER_PARSER_NO_INSPECTION;
+                    AppLayerParserStateSetFlag(pstate,
+                                                     APP_LAYER_PARSER_NO_INSPECTION);
                     if (ssl_config.no_reassemble == 1)
-                        pstate->flags |= APP_LAYER_PARSER_NO_REASSEMBLY;
+                        AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_REASSEMBLY);
                     SCLogDebug("SSLv2 No reassembly & inspection has been set");
                 }
             }
@@ -687,10 +718,9 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
             if ((ssl_state->flags & SSL_AL_FLAG_CLIENT_CHANGE_CIPHER_SPEC) &&
                 (ssl_state->flags & SSL_AL_FLAG_SERVER_CHANGE_CIPHER_SPEC)) {
                 /* set flags */
-                pstate->flags |= APP_LAYER_PARSER_DONE;
-                pstate->flags |= APP_LAYER_PARSER_NO_INSPECTION;
+                AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_INSPECTION);
                 if (ssl_config.no_reassemble == 1)
-                    pstate->flags |= APP_LAYER_PARSER_NO_REASSEMBLY;
+                    AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_REASSEMBLY);
             }
 
             break;
@@ -903,14 +933,14 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
 
 int SSLParseClientRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
                          uint8_t *input, uint32_t input_len,
-                         void *local_data, AppLayerParserResult *output)
+                         void *local_data)
 {
     return SSLDecode(f, 0 /* toserver */, alstate, pstate, input, input_len);
 }
 
 int SSLParseServerRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
                          uint8_t *input, uint32_t input_len,
-                         void *local_data, AppLayerParserResult *output)
+                         void *local_data)
 {
     return SSLDecode(f, 1 /* toclient */, alstate, pstate, input, input_len);
 }
@@ -921,15 +951,15 @@ int SSLParseServerRecord(Flow *f, void *alstate, AppLayerParserState *pstate,
  */
 void *SSLStateAlloc(void)
 {
-    void *ssl_state = SCMalloc(sizeof(SSLState));
+    SSLState *ssl_state = SCMalloc(sizeof(SSLState));
     if (unlikely(ssl_state == NULL))
         return NULL;
     memset(ssl_state, 0, sizeof(SSLState));
-    ((SSLState*)ssl_state)->client_connp.cert_log_flag = 0;
-    ((SSLState*)ssl_state)->server_connp.cert_log_flag = 0;
-    TAILQ_INIT(&((SSLState*)ssl_state)->server_connp.certs);
+    ssl_state->client_connp.cert_log_flag = 0;
+    ssl_state->server_connp.cert_log_flag = 0;
+    TAILQ_INIT(&ssl_state->server_connp.certs);
 
-    return ssl_state;
+    return (void *)ssl_state;
 }
 
 /**
@@ -971,7 +1001,7 @@ void SSLStateFree(void *p)
     return;
 }
 
-static uint16_t SSLProbingParser(uint8_t *input, uint32_t ilen)
+static uint16_t SSLProbingParser(uint8_t *input, uint32_t ilen, uint32_t *offset)
 {
     /* probably a rst/fin sending an eof */
     if (ilen == 0)
@@ -986,6 +1016,147 @@ static uint16_t SSLProbingParser(uint8_t *input, uint32_t ilen)
     return ALPROTO_FAILED;
 }
 
+int SSLStateGetEventInfo(const char *event_name,
+                         int *event_id, AppLayerEventType *event_type)
+{
+    *event_id = SCMapEnumNameToValue(event_name, tls_decoder_event_table);
+    if (*event_id == -1) {
+        SCLogError(SC_ERR_INVALID_ENUM_MAP, "event \"%s\" not present in "
+                   "ssl's enum map table.",  event_name);
+        /* yes this is fatal */
+        return -1;
+    }
+
+    *event_type = APP_LAYER_EVENT_TYPE_GENERAL;
+
+    return 0;
+}
+
+static int SSLRegisterPatternsForProtocolDetection(void)
+{
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 00 02|", 5, 2, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+
+    /** SSLv3 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 03 00|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 00|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 03 01|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 01|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1.1 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 03 02|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 02|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1.2 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 03 03|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 03|", 3, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+
+    /***** toclient direction *****/
+
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 00|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|17 03 00|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 01|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|17 03 01|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1.1 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 02|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|17 03 02|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+
+    /** TLSv1.2 */
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|16 03 03|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|17 03 03|", 3, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+
+    /* Subsection - SSLv2 style record by client, but informing the server
+     * the max version it supports.
+     * Updated by Anoop Saldanha.  Disabled it for now.  We'll get back to
+     * it after some tests */
+#if 0
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|01 03 00|", 5, 2, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_TLS,
+                                               "|00 02|", 7, 5, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+#endif
+
+    return 0;
+}
+
 /**
  * \brief Function to register the SSL protocol parser and other functions
  */
@@ -994,45 +1165,58 @@ void RegisterSSLParsers(void)
     char *proto_name = "tls";
 
     /** SSLv2  and SSLv23*/
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 00 02|", 5, 2, STREAM_TOSERVER);
-    /* subsection - SSLv2 style record by client, but informing the server the max
-     * version it supports */
-    /* Updated by Anoop Saldanha.  Disabled it for now.  We'll get back to it
-     * after some tests */
-    //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|01 03 00|", 5, 2, STREAM_TOSERVER);
-    //AlpProtoAdd(&alp_proto_ctx, IPPROTO_TCP, ALPROTO_TLS, "|00 02|", 7, 5, STREAM_TOCLIENT);
+    if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
+        AppLayerProtoDetectRegisterProtocol(ALPROTO_TLS, proto_name);
 
-    /** SSLv3 */
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 00|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 00|", 3, 0, STREAM_TOSERVER); /* client hello */
-    /** TLSv1 */
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 01|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 01|", 3, 0, STREAM_TOSERVER); /* client hello */
-    /** TLSv1.1 */
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 02|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 02|", 3, 0, STREAM_TOSERVER); /* client hello */
-    /** TLSv1.2 */
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|01 03 03|", 3, 0, STREAM_TOSERVER);
-    AlpProtoAdd(&alp_proto_ctx, proto_name, IPPROTO_TCP, ALPROTO_TLS, "|16 03 03|", 3, 0, STREAM_TOSERVER); /* client hello */
+        if (SSLRegisterPatternsForProtocolDetection() < 0)
+            return;
 
-    AppLayerRegisterProto(proto_name, ALPROTO_TLS, STREAM_TOSERVER,
-                          SSLParseClientRecord);
+        if (RunmodeIsUnittests()) {
+            AppLayerProtoDetectPPRegister(IPPROTO_TCP,
+                                          "443",
+                                          ALPROTO_TLS,
+                                          0, 3,
+                                          STREAM_TOSERVER,
+                                          SSLProbingParser);
+        } else {
+            AppLayerProtoDetectPPParseConfPorts("tcp", IPPROTO_TCP,
+                                                proto_name, ALPROTO_TLS,
+                                                0, 3,
+                                                SSLProbingParser);
+        }
+    } else {
+        SCLogInfo("Protocol detection and parser disabled for %s protocol",
+                  proto_name);
+        return;
+    }
 
-    AppLayerRegisterProto(proto_name, ALPROTO_TLS, STREAM_TOCLIENT,
-                          SSLParseServerRecord);
-    AppLayerDecoderEventsModuleRegister(ALPROTO_TLS, tls_decoder_event_table);
+    if (AppLayerParserConfParserEnabled("tcp", proto_name)) {
+        AppLayerParserRegisterParser(IPPROTO_TCP, ALPROTO_TLS, STREAM_TOSERVER,
+                                     SSLParseClientRecord);
 
-    AppLayerRegisterStateFuncs(ALPROTO_TLS, SSLStateAlloc, SSLStateFree);
+        AppLayerParserRegisterParser(IPPROTO_TCP, ALPROTO_TLS, STREAM_TOCLIENT,
+                                     SSLParseServerRecord);
+        AppLayerParserRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_TLS, SSLStateGetEventInfo);
 
-    AppLayerRegisterProbingParser(&alp_proto_ctx,
-                                  443,
-                                  IPPROTO_TCP,
-                                  proto_name,
-                                  ALPROTO_TLS,
-                                  0, 3,
-                                  STREAM_TOSERVER,
-                                  APP_LAYER_PROBING_PARSER_PRIORITY_HIGH, 1,
-                                  SSLProbingParser);
+        AppLayerParserRegisterStateFuncs(IPPROTO_TCP, ALPROTO_TLS, SSLStateAlloc, SSLStateFree);
+        AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_TLS, STREAM_TOSERVER);
+
+        /* Get the value of no reassembly option from the config file */
+        if (ConfGetNode("app-layer.protocols.tls.no-reassemble") == NULL) {
+            if (ConfGetBool("tls.no-reassemble", &ssl_config.no_reassemble) != 1)
+                ssl_config.no_reassemble = 1;
+        } else {
+            if (ConfGetBool("app-layer.protocols.tls.no-reassemble", &ssl_config.no_reassemble) != 1)
+                ssl_config.no_reassemble = 1;
+        }
+    } else {
+        SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
+                  "still on.", proto_name);
+    }
+
+#ifdef UNITTESTS
+    AppLayerParserRegisterProtocolUnittests(IPPROTO_TCP, ALPROTO_TLS, SSLParserRegisterTests);
+#endif
 
     /* Get the value of no reassembly option from the config file */
     if (ConfGetBool("tls.no-reassemble", &ssl_config.no_reassemble) != 1)
@@ -1055,19 +1239,24 @@ static int SSLParserTest01(void)
     uint8_t tlsbuf[] = { 0x16, 0x03, 0x01 };
     uint32_t tlslen = sizeof(tlsbuf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_EOF, tlsbuf, tlslen);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_EOF, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1090,6 +1279,8 @@ static int SSLParserTest01(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1104,26 +1295,34 @@ static int SSLParserTest02(void)
     uint8_t tlsbuf2[] = { 0x03, 0x01 };
     uint32_t tlslen2 = sizeof(tlsbuf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1146,6 +1345,8 @@ static int SSLParserTest02(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1162,33 +1363,44 @@ static int SSLParserTest03(void)
     uint8_t tlsbuf3[] = { 0x01 };
     uint32_t tlslen3 = sizeof(tlsbuf3);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1211,6 +1423,8 @@ static int SSLParserTest03(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1229,40 +1443,54 @@ static int SSLParserTest04(void)
     uint8_t tlsbuf4[] = { 0x01, 0x00, 0x00, 0xad, 0x03, 0x01 };
     uint32_t tlslen4 = sizeof(tlsbuf4);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1285,6 +1513,8 @@ static int SSLParserTest04(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1299,30 +1529,23 @@ static int SSLParserTest05(void)
     uint8_t tlsbuf[] = { 0x16, 0x03, 0x01, 0x00, 0x01 };
     uint32_t tlslen = sizeof(tlsbuf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        goto end;
-    }
-
-    tlsbuf[0] = 0x14;
-
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1331,7 +1554,16 @@ static int SSLParserTest05(void)
 
     tlsbuf[0] = 0x14;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    tlsbuf[0] = 0x14;
+
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1340,7 +1572,7 @@ static int SSLParserTest05(void)
 
     tlsbuf[0] = 0x17;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1388,6 +1620,8 @@ static int SSLParserTest05(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1404,21 +1638,23 @@ static int SSLParserTest06(void)
     uint8_t tlsbuf[] = { 0x16, 0x03, 0x01, 0x00, 0x01 };
     uint32_t tlslen = sizeof(tlsbuf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1427,7 +1663,7 @@ static int SSLParserTest06(void)
 
     tlsbuf[0] = 0x14;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1436,7 +1672,7 @@ static int SSLParserTest06(void)
 
     tlsbuf[0] = 0x17;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1478,7 +1714,7 @@ static int SSLParserTest06(void)
 
     tlsbuf[0] = 0x14;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1487,7 +1723,7 @@ static int SSLParserTest06(void)
 
     tlsbuf[0] = 0x17;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1509,6 +1745,8 @@ static int SSLParserTest06(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1549,19 +1787,24 @@ static int SSLParserMultimsgTest01(void)
     };
     uint32_t tlslen1 = sizeof(tlsbuf1);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1584,6 +1827,8 @@ static int SSLParserMultimsgTest01(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1623,19 +1868,24 @@ static int SSLParserMultimsgTest02(void)
     };
     uint32_t tlslen1 = sizeof(tlsbuf1);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf1, tlslen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf1, tlslen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1658,6 +1908,8 @@ static int SSLParserMultimsgTest02(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1686,19 +1938,24 @@ static int SSLParserTest07(void)
             0x00, 0x0a, 0x00, 0x02, 0x01, 0x00 };
     uint32_t tlslen = sizeof(tlsbuf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1722,6 +1979,8 @@ static int SSLParserTest07(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1736,30 +1995,23 @@ static int SSLParserTest08(void)
     uint8_t tlsbuf[] = { 0x16, 0x03, 0x00, 0x00, 0x01 };
     uint32_t tlslen = sizeof(tlsbuf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        goto end;
-    }
-
-    tlsbuf[0] = 0x14;
-
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1768,7 +2020,16 @@ static int SSLParserTest08(void)
 
     tlsbuf[0] = 0x14;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    if (r != 0) {
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        result = 0;
+        goto end;
+    }
+
+    tlsbuf[0] = 0x14;
+
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1777,7 +2038,7 @@ static int SSLParserTest08(void)
 
     tlsbuf[0] = 0x17;
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf, tlslen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1824,6 +2085,8 @@ static int SSLParserTest08(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1861,26 +2124,34 @@ static int SSLParserTest09(void)
     };
     uint32_t buf2_len = sizeof(buf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1904,6 +2175,8 @@ static int SSLParserTest09(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -1939,26 +2212,34 @@ static int SSLParserTest10(void)
     };
     uint32_t buf2_len = sizeof(buf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -1982,6 +2263,8 @@ static int SSLParserTest10(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2016,26 +2299,34 @@ static int SSLParserTest11(void)
     };
     uint32_t buf2_len = sizeof(buf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2059,6 +2350,8 @@ static int SSLParserTest11(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2098,33 +2391,44 @@ static int SSLParserTest12(void)
     };
     uint32_t buf3_len = sizeof(buf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf3, buf3_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf3, buf3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2148,6 +2452,8 @@ static int SSLParserTest12(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2192,40 +2498,54 @@ static int SSLParserTest13(void)
     };
     uint32_t buf4_len = sizeof(buf4);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf3, buf3_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf3, buf3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf4, buf4_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf4, buf4_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2249,6 +2569,8 @@ static int SSLParserTest13(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2272,26 +2594,34 @@ static int SSLParserTest14(void)
     uint32_t buf2_len = sizeof(buf2);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2301,6 +2631,8 @@ static int SSLParserTest14(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2319,21 +2651,28 @@ static int SSLParserTest15(void)
     uint32_t buf1_len = sizeof(buf1);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r == 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2352,21 +2691,28 @@ static int SSLParserTest16(void)
     uint32_t buf1_len = sizeof(buf1);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r == 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2385,21 +2731,28 @@ static int SSLParserTest17(void)
     uint32_t buf1_len = sizeof(buf1);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r == 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2424,26 +2777,34 @@ static int SSLParserTest18(void)
     uint32_t buf2_len = sizeof(buf2);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2453,6 +2814,8 @@ static int SSLParserTest18(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2472,19 +2835,24 @@ static int SSLParserTest19(void)
     uint32_t buf1_len = sizeof(buf1);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -2494,6 +2862,8 @@ static int SSLParserTest19(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2513,21 +2883,28 @@ static int SSLParserTest20(void)
     uint32_t buf1_len = sizeof(buf1);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r == 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -2546,21 +2923,26 @@ static int SSLParserTest21(void)
     uint32_t buf_len = sizeof(buf);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_EOF, buf,
-                          buf_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_EOF, buf,
+                                buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *app_state = f.alstate;
     if (app_state == NULL) {
@@ -2582,6 +2964,9 @@ static int SSLParserTest21(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     return result;
 }
@@ -2603,6 +2988,8 @@ static int SSLParserTest22(void)
         0x2f, 0x34, 0x84, 0x20, 0xc5};
     uint32_t buf_len = sizeof(buf);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+
     //AppLayerDetectProtoThreadInit();
 
     memset(&f, 0, sizeof(f));
@@ -2610,16 +2997,20 @@ static int SSLParserTest22(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT | STREAM_EOF, buf,
-                          buf_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT | STREAM_EOF, buf,
+                                buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *app_state = f.alstate;
     if (app_state == NULL) {
@@ -2642,6 +3033,8 @@ static int SSLParserTest22(void)
         goto end;
     }
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     return result;
@@ -2900,6 +3293,8 @@ static int SSLParserTest23(void)
     uint32_t toserver_app_data_buf_len = sizeof(toserver_app_data_buf);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+
     //AppLayerDetectProtoThreadInit();
 
     memset(&f, 0, sizeof(f));
@@ -2907,16 +3302,20 @@ static int SSLParserTest23(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_START, chello_buf,
-                          chello_buf_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_START, chello_buf,
+                                chello_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *app_state = f.alstate;
     if (app_state == NULL) {
@@ -2948,13 +3347,16 @@ static int SSLParserTest23(void)
     }
 
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, shello_buf,
-                      shello_buf_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, shello_buf,
+                            shello_buf_len);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     if (app_state->server_connp.content_type != SSLV3_HANDSHAKE_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
@@ -2978,13 +3380,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, client_change_cipher_spec_buf,
-                      client_change_cipher_spec_buf_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, client_change_cipher_spec_buf,
+                            client_change_cipher_spec_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* with multiple records the client content type hold the type from the last
      * record */
@@ -3012,13 +3417,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT, server_change_cipher_spec_buf,
-                      server_change_cipher_spec_buf_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, server_change_cipher_spec_buf,
+                            server_change_cipher_spec_buf_len);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     /* with multiple records the serve content type hold the type from the last
      * record */
@@ -3047,13 +3455,16 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, toserver_app_data_buf,
-                      toserver_app_data_buf_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, toserver_app_data_buf,
+                            toserver_app_data_buf_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     if (app_state->client_connp.content_type != SSLV3_APPLICATION_PROTOCOL) {
         printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
@@ -3080,10 +3491,7 @@ static int SSLParserTest23(void)
         goto end;
     }
 
-    AppLayerParserStateStore *parser_state_store =
-        (AppLayerParserStateStore *)f.alparser;
-    AppLayerParserState *parser_state = &parser_state_store->to_server;
-    if (!(parser_state->flags & APP_LAYER_PARSER_NO_INSPECTION) &&
+    if (!AppLayerParserStateIssetFlag(f.alparser, APP_LAYER_PARSER_NO_INSPECTION) &&
         !(ssn.client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
         !(ssn.server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) {
         printf("The flags should be set\n");
@@ -3098,6 +3506,8 @@ static int SSLParserTest23(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     return result;
@@ -3134,26 +3544,34 @@ static int SSLParserTest24(void)
     };
     uint32_t buf2_len = sizeof(buf2);
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf1, buf1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, buf2, buf2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     SSLState *ssl_state = f.alstate;
     if (ssl_state == NULL) {
@@ -3177,6 +3595,8 @@ static int SSLParserTest24(void)
     }
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }
@@ -3503,15 +3923,17 @@ static int SSLParserTest25(void)
     uint32_t client_key_exchange_cipher_enc_hs_len = sizeof(client_key_exchange_cipher_enc_hs);
 
     TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
     SCMutexLock(&f.m);
-    int r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER, client_hello, client_hello_len);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, client_hello, client_hello_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         SCMutexUnlock(&f.m);
@@ -3533,9 +3955,9 @@ static int SSLParserTest25(void)
     }
 
     SCMutexLock(&f.m);
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOCLIENT,
-                      server_hello_certificate_done,
-                      server_hello_certificate_done_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT,
+                            server_hello_certificate_done,
+                            server_hello_certificate_done_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         SCMutexUnlock(&f.m);
@@ -3551,9 +3973,9 @@ static int SSLParserTest25(void)
     }
 
     SCMutexLock(&f.m);
-    r = AppLayerParse(NULL, &f, ALPROTO_TLS, STREAM_TOSERVER,
-                      client_key_exchange_cipher_enc_hs,
-                      client_key_exchange_cipher_enc_hs_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            client_key_exchange_cipher_enc_hs,
+                            client_key_exchange_cipher_enc_hs_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         SCMutexUnlock(&f.m);
@@ -3577,6 +3999,8 @@ static int SSLParserTest25(void)
 
     result = 1;
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     return result;
 }

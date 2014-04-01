@@ -80,6 +80,7 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
     int match = 0;
     int store_r = 0;
 
+    KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_FILEMATCH);
     SCLogDebug("file inspection... %p", ffc);
 
     if (ffc != NULL) {
@@ -93,12 +94,12 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
             }
 
             if (file->txid < det_ctx->tx_id) {
-                SCLogDebug("file->txid < det_ctx->tx_id == %u < %u", file->txid, det_ctx->tx_id);
+                SCLogDebug("file->txid < det_ctx->tx_id == %"PRIu64" < %"PRIu64, file->txid, det_ctx->tx_id);
                 continue;
             }
 
             if (file->txid > det_ctx->tx_id) {
-                SCLogDebug("file->txid > det_ctx->tx_id == %u > %u", file->txid, det_ctx->tx_id);
+                SCLogDebug("file->txid > det_ctx->tx_id == %"PRIu64" > %"PRIu64, file->txid, det_ctx->tx_id);
                 break;
             }
 
@@ -137,8 +138,10 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
                 SCLogDebug("sm %p, sm->next %p", sm, sm->next);
 
                 if (sigmatch_table[sm->type].FileMatch != NULL) {
+                    KEYWORD_PROFILING_START;
                     match = sigmatch_table[sm->type].
                         FileMatch(tv, det_ctx, f, flags, file, s, sm);
+                    KEYWORD_PROFILING_END(det_ctx, sm->type, (match > 0));
                     if (match == 0) {
                         r = 2;
                         break;
@@ -172,8 +175,11 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
         {
             DetectFilestoreData *fd = sm->ctx;
             if (fd->scope > FILESTORE_SCOPE_DEFAULT) {
+                KEYWORD_PROFILING_START;
                 match = sigmatch_table[sm->type].
                     FileMatch(tv, det_ctx, f, flags, /* no file */NULL, s, sm);
+                KEYWORD_PROFILING_END(det_ctx, sm->type, (match > 0));
+
                 if (match == 1) {
                     r = 1;
                 }
@@ -203,8 +209,12 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
  *
  *  \note flow should be locked when this function's called.
  */
-int DetectFileInspectHttp(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags, void *alstate, int tx_id) {
-    int r = 0;
+int DetectFileInspectHttp(ThreadVars *tv,
+                          DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                          Signature *s, Flow *f, uint8_t flags, void *alstate,
+                          void *tx, uint64_t tx_id)
+{
+    int r = DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
     FileContainer *ffc;
     HtpState *htp_state = (HtpState *)alstate;
 
@@ -218,16 +228,16 @@ int DetectFileInspectHttp(ThreadVars *tv, DetectEngineCtx *de_ctx, DetectEngineT
 
     int match = DetectFileInspect(tv, det_ctx, f, s, flags, ffc);
     if (match == 1) {
-        r = 1;
+        r = DETECT_ENGINE_INSPECT_SIG_MATCH;
     } else if (match == 2) {
         if (r != 1) {
             SCLogDebug("sid %u can't match on this transaction", s->id);
-            r = 2;
+            r = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
         }
     } else if (match == 3) {
         if (r != 1) {
             SCLogDebug("sid %u can't match on this transaction (filestore sig)", s->id);
-            r = 3;
+            r = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH_FILESTORE;
         }
     }
 

@@ -53,6 +53,7 @@
 #include "util-spm.h"
 
 #include "app-layer.h"
+#include "app-layer-parser.h"
 
 #include "app-layer-htp.h"
 #include "detect-http-method.h"
@@ -94,95 +95,11 @@ void DetectHttpMethodRegister(void) {
  */
 static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
 {
-    SCEnter();
-    DetectContentData *cd = NULL;
-
-    if ((str != NULL) && (strcmp(str, "") != 0)) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT, "http_method does not take an argument");
-        SCReturnInt(-1);
-    }
-
-    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL) {
-        SCLogError(SC_ERR_HTTP_METHOD_NEEDS_PRECEEDING_CONTENT, "http_method "
-                "modifies preceding \"content\", but none was found");
-        SCReturnInt(-1);
-    }
-
-    SigMatch *sm =  SigMatchGetLastSMFromLists(s, 2,
-                                               DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
-    if (sm == NULL) {
-        SCLogError(SC_ERR_HTTP_METHOD_NEEDS_PRECEEDING_CONTENT, "http_method "
-                "modifies preceding \"content\", but none was found");
-        SCReturnInt(-1);
-    }
-
-    cd = (DetectContentData *)sm->ctx;
-
-    if (cd->flags & DETECT_CONTENT_RAWBYTES) {
-        SCLogError(SC_ERR_HTTP_METHOD_INCOMPATIBLE_WITH_RAWBYTES, "http_method "
-                "cannot be used with \"rawbytes\"");
-        SCReturnInt(-1);
-    }
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains keywords"
-                "that conflict with http_method");
-        goto error;
-    }
-
-    if ((cd->flags & DETECT_CONTENT_WITHIN) || (cd->flags & DETECT_CONTENT_DISTANCE)) {
-        SigMatch *pm =  SigMatchGetLastSMFromLists(s, 4,
-                                                   DETECT_CONTENT, sm->prev,
-                                                   DETECT_PCRE, sm->prev);
-        if (pm != NULL) {
-            /* pm is never NULL.  So no NULL check */
-            if (pm->type == DETECT_CONTENT) {
-                DetectContentData *tmp_cd = (DetectContentData *)pm->ctx;
-                tmp_cd->flags &= ~DETECT_CONTENT_RELATIVE_NEXT;
-            } else {
-                DetectPcreData *tmp_pd = (DetectPcreData *)pm->ctx;
-                tmp_pd->flags &= ~DETECT_PCRE_RELATIVE_NEXT;
-            }
-        } /* if (pm != NULL) */
-
-        /* please note.  reassigning pm */
-        pm = SigMatchGetLastSMFromLists(s, 4,
-                                        DETECT_CONTENT,
-                                        s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                        DETECT_PCRE,
-                                        s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]);
-        if (pm == NULL) {
-            SCLogError(SC_ERR_HTTP_METHOD_RELATIVE_MISSING, "http_method with "
-                    "a distance or within requires preceding http_method "
-                    "content, but none was found");
-            goto error;
-        }
-        if (pm->type == DETECT_PCRE) {
-            DetectPcreData *tmp_pd = (DetectPcreData *)pm->ctx;
-            tmp_pd->flags |= DETECT_PCRE_RELATIVE_NEXT;
-        } else {
-            DetectContentData *tmp_cd = (DetectContentData *)pm->ctx;
-            tmp_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
-        }
-    }
-    cd->id = DetectPatternGetId(de_ctx->mpm_pattern_id_store, cd, DETECT_SM_LIST_HMDMATCH);
-    sm->type = DETECT_CONTENT;
-
-    /* transfer the sm from the pmatch list to hmdmatch list */
-    SigMatchTransferSigMatchAcrossLists(sm,
-                                        &s->sm_lists[DETECT_SM_LIST_PMATCH],
-                                        &s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                        &s->sm_lists[DETECT_SM_LIST_HMDMATCH],
-                                        &s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]);
-
-    /* flag the signature to indicate that we scan the app layer data */
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_HTTP;
-
-    SCReturnInt(0);
-
-error:
-    SCReturnInt(-1);
+    return DetectEngineContentModifierBufferSetup(de_ctx, s, str,
+                                                  DETECT_AL_HTTP_METHOD,
+                                                  DETECT_SM_LIST_HMDMATCH,
+                                                  ALPROTO_HTTP,
+                                                  NULL);
 }
 
 /**
@@ -345,244 +262,6 @@ int DetectHttpMethodTest05(void)
     return result;
 }
 
-int DetectHttpMethodTest06(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; content:\"one\"; http_method; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    if (cd->id == hmd->id)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpMethodTest07(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; http_method; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    if (cd->id == hmd->id)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpMethodTest08(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; content:\"one\"; content:\"one\"; http_method; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    if (cd->id != 0 || hmd->id != 1)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpMethodTest09(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; http_method; content:\"one\"; content:\"one\"; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    if (cd->id != 1 || hmd->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpMethodTest10(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; http_method; "
-                               "content:\"one\"; content:\"one\"; http_method; content:\"one\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    DetectContentData *hmd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
-    if (cd->id != 1 || hmd1->id != 0 || hmd2->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
-int DetectHttpMethodTest11(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
-    de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(content:\"one\"; http_method; "
-                               "content:\"one\"; content:\"one\"; http_method; content:\"two\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("de_ctx->sig_list == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_PMATCH] == NULL\n");
-        goto end;
-    }
-
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH] == NULL\n");
-        goto end;
-    }
-
-    DetectContentData *cd = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hmd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    DetectContentData *hmd2 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
-    if (cd->id != 2 || hmd1->id != 0 || hmd2->id != 0)
-        goto end;
-
-    result = 1;
-
- end:
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
-}
-
 /** \test setting the nocase flag */
 static int DetectHttpMethodTest12(void)
 {
@@ -731,6 +410,7 @@ static int DetectHttpMethodSigTest01(void)
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
     HtpState *http_state = NULL;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -740,6 +420,7 @@ static int DetectHttpMethodSigTest01(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -778,11 +459,14 @@ static int DetectHttpMethodSigTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -802,7 +486,8 @@ static int DetectHttpMethodSigTest01(void)
     result = 1;
 
 end:
-
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
@@ -828,6 +513,7 @@ static int DetectHttpMethodSigTest02(void)
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     HtpState *http_state = NULL;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -837,6 +523,7 @@ static int DetectHttpMethodSigTest02(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -875,11 +562,14 @@ static int DetectHttpMethodSigTest02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -899,7 +589,8 @@ static int DetectHttpMethodSigTest02(void)
     result = 1;
 
 end:
-
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (det_ctx != NULL) DetectEngineThreadCtxDeinit(&th_v, (void *) det_ctx);
@@ -924,6 +615,7 @@ static int DetectHttpMethodSigTest03(void)
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
     HtpState *http_state = NULL;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -933,6 +625,7 @@ static int DetectHttpMethodSigTest03(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -963,11 +656,14 @@ static int DetectHttpMethodSigTest03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -984,7 +680,8 @@ static int DetectHttpMethodSigTest03(void)
     result = 1;
 
 end:
-
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
     if (de_ctx != NULL) SigCleanSignatures(de_ctx);
     if (de_ctx != NULL) DetectEngineCtxFree(de_ctx);
@@ -1010,6 +707,7 @@ static int DetectHttpMethodSigTest04(void)
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     HtpState *http_state = NULL;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -1019,6 +717,7 @@ static int DetectHttpMethodSigTest04(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
 
     p->flow = &f;
@@ -1053,11 +752,14 @@ static int DetectHttpMethodSigTest04(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    int r = AppLayerParse(NULL, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    SCMutexLock(&f.m);
+    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1079,7 +781,8 @@ static int DetectHttpMethodSigTest04(void)
     result = 1;
 
 end:
-
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -1110,12 +813,6 @@ void DetectHttpMethodRegisterTests(void) {
     UtRegisterTest("DetectHttpMethodTest03", DetectHttpMethodTest03, 1);
     UtRegisterTest("DetectHttpMethodTest04", DetectHttpMethodTest04, 1);
     UtRegisterTest("DetectHttpMethodTest05", DetectHttpMethodTest05, 1);
-    UtRegisterTest("DetectHttpMethodTest06", DetectHttpMethodTest06, 1);
-    UtRegisterTest("DetectHttpMethodTest07", DetectHttpMethodTest07, 1);
-    UtRegisterTest("DetectHttpMethodTest08", DetectHttpMethodTest08, 1);
-    UtRegisterTest("DetectHttpMethodTest09", DetectHttpMethodTest09, 1);
-    UtRegisterTest("DetectHttpMethodTest10", DetectHttpMethodTest10, 1);
-    UtRegisterTest("DetectHttpMethodTest11", DetectHttpMethodTest11, 1);
     UtRegisterTest("DetectHttpMethodTest12 -- nocase flag", DetectHttpMethodTest12, 1);
     UtRegisterTest("DetectHttpMethodTest13", DetectHttpMethodTest13, 1);
     UtRegisterTest("DetectHttpMethodTest14", DetectHttpMethodTest14, 1);

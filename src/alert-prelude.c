@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -59,51 +59,27 @@
 #include "stream.h"
 
 #ifndef PRELUDE
-/** Handle the case where no PRELUDE support is compiled in.
- *
- */
 
-TmEcode AlertPrelude (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
-TmEcode AlertPreludeThreadInit(ThreadVars *, void *, void **);
-TmEcode AlertPreludeThreadDeinit(ThreadVars *, void *);
-int AlertPreludeOpenFileCtx(LogFileCtx *, char *);
-void AlertPreludeRegisterTests(void);
+/* Handle the case where no PRELUDE support is compiled in. */
 
-void TmModuleAlertPreludeRegister (void) {
-    tmm_modules[TMM_ALERTPRELUDE].name = "AlertPrelude";
-    tmm_modules[TMM_ALERTPRELUDE].ThreadInit = AlertPreludeThreadInit;
-    tmm_modules[TMM_ALERTPRELUDE].Func = AlertPrelude;
-    tmm_modules[TMM_ALERTPRELUDE].ThreadDeinit = AlertPreludeThreadDeinit;
-    tmm_modules[TMM_ALERTPRELUDE].RegisterTests = AlertPreludeRegisterTests;
-}
-
-LogFileCtx *AlertPreludeInitCtx(ConfNode *conf)
-{
-    SCLogDebug("Can't init Prelude output - Prelude support was disabled during build.");
-    return NULL;
-}
-
-TmEcode AlertPreludeThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode AlertPreludeThreadInit(ThreadVars *t, void *initdata, void **data)
 {
     SCLogDebug("Can't init Prelude output thread - Prelude support was disabled during build.");
     return TM_ECODE_FAILED;
 }
 
-TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
-{
-    return TM_ECODE_OK;
-}
-
-TmEcode AlertPreludeThreadDeinit(ThreadVars *t, void *data)
+static TmEcode AlertPreludeThreadDeinit(ThreadVars *t, void *data)
 {
     return TM_ECODE_FAILED;
 }
 
-void AlertPreludeRegisterTests (void) {
+void TmModuleAlertPreludeRegister (void) {
+    tmm_modules[TMM_ALERTPRELUDE].name = "AlertPrelude";
+    tmm_modules[TMM_ALERTPRELUDE].ThreadInit = AlertPreludeThreadInit;
+    tmm_modules[TMM_ALERTPRELUDE].ThreadDeinit = AlertPreludeThreadDeinit;
 }
 
 #else /* implied we do have PRELUDE support */
-
 
 #include <libprelude/prelude.h>
 
@@ -120,26 +96,6 @@ void AlertPreludeRegisterTests (void) {
 static unsigned int info_priority = 4;
 static unsigned int low_priority  = 3;
 static unsigned int mid_priority  = 2;
-
-
-OutputCtx *AlertPreludeInitCtx(ConfNode *conf);
-TmEcode AlertPrelude (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
-TmEcode AlertPreludeThreadInit(ThreadVars *, void *, void **);
-TmEcode AlertPreludeThreadDeinit(ThreadVars *, void *);
-int AlertPreludeOpenFileCtx(LogFileCtx *, char *);
-void AlertPreludeRegisterTests(void);
-static void AlertPreludeDeinitCtx(OutputCtx *output_ctx);
-
-void TmModuleAlertPreludeRegister (void) {
-    tmm_modules[TMM_ALERTPRELUDE].name = "AlertPrelude";
-    tmm_modules[TMM_ALERTPRELUDE].ThreadInit = AlertPreludeThreadInit;
-    tmm_modules[TMM_ALERTPRELUDE].Func = AlertPrelude;
-    tmm_modules[TMM_ALERTPRELUDE].ThreadDeinit = AlertPreludeThreadDeinit;
-    tmm_modules[TMM_ALERTPRELUDE].RegisterTests = AlertPreludeRegisterTests;
-    tmm_modules[TMM_ALERTPRELUDE].cap_flags = 0;
-
-    OutputRegisterModule("AlertPrelude", "alert-prelude", AlertPreludeInitCtx);
-}
 
 /**
  * This holds global structures and variables. Since libprelude is thread-safe,
@@ -174,22 +130,22 @@ static int SetupAnalyzer(idmef_analyzer_t *analyzer)
     SCEnter();
 
     ret = idmef_analyzer_new_model(analyzer, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
     prelude_string_set_constant(string, ANALYZER_MODEL);
 
     ret = idmef_analyzer_new_class(analyzer, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
     prelude_string_set_constant(string, ANALYZER_CLASS);
 
     ret = idmef_analyzer_new_manufacturer(analyzer, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
     prelude_string_set_constant(string, ANALYZER_MANUFACTURER);
 
     ret = idmef_analyzer_new_version(analyzer, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
     prelude_string_set_constant(string, VERSION);
 
@@ -206,7 +162,7 @@ static int SetupAnalyzer(idmef_analyzer_t *analyzer)
  *
  * \return 0 if ok
  */
-static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
+static int EventToImpact(const PacketAlert *pa, const Packet *p, idmef_alert_t *alert)
 {
     int ret;
     prelude_string_t *str;
@@ -217,11 +173,11 @@ static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
     SCEnter();
 
     ret = idmef_alert_new_assessment(alert, &assessment);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_assessment_new_impact(assessment, &impact);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     if ( (unsigned int)pa->s->prio < mid_priority )
@@ -242,7 +198,7 @@ static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
         idmef_action_t *action;
 
         ret = idmef_action_new(&action);
-        if ( ret < 0 )
+        if (ret < 0)
             SCReturnInt(ret);
 
         idmef_action_set_category(action, IDMEF_ACTION_CATEGORY_BLOCK_INSTALLED);
@@ -251,7 +207,7 @@ static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
 
     if (pa->s->class_msg) {
         ret = idmef_impact_new_description(impact, &str);
-        if ( ret < 0 )
+        if (ret < 0)
             SCReturnInt(ret);
 
         prelude_string_set_ref(str, pa->s->class_msg);
@@ -267,7 +223,7 @@ static int EventToImpact(PacketAlert *pa, Packet *p, idmef_alert_t *alert)
  *
  * \return 0 if ok
  */
-static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
+static int EventToSourceTarget(const Packet *p, idmef_alert_t *alert)
 {
     int ret;
     idmef_node_t *node;
@@ -302,11 +258,11 @@ static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
         SCReturnInt(0);
 
     ret = idmef_alert_new_source(alert, &source, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_source_new_service(source, &service);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     if ( p->tcph || p->udph )
@@ -316,25 +272,25 @@ static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
     idmef_service_set_iana_protocol_number(service, ip_proto);
 
     ret = idmef_source_new_node(source, &node);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_node_new_address(node, &address, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_address_new_address(address, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     prelude_string_set_ref(string, saddr);
 
     ret = idmef_alert_new_target(alert, &target, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_target_new_service(target, &service);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     if ( p->tcph || p->udph )
@@ -344,15 +300,15 @@ static int EventToSourceTarget(Packet *p, idmef_alert_t *alert)
     idmef_service_set_iana_protocol_number(service, ip_proto);
 
     ret = idmef_target_new_node(target, &node);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_node_new_address(node, &address, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_address_new_address(address, &string);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     prelude_string_set_ref(string, daddr);
@@ -378,25 +334,25 @@ static int AddByteData(idmef_alert_t *alert, const char *meaning, const unsigned
         SCReturnInt(0);
 
     ret = idmef_alert_new_additional_data(alert, &ad, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(0);
 
     ret = idmef_additional_data_set_byte_string_ref(ad, data, size);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         SCLogDebug("%s: error setting byte string data: %s.",
                 prelude_strsource(ret), prelude_strerror(ret));
         SCReturnInt(-1);
     }
 
     ret = idmef_additional_data_new_meaning(ad, &str);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         SCLogDebug("%s: error creating additional-data meaning: %s.",
                 prelude_strsource(ret), prelude_strerror(ret));
         SCReturnInt(-1);
     }
 
     ret = prelude_string_set_ref(str, meaning);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         SCLogDebug("%s: error setting byte string data meaning: %s.",
                 prelude_strsource(ret), prelude_strerror(ret));
         SCReturnInt(-1);
@@ -420,20 +376,20 @@ static int AddIntData(idmef_alert_t *alert, const char *meaning, uint32_t data)
     SCEnter();
 
     ret = idmef_alert_new_additional_data(alert, &ad, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     idmef_additional_data_set_integer(ad, data);
 
     ret = idmef_additional_data_new_meaning(ad, &str);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         SCLogDebug("%s: error creating additional-data meaning: %s.",
                 prelude_strsource(ret), prelude_strerror(ret));
         SCReturnInt(-1);
     }
 
     ret = prelude_string_set_ref(str, meaning);
-    if ( ret < 0 ) {
+    if (ret < 0) {
         SCLogDebug("%s: error setting integer data meaning: %s.",
                 prelude_strsource(ret), prelude_strerror(ret));
         SCReturnInt(-1);
@@ -448,7 +404,7 @@ static int AddIntData(idmef_alert_t *alert, const char *meaning, uint32_t data)
  *
  * \return 0 if ok
  */
-static int PacketToDataV4(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
+static int PacketToDataV4(const Packet *p, const PacketAlert *pa, idmef_alert_t *alert)
 {
     SCEnter();
 
@@ -475,7 +431,7 @@ static int PacketToDataV4(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
  *
  * \return 0 if ok
  */
-static int PacketToDataV6(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
+static int PacketToDataV6(const Packet *p, const PacketAlert *pa, idmef_alert_t *alert)
 {
     return 0;
 }
@@ -488,7 +444,7 @@ static int PacketToDataV6(Packet *p, PacketAlert *pa, idmef_alert_t *alert)
  *
  * \return 0 if ok
  */
-static int PacketToData(Packet *p, PacketAlert *pa, idmef_alert_t *alert, AlertPreludeCtx *ctx)
+static int PacketToData(const Packet *p, const PacketAlert *pa, idmef_alert_t *alert, AlertPreludeCtx *ctx)
 {
     SCEnter();
 
@@ -556,11 +512,11 @@ static int AddSnortReference(idmef_classification_t *class, int gen_id, int sig_
         SCReturnInt(0);
 
     ret = idmef_classification_new_reference(class, &ref, IDMEF_LIST_APPEND);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_reference_new_name(ref, &str);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     idmef_reference_set_origin(ref, IDMEF_REFERENCE_ORIGIN_VENDOR_SPECIFIC);
@@ -570,19 +526,19 @@ static int AddSnortReference(idmef_classification_t *class, int gen_id, int sig_
     else
         ret = prelude_string_sprintf(str, "%u:%u", gen_id, sig_id);
 
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_reference_new_meaning(ref, &str);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = prelude_string_sprintf(str, "Snort Signature ID");
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = idmef_reference_new_url(ref, &str);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     if ( gen_id == 0 )
@@ -601,7 +557,7 @@ static int AddSnortReference(idmef_classification_t *class, int gen_id, int sig_
  *
  * \return 0 if ok
  */
-static int EventToReference(PacketAlert *pa, Packet *p, idmef_classification_t *class)
+static int EventToReference(const PacketAlert *pa, const Packet *p, idmef_classification_t *class)
 {
     int ret;
     prelude_string_t *str;
@@ -609,24 +565,24 @@ static int EventToReference(PacketAlert *pa, Packet *p, idmef_classification_t *
     SCEnter();
 
     ret = idmef_classification_new_ident(class, &str);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     if ( pa->s->gid == 0 )
         ret = prelude_string_sprintf(str, "%u", pa->s->id);
     else
         ret = prelude_string_sprintf(str, "%u:%u", pa->s->gid, pa->s->id);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     ret = AddSnortReference(class, pa->s->gid, pa->s->id);
-    if ( ret < 0 )
+    if (ret < 0)
         SCReturnInt(ret);
 
     SCReturnInt(0);
 }
 
-static int PreludePrintStreamSegmentCallback(Packet *p, void *data, uint8_t *buf, uint32_t buflen)
+static int PreludePrintStreamSegmentCallback(const Packet *p, void *data, uint8_t *buf, uint32_t buflen)
 {
     int ret;
 
@@ -637,6 +593,160 @@ static int PreludePrintStreamSegmentCallback(Packet *p, void *data, uint8_t *buf
         return -1;
 }
 
+/**
+ * \brief Initialize thread-specific data. Each thread structure contains
+ * a pointer to the \a AlertPreludeCtx context.
+ *
+ * \return TM_ECODE_OK if ok, else TM_ECODE_FAILED
+ */
+static TmEcode AlertPreludeThreadInit(ThreadVars *t, void *initdata, void **data)
+{
+    AlertPreludeThread *aun;
+
+    SCEnter();
+
+    if(initdata == NULL)
+    {
+        SCLogDebug("Error getting context for Prelude.  \"initdata\" argument NULL");
+        SCReturnInt(TM_ECODE_FAILED);
+    }
+
+    aun = SCMalloc(sizeof(AlertPreludeThread));
+    if (unlikely(aun == NULL))
+        SCReturnInt(TM_ECODE_FAILED);
+    memset(aun, 0, sizeof(AlertPreludeThread));
+
+    /** Use the Ouput Context */
+    aun->ctx = ((OutputCtx *)initdata)->data;
+
+    *data = (void *)aun;
+    SCReturnInt(TM_ECODE_OK);
+}
+
+/**
+ * \brief Free thread-specific data.
+ *
+ * \return TM_ECODE_OK if ok, else TM_ECODE_FAILED
+ */
+static TmEcode AlertPreludeThreadDeinit(ThreadVars *t, void *data)
+{
+    AlertPreludeThread *aun = (AlertPreludeThread *)data;
+
+    SCEnter();
+
+    if (aun == NULL) {
+        SCLogDebug("AlertPreludeThreadDeinit done (error)");
+        SCReturnInt(TM_ECODE_FAILED);
+    }
+
+    /* clear memory */
+    memset(aun, 0, sizeof(AlertPreludeThread));
+    SCFree(aun);
+
+    SCReturnInt(TM_ECODE_OK);
+}
+
+static void AlertPreludeDeinitCtx(OutputCtx *output_ctx)
+{
+    AlertPreludeCtx *ctx = (AlertPreludeCtx *)output_ctx->data;
+
+    prelude_client_destroy(ctx->client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+    SCFree(output_ctx);
+}
+
+/** \brief Initialize the Prelude logging module: initialize
+ * library, create the client and try to establish the connection
+ * to the Prelude Manager.
+ * Client flags are set to force asynchronous (non-blocking) mode for
+ * both alerts and heartbeats.
+ * This function requires an existing Prelude profile to work.
+ *
+ * \return A newly allocated AlertPreludeCtx structure, or NULL
+ */
+static OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
+{
+    int ret;
+    prelude_client_t *client;
+    AlertPreludeCtx *ctx;
+    const char *prelude_profile_name;
+    const char *log_packet_content;
+    const char *log_packet_header;
+    OutputCtx *output_ctx;
+
+    SCEnter();
+
+    ret = prelude_init(0, NULL);
+    if (ret < 0) {
+        prelude_perror(ret, "unable to initialize the prelude library");
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    prelude_profile_name = ConfNodeLookupChildValue(conf, "profile");
+    if (prelude_profile_name == NULL)
+        prelude_profile_name = DEFAULT_PRELUDE_PROFILE;
+
+    log_packet_content = ConfNodeLookupChildValue(conf, "log-packet-content");
+    log_packet_header = ConfNodeLookupChildValue(conf, "log-packet-header");
+
+    ret = prelude_client_new(&client, prelude_profile_name);
+    if ( ret < 0 || ! client ) {
+        prelude_perror(ret, "Unable to create a prelude client object");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    ret = prelude_client_set_flags(client, prelude_client_get_flags(client) | PRELUDE_CLIENT_FLAGS_ASYNC_TIMER|PRELUDE_CLIENT_FLAGS_ASYNC_SEND);
+    if (ret < 0) {
+        SCLogDebug("Unable to set asynchronous send and timer.");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    SetupAnalyzer(prelude_client_get_analyzer(client));
+
+    ret = prelude_client_start(client);
+    if (ret < 0) {
+        prelude_perror(ret, "Unable to start prelude client");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    ctx = SCMalloc(sizeof(AlertPreludeCtx));
+    if (unlikely(ctx == NULL)) {
+        prelude_perror(ret, "Unable to allocate memory");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    ctx->client = client;
+    ctx->log_packet_content = 0;
+    ctx->log_packet_header = 1;
+    if (log_packet_content && ConfValIsTrue(log_packet_content))
+        ctx->log_packet_content = 1;
+    if (log_packet_header && ConfValIsFalse(log_packet_header))
+        ctx->log_packet_header = 0;
+
+    output_ctx = SCMalloc(sizeof(OutputCtx));
+    if (unlikely(output_ctx == NULL)) {
+        SCFree(ctx);
+        prelude_perror(ret, "Unable to allocate memory");
+        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
+        SCReturnPtr(NULL, "AlertPreludeCtx");
+    }
+
+    output_ctx->data = ctx;
+    output_ctx->DeInit = AlertPreludeDeinitCtx;
+
+    SCReturnPtr((void*)output_ctx, "OutputCtx");
+}
+
+static int AlertPreludeCondition(ThreadVars *tv, const Packet *p) {
+    if (p->alerts.cnt == 0)
+        return FALSE;
+    if (!IPH_IS_VALID(p))
+        return FALSE;
+    return TRUE;
+}
 
 /**
  * \brief Handle Suricata alert: convert it to and IDMEF alert (see RFC 4765)
@@ -654,16 +764,15 @@ static int PreludePrintStreamSegmentCallback(Packet *p, void *data, uint8_t *buf
  *
  * \return TM_ECODE_OK if ok, else TM_ECODE_FAILED
  */
-TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
-{
-    AlertPreludeThread *apn = (AlertPreludeThread *)data;
+static int AlertPreludeLogger(ThreadVars *tv, void *thread_data, const Packet *p) {
+    AlertPreludeThread *apn = (AlertPreludeThread *)thread_data;
     int ret;
     idmef_time_t *time;
     idmef_alert_t *alert;
     prelude_string_t *str;
     idmef_message_t *idmef = NULL;
     idmef_classification_t *class;
-    PacketAlert *pa;
+    const PacketAlert *pa;
 
     SCEnter();
 
@@ -719,7 +828,7 @@ TmEcode AlertPrelude (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pa
     if ( ret < 0 )
         goto err;
 
-    if (pa->flags & PACKET_ALERT_FLAG_STATE_MATCH) {
+    if (PKT_IS_TCP(p) && (pa->flags & PACKET_ALERT_FLAG_STATE_MATCH)) {
         uint8_t flag;
         if (p->flowflags & FLOW_PKT_TOSERVER) {
             flag = FLOW_PKT_TOCLIENT;
@@ -757,158 +866,16 @@ err:
     SCReturnInt(TM_ECODE_FAILED);
 }
 
-/**
- * \brief Initialize thread-specific data. Each thread structure contains
- * a pointer to the \a AlertPreludeCtx context.
- *
- * \return TM_ECODE_OK if ok, else TM_ECODE_FAILED
- */
-TmEcode AlertPreludeThreadInit(ThreadVars *t, void *initdata, void **data)
-{
-    AlertPreludeThread *aun;
+void TmModuleAlertPreludeRegister (void) {
+    tmm_modules[TMM_ALERTPRELUDE].name = "AlertPrelude";
+    tmm_modules[TMM_ALERTPRELUDE].ThreadInit = AlertPreludeThreadInit;
+    tmm_modules[TMM_ALERTPRELUDE].Func = NULL;
+    tmm_modules[TMM_ALERTPRELUDE].ThreadDeinit = AlertPreludeThreadDeinit;
+    tmm_modules[TMM_ALERTPRELUDE].cap_flags = 0;
+    tmm_modules[TMM_ALERTPRELUDE].flags = TM_FLAG_LOGAPI_TM;
 
-    SCEnter();
-
-    if(initdata == NULL)
-    {
-        SCLogDebug("Error getting context for Prelude.  \"initdata\" argument NULL");
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-
-    aun = SCMalloc(sizeof(AlertPreludeThread));
-    if (unlikely(aun == NULL))
-        SCReturnInt(TM_ECODE_FAILED);
-    memset(aun, 0, sizeof(AlertPreludeThread));
-
-    /** Use the Ouput Context */
-    aun->ctx = ((OutputCtx *)initdata)->data;
-
-    *data = (void *)aun;
-    SCReturnInt(TM_ECODE_OK);
+    OutputRegisterPacketModule("AlertPrelude", "alert-prelude", AlertPreludeInitCtx,
+            AlertPreludeLogger, AlertPreludeCondition);
 }
-
-/**
- * \brief Free thread-specific data.
- *
- * \return TM_ECODE_OK if ok, else TM_ECODE_FAILED
- */
-TmEcode AlertPreludeThreadDeinit(ThreadVars *t, void *data)
-{
-    AlertPreludeThread *aun = (AlertPreludeThread *)data;
-
-    SCEnter();
-
-    if (aun == NULL) {
-        SCLogDebug("AlertPreludeThreadDeinit done (error)");
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-
-    /* clear memory */
-    memset(aun, 0, sizeof(AlertPreludeThread));
-    SCFree(aun);
-
-    SCReturnInt(TM_ECODE_OK);
-}
-
-
-/** \brief Initialize the Prelude logging module: initialize
- * library, create the client and try to establish the connection
- * to the Prelude Manager.
- * Client flags are set to force asynchronous (non-blocking) mode for
- * both alerts and heartbeats.
- * This function requires an existing Prelude profile to work.
- *
- * \return A newly allocated AlertPreludeCtx structure, or NULL
- */
-OutputCtx *AlertPreludeInitCtx(ConfNode *conf)
-{
-    int ret;
-    prelude_client_t *client;
-    AlertPreludeCtx *ctx;
-    const char *prelude_profile_name;
-    const char *log_packet_content;
-    const char *log_packet_header;
-    OutputCtx *output_ctx;
-
-    SCEnter();
-
-    ret = prelude_init(0, NULL);
-    if ( ret < 0 ) {
-        prelude_perror(ret, "unable to initialize the prelude library");
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    prelude_profile_name = ConfNodeLookupChildValue(conf, "profile");
-    if (prelude_profile_name == NULL)
-        prelude_profile_name = DEFAULT_PRELUDE_PROFILE;
-
-    log_packet_content = ConfNodeLookupChildValue(conf, "log-packet-content");
-    log_packet_header = ConfNodeLookupChildValue(conf, "log-packet-header");
-
-    ret = prelude_client_new(&client, prelude_profile_name);
-    if ( ret < 0 || ! client ) {
-        prelude_perror(ret, "Unable to create a prelude client object");
-        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    ret = prelude_client_set_flags(client, prelude_client_get_flags(client) | PRELUDE_CLIENT_FLAGS_ASYNC_TIMER|PRELUDE_CLIENT_FLAGS_ASYNC_SEND);
-    if ( ret < 0 ) {
-        SCLogDebug("Unable to set asynchronous send and timer.");
-        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    SetupAnalyzer(prelude_client_get_analyzer(client));
-
-    ret = prelude_client_start(client);
-    if ( ret < 0 ) {
-        prelude_perror(ret, "Unable to start prelude client");
-        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    ctx = SCMalloc(sizeof(AlertPreludeCtx));
-    if (unlikely(ctx == NULL)) {
-        prelude_perror(ret, "Unable to allocate memory");
-        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    ctx->client = client;
-    ctx->log_packet_content = 0;
-    ctx->log_packet_header = 1;
-    if (log_packet_content && ConfValIsTrue(log_packet_content))
-        ctx->log_packet_content = 1;
-    if (log_packet_header && ConfValIsFalse(log_packet_header))
-        ctx->log_packet_header = 0;
-
-    output_ctx = SCMalloc(sizeof(OutputCtx));
-    if (unlikely(output_ctx == NULL)) {
-        SCFree(ctx);
-        prelude_perror(ret, "Unable to allocate memory");
-        prelude_client_destroy(client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-        SCReturnPtr(NULL, "AlertPreludeCtx");
-    }
-
-    output_ctx->data = ctx;
-    output_ctx->DeInit = AlertPreludeDeinitCtx;
-
-    SCReturnPtr((void*)output_ctx, "OutputCtx");
-}
-
-static void AlertPreludeDeinitCtx(OutputCtx *output_ctx)
-{
-    AlertPreludeCtx *ctx = (AlertPreludeCtx *)output_ctx->data;
-
-    prelude_client_destroy(ctx->client, PRELUDE_CLIENT_EXIT_STATUS_SUCCESS);
-    SCFree(output_ctx);
-}
-
-void AlertPreludeRegisterTests (void) {
-#ifdef UNITTESTS
-#endif /* UNITTESTS */
-}
-
 #endif /* PRELUDE */
 

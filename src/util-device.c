@@ -31,6 +31,8 @@
 static TAILQ_HEAD(, LiveDevice_) live_devices =
     TAILQ_HEAD_INITIALIZER(live_devices);
 
+/** if set to 0 when we don't have real devices */
+static int live_devices_stats = 1;
 
 /**
  *  \brief Add a pcap device for monitoring
@@ -48,13 +50,17 @@ int LiveRegisterDevice(char *dev)
     }
 
     pd->dev = SCStrdup(dev);
+    if (unlikely(pd->dev == NULL)) {
+        SCFree(pd);
+        return -1;
+    }
     SC_ATOMIC_INIT(pd->pkts);
     SC_ATOMIC_INIT(pd->drop);
     SC_ATOMIC_INIT(pd->invalid_checksums);
     pd->ignore_checksum = 0;
     TAILQ_INSERT_TAIL(&live_devices, pd, next);
 
-    SCLogDebug("Pcap device \"%s\" registered.", dev);
+    SCLogDebug("Device \"%s\" registered.", dev);
     return 0;
 }
 
@@ -153,6 +159,40 @@ int LiveBuildDeviceList(char * runmode)
     }
 
     return i;
+}
+
+/** Call this function to disable stat on live devices
+ *
+ * This can be useful in the case, this is not a real interface.
+ */
+void LiveDeviceHasNoStats()
+{
+    live_devices_stats = 0;
+}
+
+int LiveDeviceListClean()
+{
+    SCEnter();
+    LiveDevice *pd, *tpd;
+
+    TAILQ_FOREACH_SAFE(pd, &live_devices, next, tpd) {
+        if (live_devices_stats) {
+            SCLogNotice("Stats for '%s':  pkts: %" PRIu64", drop: %" PRIu64 " (%.2f%%), invalid chksum: %" PRIu64,
+                    pd->dev,
+                    SC_ATOMIC_GET(pd->pkts),
+                    SC_ATOMIC_GET(pd->drop),
+                    100 * (SC_ATOMIC_GET(pd->drop) * 1.0) / SC_ATOMIC_GET(pd->pkts),
+                    SC_ATOMIC_GET(pd->invalid_checksums));
+        }
+        if (pd->dev)
+            SCFree(pd->dev);
+        SC_ATOMIC_DESTROY(pd->pkts);
+        SC_ATOMIC_DESTROY(pd->drop);
+        SC_ATOMIC_DESTROY(pd->invalid_checksums);
+        SCFree(pd);
+    }
+
+    SCReturnInt(TM_ECODE_OK);
 }
 
 #ifdef BUILD_UNIX_SOCKET

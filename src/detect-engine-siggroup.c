@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -117,13 +117,20 @@ error:
 }
 
 void SigGroupHeadStore(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+    void *ptmp;
     //printf("de_ctx->sgh_array_cnt %u, de_ctx->sgh_array_size %u, de_ctx->sgh_array %p\n", de_ctx->sgh_array_cnt, de_ctx->sgh_array_size, de_ctx->sgh_array);
     if (de_ctx->sgh_array_cnt < de_ctx->sgh_array_size) {
         de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
     } else {
-        de_ctx->sgh_array = SCRealloc(de_ctx->sgh_array, sizeof(SigGroupHead *) * (16 + de_ctx->sgh_array_size));
-        if (de_ctx->sgh_array == NULL)
+        ptmp = SCRealloc(de_ctx->sgh_array,
+                         sizeof(SigGroupHead *) * (16 + de_ctx->sgh_array_size));
+        if (ptmp == NULL) {
+            SCFree(de_ctx->sgh_array);
+            de_ctx->sgh_array = NULL;
             return;
+        }
+        de_ctx->sgh_array = ptmp;
+
         de_ctx->sgh_array_size += 10;
         de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
     }
@@ -174,7 +181,7 @@ void SigGroupHeadFree(SigGroupHead *sgh)
 
     PatternMatchDestroyGroup(sgh);
 
-#if defined(__SSE3__)
+#if defined(__SSE3__) || defined(__tile__)
     if (sgh->mask_array != NULL) {
         /* mask is aligned */
         SCFreeAligned(sgh->mask_array);
@@ -1689,7 +1696,7 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         return 0;
 
     BUG_ON(sgh->head_array != NULL);
-#if defined(__SSE3__)
+#if defined(__SSE3__) || defined(__tile__)
     BUG_ON(sgh->mask_array != NULL);
 
     /* mask array is 16 byte aligned for SIMD checking, also we always
@@ -1705,7 +1712,7 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     }
 #endif /* __WORDSIZE */
 
-    sgh->mask_array = SCMallocAligned((cnt * sizeof(SignatureMask)), 16);
+    sgh->mask_array = (SignatureMask *)SCMallocAligned((cnt * sizeof(SignatureMask)), 16);
     if (sgh->mask_array == NULL)
         return -1;
 
@@ -1731,7 +1738,7 @@ int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
         sgh->head_array[idx].hdr_copy3 = s->hdr_copy3;
         sgh->head_array[idx].full_sig = s;
 
-#if defined(__SSE3__)
+#if defined(__SSE3__) || defined(__tile__)
         sgh->mask_array[idx] = s->mask;
 #endif
         idx++;

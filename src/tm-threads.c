@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -77,7 +77,7 @@ static int SetCPUAffinity(uint16_t cpu);
 ThreadVars *tv_root[TVT_MAX] = { NULL };
 
 /* lock to protect tv_root */
-SCMutex tv_root_lock = PTHREAD_MUTEX_INITIALIZER;
+SCMutex tv_root_lock = SCMUTEX_INITIALIZER;
 
 /* Action On Failure(AOF).  Determines how the engine should behave when a
  * thread encounters a failure.  Defaults to restart the failed thread */
@@ -157,6 +157,10 @@ void *TmThreadsSlot1NoIn(void *td)
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while (run) {
@@ -200,7 +204,7 @@ void *TmThreadsSlot1NoIn(void *td)
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfSyncCounters(tv, 0);
+            SCPerfSyncCounters(tv);
             run = 0;
         }
     } /* while (run) */
@@ -263,6 +267,10 @@ void *TmThreadsSlot1NoOut(void *td)
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while (run) {
@@ -288,7 +296,7 @@ void *TmThreadsSlot1NoOut(void *td)
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfSyncCounters(tv, 0);
+            SCPerfSyncCounters(tv);
             run = 0;
         }
     } /* while (run) */
@@ -352,6 +360,10 @@ void *TmThreadsSlot1NoInOut(void *td)
     memset(&s->slot_pre_pq, 0, sizeof(PacketQueue));
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while (run) {
@@ -371,7 +383,7 @@ void *TmThreadsSlot1NoInOut(void *td)
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfSyncCounters(tv, 0);
+            SCPerfSyncCounters(tv);
             run = 0;
         }
     } /* while (run) */
@@ -438,7 +450,12 @@ void *TmThreadsSlot1(void *td)
     memset(&s->slot_post_pq, 0, sizeof(PacketQueue));
     SCMutexInit(&s->slot_post_pq.mutex_q, NULL);
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
+
     while (run) {
         if (TmThreadsCheckFlag(tv, THV_PAUSE)) {
             TmThreadsSetFlag(tv, THV_PAUSED);
@@ -493,7 +510,7 @@ void *TmThreadsSlot1(void *td)
         }
 
         if (TmThreadsCheckFlag(tv, THV_KILL)) {
-            SCPerfSyncCounters(tv, 0);
+            SCPerfSyncCounters(tv);
             run = 0;
         }
     } /* while (run) */
@@ -670,6 +687,10 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
         SCMutexInit(&slot->slot_post_pq.mutex_q, NULL);
     }
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     while(run) {
@@ -689,7 +710,7 @@ void *TmThreadsSlotPktAcqLoop(void *td) {
             run = 0;
         }
     }
-    SCPerfSyncCounters(tv, 0);
+    SCPerfSyncCounters(tv);
 
     TmThreadsSetFlag(tv, THV_RUNNING_DONE);
     TmThreadWaitForFlag(tv, THV_DEINIT);
@@ -770,6 +791,10 @@ void *TmThreadsSlotVar(void *td)
         SCMutexInit(&s->slot_post_pq.mutex_q, NULL);
     }
 
+    tv->sc_perf_pca = SCPerfGetAllCountersArray(&tv->sc_perf_pctx);
+    SCPerfAddToClubbedTMTable((tv->thread_group_name != NULL) ?
+            tv->thread_group_name : tv->name, &tv->sc_perf_pctx);
+
     TmThreadsSetFlag(tv, THV_INIT_DONE);
 
     s = (TmSlot *)tv->tm_slots;
@@ -832,7 +857,7 @@ void *TmThreadsSlotVar(void *td)
             run = 0;
         }
     } /* while (run) */
-    SCPerfSyncCounters(tv, 0);
+    SCPerfSyncCounters(tv);
 
     TmThreadsSetFlag(tv, THV_RUNNING_DONE);
     TmThreadWaitForFlag(tv, THV_DEINIT);
@@ -987,6 +1012,11 @@ static inline TmSlot * _TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *
     return slot;
 }
 
+void TmSlotFree(TmSlot *tms) {
+    SC_ATOMIC_DESTROY(tms->slot_data);
+    SCFree(tms);
+}
+
 /**
  * \brief Appends a new entry to the slots.
  *
@@ -1030,15 +1060,14 @@ void TmSlotSetFuncAppendDelayed(ThreadVars *tv, TmModule *tm, void *data,
 
     dslot = SCMalloc(sizeof(TmDummySlot));
     if (unlikely(dslot == NULL)) {
+        TmSlotFree(slot);
         return;
     }
-
     memset(dslot, 0, sizeof(*dslot));
 
     dslot->SlotFunc = SC_ATOMIC_GET(slot->SlotFunc);
     (void)SC_ATOMIC_SET(slot->SlotFunc, TmDummyFunc);
     dslot->SlotThreadInit = slot->SlotThreadInit;
-    slot->SlotThreadInit = NULL;
     dslot->slot = slot;
 
     TAILQ_INSERT_TAIL(&dummy_slots, dslot, next);
@@ -1405,6 +1434,8 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
 
             if (tmqh->OutHandlerCtxSetup != NULL) {
                 tv->outctx = tmqh->OutHandlerCtxSetup(outq_name);
+                if (tv->outctx == NULL)
+                    goto error;
                 tv->outq = NULL;
             } else {
                 tmq = TmqGetQueueByName(outq_name);
@@ -1651,8 +1682,8 @@ void TmThreadKillThread(ThreadVars *tv)
             SCLogDebug("signalled tv->inq->id %" PRIu32 "", tv->inq->id);
         }
 
-        if (tv->cond != NULL ) {
-            pthread_cond_broadcast(tv->cond);
+        if (tv->ctrl_cond != NULL ) {
+            pthread_cond_broadcast(tv->ctrl_cond);
         }
 
         usleep(100);
@@ -1886,7 +1917,6 @@ TmEcode TmThreadSpawn(ThreadVars *tv)
     TmThreadWaitForFlag(tv, THV_INIT_DONE | THV_RUNNING_DONE);
 
     TmThreadAppend(tv, tv->type);
-
     return TM_ECODE_OK;
 }
 
@@ -1926,24 +1956,24 @@ void TmThreadSetAOF(ThreadVars *tv, uint8_t aof)
  */
 void TmThreadInitMC(ThreadVars *tv)
 {
-    if ( (tv->m = SCMalloc(sizeof(SCMutex))) == NULL) {
+    if ( (tv->ctrl_mutex = SCMalloc(sizeof(*tv->ctrl_mutex))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC.  "
                    "Exiting...");
         exit(EXIT_FAILURE);
     }
 
-    if (SCMutexInit(tv->m, NULL) != 0) {
+    if (SCCtrlMutexInit(tv->ctrl_mutex, NULL) != 0) {
         printf("Error initializing the tv->m mutex\n");
         exit(0);
     }
 
-    if ( (tv->cond = SCMalloc(sizeof(SCCondT))) == NULL) {
+    if ( (tv->ctrl_cond = SCMalloc(sizeof(*tv->ctrl_cond))) == NULL) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in TmThreadInitMC.  "
                    "Exiting...");
         exit(0);
     }
 
-    if (SCCondInit(tv->cond, NULL) != 0) {
+    if (SCCtrlCondInit(tv->ctrl_cond, NULL) != 0) {
         SCLogError(SC_ERR_FATAL, "Error initializing the tv->cond condition "
                    "variable");
         exit(0);
@@ -2162,7 +2192,7 @@ TmEcode TmThreadWaitOnThreadInit(void)
         }
     }
 
-    SCLogInfo("all %"PRIu16" packet processing threads, %"PRIu16" management "
+    SCLogNotice("all %"PRIu16" packet processing threads, %"PRIu16" management "
               "threads initialized, engine started.", ppt_num, mgt_num);
 
     return TM_ECODE_OK;

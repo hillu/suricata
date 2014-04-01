@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -165,7 +165,7 @@ typedef enum {
     SC_ERR_CUDA_HANDLER_ERROR,
     SC_ERR_TM_THREADS_ERROR,
     SC_ERR_TM_MODULES_ERROR,
-    SC_ERR_B2G_CUDA_ERROR,
+    SC_ERR_AC_CUDA_ERROR,
     SC_ERR_INVALID_YAML_CONF_ENTRY,
     SC_ERR_TMQ_ALREADY_REGISTERED,
     SC_ERR_CONFLICTING_RULE_KEYWORDS,
@@ -258,8 +258,21 @@ typedef enum {
     SC_ERR_IPFW_SETSOCKOPT,
     SC_ERR_NO_GEOIP_SUPPORT,
     SC_ERR_GEOIP_ERROR,
+    SC_ERR_LIVE_RULE_SWAP,
     SC_WARN_UNCOMMON,
+    SC_ERR_CUDA_BUFFER_ERROR,
+    SC_ERR_DNS_LOG_GENERIC,
+    SC_WARN_OPTION_OBSOLETE,
+    SC_WARN_NO_UNITTESTS,
+    SC_ERR_THREAD_QUEUE,
+    SC_WARN_XFF_INVALID_MODE,
+    SC_WARN_XFF_INVALID_HEADER,
     SC_ERR_THRESHOLD_SETUP,
+    SC_ERR_DNS_CONFIG,
+    SC_ERR_CONF_YAML_ERROR,
+    SC_ERR_CONF_NAME_TOO_LONG,
+    SC_ERR_APP_LAYER_PROTOCOL_DETECTION,
+    SC_ERR_PCIE_INIT_FAILED,
 } SCError;
 
 const char *SCErrorToString(SCError);

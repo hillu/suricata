@@ -3,7 +3,7 @@ noinst_HEADERS = action-globals.h \
     debug.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
 	suricata-common.h threadvars.h util-binsearch.h \
-        util-validate.h
+    util-validate.h
 bin_PROGRAMS = suricata
 
 suricata_SOURCES = \
@@ -17,10 +17,16 @@ app-layer.c app-layer.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-detect-proto.c app-layer-detect-proto.h \
+app-layer-dns-common.c app-layer-dns-common.h \
+app-layer-dns-tcp.c app-layer-dns-tcp.h \
+app-layer-dns-udp.c app-layer-dns-udp.h \
+app-layer-events.c app-layer-events.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-htp-body.c app-layer-htp-body.h \
 app-layer-htp.c app-layer-htp.h \
 app-layer-htp-file.c app-layer-htp-file.h \
+app-layer-htp-libhtp.c app-layer-htp-libhtp.h \
+app-layer-htp-mem.c app-layer-htp-mem.h \
 app-layer-parser.c app-layer-parser.h \
 app-layer-protos.c app-layer-protos.h \
 app-layer-smb2.c app-layer-smb2.h \
@@ -32,7 +38,6 @@ app-layer-tls-handshake.c app-layer-tls-handshake.h \
 conf.c conf.h \
 conf-yaml-loader.c conf-yaml-loader.h \
 counters.c counters.h \
-cuda-packet-batcher.c cuda-packet-batcher.h \
 data-queue.c data-queue.h \
 decode.c decode.h \
 decode-ethernet.c decode-ethernet.h \
@@ -51,17 +56,20 @@ decode-tcp.c decode-tcp.h \
 decode-teredo.c decode-teredo.h \
 decode-udp.c decode-udp.h \
 decode-vlan.c decode-vlan.h \
+defrag-config.c defrag-config.h \
 defrag.c defrag.h \
 defrag-hash.c defrag-hash.h \
 defrag-queue.c defrag-queue.h \
 defrag-timeout.c defrag-timeout.h \
 detect-ack.c detect-ack.h \
 detect-app-layer-event.c detect-app-layer-event.h \
+detect-app-layer-protocol.c detect-app-layer-protocol.h \
 detect-asn1.c detect-asn1.h \
 detect-byte-extract.c detect-byte-extract.h \
 detect-bytejump.c detect-bytejump.h \
 detect-bytetest.c detect-bytetest.h \
 detect.c detect.h \
+detect-simd.c \
 detect-classtype.c detect-classtype.h \
 detect-content.c detect-content.h \
 detect-csum.c detect-csum.h \
@@ -71,15 +79,18 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-depth.c detect-depth.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-distance.c detect-distance.h \
+detect-dns-query.c detect-dns-query.h \
 detect-dsize.c detect-dsize.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
 detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
 detect-engine-alert.c detect-engine-alert.h \
 detect-engine-analyzer.c detect-engine-analyzer.h \
+detect-engine-apt-event.c detect-engine-apt-event.h \
 detect-engine.c detect-engine.h \
 detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
+detect-engine-dns.c detect-engine-dns.h \
 detect-engine-event.c detect-engine-event.h \
 detect-engine-file.c detect-engine-file.h \
 detect-engine-hcbd.c detect-engine-hcbd.h \
@@ -147,6 +158,7 @@ detect-isdataat.c detect-isdataat.h \
 detect-itype.c detect-itype.h \
 detect-l3proto.c detect-l3proto.h \
 detect-luajit.c detect-luajit.h \
+detect-luajit-extensions.c detect-luajit-extensions.h \
 detect-mark.c detect-mark.h \
 detect-metadata.c detect-metadata.h \
 detect-msg.c detect-msg.h \
@@ -181,18 +193,20 @@ detect-uricontent.c detect-uricontent.h \
 detect-urilen.c detect-urilen.h \
 detect-window.c detect-window.h \
 detect-within.c detect-within.h \
-flow-alert-sid.c flow-alert-sid.h \
 flow-bit.c flow-bit.h \
 flow.c flow.h \
 flow-hash.c flow-hash.h \
 flow-manager.c flow-manager.h \
 flow-queue.c flow-queue.h \
+flow-storage.c flow-storage.h \
 flow-timeout.c flow-timeout.h \
 flow-util.c flow-util.h \
 flow-var.c flow-var.h \
 host.c host.h \
 host-queue.c host-queue.h \
+host-storage.c host-storage.h \
 host-timeout.c host-timeout.h \
+log-dnslog.c log-dnslog.h \
 log-droplog.c log-droplog.h \
 log-file.c log-file.h \
 log-filestore.c log-filestore.h \
@@ -200,6 +214,18 @@ log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
 log-tlslog.c log-tlslog.h \
 output.c output.h \
+output-file.c output-file.h \
+output-filedata.c output-filedata.h \
+output-json-alert.c output-json-alert.h \
+output-json-dns.c output-json-dns.h \
+output-json-drop.c output-json-drop.h \
+output-json-file.c output-json-file.h \
+output-json-http.c output-json-http.h \
+output-json-ssh.c output-json-ssh.h \
+output-json-tls.c output-json-tls.h \
+output-packet.c output-packet.h \
+output-tx.c output-tx.h \
+output-json.c output-json.h \
 packet-queue.c packet-queue.h \
 pkt-var.c pkt-var.h \
 reputation.c reputation.h \
@@ -214,12 +240,15 @@ runmode-nfq.c runmode-nfq.h \
 runmode-pcap.c runmode-pcap.h \
 runmode-pcap-file.c runmode-pcap-file.h \
 runmode-pfring.c runmode-pfring.h \
+runmode-unittests.c runmode-unittests.h \
 runmode-unix-socket.c runmode-unix-socket.h \
+runmode-tile.c runmode-tile.h \
 runmodes.c runmodes.h \
 source-af-packet.c source-af-packet.h \
 source-erf-dag.c source-erf-dag.h \
 source-erf-file.c source-erf-file.h \
 source-ipfw.c source-ipfw.h \
+source-mpipe.c source-mpipe.h \
 source-napatech.c source-napatech.h \
 source-nfq.c source-nfq.h \
 source-pcap.c source-pcap.h \
@@ -232,7 +261,8 @@ stream-tcp-reassemble.c stream-tcp-reassemble.h \
 stream-tcp-sack.c stream-tcp-sack.h \
 stream-tcp-util.c stream-tcp-util.h \
 suricata.c suricata.h \
-threads.c threads.h \
+threads.c threads.h threads-arch-tile.h \
+threads-debug.h threads-profile.h \
 tm-modules.c tm-modules.h \
 tmqh-flow.c tmqh-flow.h \
 tmqh-nfq.c tmqh-nfq.h \
@@ -252,11 +282,14 @@ util-byte.c util-byte.h \
 util-checksum.c util-checksum.h \
 util-cidr.c util-cidr.h \
 util-classification-config.c util-classification-config.h \
+util-conf.c util-conf.h \
 util-coredump-config.c util-coredump-config.h \
 util-cpu.c util-cpu.h \
 util-crypt.c util-crypt.h \
 util-cuda.c util-cuda.h \
+util-cuda-buffer.c util-cuda-buffer.h \
 util-cuda-handlers.c util-cuda-handlers.h \
+util-cuda-vars.c util-cuda-vars.h \
 util-daemon.c util-daemon.h \
 util-debug.c util-debug.h \
 util-debug-filters.c util-debug-filters.h \
@@ -273,17 +306,23 @@ util-hash.c util-hash.h \
 util-hashlist.c util-hashlist.h \
 util-hash-lookup3.c util-hash-lookup3.h \
 util-host-os-info.c util-host-os-info.h \
+util-host-info.c util-host-info.h \
 util-ioctl.h util-ioctl.c \
+util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
+util-logopenfile-tile.h util-logopenfile-tile.c \
 util-magic.c util-magic.h \
 util-memcmp.c util-memcmp.h \
+util-memcpy.h \
 util-mem.h \
+util-memrchr.c util-memrchr.h \
 util-misc.c util-misc.h \
 util-mpm-ac-bs.c util-mpm-ac-bs.h \
 util-mpm-ac.c util-mpm-ac.h \
 util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
+util-mpm-ac-tile.c util-mpm-ac-tile.h \
+util-mpm-ac-tile-small.c \
 util-mpm-b2gc.c util-mpm-b2gc.h \
-util-mpm-b2g-cuda.c util-mpm-b2g-cuda.h \
 util-mpm-b2g.c util-mpm-b2g.h \
 util-mpm-b2gm.c util-mpm-b2gm.h \
 util-mpm-b3g.c util-mpm-b3g.h \
@@ -293,11 +332,13 @@ util-optimize.h \
 util-path.c util-path.h \
 util-pidfile.c util-pidfile.h \
 util-pool.c util-pool.h \
+util-pool-thread.c util-pool-thread.h \
 util-print.c util-print.h \
 util-privs.c util-privs.h \
 util-profiling.c util-profiling.h \
 util-profiling-locks.c util-profiling-locks.h \
 util-profiling-rules.c \
+util-profiling-keywords.c \
 util-proto-name.c util-proto-name.h \
 util-radix-tree.c util-radix-tree.h \
 util-random.c util-random.h \
@@ -306,11 +347,13 @@ util-ringbuffer.c util-ringbuffer.h \
 util-rohash.c util-rohash.h \
 util-rule-vars.c util-rule-vars.h \
 util-runmodes.c util-runmodes.h \
+util-running-modes.c util-running-modes.h \
 util-signal.c util-signal.h \
 util-spm-bm.c util-spm-bm.h \
 util-spm-bs2bm.c util-spm-bs2bm.h \
 util-spm-bs.c util-spm-bs.h \
 util-spm.c util-spm.h util-clock.h \
+util-storage.c util-storage.h \
 util-strlcatu.c \
 util-strlcpyu.c \
 util-syslog.c util-syslog.h \
@@ -326,27 +369,21 @@ win32-misc.c win32-misc.h \
 win32-service.c win32-service.h \
 win32-syslog.h
 
-EXTRA_DIST = util-mpm-b2g-cuda-kernel.cu ptxdump.py
+EXTRA_DIST = util-mpm-ac-cuda-kernel.cu ptxdump.py
 
 # set the include path found by configure
-INCLUDES= $(all_includes)
-
+AM_CPPFLAGS = $(all_includes)
 
 # the library search path.
 suricata_LDFLAGS = $(all_libraries)
-
-if BUILD_LIBHTP
-suricata_LDADD = $(top_builddir)/libhtp/htp/libhtp.la
-INCLUDES += -I$(top_srcdir)/libhtp
-endif
+suricata_LDADD = $(HTP_LDADD)
 
 # Rules to build CUDA ptx modules
 if BUILD_CUDA
 BUILT_SOURCES = cuda-ptxdump.h
-suricata_SOURCES += cuda-ptxdump.h
 
 suricata_CUDA_KERNELS = \
-util-mpm-b2g-cuda-kernel.cu
+util-mpm-ac-cuda-kernel.cu
 
 NVCCFLAGS=-O2
 
@@ -356,7 +393,9 @@ SUFFIXES = \
 .ptx_sm_12 \
 .ptx_sm_13 \
 .ptx_sm_20 \
-.ptx_sm_21
+.ptx_sm_21 \
+.ptx_sm_30 \
+.ptx_sm_35
 
 PTXS =  $(suricata_CUDA_KERNELS:.cu=.ptx_sm_10)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_11)
@@ -364,6 +403,8 @@ PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_12)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_13)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_20)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_21)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_30)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_35)
 
 .cu.ptx_sm_10:
 	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_10 -ptx $<
@@ -383,6 +424,12 @@ PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_21)
 .cu.ptx_sm_21:
 	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_21 -ptx $<
 
+.cu.ptx_sm_30:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_30 -ptx $<
+
+.cu.ptx_sm_35:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_35 -ptx $<
+
 cuda-ptxdump.h: $(PTXS)
 	$(PYTHON) ptxdump.py cuda-ptxdump $(PTXS)
 
@@ -395,7 +442,9 @@ AM_CFLAGS = -DLOCAL_STATE_DIR=\"$(localstatedir)\"
 
 if BUILD_UNITTESTS
 check-am:
-	$(top_builddir)/src/suricata -u
+	-mkdir $(top_builddir)/qa/log/
+	$(top_builddir)/src/suricata -u -l $(top_builddir)/qa/log/
+	-rm -rf $(top_builddir)/qa/log
 endif
 
 distclean-local:

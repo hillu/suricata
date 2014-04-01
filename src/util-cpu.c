@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -54,7 +54,8 @@
  * \retval 0 if the syscall is not available or we have an error;
  *           otherwise it will return the number of cpus configured
  */
-uint16_t UtilCpuGetNumProcessorsConfigured() {
+uint16_t UtilCpuGetNumProcessorsConfigured()
+{
 #ifdef SYSCONF_NPROCESSORS_CONF_COMPAT
 	long nprocs = -1;
     nprocs = sysconf(_SC_NPROCESSORS_CONF);
@@ -94,7 +95,8 @@ uint16_t UtilCpuGetNumProcessorsConfigured() {
  * \retval 0 if the syscall is not available or we have an error;
  *           otherwise it will return the number of cpus online
  */
-uint16_t UtilCpuGetNumProcessorsOnline() {
+uint16_t UtilCpuGetNumProcessorsOnline()
+{
 #ifdef SYSCONF_NPROCESSORS_ONLN_COMPAT
     long nprocs = -1;
     nprocs = sysconf(_SC_NPROCESSORS_ONLN);
@@ -128,7 +130,8 @@ uint16_t UtilCpuGetNumProcessorsOnline() {
  * \retval 0 if the syscall is not available or we have an error;
  *           otherwise it will return the number of cpus allowed
  */
-uint16_t UtilCpuGetNumProcessorsMax() {
+uint16_t UtilCpuGetNumProcessorsMax()
+{
 #ifdef SYSCONF_NPROCESSORS_MAX_COMPAT
     long nprocs = -1;
     nprocs = sysconf(_SC_NPROCESSORS_MAX);
@@ -155,7 +158,8 @@ uint16_t UtilCpuGetNumProcessorsMax() {
 /**
  * \brief Print a summary of CPUs detected (configured and online)
  */
-void UtilCpuPrintSummary() {
+void UtilCpuPrintSummary()
+{
     uint16_t cpus_conf = UtilCpuGetNumProcessorsConfigured();
     uint16_t cpus_online = UtilCpuGetNumProcessorsOnline();
 
@@ -175,6 +179,13 @@ void UtilCpuPrintSummary() {
  * \todo We'll have to deal with removig ticks from the extra cpuids inbetween
  *       2 calls.
  */
+#if defined(__tile__)
+#include <arch/cycle.h>
+uint64_t UtilCpuGetTicks(void)
+{
+  return get_cycle_count();
+}
+#else
 uint64_t UtilCpuGetTicks(void)
 {
     uint64_t val;
@@ -217,3 +228,4 @@ uint64_t UtilCpuGetTicks(void)
 #endif
     return val;
 }
+#endif /* __tile__ */

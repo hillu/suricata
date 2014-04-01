@@ -68,7 +68,7 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
     SCEnter();
 
     const char *conf_var_type_name = NULL;
-    char *conf_var_full_name = NULL;
+    char conf_var_full_name[1024] = "";
     char *conf_var_full_name_value = NULL;
 
     if (conf_var_name == NULL)
@@ -79,14 +79,7 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
     if (conf_var_type_name == NULL)
         goto end;
 
-    /* the + 2 is for the '.' and the string termination character '\0' */
-    conf_var_full_name = (char *)SCMalloc(strlen(conf_var_type_name) +
-                                        strlen(conf_var_name) + 2);
-    if (conf_var_full_name == NULL)
-        goto end;
-
-    if (snprintf(conf_var_full_name,
-                 strlen(conf_var_type_name) + strlen(conf_var_name) + 2, "%s.%s",
+    if (snprintf(conf_var_full_name, sizeof(conf_var_full_name), "%s.%s",
                  conf_var_type_name, conf_var_name) < 0) {
         goto end;
     }
@@ -101,13 +94,12 @@ char *SCRuleVarsGetConfVar(const char *conf_var_name,
                "\"%s\" is \"%s\"", conf_var_name, conf_var_full_name_value);
 
  end:
-    if (conf_var_full_name != NULL)
-        SCFree(conf_var_full_name);
     SCReturnCharPtr(conf_var_full_name_value);
 }
 
 
 /**********************************Unittests***********************************/
+#ifdef UNITTESTS
 
 static const char *dummy_conf_string =
     "%YAML 1.1\n"
@@ -366,7 +358,7 @@ int SCRuleVarsPositiveTest03(void)
         goto end;
     SigFree(s);
 */
-    s = SigInit(de_ctx, "alert tcp [![192.168.1.3,$EXTERNAL_NET],[$HTTP_SERVERS,!$HOME_NET],192.168.2.5] $HTTP_PORTS -> !$HTTP_SERVERS [80,[!$HTTP_PORTS,$ORACLE_PORTS]] (msg:\"Rule Vars Test\"; sid:1;)");
+    s = SigInit(de_ctx, "alert tcp [$HTTP_SERVERS,$HOME_NET,192.168.2.5] $HTTP_PORTS -> $EXTERNAL_NET [80,[!$HTTP_PORTS,$ORACLE_PORTS]] (msg:\"Rule Vars Test\"; sid:1;)");
     if (s == NULL)
         goto end;
     SigFree(s);
@@ -429,6 +421,8 @@ end:
         DetectEngineCtxFree(de_ctx);
     return result;
 }
+
+#endif /* UNITTESTS */
 
 void SCRuleVarsRegisterTests(void)
 {

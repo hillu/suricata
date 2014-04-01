@@ -40,6 +40,11 @@
 #include <config.h>
 #endif
 
+#ifndef CLS
+#warning "L1 cache line size not detected during build. Assuming 64 bytes."
+#define CLS 64
+#endif
+
 #if HAVE_STDIO_H
 #include <stdio.h>
 #endif
@@ -188,6 +193,10 @@
 #include <w32api/winbase.h>
 #endif
 
+#ifdef HAVE_W32API_WTYPES_H
+#include <w32api/wtypes.h>
+#endif
+
 #if !__CYGWIN__
 #ifdef HAVE_WINSOCK2_H
 #include <winsock2.h>
@@ -197,11 +206,15 @@
 #endif
 #endif /* !__CYGWIN__ */
 
+#if CPPCHECK==1
+#define BUG_ON(x) if (((x))) exit(1)
+#else
 #ifdef HAVE_ASSERT_H
 #include <assert.h>
 #define BUG_ON(x) assert(!(x))
 #else
 #define BUG_ON(x)
+#endif
 #endif
 
 /* we need this to stringify the defines which are supplied at compiletime see:
@@ -265,6 +278,10 @@
 #endif
 #endif
 
+#ifndef HAVE_PCRE_FREE_STUDY
+#define pcre_free_study pcre_free
+#endif
+
 typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM,
     PROF_DETECT_MPM_PACKET,         /* PKT MPM */
@@ -283,6 +300,7 @@ typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM_HUAD,
     PROF_DETECT_MPM_HHHD,
     PROF_DETECT_MPM_HRHHD,
+    PROF_DETECT_MPM_DNSQUERY,
     PROF_DETECT_IPONLY,
     PROF_DETECT_RULES,
     PROF_DETECT_STATEFUL,
@@ -303,9 +321,13 @@ typedef enum PacketProfileDetectId_ {
 #include "detect-engine-alert.h"
 #include "util-optimize.h"
 #include "util-path.h"
+#include "util-conf.h"
 
 size_t strlcat(char *, const char *src, size_t siz);
 size_t strlcpy(char *dst, const char *src, size_t siz);
 
+extern int coverage_unittests;
+extern int g_ut_modules;
+extern int g_ut_covered;
 #endif /* __SURICATA_COMMON_H__ */
 

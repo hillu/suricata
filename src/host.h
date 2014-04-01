@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -25,6 +25,7 @@
 #define __HOST_H__
 
 #include "decode.h"
+#include "util-storage.h"
 
 /** Spinlocks or Mutex for the flow buckets. */
 //#define HRLOCK_SPIN
@@ -62,12 +63,13 @@ typedef struct Host_ {
     Address a;
 
     /** use cnt, reference counter */
-    SC_ATOMIC_DECLARE(unsigned short, use_cnt);
+    SC_ATOMIC_DECLARE(unsigned int, use_cnt);
 
-    /** pointers to tag and threshold storage */
-    void *tag;
-    void *threshold;
+    /** pointers to iprep storage */
     void *iprep;
+
+    /** storage api handle */
+    Storage *storage;
 
     /** hash pointers, protected by hash row mutex/spin */
     struct Host_ *hnext;
@@ -82,7 +84,7 @@ typedef struct HostHashRow_ {
     HRLOCK_TYPE lock;
     Host *head;
     Host *tail;
-} HostHashRow;
+} __attribute__((aligned(CLS))) HostHashRow;
 
 /** host hash table */
 HostHashRow *host_hash;

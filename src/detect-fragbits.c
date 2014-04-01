@@ -32,11 +32,16 @@
 
 #include "flow-var.h"
 #include "decode-events.h"
+#include "app-layer.h"
 #include "app-layer-detect-proto.h"
 
 #include "detect-fragbits.h"
 #include "util-unittest.h"
 #include "util-debug.h"
+
+#include "pkt-var.h"
+#include "host.h"
+#include "util-profiling.h"
 
 /**
  *  Regex
@@ -416,10 +421,9 @@ static int FragBitsTestParse03 (void) {
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
-    AlpProtoFinalize2Thread(&dtv.udp_dp_ctx);
+    dtv.app_tctx = AppLayerGetCtxThread(&tv);
 
     p->ip4h = &ipv4h;
 
@@ -513,10 +517,9 @@ static int FragBitsTestParse04 (void) {
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&ipv4h, 0, sizeof(IPV4Hdr));
-    AlpProtoFinalize2Thread(&dtv.udp_dp_ctx);
+    dtv.app_tctx = AppLayerGetCtxThread(&tv);
 
     p->ip4h = &ipv4h;
 
@@ -524,7 +527,6 @@ static int FragBitsTestParse04 (void) {
 
     DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
-    FlowShutdown();
 
     de = DetectFragBitsParse("!D");
 
@@ -543,6 +545,8 @@ static int FragBitsTestParse04 (void) {
     if(ret) {
         if (de) SCFree(de);
         if (sm) SCFree(sm);
+        PACKET_RECYCLE(p);
+        FlowShutdown();
         SCFree(p);
         return 1;
     }
@@ -550,6 +554,8 @@ static int FragBitsTestParse04 (void) {
 error:
     if (de) SCFree(de);
     if (sm) SCFree(sm);
+    PACKET_RECYCLE(p);
+    FlowShutdown();
     SCFree(p);
     return 0;
 }

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -28,6 +28,11 @@
 #include "util-var.h"
 #include "util-atomic.h"
 #include "detect-tag.h"
+#include "util-optimize.h"
+
+/* Part of the flow structure, so we declare it here.
+ * The actual declaration is in app-layer-parser.c */
+typedef struct AppLayerParserState_ AppLayerParserState;
 
 #define FLOW_QUIET      TRUE
 #define FLOW_VERBOSE    FALSE
@@ -60,8 +65,6 @@
 
 /** All packets in this flow should be dropped */
 #define FLOW_ACTION_DROP                  0x00000200
-/** All packets in this flow should be accepted */
-#define FLOW_ACTION_PASS                  0x00000400
 
 /** Sgh for toserver direction set (even if it's NULL) */
 #define FLOW_SGH_TOSERVER                 0x00000800
@@ -80,14 +83,10 @@
 #define FLOW_TS_PM_ALPROTO_DETECT_DONE    0x00020000
 /** Probing parser alproto detection done */
 #define FLOW_TS_PP_ALPROTO_DETECT_DONE    0x00040000
-/** Both pattern matcher and probing parser alproto detection done */
-#define FLOW_TS_PM_PP_ALPROTO_DETECT_DONE 0x00080000
 /** Pattern matcher alproto detection done */
 #define FLOW_TC_PM_ALPROTO_DETECT_DONE    0x00100000
 /** Probing parser alproto detection done */
 #define FLOW_TC_PP_ALPROTO_DETECT_DONE    0x00200000
-/** Both pattern matcher and probing parser alproto detection done */
-#define FLOW_TC_PM_PP_ALPROTO_DETECT_DONE 0x00400000
 #define FLOW_TIMEOUT_REASSEMBLY_DONE      0x00800000
 /** even if the flow has files, don't store 'm */
 #define FLOW_FILE_NO_STORE_TS             0x01000000
@@ -117,7 +116,7 @@
     } while (0)
 
 #define FLOW_COPY_IPV6_ADDR_TO_PACKET(fa, pa) do {      \
-        (pa)->family = AF_INET;                         \
+        (pa)->family = AF_INET6;                        \
         (pa)->addr_data32[0] = (fa)->addr_data32[0];    \
         (pa)->addr_data32[1] = (fa)->addr_data32[1];    \
         (pa)->addr_data32[2] = (fa)->addr_data32[2];    \
@@ -209,6 +208,15 @@
     #error Enable FLOWLOCK_RWLOCK or FLOWLOCK_MUTEX
 #endif
 
+#define FLOW_IS_PM_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags & FLOW_TS_PM_ALPROTO_DETECT_DONE) : ((f)->flags & FLOW_TC_PM_ALPROTO_DETECT_DONE))
+#define FLOW_IS_PP_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags & FLOW_TS_PP_ALPROTO_DETECT_DONE) : ((f)->flags & FLOW_TC_PP_ALPROTO_DETECT_DONE))
+
+#define FLOW_SET_PM_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags |= FLOW_TS_PM_ALPROTO_DETECT_DONE) : ((f)->flags |= FLOW_TC_PM_ALPROTO_DETECT_DONE))
+#define FLOW_SET_PP_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags |= FLOW_TS_PP_ALPROTO_DETECT_DONE) : ((f)->flags |= FLOW_TC_PP_ALPROTO_DETECT_DONE))
+
+#define FLOW_RESET_PM_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags &= ~FLOW_TS_PM_ALPROTO_DETECT_DONE) : ((f)->flags &= ~FLOW_TC_PM_ALPROTO_DETECT_DONE))
+#define FLOW_RESET_PP_DONE(f, dir) (((dir) & STREAM_TOSERVER) ? ((f)->flags &= ~FLOW_TS_PP_ALPROTO_DETECT_DONE) : ((f)->flags &= ~FLOW_TC_PP_ALPROTO_DETECT_DONE))
+
 /* global flow config */
 typedef struct FlowCnf_
 {
@@ -249,6 +257,13 @@ typedef struct FlowAddress_ {
 #define addr_data16 address.address_un_data16
 #define addr_data8  address.address_un_data8
 
+#ifdef __tile__
+/* Atomic Ints performance better on Tile. */
+typedef unsigned int FlowRefCount;
+#else
+typedef unsigned short FlowRefCount;
+#endif
+
 /**
  *  \brief Flow data structure.
  *
@@ -282,6 +297,7 @@ typedef struct Flow_
     };
     uint8_t proto;
     uint8_t recursion_level;
+    uint16_t vlan_id[2];
 
     /* end of flow "header" */
 
@@ -291,13 +307,13 @@ typedef struct Flow_
      *  On receiving a packet the counter is incremented while the flow
      *  bucked is locked, which is also the case on timeout pruning.
      */
-    SC_ATOMIC_DECLARE(unsigned short, use_cnt);
+    SC_ATOMIC_DECLARE(FlowRefCount, use_cnt);
 
     /** flow queue id, used with autofp */
     SC_ATOMIC_DECLARE(int, autofp_tmqh_flow_qid);
 
-    uint32_t probing_parser_toserver_al_proto_masks;
-    uint32_t probing_parser_toclient_al_proto_masks;
+    uint32_t probing_parser_toserver_alproto_masks;
+    uint32_t probing_parser_toclient_alproto_masks;
 
     uint32_t flags;
 
@@ -320,7 +336,11 @@ typedef struct Flow_
     uint8_t protomap;
     uint8_t pad0;
 
-    uint16_t alproto; /**< \brief application level protocol */
+    AppProto alproto; /**< \brief application level protocol */
+    AppProto alproto_ts;
+    AppProto alproto_tc;
+
+    uint32_t data_al_so_far[2];
 
     /** detection engine ctx id used to inspect this flow. Set at initial
      *  inspection. If it doesn't match the currently in use de_ctx, the
@@ -330,7 +350,7 @@ typedef struct Flow_
     /** application level storage ptrs.
      *
      */
-    void *alparser;     /**< parser internal state */
+    AppLayerParserState *alparser;     /**< parser internal state */
     void *alstate;      /**< application layer state */
 
     /** detection engine state */
@@ -342,9 +362,6 @@ typedef struct Flow_
     /** toserver sgh for this flow. Only use when FLOW_SGH_TOSERVER flow flag
      *  has been set. */
     struct SigGroupHead_ *sgh_toserver;
-
-    /** List of tags of this flow (from "tag" keyword of type "session") */
-    void *tag_list;
 
     /* pointer to the var list */
     GenericVar *flowvar;
@@ -391,9 +408,6 @@ void FlowShutdown(void);
 void FlowSetIPOnlyFlag(Flow *, char);
 void FlowSetIPOnlyFlagNoLock(Flow *, char);
 
-void FlowIncrUsecnt(Flow *);
-void FlowDecrUsecnt(Flow *);
-
 void FlowRegisterTests (void);
 int FlowSetProtoTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoEmergencyTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
@@ -411,7 +425,7 @@ static inline void FlowLockSetNoPayloadInspectionFlag(Flow *);
 static inline void FlowSetNoPayloadInspectionFlag(Flow *);
 static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *);
 
-int FlowGetPacketDirection(Flow *, Packet *);
+int FlowGetPacketDirection(Flow *, const Packet *);
 
 void FlowCleanupAppLayer(Flow *);
 
@@ -481,21 +495,61 @@ static inline void FlowSetSessionNoApplayerInspectionFlag(Flow *f) {
     f->flags |= FLOW_NO_APPLAYER_INSPECTION;
 }
 
-#define FlowReference(dst_f_ptr, f) do {            \
-        if ((f) != NULL) {                          \
-            FlowIncrUsecnt((f));                    \
-            *(dst_f_ptr) = f;                       \
-        }                                           \
-    } while (0)
+/**
+ *  \brief increase the use count of a flow
+ *
+ *  \param f flow to decrease use count for
+ */
+static inline void FlowIncrUsecnt(Flow *f)
+{
+    if (f == NULL)
+        return;
 
-#define FlowDeReference(src_f_ptr) do {               \
-        if (*(src_f_ptr) != NULL) {                   \
-            FlowDecrUsecnt(*(src_f_ptr));             \
-            *(src_f_ptr) = NULL;                      \
-        }                                             \
-    } while (0)
+    (void) SC_ATOMIC_ADD(f->use_cnt, 1);
+}
+
+/**
+ *  \brief decrease the use count of a flow
+ *
+ *  \param f flow to decrease use count for
+ */
+static inline void FlowDecrUsecnt(Flow *f)
+{
+    if (f == NULL)
+        return;
+
+    (void) SC_ATOMIC_SUB(f->use_cnt, 1);
+}
+
+/** \brief Reference the flow, bumping the flows use_cnt
+ *  \note This should only be called once for a destination
+ *        pointer */
+static inline void FlowReference(Flow **d, Flow *f) {
+    if (likely(f != NULL)) {
+#ifdef DEBUG_VALIDATION
+        BUG_ON(*d == f);
+#else
+        if (*d == f)
+            return;
+#endif
+        FlowIncrUsecnt(f);
+        *d = f;
+    }
+}
+
+static inline void FlowDeReference(Flow **d) {
+    if (likely(*d != NULL)) {
+        FlowDecrUsecnt(*d);
+        *d = NULL;
+    }
+}
 
 int FlowClearMemory(Flow *,uint8_t );
+
+AppProto FlowGetAppProtocol(Flow *f);
+void *FlowGetAppState(Flow *f);
+
+
 
 #endif /* __FLOW_H__ */
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -19,286 +19,207 @@
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __APP_LAYER_PARSER_H__
 #define __APP_LAYER_PARSER_H__
 
-#include "decode-events.h"
-
+#include "app-layer-events.h"
 #include "util-file.h"
 
-/** Mapping between local parser id's (e.g. HTTP_FIELD_REQUEST_URI) and
-  * the dynamically assigned (at registration) global parser id. */
-typedef struct AppLayerLocalMap_ {
-    uint16_t parser_id;
-} AppLayerLocalMap;
+#define APP_LAYER_PARSER_EOF            0x01
+#define APP_LAYER_PARSER_NO_INSPECTION  0x02
+#define APP_LAYER_PARSER_NO_REASSEMBLY  0x04
 
-/** \brief Mapping between ALPROTO_* and L7Parsers
- *
- * Map the proto to the parsers for the to_client and to_server directions.
+
+
+/***** transaction handling *****/
+
+/** \brief Function ptr type for getting active TxId from a flow
+ *  Used by AppLayerTransactionGetActive.
  */
-typedef struct AppLayerProto_ {
-    char *name; /**< name of the registered proto */
+typedef uint64_t (*GetActiveTxIdFunc)(Flow *f, uint8_t flags);
 
-    uint16_t to_server;
-    uint16_t to_client;
-    uint16_t map_size;
-    char logger; /**< does this proto have a logger enabled? */
+/** \brief Register GetActiveTxId Function
+ *
+ */
+void RegisterAppLayerGetActiveTxIdFunc(GetActiveTxIdFunc FuncPtr);
 
-    AppLayerLocalMap **map;
+/** \brief active TX retrieval for normal ops: so with detection and logging
+ *
+ *  \retval tx_id lowest tx_id that still needs work
+ *
+ *  This is the default function.
+ */
+uint64_t AppLayerTransactionGetActiveDetectLog(Flow *f, uint8_t flags);
 
-    void *(*StateAlloc)(void);
-    void (*StateFree)(void *);
-    void (*StateUpdateTransactionId)(void *, uint16_t *);
-    void (*StateTransactionFree)(void *, uint16_t);
-    void *(*LocalStorageAlloc)(void);
-    void (*LocalStorageFree)(void *);
-
-    /** truncate state after a gap/depth event */
-    void (*Truncate)(void *, uint8_t);
-    FileContainer *(*StateGetFiles)(void *, uint8_t);
-
-} AppLayerProto;
-
-/** flags for the result elmts */
-#define ALP_RESULT_ELMT_ALLOC 0x01
-
-/** \brief Result elements for the parser */
-typedef struct AppLayerParserResultElmt_ {
-    uint16_t flags; /* flags. E.g. local alloc */
-    uint16_t name_idx; /* idx for names like "http.request_line.uri" */
-
-    uint32_t data_len; /* length of the data from the ptr */
-    uint8_t  *data_ptr; /* point to the position in the "input" data
-                          * or ptr to new mem if local alloc flag set */
-    struct AppLayerParserResultElmt_ *next;
-} AppLayerParserResultElmt;
-
-/** \brief List head for parser result elmts */
-typedef struct AppLayerParserResult_ {
-    AppLayerParserResultElmt *head;
-    AppLayerParserResultElmt *tail;
-    uint32_t cnt;
-} AppLayerParserResult;
-
-#define APP_LAYER_PARSER_USE            0x01
-#define APP_LAYER_PARSER_EOF            0x02
-#define APP_LAYER_PARSER_DONE           0x04    /**< parser is done, ignore more
-                                                     msgs */
-#define APP_LAYER_PARSER_NO_INSPECTION  0x08    /**< Flag to indicate no more
-                                                     packets payload inspection */
-#define APP_LAYER_PARSER_NO_REASSEMBLY  0x10    /**< Flag to indicate no more
-                                                     packets reassembly for this
-                                                     session */
-
-#define APP_LAYER_TRANSACTION_EOF       0x01    /**< Session done, last transaction
-                                                     as well */
-#define APP_LAYER_TRANSACTION_TOSERVER  0x02    /**< transaction has been inspected
-                                                     in to server direction. */
-#define APP_LAYER_TRANSACTION_TOCLIENT  0x04    /**< transaction has been inspected
-                                                     in to server direction. */
-
-typedef struct AppLayerParserState_ {
-    uint8_t flags;
-    uint16_t cur_parser; /**< idx of currently active parser */
-    uint8_t *store;
-    uint32_t store_len;
-    uint16_t parse_field;
-} AppLayerParserState;
-
-typedef struct AppLayerParserStateStore_ {
-    AppLayerParserState to_client;
-    AppLayerParserState to_server;
-
-    /** flags related to the id's */
-    uint8_t id_flags;
-
-    /** the highest id of inspected state's (i.e. http transactions), updated by
-     *  the stateful detection engine code */
-    uint16_t inspect_id;
-    /** the highest id of logged state's (i.e. http transactions), updated by
-     *  a logging module throught the app layer API */
-    uint16_t logged_id;
-    /** the higest id of available state's, updated by the app layer parser */
-    uint16_t avail_id;
-    /** the base id signifies the id number of the oldest id we have in our
-     *  state. As transactions may be cleaned up before the entire state is
-     *  freed, id's may "disappear". */
-    uint16_t base_id;
-
-    uint16_t version;       /**< state version, incremented for each update,
-                             *   can wrap around */
-
-    /* Used to store decoder events */
-    AppLayerDecoderEvents *decoder_events;
-} AppLayerParserStateStore;
-
-typedef struct AppLayerParserTableElement_ {
-    int (*AppLayerParser)(Flow *f, void *protocol_state, AppLayerParserState
-                          *parser_state, uint8_t *input, uint32_t input_len,
-                          void *local_storage, AppLayerParserResult *output);
-
-    char *name;
-
-    uint16_t proto;
-    uint16_t parser_local_id; /**< local id of the parser in the parser itself. */
-} AppLayerParserTableElement;
-
-typedef struct AppLayerProbingParserElement_ {
-    const char *al_proto_name;
-    uint16_t al_proto;
-    uint16_t port;
-    uint16_t ip_proto;
-    uint8_t priority;
-    uint8_t top;
-    uint32_t al_proto_mask;
-    /* the min length of data that has to be supplied to invoke the parser */
-    uint32_t min_depth;
-    /* the max length of data after which this parser won't be invoked */
-    uint32_t max_depth;
-    /* the probing parser function */
-    uint16_t (*ProbingParser)(uint8_t *input, uint32_t input_len);
-
-    struct AppLayerProbingParserElement_ *next;
-} AppLayerProbingParserElement;
-
-typedef struct AppLayerProbingParser_ {
-    /* the port no for which probing parser(s) are invoked */
-    uint16_t port;
-    uint32_t toserver_al_proto_mask;
-    uint32_t toclient_al_proto_mask;
-    /* the max depth for all the probing parsers registered for this port */
-    uint16_t toserver_max_depth;
-    uint16_t toclient_max_depth;
-
-    AppLayerProbingParserElement *toserver;
-    AppLayerProbingParserElement *toclient;
-
-    struct AppLayerProbingParser_ *next;
-} AppLayerProbingParser;
-
-typedef struct AppLayerProbingParserInfo_ {
-    const char *al_proto_name;
-    uint16_t ip_proto;
-    uint16_t al_proto;
-    uint16_t (*ProbingParser)(uint8_t *input, uint32_t input_len);
-    struct AppLayerProbingParserInfo_ *next;
-} AppLayerProbingParserInfo;
-
-#define APP_LAYER_PROBING_PARSER_PRIORITY_HIGH   1
-#define APP_LAYER_PROBING_PARSER_PRIORITY_MEDIUM 2
-#define APP_LAYER_PROBING_PARSER_PRIORITY_LOW    3
-
-extern AppLayerProto al_proto_table[];
-
-static inline
-AppLayerProbingParser *AppLayerGetProbingParsers(AppLayerProbingParser *probing_parsers,
-                                                 uint16_t ip_proto,
-                                                 uint16_t port)
-{
-    if (probing_parsers == NULL)
-        return NULL;
-
-    AppLayerProbingParser *pp = probing_parsers;
-    while (pp != NULL) {
-        if (pp->port == port || pp->port == 0) {
-            break;
-        }
-        pp = pp->next;
-    }
-
-    return pp;
-}
-
-static inline
-AppLayerProbingParserInfo *AppLayerGetProbingParserInfo(AppLayerProbingParserInfo *ppi,
-                                                        const char *al_proto_name)
-{
-    while (ppi != NULL) {
-        if (strcmp(ppi->al_proto_name, al_proto_name) == 0)
-            return ppi;
-        ppi = ppi->next;
-    }
-
-    return NULL;
-}
-struct AlpProtoDetectCtx_;
-
-/* prototypes */
-void AppLayerParsersInitPostProcess(void);
-void RegisterAppLayerParsers(void);
-void AppLayerParserRegisterTests(void);
-
-/* registration */
-int AppLayerRegisterProto(char *name, uint8_t proto, uint8_t flags,
-                          int (*AppLayerParser)(Flow *f, void *protocol_state,
-                                                AppLayerParserState *parser_state,
-                                                uint8_t *input, uint32_t input_len,
-                                                void *local_data,
-                                                AppLayerParserResult *output));
-int AppLayerRegisterParser(char *name, uint16_t proto, uint16_t parser_id,
-                           int (*AppLayerParser)(Flow *f, void *protocol_state,
-                                                 AppLayerParserState *parser_state,
-                                                 uint8_t *input, uint32_t input_len,
-                                                 void *local_data,
-                                                 AppLayerParserResult *output),
-                           char *dependency);
-void AppLayerRegisterProbingParser(struct AlpProtoDetectCtx_ *, uint16_t, uint16_t,
-                                   const char *, uint16_t,
-                                   uint16_t, uint16_t, uint8_t, uint8_t,
-                                   uint8_t,
-                                   uint16_t (*ProbingParser)(uint8_t *, uint32_t));
-void AppLayerRegisterStateFuncs(uint16_t proto, void *(*StateAlloc)(void),
-                                void (*StateFree)(void *));
-void AppLayerRegisterTransactionIdFuncs(uint16_t proto,
-        void (*StateTransactionId)(void *, uint16_t *),
-        void (*StateTransactionFree)(void *, uint16_t id));
-void AppLayerRegisterLocalStorageFunc(uint16_t proto,
-                                      void *(*LocalStorageAlloc)(void),
-                                      void (*LocalStorageFree)(void *));
-void *AppLayerGetProtocolParserLocalStorage(uint16_t);
-void AppLayerRegisterGetFilesFunc(uint16_t proto,
-        FileContainer *(*StateGetFile)(void *, uint8_t));
-void AppLayerRegisterLogger(uint16_t proto);
-uint16_t AppLayerGetProtoByName(const char *);
-const char *AppLayerGetProtoString(int proto);
-void AppLayerRegisterTruncateFunc(uint16_t proto, void (*Truncate)(void *, uint8_t));
-
-int AppLayerParse(void *, Flow *, uint8_t,
-                  uint8_t, uint8_t *, uint32_t);
-
-int AlpParseFieldBySize(AppLayerParserResult *, AppLayerParserState *, uint16_t,
-                        uint32_t, uint8_t *, uint32_t, uint32_t *);
-int AlpParseFieldByEOF(AppLayerParserResult *, AppLayerParserState *, uint16_t,
-                       uint8_t *, uint32_t);
-int AlpParseFieldByDelimiter(AppLayerParserResult *, AppLayerParserState *,
-                             uint16_t, const uint8_t *, uint8_t, uint8_t *,
-                             uint32_t, uint32_t *);
+/** \brief active TX retrieval for logging only ops
+ *
+ *  \retval tx_id lowest tx_id that still needs work
+ */
+uint64_t AppLayerTransactionGetActiveLogOnly(Flow *f, uint8_t flags);
 
 
-/* transaction handling */
-int AppLayerTransactionUpdateInspectId(Flow *, char);
-void AppLayerTransactionUpdateLoggedId(Flow *);
-int AppLayerTransactionGetLoggableId(Flow *f);
-int AppLayerTransactionGetLoggedId(Flow *f);
-int AppLayerTransactionGetBaseId(Flow *f);
-int AppLayerTransactionGetInspectId(Flow *f);
-uint16_t AppLayerTransactionGetAvailId(Flow *f);
+int AppLayerParserSetup(void);
 
-void AppLayerSetEOF(Flow *);
+int AppLayerParserDeSetup(void);
 
-/* cleanup */
-void AppLayerParserCleanupState(Flow *);
-void AppLayerFreeProbingParsers(AppLayerProbingParser *);
-void AppLayerFreeProbingParsersInfo(AppLayerProbingParserInfo *);
-void AppLayerPrintProbingParsers(AppLayerProbingParser *);
+typedef struct AppLayerParserThreadCtx_ AppLayerParserThreadCtx;
 
-uint16_t AppLayerGetStateVersion(Flow *f);
-void AppLayerListSupportedProtocols(void);
-FileContainer *AppLayerGetFilesFromFlow(Flow *, uint8_t);
-AppLayerDecoderEvents *AppLayerGetDecoderEventsForFlow(Flow *);
+/**
+ * \brief Gets a new app layer protocol's parser thread context.
+ *
+ * \retval Non-NULL pointer on success.
+ *         NULL pointer on failure.
+ */
+AppLayerParserThreadCtx *AppLayerParserThreadCtxAlloc(void);
 
-void AppLayerTriggerRawStreamReassembly(Flow *);
+/**
+ * \brief Destroys the app layer parser thread context obtained
+ *        using AppLayerParserThreadCtxAlloc().
+ *
+ * \param tctx Pointer to the thread context to be destroyed.
+ */
+void AppLayerParserThreadCtxFree(AppLayerParserThreadCtx *tctx);
+
+/**
+ * \brief Given a protocol name, checks if the parser is enabled in
+ *        the conf file.
+ *
+ * \param alproto_name Name of the app layer protocol.
+ *
+ * \retval 1 If enabled.
+ * \retval 0 If disabled.
+ */
+int AppLayerParserConfParserEnabled(const char *ipproto,
+                                    const char *alproto_name);
+
+/***** Parser related registration *****/
+
+/**
+ * \brief Register app layer parser for the protocol.
+ *
+ * \retval 0 On success.
+ * \retval -1 On failure.
+ */
+int AppLayerParserRegisterParser(uint8_t ipproto, AppProto alproto,
+                      uint8_t direction,
+                      int (*Parser)(Flow *f, void *protocol_state,
+                                    AppLayerParserState *pstate,
+                                    uint8_t *buf, uint32_t buf_len,
+                                    void *local_storage));
+void AppLayerParserRegisterParserAcceptableDataDirection(uint8_t ipproto,
+                                              AppProto alproto,
+                                              uint8_t direction);
+void AppLayerParserRegisterStateFuncs(uint8_t ipproto, AppProto alproto,
+                           void *(*StateAlloc)(void),
+                           void (*StateFree)(void *));
+void AppLayerParserRegisterLocalStorageFunc(uint8_t ipproto, AppProto proto,
+                                 void *(*LocalStorageAlloc)(void),
+                                 void (*LocalStorageFree)(void *));
+void AppLayerParserRegisterGetFilesFunc(uint8_t ipproto, AppProto alproto,
+                             FileContainer *(*StateGetFiles)(void *, uint8_t));
+void AppLayerParserRegisterGetEventsFunc(uint8_t ipproto, AppProto proto,
+    AppLayerDecoderEvents *(*StateGetEvents)(void *, uint64_t));
+void AppLayerParserRegisterHasEventsFunc(uint8_t ipproto, AppProto alproto,
+                              int (*StateHasEvents)(void *));
+void AppLayerParserRegisterLogger(uint8_t ipproto, AppProto alproto);
+void AppLayerParserRegisterTruncateFunc(uint8_t ipproto, AppProto alproto,
+                             void (*Truncate)(void *, uint8_t));
+void AppLayerParserRegisterGetStateProgressFunc(uint8_t ipproto, AppProto alproto,
+    int (*StateGetStateProgress)(void *alstate, uint8_t direction));
+void AppLayerParserRegisterTxFreeFunc(uint8_t ipproto, AppProto alproto,
+                           void (*StateTransactionFree)(void *, uint64_t));
+void AppLayerParserRegisterGetTxCnt(uint8_t ipproto, AppProto alproto,
+                         uint64_t (*StateGetTxCnt)(void *alstate));
+void AppLayerParserRegisterGetTx(uint8_t ipproto, AppProto alproto,
+                      void *(StateGetTx)(void *alstate, uint64_t tx_id));
+void AppLayerParserRegisterGetStateProgressCompletionStatus(uint8_t ipproto,
+                                                 AppProto alproto,
+    int (*StateGetStateProgressCompletionStatus)(uint8_t direction));
+void AppLayerParserRegisterGetEventInfo(uint8_t ipproto, AppProto alproto,
+    int (*StateGetEventInfo)(const char *event_name, int *event_id,
+                             AppLayerEventType *event_type));
+
+/***** Get and transaction functions *****/
+
+void *AppLayerParserGetProtocolParserLocalStorage(uint8_t ipproto, AppProto alproto);
+void AppLayerParserDestroyProtocolParserLocalStorage(uint8_t ipproto, AppProto alproto,
+                                          void *local_data);
+
+
+uint64_t AppLayerParserGetTransactionLogId(AppLayerParserState *pstate);
+void AppLayerParserSetTransactionLogId(AppLayerParserState *pstate);
+uint64_t AppLayerParserGetTransactionInspectId(AppLayerParserState *pstate, uint8_t direction);
+void AppLayerParserSetTransactionInspectId(AppLayerParserState *pstate,
+                                uint8_t ipproto, AppProto alproto, void *alstate,
+                                uint8_t direction);
+AppLayerDecoderEvents *AppLayerParserGetDecoderEvents(AppLayerParserState *pstate);
+void AppLayerParserSetDecoderEvents(AppLayerParserState *pstate, AppLayerDecoderEvents *devents);
+AppLayerDecoderEvents *AppLayerParserGetEventsByTx(uint8_t ipproto, AppProto alproto, void *alstate,
+                                        uint64_t tx_id);
+uint16_t AppLayerParserGetStateVersion(AppLayerParserState *pstate);
+FileContainer *AppLayerParserGetFiles(uint8_t ipproto, AppProto alproto,
+                           void *alstate, uint8_t direction);
+int AppLayerParserGetStateProgress(uint8_t ipproto, AppProto alproto,
+                        void *alstate, uint8_t direction);
+uint64_t AppLayerParserGetTxCnt(uint8_t ipproto, AppProto alproto, void *alstate);
+void *AppLayerParserGetTx(uint8_t ipproto, AppProto alproto, void *alstate, uint64_t tx_id);
+int AppLayerParserGetStateProgressCompletionStatus(uint8_t ipproto, AppProto alproto,
+                                        uint8_t direction);
+int AppLayerParserGetEventInfo(uint8_t ipproto, AppProto alproto, const char *event_name,
+                    int *event_id, AppLayerEventType *event_type);
+
+uint64_t AppLayerParserGetTransactionActive(uint8_t ipproto, AppProto alproto, AppLayerParserState *pstate, uint8_t direction);
+
+uint8_t AppLayerParserGetFirstDataDir(uint8_t ipproto, AppProto alproto);
+
+/***** General *****/
+
+int AppLayerParserParse(AppLayerParserThreadCtx *tctx, Flow *f, AppProto alproto,
+                   uint8_t flags, uint8_t *input, uint32_t input_len);
+void AppLayerParserSetEOF(AppLayerParserState *pstate);
+int AppLayerParserHasDecoderEvents(uint8_t ipproto, AppProto alproto, void *alstate, AppLayerParserState *pstate,
+                        uint8_t flags);
+int AppLayerParserProtocolIsTxAware(uint8_t ipproto, AppProto alproto);
+int AppLayerParserProtocolIsTxEventAware(uint8_t ipproto, AppProto alproto);
+int AppLayerParserProtocolSupportsTxs(uint8_t ipproto, AppProto alproto);
+int AppLayerParserProtocolHasLogger(uint8_t ipproto, AppProto alproto);
+void AppLayerParserTriggerRawStreamReassembly(Flow *f);
+
+/***** Cleanup *****/
+
+void AppLayerParserStateCleanup(uint8_t ipproto, AppProto alproto, void *alstate, AppLayerParserState *pstate);
+
+void AppLayerParserRegisterProtocolParsers(void);
+
+
+void AppLayerParserStateSetFlag(AppLayerParserState *pstate, uint8_t flag);
+int AppLayerParserStateIssetFlag(AppLayerParserState *pstate, uint8_t flag);
+
+void AppLayerParserStreamTruncated(uint8_t ipproto, AppProto alproto, void *alstate,
+                        uint8_t direction);
+
+
+
+AppLayerParserState *AppLayerParserStateAlloc(void);
+void AppLayerParserStateFree(AppLayerParserState *pstate);
+
+
+
+#ifdef DEBUG
+void AppLayerParserStatePrintDetails(AppLayerParserState *pstate);
+#endif
+
+/***** Unittests *****/
+
+#ifdef UNITTESTS
+void AppLayerParserRegisterProtocolUnittests(uint8_t ipproto, AppProto alproto,
+                                  void (*RegisterUnittests)(void));
+void AppLayerParserRegisterUnittests(void);
+void AppLayerParserBackupParserTable(void);
+void AppLayerParserRestoreParserTable(void);
+#endif
 
 #endif /* __APP_LAYER_PARSER_H__ */

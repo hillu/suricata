@@ -1,15 +1,39 @@
-/*
- * LibHTP (http://www.libhtp.org)
- * Copyright 2009,2010 Ivan Ristic <ivanr@webkreator.com>
- *
- * LibHTP is an open source product, released under terms of the General Public Licence
- * version 2 (GPLv2). Please refer to the file LICENSE, which contains the complete text
- * of the license.
- *
- * In addition, there is a special exception that allows LibHTP to be freely
- * used with any OSI-approved open source licence. Please refer to the file
- * LIBHTP_LICENSING_EXCEPTION for the full text of the exception.
- *
+/***************************************************************************
+ * Copyright (c) 2009-2010 Open Information Security Foundation
+ * Copyright (c) 2010-2013 Qualys, Inc.
+ * All rights reserved.
+ * 
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are
+ * met:
+ * 
+ * - Redistributions of source code must retain the above copyright
+ *   notice, this list of conditions and the following disclaimer.
+
+ * - Redistributions in binary form must reproduce the above copyright
+ *   notice, this list of conditions and the following disclaimer in the
+ *   documentation and/or other materials provided with the distribution.
+
+ * - Neither the name of the Qualys, Inc. nor the names of its
+ *   contributors may be used to endorse or promote products derived from
+ *   this software without specific prior written permission.
+ * 
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+ * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+ * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+ * HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+ * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+ * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ ***************************************************************************/
+
+/**
+ * @file
+ * @author Ivan Ristic <ivanr@webkreator.com>
  */
 
 #include <fcntl.h>
@@ -26,7 +50,7 @@
 /**
  * Destroys a test.
  *
- * @param test
+ * @param[in] test
  */
 static void test_destroy(test_t *test) {
     if (test->buf != NULL) {
@@ -38,8 +62,8 @@ static void test_destroy(test_t *test) {
 /**
  * Checks if there's a chunk boundary at the given position.
  *
- * @param test
- * @param pos
+ * @param[in] test
+ * @param[in] pos
  * @return Zero if there is no boundary, SERVER or CLIENT if a boundary
  *         was found, and a negative value on error (e.g., not enough data
  *         to determine if a boundary is present).
@@ -80,8 +104,8 @@ static int test_is_boundary(test_t *test, int pos) {
 /**
  * Initializes test by loading the entire data file into a memory block.
  *
- * @param test
- * @param filename
+ * @param[in] test
+ * @param[in] filename
  * @return Non-negative value on success, negative value on error.
  */
 static int test_init(test_t *test, const char *filename) {
@@ -100,7 +124,7 @@ static int test_init(test_t *test, const char *filename) {
     test->pos = 0;
 
     int bytes_read = 0;
-    while ((bytes_read = read(fd, test->buf + test->len, buf.st_size - test->len)) > 0) {
+    while ((bytes_read = read(fd, test->buf + test->len, buf.st_size - test->len)) > 0) {        
         test->len += bytes_read;
     }
 
@@ -109,7 +133,7 @@ static int test_init(test_t *test, const char *filename) {
         return -2;
     }
 
-    close(fd);
+    close(fd);   
 
     return 1;
 }
@@ -121,7 +145,7 @@ void test_start(test_t *test) {
 /**
  * Finds the next data chunk in the given test.
  *
- * @param test
+ * @param[in] test
  * @return One if a chunk is found or zero if there are no more chunks in the test. On
  *         success, test->chunk will point to the beginning of the chunk, while
  *         test->chunk_len will contain its length.
@@ -226,8 +250,8 @@ static int parse_filename(const char *filename, char **remote_addr, int *remote_
 /**
  * Runs a single test.
  *
- * @param filename
- * @param cfg
+ * @param[in] filename
+ * @param[in] cfg
  * @return A pointer to the instance of htp_connp_t created during
  *         the test, or NULL if the test failed for some reason.
  */
@@ -243,7 +267,7 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
     strncat(filename, "/", 1024 - strlen(filename));
     strncat(filename, testname, 1024 - strlen(filename));
 
-    printf("Filename: %s\n", filename);
+    // printf("Filename: %s\n", filename);
 
     // Initinialize test
 
@@ -272,12 +296,12 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
         int remote_port, local_port;
 
         parse_filename(testname, &remote_addr, &remote_port, &local_addr, &local_port);
-        htp_connp_open(*connp, (const char *) remote_addr, remote_port, (const char *) local_addr, local_port, tv_start.tv_usec);
+        htp_connp_open(*connp, (const char *) remote_addr, remote_port, (const char *) local_addr, local_port, &tv_start);
         free(remote_addr);
         free(local_addr);
     } else {
         // No connection metadata; provide some fake information instead
-        htp_connp_open(*connp, (const char *) "127.0.0.1", 10000, (const char *) "127.0.0.1", 80, tv_start.tv_usec);
+        htp_connp_open(*connp, (const char *) "127.0.0.1", 10000, (const char *) "127.0.0.1", 80, &tv_start);
     }
 
     // Find all chunks and feed them to the parser
@@ -302,13 +326,13 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
                 fprintf(stderr, "Unable to buffer more than one inbound chunk.\n");
                 return -1;
             }
-
-            int rc = htp_connp_req_data(*connp, tv_start.tv_usec, test.chunk, test.chunk_len);
-            if (rc == STREAM_STATE_ERROR) {
+            
+            int rc = htp_connp_req_data(*connp, &tv_start, test.chunk, test.chunk_len);
+            if (rc == HTP_STREAM_ERROR) {
                 test_destroy(&test);
                 return -101;
             }
-            if (rc == STREAM_STATE_DATA_OTHER) {
+            if (rc == HTP_STREAM_DATA_OTHER) {
                 // Parser needs to see the outbound stream in order to continue
                 // parsing the inbound stream.
                 in_data_other = 1;
@@ -318,20 +342,20 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
             }
         } else {
             if (out_data_other) {
-                int rc = htp_connp_res_data(*connp, tv_start.tv_usec, out_data + out_data_offset, out_data_len - out_data_offset);
-                if (rc == STREAM_STATE_ERROR) {
+                int rc = htp_connp_res_data(*connp, &tv_start, out_data + out_data_offset, out_data_len - out_data_offset);
+                if (rc == HTP_STREAM_ERROR) {
                     test_destroy(&test);
                     return -104;
                 }
                 out_data_other = 0;
             }
 
-            int rc = htp_connp_res_data(*connp, tv_start.tv_usec, test.chunk, test.chunk_len);
-            if (rc == STREAM_STATE_ERROR) {
+            int rc = htp_connp_res_data(*connp, &tv_start, test.chunk, test.chunk_len);
+            if (rc == HTP_STREAM_ERROR) {
                 test_destroy(&test);
                 return -102;
             }
-            if (rc == STREAM_STATE_DATA_OTHER) {
+            if (rc == HTP_STREAM_DATA_OTHER) {
                 // Parser needs to see the outbound stream in order to continue
                 // parsing the inbound stream.
                 out_data_other = 1;
@@ -342,8 +366,8 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
             }
 
             if (in_data_other) {
-                int rc = htp_connp_req_data(*connp, tv_start.tv_usec, in_data + in_data_offset, in_data_len - in_data_offset);
-                if (rc == STREAM_STATE_ERROR) {
+                int rc = htp_connp_req_data(*connp, &tv_start, in_data + in_data_offset, in_data_len - in_data_offset);
+                if (rc == HTP_STREAM_ERROR) {
                     test_destroy(&test);
                     return -103;
                 }
@@ -353,8 +377,8 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
     }
 
     if (out_data_other) {
-        int rc = htp_connp_res_data(*connp, tv_start.tv_usec, out_data + out_data_offset, out_data_len - out_data_offset);
-        if (rc == STREAM_STATE_ERROR) {
+        int rc = htp_connp_res_data(*connp, &tv_start, out_data + out_data_offset, out_data_len - out_data_offset);
+        if (rc == HTP_STREAM_ERROR) {
             test_destroy(&test);
             return -104;
         }
@@ -364,9 +388,7 @@ int test_run(const char *testsdir, const char *testname, htp_cfg_t *cfg, htp_con
     gettimeofday(&tv_end, NULL);
 
     // Close the connection
-    htp_connp_close(*connp, tv_end.tv_usec);
-
-    // printf("Parsing time: %i\n", tv_end.tv_usec - tv_start.tv_usec);
+    htp_connp_close(*connp, &tv_end);
 
     // Clean up
     test_destroy(&test);
