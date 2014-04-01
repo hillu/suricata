@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -93,6 +93,8 @@ typedef struct DefragTracker_ {
     SCMutex lock; /**< Mutex for locking list operations on
                            * this tracker. */
 
+    uint16_t vlan_id[2]; /**< VLAN ID tracker applies to. */
+
     uint32_t id; /**< IP ID for this tracker.  32 bits for IPv6, 16
                   * for IPv4. */
 
@@ -109,9 +111,10 @@ typedef struct DefragTracker_ {
     Address dst_addr; /**< Destination address for this tracker. */
 
     uint32_t timeout; /**< When this tracker will timeout. */
+    uint32_t host_timeout;  /**< Host timeout, statically assigned from the yaml */
 
     /** use cnt, reference counter */
-    SC_ATOMIC_DECLARE(unsigned short, use_cnt);
+    SC_ATOMIC_DECLARE(unsigned int, use_cnt);
 
     TAILQ_HEAD(frag_tailq, Frag_) frags; /**< Head of list of fragments. */
 
@@ -130,7 +133,7 @@ void DefragReload(void); /**< use only in unittests */
 
 uint8_t DefragGetOsPolicy(Packet *);
 void DefragTrackerFreeFrags(DefragTracker *);
-Packet *Defrag(ThreadVars *, DecodeThreadVars *, Packet *);
+Packet *Defrag(ThreadVars *, DecodeThreadVars *, Packet *, PacketQueue *);
 void DefragRegisterTests(void);
 
 #endif /* __DEFRAG_H__ */

@@ -42,6 +42,20 @@
 #include "flow-manager.h"
 #include "util-profiling.h"
 #include "runmode-unix-socket.h"
+#include "util-checksum.h"
+#include "util-atomic.h"
+
+#ifdef __SC_CUDA_SUPPORT__
+
+#include "util-cuda.h"
+#include "util-cuda-buffer.h"
+#include "util-mpm-ac.h"
+#include "util-cuda-handlers.h"
+#include "detect-engine.h"
+#include "detect-engine-mpm.h"
+#include "util-cuda-vars.h"
+
+#endif /* __SC_CUDA_SUPPORT__ */
 
 extern uint8_t suricata_ctl_flags;
 extern int max_pending_packets;
@@ -50,10 +64,14 @@ extern int max_pending_packets;
 
 typedef struct PcapFileGlobalVars_ {
     pcap_t *pcap_handle;
-    void (*Decoder)(ThreadVars *, DecodeThreadVars *, Packet *, u_int8_t *, u_int16_t, PacketQueue *);
+    int (*Decoder)(ThreadVars *, DecodeThreadVars *, Packet *, u_int8_t *, u_int16_t, PacketQueue *);
     int datalink;
     struct bpf_program filter;
     uint64_t cnt; /** packet counter */
+    ChecksumValidationMode conf_checksum_mode;
+    ChecksumValidationMode checksum_mode;
+    SC_ATOMIC_DECLARE(unsigned int, invalid_checksums);
+
 } PcapFileGlobalVars;
 
 /** max packets < 65536 */
@@ -137,6 +155,18 @@ void PcapFileCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
         PACKET_PROFILING_TMM_END(p, TMM_RECEIVEPCAPFILE);
         SCReturn;
     }
+
+    /* We only check for checksum disable */
+    if (pcap_g.checksum_mode == CHECKSUM_VALIDATION_DISABLE) {
+        p->flags |= PKT_IGNORE_CHECKSUM;
+    } else if (pcap_g.checksum_mode == CHECKSUM_VALIDATION_AUTO) {
+        if (ChecksumAutoModeCheck(ptv->pkts, p->pcap_cnt,
+                                  SC_ATOMIC_GET(pcap_g.invalid_checksums))) {
+            pcap_g.checksum_mode = CHECKSUM_VALIDATION_DISABLE;
+            p->flags |= PKT_IGNORE_CHECKSUM;
+        }
+    }
+
     PACKET_PROFILING_TMM_END(p, TMM_RECEIVEPCAPFILE);
 
     if (TmThreadsSlotProcessPkt(ptv->tv, ptv->slot, p) != TM_ECODE_OK) {
@@ -215,7 +245,7 @@ TmEcode ReceivePcapFileLoop(ThreadVars *tv, void *data, void *slot)
                 SCReturnInt(TM_ECODE_DONE);
             }
         }
-        SCPerfSyncCountersIfSignalled(tv, 0);
+        SCPerfSyncCountersIfSignalled(tv);
     }
 
     SCReturnInt(TM_ECODE_OK);
@@ -224,6 +254,7 @@ TmEcode ReceivePcapFileLoop(ThreadVars *tv, void *data, void *slot)
 TmEcode ReceivePcapFileThreadInit(ThreadVars *tv, void *initdata, void **data) {
     SCEnter();
     char *tmpbpfstring = NULL;
+    char *tmpstring = NULL;
     if (initdata == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "error: initdata == NULL");
         SCReturnInt(TM_ECODE_FAILED);
@@ -298,6 +329,19 @@ TmEcode ReceivePcapFileThreadInit(ThreadVars *tv, void *initdata, void **data) {
             }
     }
 
+    if (ConfGet("pcap-file.checksum-checks", &tmpstring) != 1) {
+        pcap_g.conf_checksum_mode = CHECKSUM_VALIDATION_AUTO;
+    } else {
+        if (strcmp(tmpstring, "auto") == 0) {
+            pcap_g.conf_checksum_mode = CHECKSUM_VALIDATION_AUTO;
+        } else if (strcmp(tmpstring, "yes") == 0) {
+            pcap_g.conf_checksum_mode = CHECKSUM_VALIDATION_ENABLE;
+        } else if (strcmp(tmpstring, "no") == 0) {
+            pcap_g.conf_checksum_mode = CHECKSUM_VALIDATION_DISABLE;
+        }
+    }
+    pcap_g.checksum_mode = pcap_g.conf_checksum_mode;
+
     ptv->tv = tv;
     *data = (void *)ptv;
     SCReturnInt(TM_ECODE_OK);
@@ -307,7 +351,21 @@ void ReceivePcapFileThreadExitStats(ThreadVars *tv, void *data) {
     SCEnter();
     PcapFileThreadVars *ptv = (PcapFileThreadVars *)data;
 
-    SCLogInfo("Pcap-file module read %" PRIu32 " packets, %" PRIu64 " bytes", ptv->pkts, ptv->bytes);
+    if (pcap_g.conf_checksum_mode == CHECKSUM_VALIDATION_AUTO &&
+            pcap_g.cnt < CHECKSUM_SAMPLE_COUNT &&
+            SC_ATOMIC_GET(pcap_g.invalid_checksums)) {
+        uint64_t chrate = pcap_g.cnt / SC_ATOMIC_GET(pcap_g.invalid_checksums);
+        if (chrate < CHECKSUM_INVALID_RATIO)
+            SCLogWarning(SC_ERR_INVALID_CHECKSUM,
+                         "1/%" PRIu64 "th of packets have an invalid checksum,"
+                         " consider setting pcap-file.checksum-checks variable to no"
+                         " or use '-k none' option on command line.",
+                         chrate);
+        else
+            SCLogInfo("1/%" PRIu64 "th of packets have an invalid checksum",
+                      chrate);
+    }
+    SCLogNotice("Pcap-file module read %" PRIu32 " packets, %" PRIu64 " bytes", ptv->pkts, ptv->bytes);
     return;
 }
 
@@ -327,9 +385,14 @@ TmEcode DecodePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, P
     SCEnter();
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
 
+    /* XXX HACK: flow timeout can call us for injected pseudo packets
+     *           see bug: https://redmine.openinfosecfoundation.org/issues/1107 */
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return TM_ECODE_OK;
+
     /* update counters */
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
+//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
 
     SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
 #if 0
@@ -353,6 +416,12 @@ TmEcode DecodePcapFile(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, P
     /* call the decoder */
     pcap_g.Decoder(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
 
+#ifdef DEBUG
+    BUG_ON(p->pkt_src != PKT_SRC_WIRE && p->pkt_src != PKT_SRC_FFR_V2);
+#endif
+
+    PacketDecodeFinalize(tv, dtv, p);
+
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -360,16 +429,27 @@ TmEcode DecodePcapFileThreadInit(ThreadVars *tv, void *initdata, void **data)
 {
     SCEnter();
     DecodeThreadVars *dtv = NULL;
-    dtv = DecodeThreadVarsAlloc();
+    dtv = DecodeThreadVarsAlloc(tv);
 
     if (dtv == NULL)
         SCReturnInt(TM_ECODE_FAILED);
 
     DecodeRegisterPerfCounters(dtv, tv);
 
+#ifdef __SC_CUDA_SUPPORT__
+    if (CudaThreadVarsInit(&dtv->cuda_vars) < 0)
+        SCReturnInt(TM_ECODE_FAILED);
+#endif
+
     *data = (void *)dtv;
 
     SCReturnInt(TM_ECODE_OK);
+}
+
+
+void PcapIncreaseInvalidChecksum()
+{
+    (void) SC_ATOMIC_ADD(pcap_g.invalid_checksums, 1);
 }
 
 /* eof */

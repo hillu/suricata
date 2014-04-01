@@ -48,6 +48,10 @@
 #include "util-debug.h"
 #include "util-error.h"
 
+#include "pkt-var.h"
+#include "host.h"
+#include "util-profiling.h"
+
 static int DetectPortCutNot(DetectPort *, DetectPort **);
 static int DetectPortCut(DetectEngineCtx *, DetectPort *, DetectPort *,
                          DetectPort **);
@@ -177,8 +181,6 @@ void DetectPortCleanupList (DetectPort *head) {
         DetectPortFree(cur);
         cur = next;
     }
-
-    head = NULL;
 }
 
 /**
@@ -1011,7 +1013,6 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
     size_t size = strlen(s);
     char address[1024] = "";
     char *rule_var_port = NULL;
-    char *temp_rule_var_port = NULL;
     int r = 0;
 
     SCLogDebug("head %p, *head %p, negate %d", head, *head, negate);
@@ -1054,6 +1055,9 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
             if (o_set == 1) {
                 o_set = 0;
             } else if (d_set == 1) {
+                char *temp_rule_var_port = NULL,
+                     *alloc_rule_var_port = NULL;
+
                 address[x - 1] = '\0';
 
                 rule_var_port = SCRuleVarsGetConfVar(address,
@@ -1069,11 +1073,12 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                 }
                 temp_rule_var_port = rule_var_port;
                 if (negate == 1 || n_set == 1) {
-                    temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
-                    if (unlikely(temp_rule_var_port == NULL))
+                    alloc_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
+                    if (unlikely(alloc_rule_var_port == NULL))
                         goto error;
-                    snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
+                    snprintf(alloc_rule_var_port, strlen(rule_var_port) + 3,
                              "[%s]", rule_var_port);
+                    temp_rule_var_port = alloc_rule_var_port;
                 }
                 r = DetectPortParseDo(head, nhead, temp_rule_var_port,
                                   (negate + n_set) % 2);//negate? negate: n_set);
@@ -1082,8 +1087,8 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
 
                 d_set = 0;
                 n_set = 0;
-                if (temp_rule_var_port != rule_var_port)
-                    SCFree(temp_rule_var_port);
+                if (alloc_rule_var_port != NULL)
+                    SCFree(alloc_rule_var_port);
             } else {
                 address[x - 1] = '\0';
                 SCLogDebug("Parsed port from DetectPortParseDo - %s", address);
@@ -1112,6 +1117,9 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
             SCLogDebug("%s", address);
             x = 0;
             if (d_set == 1) {
+                char *temp_rule_var_port = NULL,
+                     *alloc_rule_var_port = NULL;
+
                 rule_var_port = SCRuleVarsGetConfVar(address,
                                                      SC_RULE_VARS_PORT_GROUPS);
                 if (rule_var_port == NULL)
@@ -1125,11 +1133,12 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                 }
                 temp_rule_var_port = rule_var_port;
                 if ((negate + n_set) % 2) {
-                    temp_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
-                    if (unlikely(temp_rule_var_port == NULL))
+                    alloc_rule_var_port = SCMalloc(strlen(rule_var_port) + 3);
+                    if (unlikely(alloc_rule_var_port == NULL))
                         goto error;
-                    snprintf(temp_rule_var_port, strlen(rule_var_port) + 3,
+                    snprintf(alloc_rule_var_port, strlen(rule_var_port) + 3,
                             "[%s]", rule_var_port);
+                    temp_rule_var_port = alloc_rule_var_port;
                 }
                 r = DetectPortParseDo(head, nhead, temp_rule_var_port,
                                   (negate + n_set) % 2);
@@ -1137,8 +1146,8 @@ static int DetectPortParseDo(DetectPort **head, DetectPort **nhead, char *s,
                     goto error;
 
                 d_set = 0;
-                if (temp_rule_var_port != rule_var_port)
-                    SCFree(temp_rule_var_port);
+                if (alloc_rule_var_port != NULL)
+                    SCFree(alloc_rule_var_port);
             } else {
                 if (!((negate + n_set) % 2)) {
                     r = DetectPortParseInsertString(head,address);
@@ -1324,11 +1333,13 @@ int DetectPortTestConfVars(void)
                        "Port var \"%s\" probably has a sequence(something "
                        "in brackets) value set without any quotes. Please "
                        "quote it using \"..\".", seq_node->name);
+            DetectPortCleanupList(gh);
             goto error;
         }
 
         int r = DetectPortParseDo(&gh, &ghn, seq_node->val, /* start with negate no */0);
         if (r < 0) {
+            DetectPortCleanupList(gh);
             goto error;
         }
 
@@ -1338,13 +1349,15 @@ int DetectPortTestConfVars(void)
                        "with it's value \"%s\".  Port space range is NIL. "
                        "Probably have a !any or a port range that supplies "
                        "a NULL address range", seq_node->name, seq_node->val);
+            DetectPortCleanupList(gh);
+            DetectPortCleanupList(ghn);
             goto error;
         }
 
         if (gh != NULL)
-            DetectPortFree(gh);
+            DetectPortCleanupList(gh);
         if (ghn != NULL)
-            DetectPortFree(ghn);
+            DetectPortCleanupList(ghn);
     }
 
     return 0;
@@ -1400,11 +1413,9 @@ error:
 DetectPort *PortParse(char *str) {
     char *port2 = NULL;
     DetectPort *dp = NULL;
-    char *portdup = SCStrdup(str);
 
-    if (unlikely(portdup == NULL)) {
-        return NULL;
-    }
+    char portstr[16];
+    strlcpy(portstr, str, sizeof(portstr));
 
     dp = DetectPortInit();
     if (dp == NULL)
@@ -1413,7 +1424,7 @@ DetectPort *PortParse(char *str) {
     /* XXX better input validation */
 
     /* we dup so we can put a nul-termination in it later */
-    char *port = portdup;
+    char *port = portstr;
 
     /* handle the negation case */
     if (port[0] == '!') {
@@ -1455,14 +1466,11 @@ DetectPort *PortParse(char *str) {
         }
     }
 
-    SCFree(portdup);
     return dp;
 
 error:
     if (dp != NULL)
         DetectPortCleanupList(dp);
-
-    if (portdup) SCFree(portdup);
     return NULL;
 }
 
@@ -2444,6 +2452,7 @@ int PortTestMatchReal(uint8_t *raw_eth_pkt, uint16_t pktsize, char *sig,
     FlowInitConfig(FLOW_QUIET);
     Packet *p = UTHBuildPacketFromEth(raw_eth_pkt, pktsize);
     result = UTHPacketMatchSig(p, sig);
+    PACKET_RECYCLE(p);
     FlowShutdown();
     return result;
 }

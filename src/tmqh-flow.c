@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -85,7 +85,7 @@ Packet *TmqhInputFlow(ThreadVars *tv)
 {
     PacketQueue *q = &trans_q[tv->inq->id];
 
-    SCPerfSyncCountersIfSignalled(tv, 0);
+    SCPerfSyncCountersIfSignalled(tv);
 
     SCMutexLock(&q->mutex_q);
     if (q->len == 0) {
@@ -106,6 +106,7 @@ Packet *TmqhInputFlow(ThreadVars *tv)
 
 static int StoreQueueId(TmqhFlowCtx *ctx, char *name)
 {
+    void *ptmp;
     Tmq *tmq = TmqGetQueueByName(name);
     if (tmq == NULL) {
         tmq = TmqCreateQueue(SCStrdup(name));
@@ -125,10 +126,14 @@ static int StoreQueueId(TmqhFlowCtx *ctx, char *name)
         memset(ctx->queues, 0, ctx->size * sizeof(TmqhFlowMode));
     } else {
         ctx->size++;
-        ctx->queues = SCRealloc(ctx->queues, ctx->size * sizeof(TmqhFlowMode));
-        if (ctx->queues == NULL) {
+        ptmp = SCRealloc(ctx->queues, ctx->size * sizeof(TmqhFlowMode));
+        if (ptmp == NULL) {
+            SCFree(ctx->queues);
+            ctx->queues = NULL;
             return -1;
         }
+        ctx->queues = ptmp;
+
         memset(ctx->queues + (ctx->size - 1), 0, sizeof(TmqhFlowMode));
     }
     ctx->queues[ctx->size - 1].q = &trans_q[id];
@@ -152,6 +157,8 @@ void *TmqhOutputFlowSetupCtx(char *queue_str)
 {
     if (queue_str == NULL || strlen(queue_str) == 0)
         return NULL;
+
+    SCLogDebug("queue_str %s", queue_str);
 
     TmqhFlowCtx *ctx = SCMalloc(sizeof(TmqhFlowCtx));
     if (unlikely(ctx == NULL))

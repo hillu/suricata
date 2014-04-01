@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -75,15 +75,13 @@ uint32_t UTHSetIPv4Address(char *str) {
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto, char *src, char *dst,
+                           uint8_t ipproto, char *src, char *dst,
                            uint16_t sport, uint16_t dport) {
     uint32_t in[4];
 
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return NULL;
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
 
     TimeSet(&p->ts);
 
@@ -162,15 +160,13 @@ error:
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto, char *src, char *dst,
+                           uint8_t ipproto, char *src, char *dst,
                            uint16_t sport, uint16_t dport) {
     struct in_addr in;
 
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return NULL;
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = ((uint8_t *)p) + sizeof(*p);
 
     struct timeval tv;
     TimeGet(&tv);
@@ -256,7 +252,7 @@ error:
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacket(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto) {
+                           uint8_t ipproto) {
     return UTHBuildPacketReal(payload, payload_len, ipproto,
                               "192.168.1.5", "192.168.1.1",
                               41424, 80);
@@ -291,13 +287,11 @@ Packet **UTHBuildPacketArrayFromEth(uint8_t *raw_eth[], int *pktsize, int numpkt
 
     int i = 0;
     for (; i < numpkts; i++) {
-        p[i] = SCMalloc(SIZE_OF_PACKET);
+        p[i] = PacketGetFromAlloc();
         if (p[i] == NULL) {
             SCFree(p);
             return NULL;
         }
-        memset(p[i], 0, SIZE_OF_PACKET);
-        p[i]->pkt = (uint8_t *)(p[i] + 1);
         DecodeEthernet(&th_v, &dtv, p[i], raw_eth[i], pktsize[i], NULL);
     }
     return p;
@@ -315,11 +309,9 @@ Packet **UTHBuildPacketArrayFromEth(uint8_t *raw_eth[], int *pktsize, int numpkt
 Packet *UTHBuildPacketFromEth(uint8_t *raw_eth, uint16_t pktsize) {
     DecodeThreadVars dtv;
     ThreadVars th_v;
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return NULL;
-    memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&th_v, 0, sizeof(th_v));
 
@@ -338,7 +330,7 @@ Packet *UTHBuildPacketFromEth(uint8_t *raw_eth, uint16_t pktsize) {
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketSrcDst(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto, char *src, char *dst) {
+                           uint8_t ipproto, char *src, char *dst) {
     return UTHBuildPacketReal(payload, payload_len, ipproto,
                               src, dst,
                               41424, 80);
@@ -355,7 +347,7 @@ Packet *UTHBuildPacketSrcDst(uint8_t *payload, uint16_t payload_len,
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketIPV6SrcDst(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto, char *src, char *dst) {
+                           uint8_t ipproto, char *src, char *dst) {
     return UTHBuildPacketIPV6Real(payload, payload_len, ipproto,
                               src, dst,
                               41424, 80);
@@ -372,7 +364,7 @@ Packet *UTHBuildPacketIPV6SrcDst(uint8_t *payload, uint16_t payload_len,
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketSrcDstPorts(uint8_t *payload, uint16_t payload_len,
-                           uint16_t ipproto, uint16_t sport, uint16_t dport) {
+                           uint8_t ipproto, uint16_t sport, uint16_t dport) {
     return UTHBuildPacketReal(payload, payload_len, ipproto,
                               "192.168.1.5", "192.168.1.1",
                               sport, dport);
@@ -857,7 +849,7 @@ uint32_t UTHBuildPacketOfFlows(uint32_t start, uint32_t end, uint8_t dir) {
 /**
  * \brief CheckUTHTestPacket wrapper to check packets for unittests
  */
-int CheckUTHTestPacket(Packet *p, uint16_t ipproto) {
+int CheckUTHTestPacket(Packet *p, uint8_t ipproto) {
     uint16_t sport = 41424;
     uint16_t dport = 80;
     uint8_t payload[] = "Payload";

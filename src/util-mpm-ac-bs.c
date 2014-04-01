@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -58,8 +58,9 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 #include "util-memcmp.h"
+#include "util-memcpy.h"
 
-void SCACBSInitCtx(MpmCtx *, int);
+void SCACBSInitCtx(MpmCtx *);
 void SCACBSInitThreadCtx(MpmCtx *, MpmThreadCtx *, uint32_t);
 void SCACBSDestroyCtx(MpmCtx *);
 void SCACBSDestroyThreadCtx(MpmCtx *, MpmThreadCtx *);
@@ -133,33 +134,6 @@ static void SCACBSGetConfig()
 
 /**
  * \internal
- * \brief Compares 2 patterns.  We use it for the hashing process during the
- *        the initial pattern insertion time, to cull duplicate sigs.
- *
- * \param p      Pointer to the first pattern(SCACBSPattern).
- * \param pat    Pointer to the second pattern(raw pattern array).
- * \param patlen Pattern length.
- * \param flags  Flags.  We don't need this.
- *
- * \retval hash A 32 bit unsigned hash.
- */
-static inline int SCACBSCmpPattern(SCACBSPattern *p, uint8_t *pat, uint16_t patlen,
-                                 char flags)
-{
-    if (p->len != patlen)
-        return 0;
-
-    if (p->flags != flags)
-        return 0;
-
-    if (memcmp(p->cs, pat, patlen) != 0)
-        return 0;
-
-    return 1;
-}
-
-/**
- * \internal
  * \brief Creates a hash of the pattern.  We use it for the hashing process
  *        during the initial pattern insertion time, to cull duplicate sigs.
  *
@@ -195,14 +169,13 @@ static inline SCACBSPattern *SCACBSInitHashLookup(SCACBSCtx *ctx, uint8_t *pat,
 {
     uint32_t hash = SCACBSInitHashRaw(pat, patlen);
 
-    if (ctx->init_hash == NULL || ctx->init_hash[hash] == NULL) {
+    if (ctx->init_hash == NULL) {
         return NULL;
     }
 
     SCACBSPattern *t = ctx->init_hash[hash];
     for ( ; t != NULL; t = t->next) {
-        //if (SCACBSCmpPattern(t, pat, patlen, flags) == 1)
-        if (t->flags == flags && t->id == pid)
+        if (t->id == pid)
             return t;
     }
 
@@ -263,23 +236,6 @@ static inline void SCACBSFreePattern(MpmCtx *mpm_ctx, SCACBSPattern *p)
         mpm_ctx->memory_cnt--;
         mpm_ctx->memory_size -= sizeof(SCACBSPattern);
     }
-    return;
-}
-
-/**
- * \internal
- * \brief Does a memcpy of the input string to lowercase.
- *
- * \param d   Pointer to the target area for memcpy.
- * \param s   Pointer to the src string for memcpy.
- * \param len len of the string sent in s.
- */
-static inline void memcpy_tolower(uint8_t *d, uint8_t *s, uint16_t len)
-{
-    uint16_t i;
-    for (i = 0; i < len; i++)
-        d[i] = u8_tolower(s[i]);
-
     return;
 }
 
@@ -433,17 +389,22 @@ error:
  */
 static inline int SCACBSInitNewState(MpmCtx *mpm_ctx)
 {
+    void *ptmp;
     SCACBSCtx *ctx = (SCACBSCtx *)mpm_ctx->ctx;
     int ascii_code = 0;
     int size = 0;
 
     /* reallocate space in the goto table to include a new state */
     size = (ctx->state_count + 1) * ctx->single_state_size;
-    ctx->goto_table = SCRealloc(ctx->goto_table, size);
-    if (ctx->goto_table == NULL) {
+    ptmp = SCRealloc(ctx->goto_table, size);
+    if (ptmp == NULL) {
+        SCFree(ctx->goto_table);
+        ctx->goto_table = NULL;
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
+    ctx->goto_table = ptmp;
+
     /* set all transitions for the newly assigned state as FAIL transitions */
     for (ascii_code = 0; ascii_code < 256; ascii_code++) {
         ctx->goto_table[ctx->state_count][ascii_code] = SC_AC_BS_FAIL;
@@ -451,11 +412,15 @@ static inline int SCACBSInitNewState(MpmCtx *mpm_ctx)
 
     /* reallocate space in the output table for the new state */
     size = (ctx->state_count + 1) * sizeof(SCACBSOutputTable);
-    ctx->output_table = SCRealloc(ctx->output_table, size);
-    if (ctx->output_table == NULL) {
+    ptmp = SCRealloc(ctx->output_table, size);
+    if (ptmp == NULL) {
+        SCFree(ctx->output_table);
+        ctx->output_table = NULL;
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
+    ctx->output_table = ptmp;
+
     memset(ctx->output_table + ctx->state_count, 0, sizeof(SCACBSOutputTable));
 
     /* \todo using it temporarily now during dev, since I have restricted
@@ -478,6 +443,7 @@ static inline int SCACBSInitNewState(MpmCtx *mpm_ctx)
  */
 static void SCACBSSetOutputState(int32_t state, uint32_t pid, MpmCtx *mpm_ctx)
 {
+    void *ptmp;
     SCACBSCtx *ctx = (SCACBSCtx *)mpm_ctx->ctx;
     SCACBSOutputTable *output_state = &ctx->output_table[state];
     uint32_t i = 0;
@@ -488,12 +454,16 @@ static void SCACBSSetOutputState(int32_t state, uint32_t pid, MpmCtx *mpm_ctx)
     }
 
     output_state->no_of_entries++;
-    output_state->pids = SCRealloc(output_state->pids,
-                                   output_state->no_of_entries * sizeof(uint32_t));
-    if (output_state->pids == NULL) {
+    ptmp = SCRealloc(output_state->pids,
+                     output_state->no_of_entries * sizeof(uint32_t));
+    if (ptmp == NULL) {
+        SCFree(output_state->pids);
+        output_state->pids = NULL;
         SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
         exit(EXIT_FAILURE);
     }
+    output_state->pids = ptmp;
+
     output_state->pids[output_state->no_of_entries - 1] = pid;
 
     return;
@@ -660,6 +630,7 @@ static inline int32_t SCACBSDequeue(StateQueue *q)
 static inline void SCACBSClubOutputStates(int32_t dst_state, int32_t src_state,
                                         MpmCtx *mpm_ctx)
 {
+    void *ptmp;
     SCACBSCtx *ctx = (SCACBSCtx *)mpm_ctx->ctx;
     uint32_t i = 0;
     uint32_t j = 0;
@@ -676,12 +647,16 @@ static inline void SCACBSClubOutputStates(int32_t dst_state, int32_t src_state,
         if (j == output_dst_state->no_of_entries) {
             output_dst_state->no_of_entries++;
 
-            output_dst_state->pids = SCRealloc(output_dst_state->pids,
-                                               (output_dst_state->no_of_entries *
-                                                sizeof(uint32_t)) );
-            if (output_dst_state->pids == NULL) {
+            ptmp = SCRealloc(output_dst_state->pids,
+                             (output_dst_state->no_of_entries * sizeof(uint32_t)));
+            if (ptmp == NULL) {
+                SCFree(output_dst_state->pids);
+                output_dst_state->pids = NULL;
                 SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
                 exit(EXIT_FAILURE);
+            }
+            else {
+                output_dst_state->pids = ptmp;
             }
 
             output_dst_state->pids[output_dst_state->no_of_entries - 1] =
@@ -1211,32 +1186,15 @@ int SCACBSPreparePatterns(MpmCtx *mpm_ctx)
     memset(ctx->pid_pat_list, 0, (ctx->max_pat_id + 1) * sizeof(SCACBSPatternList));
 
     for (i = 0; i < mpm_ctx->pattern_cnt; i++) {
-        if (ctx->parray[i]->flags & MPM_PATTERN_FLAG_NOCASE) {
-            if (ctx->pid_pat_list[ctx->parray[i]->id].case_state == 0)
-                ctx->pid_pat_list[ctx->parray[i]->id].case_state = 1;
-            else if (ctx->pid_pat_list[ctx->parray[i]->id].case_state == 1)
-                ctx->pid_pat_list[ctx->parray[i]->id].case_state = 1;
-            else
-                ctx->pid_pat_list[ctx->parray[i]->id].case_state = 3;
-        } else {
-            //if (memcmp(ctx->parray[i]->original_pat, ctx->parray[i]->ci,
-            //           ctx->parray[i]->len) != 0) {
-                ctx->pid_pat_list[ctx->parray[i]->id].cs = SCMalloc(ctx->parray[i]->len);
-                if (ctx->pid_pat_list[ctx->parray[i]->id].cs == NULL) {
-                    SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
-                    exit(EXIT_FAILURE);
-                }
-                memcpy(ctx->pid_pat_list[ctx->parray[i]->id].cs,
-                       ctx->parray[i]->original_pat, ctx->parray[i]->len);
-                ctx->pid_pat_list[ctx->parray[i]->id].patlen = ctx->parray[i]->len;
-
-                if (ctx->pid_pat_list[ctx->parray[i]->id].case_state == 0)
-                    ctx->pid_pat_list[ctx->parray[i]->id].case_state = 2;
-                else if (ctx->pid_pat_list[ctx->parray[i]->id].case_state == 2)
-                    ctx->pid_pat_list[ctx->parray[i]->id].case_state = 2;
-                else
-                    ctx->pid_pat_list[ctx->parray[i]->id].case_state = 3;
-                //}
+        if (!(ctx->parray[i]->flags & MPM_PATTERN_FLAG_NOCASE)) {
+            ctx->pid_pat_list[ctx->parray[i]->id].cs = SCMalloc(ctx->parray[i]->len);
+            if (ctx->pid_pat_list[ctx->parray[i]->id].cs == NULL) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+                exit(EXIT_FAILURE);
+            }
+            memcpy(ctx->pid_pat_list[ctx->parray[i]->id].cs,
+                   ctx->parray[i]->original_pat, ctx->parray[i]->len);
+            ctx->pid_pat_list[ctx->parray[i]->id].patlen = ctx->parray[i]->len;
         }
     }
 
@@ -1289,7 +1247,7 @@ void SCACBSInitThreadCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t
  * \param module_handle Cuda module handle from the cuda handler API.  We don't
  *                      have to worry about this here.
  */
-void SCACBSInitCtx(MpmCtx *mpm_ctx, int module_handle)
+void SCACBSInitCtx(MpmCtx *mpm_ctx)
 {
     if (mpm_ctx->ctx != NULL)
         return;
@@ -1500,15 +1458,11 @@ uint32_t SCACBSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
-                        if ((i + 1) < pid_pat_list[pids[k] & 0x0000FFFF].patlen)
-                            continue;
                         if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
                                      buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
                                      pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
                             /* inside loop */
-                            if (pid_pat_list[pids[k] & 0x0000FFFF].case_state != 3) {
-                                continue;
-                            }
+                            continue;
                         }
                         if (pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] & (1 << ((pids[k] & 0x0000FFFF) % 8))) {
                             ;
@@ -1585,15 +1539,11 @@ uint32_t SCACBSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
-                        if ((i + 1) < pid_pat_list[pids[k] & 0x0000FFFF].patlen)
-                            continue;
                         if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
                                      buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
                                      pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
                             /* inside loop */
-                            if (pid_pat_list[pids[k] & 0x0000FFFF].case_state != 3) {
-                                continue;
-                            }
+                            continue;
                         }
                         if (pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] & (1 << ((pids[k] & 0x0000FFFF) % 8))) {
                             ;
@@ -1717,12 +1667,12 @@ static int SCACBSTest01(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1751,12 +1701,12 @@ static int SCACBSTest02(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abce", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abce", 4, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1784,16 +1734,16 @@ static int SCACBSTest03(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"bcde", 4, 0, 0, 1, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"bcde", 4, 0, 0, 1, 0, 0);
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"fghj", 4, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 0, 3);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"fghj", 4, 0, 0, 2, 0, 0);
+    PmqSetup(&pmq, 3);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1821,13 +1771,13 @@ static int SCACBSTest04(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"bcdegh", 6, 0, 0, 1, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"fghjxyz", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 0, 3);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"bcdegh", 6, 0, 0, 1, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"fghjxyz", 7, 0, 0, 2, 0, 0);
+    PmqSetup(&pmq, 3);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1855,13 +1805,13 @@ static int SCACBSTest05(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"fghJikl", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 0, 3);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"fghJikl", 7, 0, 0, 2, 0, 0);
+    PmqSetup(&pmq, 3);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1889,11 +1839,11 @@ static int SCACBSTest06(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1921,23 +1871,23 @@ static int SCACBSTest07(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* should match 30 times */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"A", 1, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"A", 1, 0, 0, 0, 0, 0);
     /* should match 29 times */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 1, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 1, 0, 0);
     /* should match 28 times */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AAA", 3, 0, 0, 2, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AAA", 3, 0, 0, 2, 0, 0);
     /* 26 */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAA", 5, 0, 0, 3, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAA", 5, 0, 0, 3, 0, 0);
     /* 21 */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAAAAAAA", 10, 0, 0, 4, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAAAAAAA", 10, 0, 0, 4, 0, 0);
     /* 1 */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
                      30, 0, 0, 5, 0, 0);
-    PmqSetup(&pmq, 0, 6);
+    PmqSetup(&pmq, 6);
     /* total matches: 135 */
 
     SCACBSPreparePatterns(&mpm_ctx);
@@ -1966,12 +1916,12 @@ static int SCACBSTest08(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -1998,12 +1948,12 @@ static int SCACBSTest09(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"ab", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"ab", 2, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2030,12 +1980,12 @@ static int SCACBSTest10(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcdefgh", 8, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcdefgh", 8, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2067,18 +2017,18 @@ static int SCACBSTest11(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    if (SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"he", 2, 0, 0, 1, 0, 0) == -1)
+    if (MpmAddPatternCS(&mpm_ctx, (uint8_t *)"he", 2, 0, 0, 1, 0, 0) == -1)
         goto end;
-    if (SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"she", 3, 0, 0, 2, 0, 0) == -1)
+    if (MpmAddPatternCS(&mpm_ctx, (uint8_t *)"she", 3, 0, 0, 2, 0, 0) == -1)
         goto end;
-    if (SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"his", 3, 0, 0, 3, 0, 0) == -1)
+    if (MpmAddPatternCS(&mpm_ctx, (uint8_t *)"his", 3, 0, 0, 3, 0, 0) == -1)
         goto end;
-    if (SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"hers", 4, 0, 0, 4, 0, 0) == -1)
+    if (MpmAddPatternCS(&mpm_ctx, (uint8_t *)"hers", 4, 0, 0, 4, 0, 0) == -1)
         goto end;
-    PmqSetup(&pmq, 0, 5);
+    PmqSetup(&pmq, 5);
 
     if (SCACBSPreparePatterns(&mpm_ctx) == -1)
         goto end;
@@ -2114,14 +2064,14 @@ static int SCACBSTest12(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"wxyz", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"wxyz", 4, 0, 0, 0, 0, 0);
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"vwxyz", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 0, 2);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"vwxyz", 5, 0, 0, 1, 0, 0);
+    PmqSetup(&pmq, 2);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2149,13 +2099,13 @@ static int SCACBSTest13(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCD";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2183,13 +2133,13 @@ static int SCACBSTest14(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCDE";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2217,13 +2167,13 @@ static int SCACBSTest15(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCDEF";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2251,13 +2201,13 @@ static int SCACBSTest16(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABC";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2285,13 +2235,13 @@ static int SCACBSTest17(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzAB";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2319,13 +2269,13 @@ static int SCACBSTest18(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
     char *pat = "abcde""fghij""klmno""pqrst""uvwxy""z";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2353,13 +2303,13 @@ static int SCACBSTest19(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 */
     char *pat = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2386,13 +2336,13 @@ static int SCACBSTest20(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 */
     char *pat = "AAAAA""AAAAA""AAAAA""AAAAA""AAAAA""AAAAA""AA";
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2420,12 +2370,12 @@ static int SCACBSTest21(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2452,14 +2402,14 @@ static int SCACBSTest22(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
     /* 1 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcde", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 0, 2);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcde", 5, 0, 0, 1, 0, 0);
+    PmqSetup(&pmq, 2);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2487,12 +2437,12 @@ static int SCACBSTest23(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2519,12 +2469,12 @@ static int SCACBSTest24(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 1 */
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2551,13 +2501,13 @@ static int SCACBSTest25(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"fghiJkl", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 0, 3);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"fghiJkl", 7, 0, 0, 2, 0, 0);
+    PmqSetup(&pmq, 3);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2585,12 +2535,12 @@ static int SCACBSTest26(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCI(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 0, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 0, 2);
+    MpmAddPatternCI(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 1, 0, 0);
+    PmqSetup(&pmq, 2);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2618,12 +2568,12 @@ static int SCACBSTest27(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 0 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"ONE", 3, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"ONE", 3, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2651,12 +2601,12 @@ static int SCACBSTest28(void)
 
     memset(&mpm_ctx, 0, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
     /* 0 match */
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"one", 3, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 0, 1);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"one", 3, 0, 0, 0, 0, 0);
+    PmqSetup(&pmq, 1);
 
     SCACBSPreparePatterns(&mpm_ctx);
 
@@ -2684,14 +2634,14 @@ static int SCACBSTest29(void)
 
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     memset(&mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
-    MpmInitCtx(&mpm_ctx, MPM_AC_BS, -1);
+    MpmInitCtx(&mpm_ctx, MPM_AC_BS);
     SCACBSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
 
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"abcde", 5, 0, 0, 0, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"bcdef", 5, 0, 0, 1, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"cdefg", 5, 0, 0, 3, 0, 0);
-    SCACBSAddPatternCS(&mpm_ctx, (uint8_t *)"defgh", 5, 0, 0, 4, 0, 0);
-    PmqSetup(&pmq, 0, 4);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcde", 5, 0, 0, 0, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"bcdef", 5, 0, 0, 1, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"cdefg", 5, 0, 0, 3, 0, 0);
+    MpmAddPatternCS(&mpm_ctx, (uint8_t *)"defgh", 5, 0, 0, 4, 0, 0);
+    PmqSetup(&pmq, 4);
 
     SCACBSPreparePatterns(&mpm_ctx);
 

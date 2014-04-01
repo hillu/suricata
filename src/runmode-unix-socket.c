@@ -22,7 +22,6 @@
 #include "runmode-pcap-file.h"
 #include "log-httplog.h"
 #include "output.h"
-#include "cuda-packet-batcher.h"
 #include "source-pfring.h"
 #include "detect-engine-mpm.h"
 
@@ -279,7 +278,7 @@ TmEcode UnixSocketPcapFilesCheck(void *data)
     }
     if ((unix_manager_file_task_failed == 1) || (this->running == 1)) {
         if (unix_manager_file_task_failed) {
-            SCLogInfo("Preceeding taks failed, cleaning the running mode");
+            SCLogInfo("Preceeding task failed, cleaning the running mode");
         }
         unix_manager_file_task_failed = 0;
         this->running = 0;
@@ -308,19 +307,23 @@ TmEcode UnixSocketPcapFilesCheck(void *data)
         SCLogInfo("Starting run for '%s'", cfile->filename);
         unix_manager_file_task_running = 1;
         this->running = 1;
-        if (ConfSet("pcap-file.file", cfile->filename, 1) != 1) {
+        if (ConfSet("pcap-file.file", cfile->filename) != 1) {
             SCLogInfo("Can not set working file to '%s'", cfile->filename);
             PcapFilesFree(cfile);
             return TM_ECODE_FAILED;
         }
         if (cfile->output_dir) {
-            if (ConfSet("default-log-dir", cfile->output_dir, 1) != 1) {
+            if (ConfSet("default-log-dir", cfile->output_dir) != 1) {
                 SCLogInfo("Can not set output dir to '%s'", cfile->output_dir);
                 PcapFilesFree(cfile);
                 return TM_ECODE_FAILED;
             }
         }
         this->currentfile = SCStrdup(cfile->filename);
+        if (unlikely(this->currentfile == NULL)) {
+            SCLogError(SC_ERR_MEM_ALLOC, "Failed file name allocation");
+            return TM_ECODE_FAILED;
+        }
         PcapFilesFree(cfile);
         SCPerfInitCounterApi();
         DefragInit();

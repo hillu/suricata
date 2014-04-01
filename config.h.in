@@ -3,6 +3,9 @@
 /* Unix socket support enabled */
 #undef BUILD_UNIX_SOCKET
 
+/* L1 cache line size */
+#undef CLS
+
 /* Our CONFIG_DIR */
 #undef CONFIG_DIR
 
@@ -17,6 +20,9 @@
 
 /* Define to 1 if you have the <ctype.h> header file. */
 #undef HAVE_CTYPE_H
+
+/* Detection is disabled */
+#undef HAVE_DETECT_DISABLED
 
 /* Define to 1 if you have the <dlfcn.h> header file. */
 #undef HAVE_DLFCN_H
@@ -67,6 +73,9 @@
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
 
+/* Define to 1 if you have the `iconv' library (-liconv). */
+#undef HAVE_LIBICONV
+
 /* Define to 1 if you have the `jansson' library (-ljansson). */
 #undef HAVE_LIBJANSSON
 
@@ -110,6 +119,9 @@
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
 
+/* Define to 1 if you have the <linux/ethtool.h> header file. */
+#undef HAVE_LINUX_ETHTOOL_H
+
 /* Define to 1 if you have the <linux/filter.h> header file. */
 #undef HAVE_LINUX_FILTER_H
 
@@ -121,6 +133,9 @@
 
 /* Define to 1 if you have the <linux/if_packet.h> header file. */
 #undef HAVE_LINUX_IF_PACKET_H
+
+/* Define to 1 if you have the <linux/sockios.h> header file. */
+#undef HAVE_LINUX_SOCKIOS_H
 
 /* libluajit available */
 #undef HAVE_LUAJIT
@@ -135,8 +150,14 @@
 /* Define to 1 if you have the <memory.h> header file. */
 #undef HAVE_MEMORY_H
 
+/* Define to 1 if you have the `memrchr' function. */
+#undef HAVE_MEMRCHR
+
 /* Define to 1 if you have the `memset' function. */
 #undef HAVE_MEMSET
+
+/* mPIPE support is available */
+#undef HAVE_MPIPE
 
 /* Define to 1 if you have the <netdb.h> header file. */
 #undef HAVE_NETDB_H
@@ -156,6 +177,9 @@
 /* Found nfq_set_verdict2 function in netfilter_queue */
 #undef HAVE_NFQ_SET_VERDICT2
 
+/* Found nfq_set_verdict_batch function in netfilter_queue */
+#undef HAVE_NFQ_SET_VERDICT_BATCH
+
 /* libnss available for md5 */
 #undef HAVE_NSS
 
@@ -170,6 +194,9 @@
 
 /* Define to 1 if you have the <pcap/pcap.h> header file. */
 #undef HAVE_PCAP_PCAP_H
+
+/* Pcre pcre_free_study supported */
+#undef HAVE_PCRE_FREE_STUDY
 
 /* PF_RING pfring_set_cluster is available */
 #undef HAVE_PFRING_CLUSTER_TYPE
@@ -277,6 +304,9 @@
 /* Define to 1 if you have the <w32api/winbase.h> header file. */
 #undef HAVE_W32API_WINBASE_H
 
+/* Define to 1 if you have the <w32api/wtypes.h> header file. */
+#undef HAVE_W32API_WTYPES_H
+
 /* Define to 1 if you have the <windows.h> header file. */
 #undef HAVE_WINDOWS_H
 
@@ -320,11 +350,20 @@
 /* Pcre with JIT compiler support enabled */
 #undef PCRE_HAVE_JIT
 
+/* Libprelude support enabled */
+#undef PRELUDE
+
 /* Define whether application use libtool >= 2.0 */
 #undef PRELUDE_APPLICATION_USE_LIBTOOL2
 
+/* Official release */
+#undef RELEASE
+
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
+
+/* Thread local storage */
+#undef TLS
 
 /* Version number of package */
 #undef VERSION

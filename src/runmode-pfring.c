@@ -23,7 +23,6 @@
 #include "source-pfring.h"
 #include "log-httplog.h"
 #include "output.h"
-#include "cuda-packet-batcher.h"
 #include "source-pfring.h"
 
 #include "alert-fastlog.h"
@@ -38,7 +37,6 @@
 #include "util-runmodes.h"
 #include "util-device.h"
 
-static const char *default_mode_auto = NULL;
 static const char *default_mode_autofp = NULL;
 
 
@@ -56,7 +54,6 @@ const char *RunModeIdsPfringGetDefaultMode(void)
 
 void RunModeIdsPfringRegister(void)
 {
-    default_mode_auto = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_PFRING, "auto",
                               "Multi threaded pfring mode",
                               RunModeIdsPfringAuto);
@@ -288,14 +285,25 @@ void *ParsePfringConfig(const char *iface)
     if (ConfGet("bpf-filter", &bpf_filter) == 1) {
         if (strlen(bpf_filter) > 0) {
             pfconf->bpf_filter = SCStrdup(bpf_filter);
-            SCLogDebug("Going to use command-line provided bpf filter %s",
-                       pfconf->bpf_filter);
+            if (unlikely(pfconf->bpf_filter == NULL)) {
+                SCLogError(SC_ERR_MEM_ALLOC,
+                           "Can't allocate BPF filter string");
+            } else {
+                SCLogDebug("Going to use command-line provided bpf filter %s",
+                           pfconf->bpf_filter);
+            }
         }
     } else {
         if (ConfGetChildValueWithDefault(if_root, if_default, "bpf-filter", &bpf_filter) == 1) {
             if (strlen(bpf_filter) > 0) {
                 pfconf->bpf_filter = SCStrdup(bpf_filter);
-                SCLogDebug("Going to use bpf filter %s", pfconf->bpf_filter);
+                if (unlikely(pfconf->bpf_filter == NULL)) {
+                    SCLogError(SC_ERR_MEM_ALLOC,
+                               "Can't allocate BPF filter string");
+                } else {
+                    SCLogDebug("Going to use bpf filter %s",
+                               pfconf->bpf_filter);
+                }
             }
         }
     }

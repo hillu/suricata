@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "1.4.7"
+#define PROG_VER "2.0"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -115,12 +115,55 @@ enum {
 #define IS_ENGINE_MODE_IPS(engine_mode)  ((engine_mode) == ENGINE_MODE_IPS)
 #define IS_ENGINE_MODE_IDS(engine_mode)  ((engine_mode) == ENGINE_MODE_IDS)
 
+/* Box is acting as router */
+enum {
+    SURI_HOST_IS_SNIFFER_ONLY,
+    SURI_HOST_IS_ROUTER,
+};
+
+#define IS_SURI_HOST_MODE_SNIFFER_ONLY(host_mode)  ((host_mode) == SURI_HOST_IS_SNIFFER_ONLY)
+#define IS_SURI_HOST_MODE_ROUTER(host_mode)  ((host_mode) == SURI_HOST_IS_ROUTER)
+
 /* queue's between various other threads
  * XXX move to the TmQueue structure later
  */
 PacketQueue trans_q[256];
 
 SCDQDataQueue data_queues[256];
+
+typedef struct SCInstance_ {
+    int run_mode;
+
+    char pcap_dev[128];
+    char *sig_file;
+    int sig_file_exclusive;
+    char *pid_filename;
+    char *regex_arg;
+
+    char *keyword_info;
+    char *runmode_custom_mode;
+#ifndef OS_WIN32
+    char *user_name;
+    char *group_name;
+    uint8_t do_setuid;
+    uint8_t do_setgid;
+    uint32_t userid;
+    uint32_t groupid;
+#endif /* OS_WIN32 */
+    int delayed_detect;
+    int rule_reload;
+    int disabled_detect;
+    int daemon;
+    int offline;
+    int verbose;
+    int checksum_validation;
+
+    struct timeval start_time;
+
+    char *log_dir;
+} SCInstance;
+
+
 /* memset to zeros, and mutex init! */
 void GlobalInits();
 
@@ -152,6 +195,7 @@ void SignalHandlerSigusr2Idle(int sig);
 
 int RunmodeIsUnittests(void);
 int RunmodeGetCurrent(void);
+int IsRuleReloadSet(int quiet);
 
 extern int run_mode;
 

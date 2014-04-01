@@ -35,6 +35,7 @@
 
 #include "util-radix-tree.h"
 #include "util-file.h"
+#include "app-layer-htp-mem.h"
 
 #include <htp/htp.h>
 
@@ -45,6 +46,11 @@
 #define HTP_CONFIG_DEFAULT_REQUEST_INSPECT_WINDOW       4096U
 #define HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_MIN_SIZE    32768U
 #define HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_WINDOW      4096U
+#define HTP_CONFIG_DEFAULT_FIELD_LIMIT_SOFT             9000U
+#define HTP_CONFIG_DEFAULT_FIELD_LIMIT_HARD             18000U
+
+#define HTP_CONFIG_DEFAULT_RANDOMIZE                    1
+#define HTP_CONFIG_DEFAULT_RANDOMIZE_RANGE              10
 
 /** a boundary should be smaller in size */
 #define HTP_BOUNDARY_MAX                            200U
@@ -113,6 +119,8 @@ enum {
     HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG,
     HTTP_DECODER_EVENT_RESPONSE_FIELD_TOO_LONG,
     HTTP_DECODER_EVENT_REQUEST_SERVER_PORT_TCP_PORT_MISMATCH,
+    HTTP_DECODER_EVENT_URI_HOST_INVALID,
+    HTTP_DECODER_EVENT_HEADER_HOST_INVALID,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
@@ -132,6 +140,8 @@ typedef struct HTPCfgRec_ {
     htp_cfg_t           *cfg;
     struct HTPCfgRec_   *next;
 
+    int                 uri_include_all; /**< use all info in uri (bool) */
+
     /** max size of the client body we inspect */
     uint32_t            request_body_limit;
     uint32_t            response_body_limit;
@@ -141,6 +151,8 @@ typedef struct HTPCfgRec_ {
 
     uint32_t            response_inspect_min_size;
     uint32_t            response_inspect_window;
+    int                 randomize;
+    int                 randomize_range;
 } HTPCfgRec;
 
 /** Struct used to hold chunks of a body on a request */
@@ -167,14 +179,11 @@ typedef struct HtpBody_ {
     uint64_t body_inspected;
 } HtpBody;
 
-#define HTP_REQ_BODY_COMPLETE   0x01    /**< body is complete or limit is reached,
-                                             either way, this is it. */
-#define HTP_RES_BODY_COMPLETE   0x02
-#define HTP_CONTENTTYPE_SET     0x04    /**< We have the content type */
-#define HTP_BOUNDARY_SET        0x08    /**< We have a boundary string */
-#define HTP_BOUNDARY_OPEN       0x10    /**< We have a boundary string */
-#define HTP_FILENAME_SET        0x20    /**< filename is registered in the flow */
-#define HTP_DONTSTORE           0x40    /**< not storing this file */
+#define HTP_CONTENTTYPE_SET     0x01    /**< We have the content type */
+#define HTP_BOUNDARY_SET        0x02    /**< We have a boundary string */
+#define HTP_BOUNDARY_OPEN       0x04    /**< We have a boundary string */
+#define HTP_FILENAME_SET        0x08   /**< filename is registered in the flow */
+#define HTP_DONTSTORE           0x10    /**< not storing this file */
 
 #define HTP_TX_HAS_FILE             0x01
 #define HTP_TX_HAS_FILENAME         0x02    /**< filename is known at this time */
@@ -190,8 +199,19 @@ typedef struct HtpBody_ {
   * the tx user data */
 typedef struct HtpTxUserData_ {
     /* Body of the request (if any) */
+    uint8_t request_body_init;
+    uint8_t response_body_init;
     HtpBody request_body;
     HtpBody response_body;
+
+    bstr *request_uri_normalized;
+
+    uint8_t *request_headers_raw;
+    uint8_t *response_headers_raw;
+    uint32_t request_headers_raw_len;
+    uint32_t response_headers_raw_len;
+
+    AppLayerDecoderEvents *decoder_events;          /**< per tx events */
 
     /** Holds the boundary identificator string if any (used on
      *  multipart/form-data only)
@@ -211,16 +231,19 @@ typedef struct HtpTxUserData_ {
 
 typedef struct HtpState_ {
 
-    htp_connp_t *connp;     /**< Connection parser structure for
-                                 each connection */
+    /* Connection parser structure for each connection */
+    htp_connp_t *connp;
+    /* Connection structure for each connection */
+    htp_conn_t *conn;
     Flow *f;                /**< Needed to retrieve the original flow when usin HTPLib callbacks */
-    uint16_t flags;
-    uint16_t transaction_cnt;
-    uint16_t transaction_done;
-    uint16_t store_tx_id;
+    uint64_t transaction_cnt;
+    uint64_t store_tx_id;
     FileContainer *files_ts;
     FileContainer *files_tc;
     struct HTPCfgRec_ *cfg;
+    uint16_t flags;
+    uint16_t events;
+    uint16_t htp_messages_offset; /**< offset into conn->messages list */
 } HtpState;
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */

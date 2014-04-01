@@ -1,10 +1,12 @@
 #TODO A better place for default CFLAGS?
 
-AC_INIT(configure.ac)
 
+    AC_INIT(suricata, 2.0)
     AC_CONFIG_HEADERS([config.h])
-    AM_INIT_AUTOMAKE(suricata, 1.4.7)
-    CFLAGS="${CFLAGS} -DRELEASE"
+    AC_CONFIG_SRCDIR([src/suricata.c])
+    AC_CONFIG_MACRO_DIR(m4)
+    AM_INIT_AUTOMAKE
+    AC_DEFINE([RELEASE], [1], [Official release])
 
     AC_LANG_C
     AC_PROG_CC_C99
@@ -29,7 +31,7 @@ AC_INIT(configure.ac)
             echo "*************************************************************************"
             echo "   Warning! libnet version 1.1.x could not be found in " $1
             echo "   Reject keywords will not be supported."
-            echo "   If you require reject support plese install libnet 1.1.x. "
+            echo "   If you require reject support, please install libnet 1.1.x. "
             echo "   If libnet is not installed in a non-standard location please use the"
             echo "   --with-libnet-includes and --with-libnet-libraries configure options"
             echo "*************************************************************************"
@@ -68,7 +70,7 @@ AC_INIT(configure.ac)
                 CFLAGS="$CFLAGS -W"
         fi
     fi
-    CFLAGS="$CFLAGS -Wall -fno-strict-aliasing"
+    CFLAGS="$CFLAGS -Wall"
     CFLAGS="$CFLAGS -Wno-unused-parameter"
     CFLAGS="$CFLAGS -std=gnu99"
 
@@ -90,17 +92,6 @@ AC_INIT(configure.ac)
         exit 1
     fi
 
-    AC_PATH_PROG(HAVE_COCCINELLE_CONFIG, spatch, "no")
-    if test "$HAVE_COCCINELLE_CONFIG" = "no"; then
-        echo
-        echo "   Warning! spatch not found, you will not be "
-        echo "   able to run code checking with coccinelle  "
-        echo "   get it from http://coccinelle.lip6.fr      "
-        echo "   or install from your distribution          "
-        echo
-    fi
-    AM_CONDITIONAL([HAVE_COCCINELLE], [test "$HAVE_COCCINELLE_CONFIG" != "no"])
-
     AC_PATH_PROG(HAVE_PYTHON_CONFIG, python, "no")
     if test "$HAVE_PYTHON_CONFIG" = "no"; then
         echo
@@ -113,7 +104,17 @@ AC_INIT(configure.ac)
     fi
     AM_CONDITIONAL([HAVE_PYTHON], [test "$HAVE_PYTHON_CONFIG" != "no"])
 
-
+    AC_PATH_PROG(HAVE_WGET, wget, "no")
+    if test "$HAVE_WGET" = "no"; then
+        AC_PATH_PROG(HAVE_CURL, curl, "no")
+        if test "$HAVE_CURL" = "no"; then
+            echo
+            echo "   Warning curl or wget not found, you won't be able to"
+            echo "   download latest ruleset with 'make install-rules'"
+        fi
+    fi
+    AM_CONDITIONAL([HAVE_FETCH_COMMAND], [test "x$HAVE_WGET" != "xno" || test "x$HAVE_CURL" != "xno"])
+    AM_CONDITIONAL([HAVE_WGET_COMMAND], [test "x$HAVE_WGET" != "xno"])
 
     # Checks for libraries.
 
@@ -125,6 +126,7 @@ AC_INIT(configure.ac)
     AC_CHECK_HEADERS([syslog.h sys/prctl.h sys/socket.h sys/stat.h sys/syscall.h])
     AC_CHECK_HEADERS([sys/time.h time.h unistd.h])
     AC_CHECK_HEADERS([sys/ioctl.h linux/if_ether.h linux/if_packet.h linux/filter.h])
+    AC_CHECK_HEADERS([linux/ethtool.h linux/sockios.h])
 
     AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h linux/if_arp.h], [], [],
     [[#ifdef HAVE_SYS_SOCKET_H
@@ -133,12 +135,18 @@ AC_INIT(configure.ac)
         #endif
     ]])
 
-    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h], [], [],
-                    [[#define _X86_
+    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h w32api/wtypes.h], [], [],
+                    [[
+                        #ifndef _X86_
+                        #define _X86_
+                        #endif
                      ]])
     AC_CHECK_HEADERS([w32api/winbase.h], [], [],
-                    [[#define _X86_
-                     #include <windows.h>
+                    [[
+                        #ifndef _X86_
+                        #define _X86_
+                        #endif
+                        #include <windows.h>
                      ]])
 
     # Checks for typedefs, structures, and compiler characteristics.
@@ -155,7 +163,7 @@ AC_INIT(configure.ac)
     # Checks for library functions.
     AC_FUNC_MALLOC
     AC_FUNC_REALLOC
-    AC_CHECK_FUNCS([gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul memchr])
+    AC_CHECK_FUNCS([gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul memchr memrchr])
 
     # Add large file support
     AC_SYS_LARGEFILE
@@ -177,23 +185,11 @@ AC_INIT(configure.ac)
             LDFLAGS="${LDFLAGS} -L/usr/local/lib -L/usr/local/lib/libnet11"
             e_magic_file="/usr/share/misc/magic"
             ;;
-        *-*-openbsd5.1)
-            CFLAGS="${CFLAGS} -D__OpenBSD__ -fgnu89-inline"
-            CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet-1.1"
-            LDFLAGS="${LDFLAGS} -L/usr/local/lib -I/usr/local/lib/libnet-1.1"
-            e_magic_file="/usr/local/share/misc/magic.mgc"
-            ;;
-        *-*-openbsd5.2)
+        *-*-openbsd*)
             CFLAGS="${CFLAGS} -D__OpenBSD__"
             CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet-1.1"
             LDFLAGS="${LDFLAGS} -L/usr/local/lib -I/usr/local/lib/libnet-1.1"
             e_magic_file="/usr/local/share/misc/magic.mgc"
-            ;;
-        *-*-openbsd*)
-            CFLAGS="${CFLAGS} -D__OpenBSD__ -fgnu89-inline"
-            CPPFLAGS="${CPPFLAGS} -I/usr/local/include -I/usr/local/include/libnet-1.1"
-            LDFLAGS="${LDFLAGS} -L/usr/local/lib -I/usr/local/lib/libnet-1.1"
-            e_magic_file="/usr/local/share/file/magic.mgc"
             ;;
         *darwin*|*Darwin*)
             CFLAGS="${CFLAGS} -DOS_DARWIN"
@@ -216,6 +212,14 @@ AC_INIT(configure.ac)
             ;;
     esac
     AC_MSG_RESULT(ok)
+
+    # check if our target supports thread local storage
+    AC_MSG_CHECKING(for thread local storage __thread support)
+    AC_TRY_COMPILE([#include <stdlib.h>],
+        [ void somefunc (void) { static __thread int i; i = 1; i++; } ],
+        [AC_DEFINE([TLS], [1], [Thread local storage])
+         AC_MSG_RESULT([yes]) ],
+        [AC_MSG_RESULT([no])])
 
     #Enable support for gcc compile time security options. There is no great way to do detection of valid cflags that I have found
     #AX_CFLAGS_GCC_OPTION don't seem to do a better job than the code below and are a pain because of extra m4 files etc.
@@ -285,7 +289,6 @@ AC_INIT(configure.ac)
     AC_ARG_ENABLE(gccmarch_native,
            AS_HELP_STRING([--enable-gccmarch-native], [Enable gcc march=native gcc 4.2 and later only]),,[enable_gccmarch_native=yes])
     AS_IF([test "x$enable_gccmarch_native" = "xyes"], [
-        if test `basename $CC` = "clang"; then
             OFLAGS="$CFLAGS"
             CFLAGS="$CFLAGS -march=native"
             AC_MSG_CHECKING([checking if $CC supports -march=native])
@@ -300,25 +303,6 @@ AC_INIT(configure.ac)
                           enable_gccmarch_native=no
                         ]
                      )
-        fi
-        if test `basename $CC` = "gcc"; then
-            case $host in
-            *darwin*|*Darwin*)
-            if test "$gccvernum" -ge "403"; then
-                        dnl gcc 4.3 or later
-                        CFLAGS="$CFLAGS -march=native"
-            else
-                enable_gccmarch_native=no
-            fi
-            ;;
-            *)
-            if test "$gccvernum" -ge "402"; then
-                        dnl gcc 4.2 or later
-                        CFLAGS="$CFLAGS -march=native"
-            fi
-            ;;
-            esac
-        fi
     ])
 
 # options
@@ -383,7 +367,40 @@ AC_INIT(configure.ac)
         CFLAGS="$CFLAGS -DIPFW"
     ])
 
+    AC_ARG_ENABLE(coccinelle,
+           AS_HELP_STRING([--disable-coccinelle], [Disable coccinelle QA steps during make check])],[enable_coccinelle="$enableval"],[enable_coccinelle=yes])
+    AS_IF([test "x$enable_coccinelle" = "xyes"], [
+        AC_PATH_PROG(HAVE_COCCINELLE_CONFIG, spatch, "no")
+        if test "$HAVE_COCCINELLE_CONFIG" = "no"; then
+            echo "   Warning! spatch not found, you will not be "
+            echo "   able to run code checking with coccinelle  "
+            echo "   get it from http://coccinelle.lip6.fr      "
+            echo "   or install from your distribution          "
+            enable_coccinelle=no
+        fi
+    ])
+    AM_CONDITIONAL([HAVE_COCCINELLE], [test "x$enable_coccinelle" != "xno"])
+
+  # disable detection
+    AC_ARG_ENABLE(detection,
+           AS_HELP_STRING([--disable-detection], [Disable Detection Modules])], [enable_detection="$enableval"],[enable_detection=yes])
+    AS_IF([test "x$enable_detection" = "xno"], [
+        AC_DEFINE([HAVE_DETECT_DISABLED], [1], [Detection is disabled])
+    ])
+
+    AM_CONDITIONAL([BUILD_PCIE_LOGGING], [test ! -z "$TILERA_ROOT"])
+
 # libraries
+
+    AC_MSG_CHECKING([for Mpipe])
+    AC_COMPILE_IFELSE(
+        [AC_LANG_PROGRAM([[#include <gxio/mpipe.h>]])],
+        [
+        AC_MSG_RESULT([yes])
+        AC_DEFINE([HAVE_MPIPE],[1],[mPIPE support is available])
+        LDFLAGS="$LDFLAGS -lgxpci -lgxio -ltmc"
+        ],
+        [AC_MSG_RESULT([no])])
 
   #libpcre
     AC_ARG_WITH(libpcre_includes,
@@ -439,6 +456,14 @@ AC_INIT(configure.ac)
         echo "   from www.pcre.org."
         echo
     fi
+
+    TMPCFLAGS="${CFLAGS}"
+    CFLAGS="-O0 -g -Werror -Wall"
+    AC_TRY_COMPILE([ #include <pcre.h> ],
+        [ pcre_extra *extra = NULL; pcre_free_study(extra); ],
+        [ AC_DEFINE([HAVE_PCRE_FREE_STUDY], [1], [Pcre pcre_free_study supported])], [:]
+    )
+    CFLAGS="${TMPCFLAGS}"
 
     #enable support for PCRE-jit available since pcre-8.20
     AC_MSG_CHECKING(for PCRE JIT support)
@@ -579,10 +604,10 @@ AC_INIT(configure.ac)
         if test "$JANSSON" = "no"; then
             echo
             echo "   Jansson >= 2.2 is required for features like unix socket"
-            echo "   Go get it from your distribution of from:"
-	        echo "     http://www.digip.org/jansson/"
+            echo "   Go get it from your distribution or from:"
+            echo "     http://www.digip.org/jansson/"
             echo
-            if test "x$enable_unixsocket" = "xyes"; then
+	    if test "x$enable_unixsocket" = "xyes"; then
                 exit 1
             fi
             enable_unixsocket="no"
@@ -594,9 +619,9 @@ AC_INIT(configure.ac)
                 *-*-cygwin)
                 ;;
                 *)
-                if test "x$enable_unixsocket" = "xtest"; then
+		if test "x$enable_unixsocket" = "xtest"; then
                     enable_unixsocket="yes"
-                fi
+		fi
                 ;;
             esac
         fi
@@ -604,7 +629,7 @@ AC_INIT(configure.ac)
         if test "x$enable_unixsocket" = "xyes"; then
             echo
             echo "   Jansson >= 2.2 is required for features like unix socket"
-            echo "   Go get it from your distribution of from:"
+            echo "   Go get it from your distribution or from:"
             echo "     http://www.digip.org/jansson/"
             echo
             exit 1
@@ -698,6 +723,7 @@ AC_INIT(configure.ac)
         AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_maxlen],AC_DEFINE_UNQUOTED([HAVE_NFQ_MAXLEN],[1],[Found queue max length support in netfilter_queue]) ,,[-lnfnetlink])
         AC_CHECK_LIB([netfilter_queue], [nfq_set_verdict2],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_VERDICT2],[1],[Found nfq_set_verdict2 function in netfilter_queue]) ,,[-lnfnetlink])
         AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_flags],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_QUEUE_FLAGS],[1],[Found nfq_set_queue_flags function in netfilter_queue]) ,,[-lnfnetlink])
+        AC_CHECK_LIB([netfilter_queue], [nfq_set_verdict_batch],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_VERDICT_BATCH],[1],[Found nfq_set_verdict_batch function in netfilter_queue]) ,,[-lnfnetlink])
 
         # check if the argument to nfq_get_payload is signed or unsigned
         AC_MSG_CHECKING([for signed nfq_get_payload payload argument])
@@ -710,6 +736,7 @@ AC_INIT(configure.ac)
         AC_COMPILE_IFELSE(
             [AC_LANG_PROGRAM(
                 [
+                #include <stdio.h>
                 #include <libnetfilter_queue/libnetfilter_queue.h>
                 ],
                 [
@@ -741,8 +768,11 @@ AC_INIT(configure.ac)
   # prelude
     AC_ARG_ENABLE(prelude,
             AS_HELP_STRING([--enable-prelude], [Enable Prelude support for alerts]),,[enable_prelude=no])
+    # Prelude doesn't work with -Werror
+    STORECFLAGS="${CFLAGS}"
+    CFLAGS="${CFLAGS} -Wno-error=unused-result"
+
     AS_IF([test "x$enable_prelude" = "xyes"], [
-        CFLAGS="$CFLAGS -DPRELUDE"
         AM_PATH_LIBPRELUDE(0.9.9, , AC_MSG_ERROR(Cannot find libprelude: Is libprelude-config in the path?), no)
         if test "x${LIBPRELUDE_CFLAGS}" != "x"; then
             CPPFLAGS="${CPPFLAGS} ${LIBPRELUDE_CFLAGS}"
@@ -755,7 +785,10 @@ AC_INIT(configure.ac)
         if test "x${LIBPRELUDE_LIBS}" != "x"; then
             LDFLAGS="${LDFLAGS} ${LIBPRELUDE_LIBS}"
         fi
+        AC_DEFINE([PRELUDE], [1], [Libprelude support enabled])
     ])
+    CFLAGS="${STORECFLAGS}"
+
 
   # libnet
     AC_ARG_WITH(libnet_includes,
@@ -788,7 +821,7 @@ AC_INIT(configure.ac)
 
     AC_MSG_CHECKING(for libnet.h version 1.1.x)
     if test "$LIBNET_INC_DIR" != ""; then
-        if eval "grep LIBNET_VERSION $LIBNET_INC_DIR/libnet.h | grep -v 1.1 >/dev/null"; then
+        if eval "grep LIBNET_VERSION $LIBNET_INC_DIR/libnet.h | grep -v '1.[[12]]' >/dev/null"; then
             AC_MSG_RESULT(no)
             LIBNET_DETECT_FAIL="yes"
             LIBNET_FAIL_WARN($libnet_dir)
@@ -1028,7 +1061,7 @@ AC_INIT(configure.ac)
                 [with_libhtp_libraries="$withval"],[with_libhtp_libraries="no"])
 
         if test "$with_libhtp_includes" != "no"; then
-            CPPFLAGS="${CPPFLAGS} -I${with_libhtp_includes}"
+            CPPFLAGS="-I${with_libhtp_includes} ${CPPFLAGS}"
         fi
 
         if test "$with_libhtp_libraries" != "no"; then
@@ -1045,19 +1078,15 @@ AC_INIT(configure.ac)
             echo
             exit 1
         fi
-        PKG_CHECK_MODULES(LIBHTPMINVERSION, htp >= 0.2.3,[libhtp_minver_found="yes"],[libhtp_minver_found="no"])
+        PKG_CHECK_MODULES(LIBHTPMINVERSION, [htp >= 0.5.5],[libhtp_minver_found="yes"],[libhtp_minver_found="no"])
         if test "$libhtp_minver_found" = "no"; then
-            echo
-            echo "   ERROR! libhtp was found but is not the minimum version required >=0.2.3"
-            echo
-            exit 1
-        fi
-        PKG_CHECK_MODULES(LIBHTPMAXVERSION, htp <= 0.3.0,[libhtp_maxver_found="yes"],[libhtp_maxver_found="no"])
-        if test "$libhtp_maxver_found" = "no"; then
-            echo
-            echo "   ERROR! libhtp 0.3.x was found but only 0.2.x is supported"
-            echo
-            exit 1
+            PKG_CHECK_MODULES(LIBHTPDEVVERSION, [htp = 0.5.X],[libhtp_devver_found="yes"],[libhtp_devver_found="no"])
+            if test "$libhtp_devver_found" = "no"; then
+                echo
+                echo "   ERROR! libhtp was found but it is neither >= 0.5.5, nor the dev 0.5.X"
+                echo
+                exit 1
+            fi
         fi
 
         AC_CHECK_LIB([htp], [htp_config_register_request_uri_normalize],AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Found htp_config_register_request_uri_normalize function in libhtp]) ,,[-lhtp])
@@ -1067,14 +1096,35 @@ AC_INIT(configure.ac)
         AC_EGREP_HEADER(htp_config_set_path_decode_u_encoding, htp/htp.h, AC_DEFINE_UNQUOTED([HAVE_HTP_SET_PATH_DECODE_U_ENCODING],[1],[Found usable htp_config_set_path_decode_u_encoding function in libhtp]) )
     ])
 
-    # even if we are using an installed htp lib we still need to gen Makefiles inside of htp
-    AC_CONFIG_SUBDIRS([libhtp])
-    AM_CONDITIONAL([BUILD_LIBHTP], [test "x$enable_non_bundled_htp" = "xno"])
-    AS_IF([test "x$enable_non_bundled_htp" = "xno"], [
-        AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Assuming htp_config_register_request_uri_normalize function in bundled libhtp])
-        AC_DEFINE_UNQUOTED([HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW],[1],[Assuming htp_tx_get_response_headers_raw function in bundled libhtp])
-        AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Assuming htp_decode_query_inplace function in bundled libhtp])
-    ])
+    if test "x$enable_non_bundled_htp" = "xno"; then
+        # test if we have a bundled htp
+        if test -d "$srcdir/libhtp"; then
+            AC_CONFIG_SUBDIRS([libhtp])
+            HTP_DIR="libhtp"
+            AC_SUBST(HTP_DIR)
+            HTP_LDADD="../libhtp/htp/libhtp.la"
+            AC_SUBST(HTP_LDADD)
+            # make sure libhtp is added to the includes
+            CPPFLAGS="-I${srcdir}/../libhtp/ ${CPPFLAGS}"
+
+            AC_CHECK_HEADER(iconv.h,,[AC_ERROR(iconv.h not found ...)])
+            AC_CHECK_LIB(iconv, libiconv_close)
+            AC_DEFINE_UNQUOTED([HAVE_HTP_URI_NORMALIZE_HOOK],[1],[Assuming htp_config_register_request_uri_normalize function in bundled libhtp])
+            AC_DEFINE_UNQUOTED([HAVE_HTP_TX_GET_RESPONSE_HEADERS_RAW],[1],[Assuming htp_tx_get_response_headers_raw function in bundled libhtp])
+            AC_DEFINE_UNQUOTED([HAVE_HTP_DECODE_QUERY_INPLACE],[1],[Assuming htp_decode_query_inplace function in bundled libhtp])
+        else
+            echo
+            echo "  ERROR: Libhtp is not bundled. Get libhtp by doing:"
+            echo "     git clone https://github.com/ironbee/libhtp"
+            echo "  Then re-run Suricata's autogen.sh and configure script."
+            echo "  Or, if libhtp is installed in a different location,"
+            echo "  pass --enable-non-bundled-htp to Suricata's configure script."
+            echo "  Add --with-libhtp-includes=<dir> and --with-libhtp-libraries=<dir> if"
+            echo "  libhtp is not installed in the include and library paths."
+            echo
+            exit 1
+        fi
+    fi
 
 
   # enable CUDA output
@@ -1195,7 +1245,7 @@ AC_INIT(configure.ac)
 
   # Check for DAG support.
     AC_ARG_ENABLE(dag,
-	        [  --enable-dag  Enable DAG capture],
+	        AS_HELP_STRING([--enable-dag],[Enable DAG capture]),
 	        [ enable_dag=yes ],
 	        [ enable_dag=no])
     AC_ARG_WITH(dag_includes,
@@ -1235,6 +1285,14 @@ AC_INIT(configure.ac)
 
   # libnspr
     enable_nspr="no"
+
+    # Try pkg-config first:
+    PKG_CHECK_MODULES([libnspr], nspr,, [with_pkgconfig_nspr=no])
+    if test "$with_pkgconfig_nspr" != "no"; then
+        CPPFLAGS="${CPPFLAGS} ${libnspr_CFLAGS}"
+        LIBS="${LIBS} ${libnspr_LIBS}"
+    fi
+
     AC_ARG_WITH(libnspr_includes,
             [  --with-libnspr-includes=DIR  libnspr include directory],
             [with_libnspr_includes="$withval"],[with_libnspr_includes=no])
@@ -1269,6 +1327,14 @@ AC_INIT(configure.ac)
 
   # libnss
     enable_nss="no"
+
+    # Try pkg-config first:
+    PKG_CHECK_MODULES([libnss], nss,, [with_pkgconfig_nss=no])
+    if test "$with_pkgconfig_nss" != "no"; then
+        CPPFLAGS="${CPPFLAGS} ${libnss_CFLAGS}"
+        LIBS="${LIBS} ${libnss_LIBS}"
+    fi
+
     AC_ARG_WITH(libnss_includes,
             [  --with-libnss-includes=DIR  libnss include directory],
             [with_libnss_includes="$withval"],[with_libnss_includes=no])
@@ -1337,7 +1403,7 @@ AC_INIT(configure.ac)
 
   # Napatech - Using the 3GD API
     AC_ARG_ENABLE(napatech,
-                [  --enable-napatech   Enabled Napatech Devices],
+                AS_HELP_STRING([--enable-napatech],[Enabled Napatech Devices]),
                 [ enable_napatech=yes ],
                 [ enable_napatech=no])
     AC_ARG_WITH(napatech_includes,
@@ -1370,7 +1436,7 @@ AC_INIT(configure.ac)
 
   # libluajit
     AC_ARG_ENABLE(luajit,
-	        [  --enable-luajit  Enable Luajit support],
+	        AS_HELP_STRING([--enable-luajit],[Enable Luajit support]),
 	        [ enable_luajit="yes"],
 	        [ enable_luajit="no"])
     AC_ARG_WITH(libluajit_includes,
@@ -1433,7 +1499,7 @@ AC_INIT(configure.ac)
 
   # libgeoip
     AC_ARG_ENABLE(geoip,
-	        [  --enable-geoip  Enable GeoIP support],
+	        AS_HELP_STRING([--enable-geoip],[Enable GeoIP support]),
 	        [ enable_geoip="yes"],
 	        [ enable_geoip="no"])
     AC_ARG_WITH(libgeoip_includes,
@@ -1471,6 +1537,18 @@ AC_INIT(configure.ac)
         fi
     fi
 
+# get cache line size
+    AC_PATH_PROG(HAVE_GETCONF_CMD, getconf, "no")
+    if test "$HAVE_GETCONF_CMD" != "no"; then
+        CLS=$(getconf LEVEL1_DCACHE_LINESIZE)
+        if [test "$CLS" != "" && test "$CLS" != "0"]; then
+            AC_DEFINE_UNQUOTED([CLS],[${CLS}],[L1 cache line size])
+        else
+            AC_DEFINE_UNQUOTED([CLS],[64],[L1 cache line size])
+        fi
+    else
+        AC_DEFINE_UNQUOTED([CLS],[64],[L1 cache line size])
+    fi
 
 # get revision
     if test -f ./revision; then
@@ -1521,10 +1599,12 @@ if test "$WINDOWS_PATH" = "yes"; then
   e_magic_file="$e_winbase\\\\magic.mgc"
   e_logdir="$e_winbase\\\\log"
   e_logfilesdir="$e_logdir\\\\files"
+  e_logcertsdir="$e_logdir\\\\certs"
 else
   EXPAND_VARIABLE(localstatedir, e_logdir, "/log/suricata/")
   EXPAND_VARIABLE(localstatedir, e_rundir, "/run/")
   EXPAND_VARIABLE(localstatedir, e_logfilesdir, "/log/suricata/files")
+  EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
   EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
   EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
   EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/suricata")
@@ -1532,13 +1612,14 @@ fi
 AC_SUBST(e_logdir)
 AC_SUBST(e_rundir)
 AC_SUBST(e_logfilesdir)
+AC_SUBST(e_logcertsdir)
 AC_SUBST(e_sysconfdir)
 AC_SUBST(e_sysconfrulesdir)
 AC_SUBST(e_localstatedir)
 AC_DEFINE_UNQUOTED([CONFIG_DIR],["$e_sysconfdir"],[Our CONFIG_DIR])
 AC_SUBST(e_magic_file)
 
-AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
+AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile contrib/tile_pcie_logd/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
 
 SURICATA_BUILD_CONF="Suricata Configuration:
   AF_PACKET support:                       ${enable_af_packet}
@@ -1548,6 +1629,7 @@ SURICATA_BUILD_CONF="Suricata Configuration:
   DAG enabled:                             ${enable_dag}
   Napatech enabled:                        ${enable_napatech}
   Unix socket enabled:                     ${enable_unixsocket}
+  Detection enabled:                       ${enable_detection}
 
   libnss support:                          ${enable_nss}
   libnspr support:                         ${enable_nspr}
@@ -1567,6 +1649,7 @@ SURICATA_BUILD_CONF="Suricata Configuration:
   Debug validation enabled:                ${enable_debug_validation}
   Profiling enabled:                       ${enable_profiling}
   Profiling locks enabled:                 ${enable_profiling_locks}
+  Coccinelle / spatch:                     ${enable_coccinelle}
 
 Generic build parameters:
   Installation prefix (--prefix):          ${prefix}
@@ -1581,9 +1664,9 @@ Generic build parameters:
 
 echo
 echo "$SURICATA_BUILD_CONF"
-echo "printf(" >${ac_builddir}/src/build-info.h
-echo "$SURICATA_BUILD_CONF" | sed -e 's/^/"/' | sed -e 's/$/\\n"/' >>${ac_builddir}/src/build-info.h
-echo ");" >>${ac_builddir}/src/build-info.h
+echo "printf(" >src/build-info.h
+echo "$SURICATA_BUILD_CONF" | sed -e 's/^/"/' | sed -e 's/$/\\n"/' >>src/build-info.h
+echo ");" >>src/build-info.h
 
 echo "
 To build and install run 'make' and 'make install'.

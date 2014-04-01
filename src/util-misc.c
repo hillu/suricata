@@ -28,39 +28,49 @@
 #include "util-debug.h"
 #include "util-unittest.h"
 
-/* size string parsing API */
-
-static int ParseSizeString(const char *size, double *res)
-{
 #define PARSE_REGEX "^\\s*(\\d+(?:.\\d+)?)\\s*([a-zA-Z]{2})?\\s*$"
+static pcre *parse_regex = NULL;
+static pcre_extra *parse_regex_study = NULL;
 
-    pcre *parse_regex;
-    pcre_extra *parse_regex_study;
+void ParseSizeInit(void) {
     const char *eb;
     int eo;
     int opts = 0;
-#define MAX_SUBSTRINGS 30
-    int pcre_exec_ret;
-    int r;
-    int ov[MAX_SUBSTRINGS];
-    int retval = 0;
-
-    *res = 0;
 
     parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
     if (parse_regex == NULL) {
         SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset "
                    "%" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        retval = -2;
-        goto end;
+        exit(EXIT_FAILURE);
     }
-
     parse_regex_study = pcre_study(parse_regex, 0, &eb);
     if (eb != NULL) {
         SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        retval = -2;
-        goto end;
+        exit(EXIT_FAILURE);
     }
+}
+
+void ParseSizeDeinit(void) {
+
+    if (parse_regex != NULL)
+        pcre_free(parse_regex);
+    if (parse_regex_study != NULL)
+        pcre_free_study(parse_regex_study);
+}
+
+/* size string parsing API */
+
+static int ParseSizeString(const char *size, double *res)
+{
+#define MAX_SUBSTRINGS 30
+    int pcre_exec_ret;
+    int r;
+    int ov[MAX_SUBSTRINGS];
+    int retval = 0;
+    char str[128];
+    char str2[128];
+
+    *res = 0;
 
     pcre_exec_ret = pcre_exec(parse_regex, parse_regex_study, size, strlen(size), 0, 0,
                     ov, MAX_SUBSTRINGS);
@@ -76,16 +86,15 @@ static int ParseSizeString(const char *size, double *res)
         goto end;
     }
 
-    const char *str_ptr;
-    r = pcre_get_substring((char *)size, ov, MAX_SUBSTRINGS, 1,
-                             &str_ptr);
+    r = pcre_copy_substring((char *)size, ov, MAX_SUBSTRINGS, 1,
+                             str, sizeof(str));
     if (r < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
         retval = -2;
         goto end;
     }
 
-    char *endptr;
+    char *endptr, *str_ptr = str;
     errno = 0;
     *res = strtod(str_ptr, &endptr);
     if (errno == ERANGE) {
@@ -97,22 +106,21 @@ static int ParseSizeString(const char *size, double *res)
         retval = -1;
         goto end;
     }
-    pcre_free_substring(str_ptr);
 
     if (pcre_exec_ret == 3) {
-        r = pcre_get_substring((char *)size, ov, MAX_SUBSTRINGS, 2,
-                                 &str_ptr);
+        r = pcre_copy_substring((char *)size, ov, MAX_SUBSTRINGS, 2,
+                                 str2, sizeof(str2));
         if (r < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
             retval = -2;
             goto end;
         }
 
-        if (strcasecmp(str_ptr, "kb") == 0) {
+        if (strcasecmp(str2, "kb") == 0) {
             *res *= 1024;
-        } else if (strcasecmp(str_ptr, "mb") == 0) {
+        } else if (strcasecmp(str2, "mb") == 0) {
             *res *= 1024 * 1024;
-        } else if (strcasecmp(str_ptr, "gb") == 0) {
+        } else if (strcasecmp(str2, "gb") == 0) {
             *res *= 1024 * 1024 * 1024;
         } else {
             /* not possible */

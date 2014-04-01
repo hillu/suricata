@@ -34,7 +34,10 @@
 #include "detect-bytetest.h"
 #include "detect-bytejump.h"
 #include "detect-byte-extract.h"
+#include "detect-content.h"
 #include "detect-engine-content-inspection.h"
+
+#include "stream-tcp.h"
 
 #include "app-layer.h"
 #include "app-layer-dcerpc.h"
@@ -1274,6 +1277,7 @@ int DcePayloadTest01(void)
         "content:\"|79 26 46 f7 bf a1|\"; distance:0; sid:8;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -1344,7 +1348,7 @@ int DcePayloadTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1385,7 +1389,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1426,7 +1430,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1468,7 +1472,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 2");
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1510,7 +1514,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 3");
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1553,7 +1557,7 @@ int DcePayloadTest01(void)
     }
 
     SCLogDebug("sending request 4");
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request4, request4_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request4, request4_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1594,7 +1598,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request5, request5_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request5, request5_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1635,7 +1639,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request6, request6_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request6, request6_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1676,7 +1680,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request7, request7_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request7, request7_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1717,7 +1721,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request8, request8_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request8, request8_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1758,7 +1762,7 @@ int DcePayloadTest01(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request9, request9_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request9, request9_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -1802,6 +1806,8 @@ int DcePayloadTest01(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -2139,6 +2145,7 @@ int DcePayloadTest02(void)
         "dce_stub_data; content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -2156,6 +2163,7 @@ int DcePayloadTest02(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -2179,7 +2187,7 @@ int DcePayloadTest02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2196,7 +2204,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2213,7 +2221,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2230,7 +2238,7 @@ int DcePayloadTest02(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2250,6 +2258,8 @@ int DcePayloadTest02(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -2587,6 +2597,7 @@ int DcePayloadTest03(void)
         "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -2603,6 +2614,7 @@ int DcePayloadTest03(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -2626,7 +2638,7 @@ int DcePayloadTest03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2643,7 +2655,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2660,7 +2672,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2677,7 +2689,7 @@ int DcePayloadTest03(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -2697,6 +2709,8 @@ int DcePayloadTest03(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -3034,6 +3048,7 @@ int DcePayloadTest04(void)
         "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -3050,6 +3065,7 @@ int DcePayloadTest04(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -3073,7 +3089,7 @@ int DcePayloadTest04(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3090,7 +3106,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3107,7 +3123,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3124,7 +3140,7 @@ int DcePayloadTest04(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3144,6 +3160,8 @@ int DcePayloadTest04(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -3480,6 +3498,7 @@ int DcePayloadTest05(void)
         "dce_stub_data; content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -3496,6 +3515,7 @@ int DcePayloadTest05(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -3519,7 +3539,7 @@ int DcePayloadTest05(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3536,7 +3556,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3553,7 +3573,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3570,7 +3590,7 @@ int DcePayloadTest05(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3590,6 +3610,8 @@ int DcePayloadTest05(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -3927,6 +3949,7 @@ int DcePayloadTest06(void)
         "content:\"|2d 5e 63 2a 4c|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -3943,6 +3966,7 @@ int DcePayloadTest06(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -3966,7 +3990,7 @@ int DcePayloadTest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -3983,7 +4007,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4000,7 +4024,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4017,7 +4041,7 @@ int DcePayloadTest06(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4037,6 +4061,8 @@ int DcePayloadTest06(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -4373,6 +4399,7 @@ int DcePayloadTest07(void)
         "content:\"|2d 5e 63 35 25|\"; distance:0; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -4389,6 +4416,7 @@ int DcePayloadTest07(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -4412,7 +4440,7 @@ int DcePayloadTest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4429,7 +4457,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4446,7 +4474,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4463,7 +4491,7 @@ int DcePayloadTest07(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4483,6 +4511,8 @@ int DcePayloadTest07(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -4657,6 +4687,7 @@ int DcePayloadTest08(void)
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -4672,6 +4703,7 @@ int DcePayloadTest08(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -4690,7 +4722,7 @@ int DcePayloadTest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4706,6 +4738,8 @@ int DcePayloadTest08(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -4880,6 +4914,7 @@ int DcePayloadTest09(void)
         "distance:0; within:2; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -4895,6 +4930,7 @@ int DcePayloadTest09(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -4913,7 +4949,7 @@ int DcePayloadTest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -4929,6 +4965,8 @@ int DcePayloadTest09(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -5103,6 +5141,7 @@ int DcePayloadTest10(void)
         "distance:-10; within:3; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -5118,6 +5157,7 @@ int DcePayloadTest10(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -5136,7 +5176,7 @@ int DcePayloadTest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5152,6 +5192,8 @@ int DcePayloadTest10(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -5461,6 +5503,7 @@ int DcePayloadTest11(void)
         "distance:1; within:3; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -5476,6 +5519,7 @@ int DcePayloadTest11(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -5494,7 +5538,7 @@ int DcePayloadTest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5507,7 +5551,7 @@ int DcePayloadTest11(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5523,6 +5567,8 @@ int DcePayloadTest11(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -5833,6 +5879,7 @@ int DcePayloadTest12(void)
         "distance:2; within:3; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -5848,6 +5895,7 @@ int DcePayloadTest12(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -5866,7 +5914,7 @@ int DcePayloadTest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5879,7 +5927,7 @@ int DcePayloadTest12(void)
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -5895,6 +5943,8 @@ int DcePayloadTest12(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -5912,6 +5962,9 @@ end:
 #endif
 }
 
+/* Disabled because of bug_753.  Would be enabled, once we rewrite
+ * dce parser */
+#if 0
 
 /**
  * \test Test the working of detection engien with respect to dce keywords.
@@ -6009,9 +6062,14 @@ int DcePayloadTest13(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; sid:1;)";
+        "(dce_stub_data; content:\"|00 02|\"; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:\"|00 75|\"; sid:2;)";
+    char *sig3 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:\"|00 18|\"; sid:3;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6034,6 +6092,7 @@ int DcePayloadTest13(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6044,15 +6103,20 @@ int DcePayloadTest13(void)
         goto end;
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx, sig1);
-    s = de_ctx->sig_list;
+    s = de_ctx->sig_list = SigInit(de_ctx, sig1);
+    if (s == NULL)
+        goto end;
+    s = de_ctx->sig_list->next = SigInit(de_ctx, sig2);
+    if (s == NULL)
+        goto end;
+    s = de_ctx->sig_list->next->next = SigInit(de_ctx, sig3);
     if (s == NULL)
         goto end;
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6060,19 +6124,19 @@ int DcePayloadTest13(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
-    if (!(PacketAlertCheck(p[0], 1))) {
+    if (!PacketAlertCheck(p[0], 1) || PacketAlertCheck(p[0], 2) || PacketAlertCheck(p[0], 3)) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
 
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[6]);
-    if ((PacketAlertCheck(p[6], 1))) {
+    if (PacketAlertCheck(p[6], 1) || PacketAlertCheck(p[6], 2) || PacketAlertCheck(p[6], 3)) {
         printf("sid 1 matched but shouldn't have for packet 6: ");
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response1, response1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response1, response1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6080,12 +6144,12 @@ int DcePayloadTest13(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
-    if ((PacketAlertCheck(p[1], 1))) {
+    if (PacketAlertCheck(p[1], 1) || PacketAlertCheck(p[1], 2) || PacketAlertCheck(p[1], 3)) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6096,19 +6160,19 @@ int DcePayloadTest13(void)
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
-    if (!(PacketAlertCheck(p[2], 1))) {
+    if (PacketAlertCheck(p[2], 1) || !PacketAlertCheck(p[2], 2) || PacketAlertCheck(p[2], 3)) {
         printf("sid 1 didn't match but should have for packet 2: ");
         goto end;
     }
 
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[7]);
-    if ((PacketAlertCheck(p[7], 1))) {
+    if (PacketAlertCheck(p[7], 1) || PacketAlertCheck(p[7], 2) || PacketAlertCheck(p[7], 3)) {
         printf("sid 1 matched but shouldn't have for packet 7: ");
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6116,12 +6180,12 @@ int DcePayloadTest13(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
-    if ((PacketAlertCheck(p[3], 1))) {
+    if (PacketAlertCheck(p[3], 1) || PacketAlertCheck(p[3], 2) || PacketAlertCheck(p[3], 3)) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request3, request3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6132,12 +6196,12 @@ int DcePayloadTest13(void)
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[4]);
-    if (!(PacketAlertCheck(p[4], 1))) {
+    if (PacketAlertCheck(p[4], 1) || PacketAlertCheck(p[4], 2) || !PacketAlertCheck(p[4], 3)) {
         printf("sid 1 didn't match but should have for packet 4: ");
         goto end;
     }
 
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response3, response3_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response3, response3_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6145,7 +6209,7 @@ int DcePayloadTest13(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[5]);
-    if ((PacketAlertCheck(p[5], 1))) {
+    if (PacketAlertCheck(p[5], 1) || PacketAlertCheck(p[5], 2) || PacketAlertCheck(p[5], 3)) {
         printf("sid 1 matched but shouldn't have for packet 5: ");
         goto end;
     }
@@ -6153,6 +6217,8 @@ int DcePayloadTest13(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6249,9 +6315,12 @@ int DcePayloadTest14(void)
     int i = 0;
 
     char *sig1 = "alert tcp any any -> any any "
-        "(dce_stub_data; sid:1;)";
+        "(dce_stub_data; content:\"|7f 01|\"; sid:1;)";
+    char *sig2 = "alert tcp any any -> any any "
+        "(dce_stub_data; content:\"|3f 00|\"; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6271,6 +6340,7 @@ int DcePayloadTest14(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6281,8 +6351,10 @@ int DcePayloadTest14(void)
         goto end;
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx, sig1);
-    s = de_ctx->sig_list;
+    s = de_ctx->sig_list = SigInit(de_ctx, sig1);
+    if (s == NULL)
+        goto end;
+    s = de_ctx->sig_list->next = SigInit(de_ctx, sig2);
     if (s == NULL)
         goto end;
 
@@ -6290,7 +6362,7 @@ int DcePayloadTest14(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6298,20 +6370,20 @@ int DcePayloadTest14(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[0]);
-    if (!(PacketAlertCheck(p[0], 1))) {
+    if (!PacketAlertCheck(p[0], 1) || PacketAlertCheck(p[0], 2)) {
         printf("sid 1 didn't match but should have for packet 0: ");
         goto end;
     }
 
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[1]);
-    if ((PacketAlertCheck(p[1], 1))) {
+    if (PacketAlertCheck(p[1], 1) || PacketAlertCheck(p[1], 2)) {
         printf("sid 1 matched but shouldn't have for packet 1: ");
         goto end;
     }
 
     /* bind */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, bind, bind_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6319,13 +6391,13 @@ int DcePayloadTest14(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[2]);
-    if ((PacketAlertCheck(p[2], 1))) {
+    if (PacketAlertCheck(p[2], 1) || PacketAlertCheck(p[2], 2)) {
         printf("sid 1 matched but shouldn't have for packet 2: ");
         goto end;
     }
 
     /* bind_ack.  A new transaction initiation */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, bind_ack, bind_ack_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6333,7 +6405,7 @@ int DcePayloadTest14(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[3]);
-    if ((PacketAlertCheck(p[3], 1))) {
+    if (PacketAlertCheck(p[3], 1) || PacketAlertCheck(p[3], 2)) {
         printf("sid 1 matched but shouldn't have for packet 3: ");
         goto end;
     }
@@ -6341,7 +6413,7 @@ int DcePayloadTest14(void)
     /* we should have a match for the sig once again for the same flow, since
      * the detection engine state for the flow has been reset because of a
      * fresh transaction */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request2, request2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6349,13 +6421,13 @@ int DcePayloadTest14(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[4]);
-    if (!(PacketAlertCheck(p[4], 1))) {
+    if (PacketAlertCheck(p[4], 1) || !PacketAlertCheck(p[4], 2)) {
         printf("sid 1 didn't match but should have for packet 4: ");
         goto end;
     }
 
     /* response */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOCLIENT, response2, response2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
@@ -6363,7 +6435,7 @@ int DcePayloadTest14(void)
     }
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p[5]);
-    if ((PacketAlertCheck(p[5], 1))) {
+    if (PacketAlertCheck(p[5], 1) || PacketAlertCheck(p[5], 2)) {
         printf("sid 1 matched but shouldn't have for packet 5: ");
         goto end;
     }
@@ -6371,6 +6443,8 @@ int DcePayloadTest14(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6384,6 +6458,8 @@ end:
     UTHFreePackets(p, 6);
     return result;
 }
+
+#endif
 
 /**
  * \test Test the working of byte_test endianness.
@@ -6425,6 +6501,7 @@ int DcePayloadTest15(void)
         "byte_test:2,=,46,5,relative,dce; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6438,6 +6515,7 @@ int DcePayloadTest15(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6460,12 +6538,15 @@ int DcePayloadTest15(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -6480,6 +6561,8 @@ int DcePayloadTest15(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6534,6 +6617,7 @@ int DcePayloadTest16(void)
         "byte_test:2,=,11776,5,relative; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6547,6 +6631,7 @@ int DcePayloadTest16(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6569,12 +6654,15 @@ int DcePayloadTest16(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -6589,6 +6677,8 @@ int DcePayloadTest16(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6643,6 +6733,7 @@ int DcePayloadTest17(void)
         "byte_test:2,=,46,5,relative,little; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6656,6 +6747,7 @@ int DcePayloadTest17(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6678,12 +6770,15 @@ int DcePayloadTest17(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -6698,6 +6793,8 @@ int DcePayloadTest17(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6752,6 +6849,7 @@ int DcePayloadTest18(void)
         "byte_jump:2,2,relative,dce; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6765,6 +6863,7 @@ int DcePayloadTest18(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6787,12 +6886,15 @@ int DcePayloadTest18(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -6807,6 +6909,8 @@ int DcePayloadTest18(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6861,6 +6965,7 @@ int DcePayloadTest19(void)
         "byte_jump:2,2,relative; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6874,6 +6979,7 @@ int DcePayloadTest19(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -6896,12 +7002,15 @@ int DcePayloadTest19(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -6916,6 +7025,8 @@ int DcePayloadTest19(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -6970,6 +7081,7 @@ int DcePayloadTest20(void)
         "byte_jump:2,2,little,relative; byte_test:2,=,14080,0,relative; sid:2;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -6983,6 +7095,7 @@ int DcePayloadTest20(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -7005,12 +7118,15 @@ int DcePayloadTest20(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -7025,6 +7141,8 @@ int DcePayloadTest20(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -7071,6 +7189,7 @@ int DcePayloadTest21(void)
         "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -7084,6 +7203,7 @@ int DcePayloadTest21(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -7103,12 +7223,15 @@ int DcePayloadTest21(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -7119,6 +7242,8 @@ int DcePayloadTest21(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -7165,6 +7290,7 @@ int DcePayloadTest22(void)
         "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -7178,6 +7304,7 @@ int DcePayloadTest22(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -7197,12 +7324,15 @@ int DcePayloadTest22(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -7213,6 +7343,8 @@ int DcePayloadTest22(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -7260,6 +7392,7 @@ int DcePayloadTest23(void)
         "content:\"string\"; within:8; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -7273,6 +7406,7 @@ int DcePayloadTest23(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -7292,12 +7426,15 @@ int DcePayloadTest23(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -7308,6 +7445,8 @@ int DcePayloadTest23(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -7462,6 +7601,7 @@ int DcePayloadParseTest26(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
+                                   "pkt_data; "
                                    "content:\"one\"; "
                                    "content:\"two\"; "
                                    "content:\"three\"; within:5; "
@@ -7716,6 +7856,7 @@ int DcePayloadParseTest28(void)
                                    "dce_stub_data; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
+                                   "pkt_data; "
                                    "content:\"three\";"
                                    "content:\"four\";"
                                    "sid:1;)");
@@ -7841,6 +7982,7 @@ int DcePayloadParseTest29(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
+                                   "pkt_data; "
                                    "pcre:/boom/; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
@@ -7982,6 +8124,7 @@ int DcePayloadParseTest30(void)
     s = de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                    "(msg:\"Testing bytejump_body\"; "
                                    "dce_stub_data; "
+                                   "pkt_data; "
                                    "byte_jump:2,5; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
@@ -8131,6 +8274,7 @@ int DcePayloadParseTest31(void)
                                    "byte_jump:2,5,relative; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
+                                   "pkt_data; "
                                    "content:\"three\";"
                                    "content:\"four\";"
                                    "sid:1;)");
@@ -8277,6 +8421,7 @@ int DcePayloadParseTest32(void)
                                    "byte_jump:2,5,relative; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
+                                   "pkt_data; "
                                    "content:\"three\";"
                                    "content:\"four\"; within:4; "
                                    "sid:1;)");
@@ -8423,6 +8568,7 @@ int DcePayloadParseTest33(void)
                                    "pcre:/boom/R; "
                                    "content:\"one\"; distance:10; within:5; "
                                    "content:\"two\"; within:5;"
+                                   "pkt_data; "
                                    "content:\"three\";"
                                    "content:\"four\"; distance:5;"
                                    "sid:1;)");
@@ -8566,6 +8712,7 @@ int DcePayloadParseTest34(void)
                                    "pcre:/boom/R; "
                                    "byte_jump:1,2,relative,align,dce; "
                                    "content:\"one\"; within:4; distance:8; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -8686,6 +8833,7 @@ int DcePayloadParseTest35(void)
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_test:1,=,0,0,relative,dce; "
+                                   "pkt_data; "
                                    "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -8711,7 +8859,7 @@ int DcePayloadParseTest35(void)
     if (bd->flags & DETECT_BYTETEST_LITTLE ||
         bd->flags & DETECT_BYTETEST_BIG ||
         bd->flags & DETECT_BYTETEST_STRING ||
-        !(bd->flags & DETECT_BYTETEST_RELATIVE) ||
+        !(bd->flags & DETECT_BYTEJUMP_RELATIVE) ||
         !(bd->flags & DETECT_BYTETEST_DCE) ) {
         result = 0;
         printf("one failed\n");
@@ -8773,6 +8921,7 @@ int DcePayloadParseTest36(void)
                                    "dce_opnum:10; dce_stub_data; "
                                    "isdataat:10,relative; "
                                    "content:\"one\"; within:4; distance:8; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -8877,6 +9026,7 @@ int DcePayloadParseTest37(void)
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_jump:1,2,relative,align,dce; "
                                    "byte_test:1,=,2,0,relative,dce; "
+                                   "pkt_data; "
                                    "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -8985,6 +9135,7 @@ int DcePayloadParseTest38(void)
                                    "pcre:/boom/R; "
                                    "byte_jump:1,2,relative,align,dce; "
                                    "byte_test:1,=,2,0,relative,dce; "
+                                   "pkt_data; "
                                    "content:\"one\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -9008,7 +9159,7 @@ int DcePayloadParseTest38(void)
     }
     pd = (DetectPcreData *)sm->ctx;
     if ( pd->flags & DETECT_PCRE_RAWBYTES ||
-         !(pd->flags & DETECT_PCRE_RELATIVE) ) {
+         !(pd->flags & DETECT_PCRE_RELATIVE)) {
         result = 0;
         printf("one failed\n");
         goto end;
@@ -9189,6 +9340,7 @@ int DcePayloadParseTest40(void)
                                    "content:\"one\"; within:10; "
                                    "content:\"two\"; distance:20; within:30; "
                                    "byte_test:1,=,2,0,relative,dce; "
+                                   "pkt_data; "
                                    "content:\"three\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -9316,6 +9468,7 @@ int DcePayloadParseTest41(void)
                                    "dce_iface:12345678-1234-1234-1234-123456789012; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "content:\"one\"; within:10; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "byte_test:1,=,2,0,relative,dce; "
                                    "content:\"three\"; "
@@ -9455,6 +9608,7 @@ int DcePayloadTest42(void)
         "content:!\"and\"; distance:0; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -9468,6 +9622,7 @@ int DcePayloadTest42(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -9487,12 +9642,15 @@ int DcePayloadTest42(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if (!(PacketAlertCheck(p, 1))) {
@@ -9503,6 +9661,8 @@ int DcePayloadTest42(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -9550,6 +9710,7 @@ int DcePayloadTest43(void)
         "pcre:/super/R; content:\"nova\"; within:7; sid:1;)";
 
     Signature *s;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
     memset(&f, 0, sizeof(Flow));
@@ -9563,6 +9724,7 @@ int DcePayloadTest43(void)
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
+    f.proto = IPPROTO_TCP;
     f.flags |= FLOW_IPV4;
     f.alproto = ALPROTO_DCERPC;
 
@@ -9582,12 +9744,15 @@ int DcePayloadTest43(void)
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
     /* request 1 */
-    r = AppLayerParse(NULL, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
+    SCMutexLock(&f.m);
+    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_DCERPC, STREAM_TOSERVER, request1, request1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
+        SCMutexUnlock(&f.m);
         goto end;
     }
+    SCMutexUnlock(&f.m);
     /* detection phase */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
     if ( !(PacketAlertCheck(p, 1))) {
@@ -9598,6 +9763,8 @@ int DcePayloadTest43(void)
     result = 1;
 
 end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) {
         SigGroupCleanup(de_ctx);
         SigCleanSignatures(de_ctx);
@@ -9636,6 +9803,7 @@ int DcePayloadParseTest44(void)
                                    "dce_opnum:10; dce_stub_data; "
                                    "isdataat:10,relative; "
                                    "content:\"one\"; within:4; distance:8; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -9761,6 +9929,7 @@ int DcePayloadParseTest45(void)
                                    "content:\"one\"; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_jump:1,2,relative,align,dce; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -9872,6 +10041,7 @@ int DcePayloadParseTest46(void)
                                    "content:\"one\"; "
                                    "dce_opnum:10; dce_stub_data; "
                                    "byte_test:1,=,2,0,relative,dce; "
+                                   "pkt_data; "
                                    "content:\"two\"; "
                                    "sid:1;)");
     if (de_ctx->sig_list == NULL) {
@@ -9976,8 +10146,12 @@ void DcePayloadRegisterTests(void)
     UtRegisterTest("DcePayloadTest10", DcePayloadTest10, 1);
     UtRegisterTest("DcePayloadTest11", DcePayloadTest11, 1);
     UtRegisterTest("DcePayloadTest12", DcePayloadTest12, 1);
+    /* Disabled because of bug_753.  Would be enabled, once we rewrite
+     * dce parser */
+#if 0
     UtRegisterTest("DcePayloadTest13", DcePayloadTest13, 1);
     UtRegisterTest("DcePayloadTest14", DcePayloadTest14, 1);
+#endif
     UtRegisterTest("DcePayloadTest15", DcePayloadTest15, 1);
     UtRegisterTest("DcePayloadTest16", DcePayloadTest16, 1);
     UtRegisterTest("DcePayloadTest17", DcePayloadTest17, 1);

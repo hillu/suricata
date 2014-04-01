@@ -40,6 +40,7 @@
 
 #include "suricata-common.h"
 #include "util-pool.h"
+#include "util-pool-thread.h"
 #include "util-unittest.h"
 #include "util-debug.h"
 
@@ -84,17 +85,25 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *
 {
     Pool *p = NULL;
 
-    if (size != 0 && prealloc_size > size)
+    if (size != 0 && prealloc_size > size) {
+        SCLogError(SC_ERR_POOL_INIT, "size error");
         goto error;
-    if (size != 0 && elt_size == 0)
+    }
+    if (size != 0 && elt_size == 0) {
+        SCLogError(SC_ERR_POOL_INIT, "size != 0 && elt_size == 0");
         goto error;
-    if (elt_size && Free)
+    }
+    if (elt_size && Free) {
+        SCLogError(SC_ERR_POOL_INIT, "elt_size && Free");
         goto error;
+    }
 
     /* setup the filter */
     p = SCMalloc(sizeof(Pool));
-    if (unlikely(p == NULL))
+    if (unlikely(p == NULL)) {
+        SCLogError(SC_ERR_POOL_INIT, "alloc error");
         goto error;
+    }
 
     memset(p,0,sizeof(Pool));
 
@@ -116,16 +125,18 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *
     uint32_t u32 = 0;
     if (size > 0) {
         PoolBucket *pb = SCCalloc(size, sizeof(PoolBucket));
-        if (unlikely(pb == NULL))
+        if (unlikely(pb == NULL)) {
+            SCLogError(SC_ERR_POOL_INIT, "alloc error");
             goto error;
+        }
         p->pb_buffer = pb;
         memset(pb, 0, size * sizeof(PoolBucket));
         for (u32 = 0; u32 < size; u32++) {
             /* populate pool */
-            pb->next = p->empty_list;
+            pb->next = p->empty_stack;
             pb->flags |= POOL_BUCKET_PREALLOCATED;
-            p->empty_list = pb;
-            p->empty_list_size++;
+            p->empty_stack = pb;
+            p->empty_stack_size++;
             pb++;
         }
     }
@@ -133,15 +144,19 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *
     if (size > 0) {
         p->data_buffer = SCCalloc(prealloc_size, elt_size);
         /* FIXME better goto */
-        if (p->data_buffer == NULL)
+        if (p->data_buffer == NULL) {
+            SCLogError(SC_ERR_POOL_INIT, "alloc error");
             goto error;
+        }
     }
     /* prealloc the buckets and requeue them to the alloc list */
     for (u32 = 0; u32 < prealloc_size; u32++) {
         if (size == 0) { /* unlimited */
             PoolBucket *pb = SCMalloc(sizeof(PoolBucket));
-            if (unlikely(pb == NULL))
+            if (unlikely(pb == NULL)) {
+                SCLogError(SC_ERR_POOL_INIT, "alloc error");
                 goto error;
+            }
 
             memset(pb, 0, sizeof(PoolBucket));
 
@@ -151,10 +166,12 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *
                 pb->data = SCMalloc(p->elt_size);
             }
             if (pb->data == NULL) {
+                SCLogError(SC_ERR_POOL_INIT, "alloc error");
                 SCFree(pb);
                 goto error;
             }
             if (p->Init(pb->data, p->InitData) != 1) {
+                SCLogError(SC_ERR_POOL_INIT, "init error");
                 if (p->Cleanup)
                     p->Cleanup(pb->data);
                 if (p->Free)
@@ -166,29 +183,32 @@ Pool *PoolInit(uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *
             }
             p->allocated++;
 
-            pb->next = p->alloc_list;
-            p->alloc_list = pb;
-            p->alloc_list_size++;
+            pb->next = p->alloc_stack;
+            p->alloc_stack = pb;
+            p->alloc_stack_size++;
         } else {
-            PoolBucket *pb = p->empty_list;
-            if (pb == NULL)
+            PoolBucket *pb = p->empty_stack;
+            if (pb == NULL) {
+                SCLogError(SC_ERR_POOL_INIT, "alloc error");
                 goto error;
+            }
 
             pb->data = (char *)p->data_buffer + u32 * elt_size;
             if (p->Init(pb->data, p->InitData) != 1) {
+                SCLogError(SC_ERR_POOL_INIT, "init error");
                 if (p->Cleanup)
                     p->Cleanup(pb->data);
                 goto error;
             }
 
-            p->empty_list = pb->next;
-            p->empty_list_size--;
+            p->empty_stack = pb->next;
+            p->empty_stack_size--;
 
             p->allocated++;
 
-            pb->next = p->alloc_list;
-            p->alloc_list = pb;
-            p->alloc_list_size++;
+            pb->next = p->alloc_stack;
+            p->alloc_stack = pb;
+            p->alloc_stack_size++;
         }
     }
 
@@ -206,9 +226,9 @@ void PoolFree(Pool *p) {
     if (p == NULL)
         return;
 
-    while (p->alloc_list != NULL) {
-        PoolBucket *pb = p->alloc_list;
-        p->alloc_list = pb->next;
+    while (p->alloc_stack != NULL) {
+        PoolBucket *pb = p->alloc_stack;
+        p->alloc_stack = pb->next;
         if (p->Cleanup)
             p->Cleanup(pb->data);
         if (PoolDataPreAllocated(p, pb->data) == 0) {
@@ -223,9 +243,9 @@ void PoolFree(Pool *p) {
         }
     }
 
-    while (p->empty_list != NULL) {
-        PoolBucket *pb = p->empty_list;
-        p->empty_list = pb->next;
+    while (p->empty_stack != NULL) {
+        PoolBucket *pb = p->empty_stack;
+        p->empty_stack = pb->next;
         if (pb->data!= NULL) {
             if (p->Cleanup)
                 p->Cleanup(pb->data);
@@ -251,42 +271,52 @@ void PoolFree(Pool *p) {
 
 void PoolPrint(Pool *p) {
     printf("\n----------- Hash Table Stats ------------\n");
-    printf("Buckets:               %" PRIu32 "\n", p->empty_list_size + p->alloc_list_size);
+    printf("Buckets:               %" PRIu32 "\n", p->empty_stack_size + p->alloc_stack_size);
     printf("-----------------------------------------\n");
 }
 
 void *PoolGet(Pool *p) {
     SCEnter();
 
-    PoolBucket *pb = p->alloc_list;
+    PoolBucket *pb = p->alloc_stack;
     if (pb != NULL) {
         /* pull from the alloc list */
-        p->alloc_list = pb->next;
-        p->alloc_list_size--;
+        p->alloc_stack = pb->next;
+        p->alloc_stack_size--;
 
         /* put in the empty list */
-        pb->next = p->empty_list;
-        p->empty_list = pb;
-        p->empty_list_size++;
+        pb->next = p->empty_stack;
+        p->empty_stack = pb;
+        p->empty_stack_size++;
     } else {
         if (p->max_buckets == 0 || p->allocated < p->max_buckets) {
             void *pitem;
             SCLogDebug("max_buckets %"PRIu32"", p->max_buckets);
-            p->allocated++;
-
-            p->outstanding++;
-            if (p->outstanding > p->max_outstanding)
-                p->max_outstanding = p->outstanding;
 
             if (p->Alloc != NULL) {
                 pitem = p->Alloc();
             } else {
                 pitem = SCMalloc(p->elt_size);
             }
+
             if (pitem != NULL) {
-                if (p->Init(pitem, p->InitData) != 1)
+                if (p->Init(pitem, p->InitData) != 1) {
+                    if (p->Cleanup)
+                        p->Cleanup(pitem);
+                    if (p->Free != NULL)
+                        p->Free(pitem);
+                    else
+                        SCFree(pitem);
                     SCReturnPtr(NULL, "void");
+                }
+
+                p->allocated++;
+
+                p->outstanding++;
+                if (p->outstanding > p->max_outstanding)
+                    p->max_outstanding = p->outstanding;
             }
+
             SCReturnPtr(pitem, "void");
         } else {
             SCReturnPtr(NULL, "void");
@@ -304,7 +334,7 @@ void *PoolGet(Pool *p) {
 void PoolReturn(Pool *p, void *data) {
     SCEnter();
 
-    PoolBucket *pb = p->empty_list;
+    PoolBucket *pb = p->empty_stack;
 
     SCLogDebug("pb %p", pb);
 
@@ -327,13 +357,13 @@ void PoolReturn(Pool *p, void *data) {
     }
 
     /* pull from the alloc list */
-    p->empty_list = pb->next;
-    p->empty_list_size--;
+    p->empty_stack = pb->next;
+    p->empty_stack_size--;
 
     /* put in the alloc list */
-    pb->next = p->alloc_list;
-    p->alloc_list = pb;
-    p->alloc_list_size++;
+    pb->next = p->alloc_stack;
+    p->alloc_stack = pb;
+    p->alloc_stack_size++;
 
     pb->data = data;
     p->outstanding--;
@@ -383,9 +413,9 @@ static int PoolTestInit02 (void) {
     if (p == NULL)
         goto end;
 
-    if (p->alloc_list == NULL || p->empty_list == NULL) {
+    if (p->alloc_stack == NULL || p->empty_stack == NULL) {
         printf("list(s) not properly initialized (a:%p e:%p): ",
-            p->alloc_list, p->empty_list);
+            p->alloc_stack, p->empty_stack);
         retval = 0;
         goto end;
     }
@@ -426,14 +456,14 @@ static int PoolTestInit03 (void) {
         goto end;
     }
 
-    if (p->alloc_list_size != 4) {
-        printf("p->alloc_list_size 4 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 4) {
+        printf("p->alloc_stack_size 4 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
 
-    if (p->empty_list_size != 6) {
-        printf("p->empty_list_size 6 != %" PRIu32 ": ", p->empty_list_size);
+    if (p->empty_stack_size != 6) {
+        printf("p->empty_stack_size 6 != %" PRIu32 ": ", p->empty_stack_size);
         retval = 0;
         goto end;
     }
@@ -466,14 +496,14 @@ static int PoolTestInit04 (void) {
         goto end;
     }
 
-    if (p->alloc_list_size != 4) {
-        printf("p->alloc_list_size 4 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 4) {
+        printf("p->alloc_stack_size 4 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
 
-    if (p->empty_list_size != 6) {
-        printf("p->empty_list_size 6 != %" PRIu32 ": ", p->empty_list_size);
+    if (p->empty_stack_size != 6) {
+        printf("p->empty_stack_size 6 != %" PRIu32 ": ", p->empty_stack_size);
         retval = 0;
         goto end;
     }
@@ -500,14 +530,14 @@ static int PoolTestInit05 (void) {
         goto end;
     }
 
-    if (p->alloc_list_size != 4) {
-        printf("p->alloc_list_size 4 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 4) {
+        printf("p->alloc_stack_size 4 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
 
-    if (p->empty_list_size != 6) {
-        printf("p->empty_list_size 6 != %" PRIu32 ": ", p->empty_list_size);
+    if (p->empty_stack_size != 6) {
+        printf("p->empty_stack_size 6 != %" PRIu32 ": ", p->empty_stack_size);
         retval = 0;
         goto end;
     }
@@ -515,14 +545,14 @@ static int PoolTestInit05 (void) {
     PoolReturn(p, data);
     data = NULL;
 
-    if (p->alloc_list_size != 5) {
-        printf("p->alloc_list_size 5 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 5) {
+        printf("p->alloc_stack_size 5 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
 
-    if (p->empty_list_size != 5) {
-        printf("p->empty_list_size 5 != %" PRIu32 ": ", p->empty_list_size);
+    if (p->empty_stack_size != 5) {
+        printf("p->empty_stack_size 5 != %" PRIu32 ": ", p->empty_stack_size);
         retval = 0;
         goto end;
     }
@@ -578,8 +608,8 @@ static int PoolTestInit06 (void) {
         goto end;
     }
 
-    if (p->alloc_list_size != 1) {
-        printf("p->alloc_list_size 1 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 1) {
+        printf("p->alloc_stack_size 1 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
@@ -648,8 +678,8 @@ static int PoolTestInit07 (void) {
         goto end;
     }
 
-    if (p->alloc_list_size != 1) {
-        printf("p->alloc_list_size 1 != %" PRIu32 ": ", p->alloc_list_size);
+    if (p->alloc_stack_size != 1) {
+        printf("p->alloc_stack_size 1 != %" PRIu32 ": ", p->alloc_stack_size);
         retval = 0;
         goto end;
     }
@@ -680,6 +710,8 @@ void PoolRegisterTests(void) {
     UtRegisterTest("PoolTestInit05", PoolTestInit05, 1);
     UtRegisterTest("PoolTestInit06", PoolTestInit06, 1);
     UtRegisterTest("PoolTestInit07", PoolTestInit07, 1);
+
+    PoolThreadRegisterTests();
 #endif /* UNITTESTS */
 }
 

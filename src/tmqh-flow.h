@@ -26,7 +26,6 @@
 
 typedef struct TmqhFlowMode_ {
     PacketQueue *q;
-
     SC_ATOMIC_DECLARE(uint64_t, total_packets);
     SC_ATOMIC_DECLARE(uint64_t, total_flows);
 } TmqhFlowMode;

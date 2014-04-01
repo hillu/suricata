@@ -81,48 +81,45 @@ void DetectProtoFree(DetectProto *dp)
  *            incoming protocol information.
  * \param str Pointer to the string containing the protocol name.
  *
- * \retval 0 Always return 0.
+ * \retval >=0 If proto is detected, -1 otherwise.
  */
 int DetectProtoParse(DetectProto *dp, char *str)
 {
-    int proto;
-
     if (strcasecmp(str, "tcp") == 0) {
-        proto = IPPROTO_TCP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_TCP / 8] |= 1 << (IPPROTO_TCP % 8);
         SCLogDebug("TCP protocol detected");
     } else if (strcasecmp(str, "tcp-pkt") == 0) {
-        proto = IPPROTO_TCP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_TCP / 8] |= 1 << (IPPROTO_TCP % 8);
         SCLogDebug("TCP protocol detected, packets only");
         dp->flags |= DETECT_PROTO_ONLY_PKT;
     } else if (strcasecmp(str, "tcp-stream") == 0) {
-        proto = IPPROTO_TCP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_TCP / 8] |= 1 << (IPPROTO_TCP % 8);
         SCLogDebug("TCP protocol detected, stream only");
         dp->flags |= DETECT_PROTO_ONLY_STREAM;
     } else if (strcasecmp(str, "udp") == 0) {
-        proto = IPPROTO_UDP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_UDP / 8] |= 1 << (IPPROTO_UDP % 8);
         SCLogDebug("UDP protocol detected");
+    } else if (strcasecmp(str, "icmpv4") == 0) {
+        dp->proto[IPPROTO_ICMP / 8] |= 1 << (IPPROTO_ICMP % 8);
+        SCLogDebug("ICMPv4 protocol detected");
+    } else if (strcasecmp(str, "icmpv6") == 0) {
+        dp->proto[IPPROTO_ICMPV6 / 8] |= 1 << (IPPROTO_ICMPV6 % 8);
+        SCLogDebug("ICMPv6 protocol detected");
     } else if (strcasecmp(str, "icmp") == 0) {
-        proto = IPPROTO_ICMP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
-        proto = IPPROTO_ICMPV6;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_ICMP / 8] |= 1 << (IPPROTO_ICMP % 8);
+        dp->proto[IPPROTO_ICMPV6 / 8] |= 1 << (IPPROTO_ICMPV6 % 8);
         SCLogDebug("ICMP protocol detected, sig applies both to ICMPv4 and ICMPv6");
     } else if (strcasecmp(str, "sctp") == 0) {
-        proto = IPPROTO_SCTP;
-        dp->proto[proto / 8] |= 1 << (proto % 8);
+        dp->proto[IPPROTO_SCTP / 8] |= 1 << (IPPROTO_SCTP % 8);
         SCLogDebug("SCTP protocol detected");
     } else if (strcasecmp(str,"ipv4") == 0 ||
                strcasecmp(str,"ip4") == 0 ) {
-        dp->flags |= DETECT_PROTO_IPV4;
+        dp->flags |= (DETECT_PROTO_IPV4 | DETECT_PROTO_ANY);
         memset(dp->proto, 0xff, sizeof(dp->proto));
         SCLogDebug("IPv4 protocol detected");
     } else if (strcasecmp(str,"ipv6") == 0 ||
                strcasecmp(str,"ip6") == 0 ) {
-        dp->flags |= DETECT_PROTO_IPV6;
+        dp->flags |= (DETECT_PROTO_IPV6 | DETECT_PROTO_ANY);
         memset(dp->proto, 0xff, sizeof(dp->proto));
         SCLogDebug("IPv6 protocol detected");
     } else if (strcasecmp(str,"ip") == 0 ||
@@ -154,8 +151,8 @@ int DetectProtoParse(DetectProto *dp, char *str)
         }
 #endif
     }
-    return 0;
 
+    return 0;
 error:
     return -1;
 }
@@ -213,7 +210,7 @@ static int DetectProtoInitTest(DetectEngineCtx **de_ctx, Signature **sig,
 
     *sig = (*de_ctx)->sig_list;
 
-    if (DetectProtoParse(dp, str) != 0)
+    if (DetectProtoParse(dp, str) < 0)
         goto end;
 
     result = 1;
@@ -232,7 +229,7 @@ static int ProtoTestParse01 (void)
     memset(&dp,0,sizeof(DetectProto));
 
     int r = DetectProtoParse(&dp, "6");
-    if (r != 0) {
+    if (r < 0) {
         return 1;
     }
 
@@ -249,7 +246,7 @@ static int ProtoTestParse02 (void)
     memset(&dp,0,sizeof(DetectProto));
 
     int r = DetectProtoParse(&dp, "tcp");
-    if (r == 0 && dp.proto[(IPPROTO_TCP/8)] & (1<<(IPPROTO_TCP%8))) {
+    if (r >= 0 && dp.proto[(IPPROTO_TCP/8)] & (1<<(IPPROTO_TCP%8))) {
         return 1;
     }
 
@@ -266,7 +263,7 @@ static int ProtoTestParse03 (void)
     memset(&dp,0,sizeof(DetectProto));
 
     int r = DetectProtoParse(&dp, "ip");
-    if (r == 0 && dp.flags & DETECT_PROTO_ANY) {
+    if (r >= 0 && dp.flags & DETECT_PROTO_ANY) {
         return 1;
     }
 
@@ -285,7 +282,7 @@ static int ProtoTestParse04 (void)
 
     /* Check for a bad number */
     int r = DetectProtoParse(&dp, "4242");
-    if (r == -1) {
+    if (r < 0) {
         return 1;
     }
 
@@ -304,7 +301,7 @@ static int ProtoTestParse05 (void)
 
     /* Check for a bad string */
     int r = DetectProtoParse(&dp, "tcp/udp");
-    if (r == -1) {
+    if (r < 0) {
         return 1;
     }
 
@@ -322,7 +319,7 @@ static int ProtoTestParse06 (void)
 
     /* Check for a bad string */
     int r = DetectProtoParse(&dp, "tcp-pkt");
-    if (r == -1) {
+    if (r < 0) {
         printf("parsing tcp-pkt failed: ");
         return 0;
     }
@@ -345,7 +342,7 @@ static int ProtoTestParse07 (void)
 
     /* Check for a bad string */
     int r = DetectProtoParse(&dp, "tcp-stream");
-    if (r == -1) {
+    if (r < 0) {
         printf("parsing tcp-stream failed: ");
         return 0;
     }
@@ -398,6 +395,88 @@ cleanup:
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
+    return result;
+}
+
+/**
+ * \test DetectrotoTestSetup02 is a test for a icmpv4 and icmpv6
+ *       protocol setting up in signature.
+ */
+static int DetectProtoTestSetup02(void)
+{
+    DetectProto dp;
+    Signature *sig_icmpv4 = NULL;
+    Signature *sig_icmpv6 = NULL;
+    Signature *sig_icmp = NULL;
+    DetectEngineCtx *de_ctx = NULL;
+    int result = 0;
+    int i;
+
+    memset(&dp, 0, sizeof(dp));
+
+    if (DetectProtoInitTest(&de_ctx, &sig_icmpv4, &dp, "icmpv4") == 0) {
+        printf("failure - imcpv4.\n");
+        goto end;
+    }
+
+    if (DetectProtoInitTest(&de_ctx, &sig_icmpv6, &dp, "icmpv6") == 0) {
+        printf("failure - imcpv6.\n");
+        goto end;
+    }
+
+    if (DetectProtoInitTest(&de_ctx, &sig_icmp, &dp, "icmp") == 0) {
+        printf("failure - imcp.\n");
+        goto end;
+    }
+
+    for (i = 0; i < 256 / 8; i++) {
+        if (i == IPPROTO_ICMP) {
+            if (!(sig_icmpv4->proto.proto[i / 8] & (1 << (i % 8)))) {
+                printf("failed in sig matching - icmpv4 - icmpv4.\n");
+                goto end;
+            }
+            continue;
+        }
+        if (sig_icmpv4->proto.proto[i / 8] & (1 << (i % 8))) {
+            printf("failed in sig matching - icmpv4 - others.\n");
+            goto end;
+        }
+    }
+
+    for (i = 0; i < 256 / 8; i++) {
+        if (i == IPPROTO_ICMPV6) {
+            if (!(sig_icmpv6->proto.proto[i / 8] & (1 << (i % 8)))) {
+                printf("failed in sig matching - icmpv6 - icmpv6.\n");
+                goto end;
+            }
+            continue;
+        }
+        if (sig_icmpv6->proto.proto[i / 8] & (1 << (i % 8))) {
+            printf("failed in sig matching - icmpv6 - others.\n");
+            goto end;
+        }
+    }
+
+    for (i = 0; i < 256 / 8; i++) {
+        if (i == IPPROTO_ICMP || i == IPPROTO_ICMPV6) {
+            if (!(sig_icmp->proto.proto[i / 8] & (1 << (i % 8)))) {
+                printf("failed in sig matching - icmp - icmp.\n");
+                goto end;
+            }
+            continue;
+        }
+        if (sig_icmpv6->proto.proto[i / 8] & (1 << (i % 8))) {
+            printf("failed in sig matching - icmp - others.\n");
+            goto end;
+        }
+    }
+
+    result = 1;
+
+ end:
+    SigGroupCleanup(de_ctx);
+    SigCleanSignatures(de_ctx);
+    DetectEngineCtxFree(de_ctx);
     return result;
 }
 
@@ -533,7 +612,10 @@ void DetectProtoTests(void)
     UtRegisterTest("ProtoTestParse05", ProtoTestParse05, 1);
     UtRegisterTest("ProtoTestParse06", ProtoTestParse06, 1);
     UtRegisterTest("ProtoTestParse07", ProtoTestParse07, 1);
+
     UtRegisterTest("DetectProtoTestSetup01", DetectProtoTestSetup01, 1);
+    UtRegisterTest("DetectProtoTestSetup02", DetectProtoTestSetup02, 1);
+
     UtRegisterTest("DetectProtoTestSig01", DetectProtoTestSig01, 1);
     UtRegisterTest("DetectProtoTestSig02", DetectProtoTestSig02, 1);
 #endif /* UNITTESTS */

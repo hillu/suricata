@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -28,8 +28,13 @@
 #define COUNTERS
 
 #include "suricata-common.h"
-
 #include "threadvars.h"
+#include "decode-events.h"
+
+#ifdef __SC_CUDA_SUPPORT__
+#include "util-cuda-buffer.h"
+#include "util-cuda-vars.h"
+#endif /* __SC_CUDA_SUPPORT__ */
 
 typedef enum {
     CHECKSUM_VALIDATION_DISABLE,
@@ -39,7 +44,7 @@ typedef enum {
     CHECKSUM_VALIDATION_KERNEL,
 } ChecksumValidationMode;
 
-enum {
+enum PktSrcEnum {
     PKT_SRC_WIRE = 1,
     PKT_SRC_DECODER_GRE,
     PKT_SRC_DECODER_IPV4,
@@ -55,6 +60,7 @@ enum {
 #include "source-ipfw.h"
 #include "source-pcap.h"
 #include "source-af-packet.h"
+#include "source-mpipe.h"
 
 #include "action-globals.h"
 
@@ -77,12 +83,15 @@ enum {
 
 #include "app-layer-protos.h"
 
-#ifdef __SC_CUDA_SUPPORT__
-#define CUDA_MAX_PAYLOAD_SIZE 1500
-#endif
-
-/* forward declaration */
+/* forward declarations */
 struct DetectionEngineThreadCtx_;
+typedef struct AppLayerThreadCtx_ AppLayerThreadCtx;
+
+/* declare these here as they are called from the
+ * PACKET_RECYCLE and PACKET_CLEANUP macro's. */
+typedef struct AppLayerDecoderEvents_ AppLayerDecoderEvents;
+void AppLayerDecoderEventsResetEvents(AppLayerDecoderEvents *events);
+void AppLayerDecoderEventsFreeEvents(AppLayerDecoderEvents **events);
 
 /* Address */
 typedef struct Address_ {
@@ -106,7 +115,7 @@ typedef struct Address_ {
         (b)->addr_data32[3] = (a)->addr_data32[3]; \
     } while (0)
 
-/* Set the IPv4 addressesinto the Addrs of the Packet.
+/* Set the IPv4 addresses into the Addrs of the Packet.
  * Make sure p->ip4h is initialized and validated.
  *
  * We set the rest of the struct to 0 so we can
@@ -196,8 +205,8 @@ typedef struct Address_ {
 #define GET_TCP_DST_PORT(p)  ((p)->dp)
 
 #define GET_PKT_LEN(p) ((p)->pktlen)
-#define GET_PKT_DATA(p) ((((p)->ext_pkt) == NULL ) ? (p)->pkt : (p)->ext_pkt)
-#define GET_PKT_DIRECT_DATA(p) ((p)->pkt)
+#define GET_PKT_DATA(p) ((((p)->ext_pkt) == NULL ) ? (uint8_t *)((p) + 1) : (p)->ext_pkt)
+#define GET_PKT_DIRECT_DATA(p) (uint8_t *)((p) + 1)
 #define GET_PKT_DIRECT_MAX_SIZE(p) (default_packet_size)
 
 #define SET_PKT_LEN(p, len) do { \
@@ -246,6 +255,7 @@ typedef struct PacketAlert_ {
     uint8_t action; /* Internal num, used for sorting */
     uint8_t flags;
     struct Signature_ *s;
+    uint64_t tx_id;
 } PacketAlert;
 
 /** After processing an alert by the thresholding module, if at
@@ -256,6 +266,8 @@ typedef struct PacketAlert_ {
 #define PACKET_ALERT_FLAG_STATE_MATCH   0x02
 /** alert was generated based on stream */
 #define PACKET_ALERT_FLAG_STREAM_MATCH  0x04
+/** alert is in a tx, tx_id set */
+#define PACKET_ALERT_FLAG_TX            0x08
 
 #define PACKET_ALERT_MAX 15
 
@@ -367,13 +379,15 @@ typedef struct Packet_
      * has the exact same tuple as the lower levels */
     uint8_t recursion_level;
 
-    /* Pkt Flags */
-    uint32_t flags;
+    uint16_t vlan_id[2];
+    uint8_t vlan_idx;
 
     /* flow */
     uint8_t flowflags;
+    /* coccinelle: Packet:flowflags:FLOW_PKT_ */
 
-    uint8_t pkt_src;
+    /* Pkt Flags */
+    uint32_t flags;
 
     struct Flow_ *flow;
 
@@ -390,23 +404,17 @@ typedef struct Packet_
 #ifdef AF_PACKET
         AFPPacketVars afp_v;
 #endif
+#ifdef HAVE_MPIPE
+        /* tilegx mpipe stuff */
+        MpipePacketVars mpipe_v;
+#endif
 
         /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
         PcapPacketVars pcap_v;
     };
 
-    /** data linktype in host order */
-    int datalink;
-
-    /* IPS action to take */
-    uint8_t action;
-
-    /* used to hold flowbits only if debuglog is enabled */
-    int debuglog_flowbits_names_len;
-    const char **debuglog_flowbits_names;
-
-    /** The release function for packet data */
-    TmEcode (*ReleaseData)(ThreadVars *, struct Packet_ *);
+    /** The release function for packet structure and data */
+    void (*ReleasePacket)(struct Packet_ *);
 
     /* pkt vars */
     PktVar *pktvar;
@@ -414,26 +422,40 @@ typedef struct Packet_
     /* header pointers */
     EthernetHdr *ethh;
 
+    /* Checksum for IP packets. */
+    int32_t level3_comp_csum;
+    /* Check sum for TCP, UDP or ICMP packets */
+    int32_t level4_comp_csum;
+
     IPV4Hdr *ip4h;
-    IPV4Vars ip4vars;
 
     IPV6Hdr *ip6h;
-    IPV6Vars ip6vars;
-    IPV6ExtHdrs ip6eh;
+
+    /* IPv4 and IPv6 are mutually exclusive */
+    union {
+        IPV4Vars ip4vars;
+        struct {
+            IPV6Vars ip6vars;
+            IPV6ExtHdrs ip6eh;
+        };
+    };
+    /* Can only be one of TCP, UDP, ICMP at any given time */
+    union {
+        TCPVars tcpvars;
+        UDPVars udpvars;
+        ICMPV4Vars icmpv4vars;
+        ICMPV6Vars icmpv6vars;
+    };
 
     TCPHdr *tcph;
-    TCPVars tcpvars;
 
     UDPHdr *udph;
-    UDPVars udpvars;
 
     SCTPHdr *sctph;
 
     ICMPV4Hdr *icmpv4h;
-    ICMPV4Vars icmpv4vars;
 
     ICMPV6Hdr *icmpv6h;
-    ICMPV6Vars icmpv6vars;
 
     PPPHdr *ppph;
     PPPOESessionHdr *pppoesh;
@@ -441,17 +463,21 @@ typedef struct Packet_
 
     GREHdr *greh;
 
-    VLANHdr *vlanh;
+    VLANHdr *vlanh[2];
 
     /* ptr to the payload of the packet
      * with it's length. */
     uint8_t *payload;
     uint16_t payload_len;
 
+    /* IPS action to take */
+    uint8_t action;
+
+    uint8_t pkt_src;
+
     /* storage: set to pointer to heap and extended via allocation if necessary */
-    uint8_t *pkt;
-    uint8_t *ext_pkt;
     uint32_t pktlen;
+    uint8_t *ext_pkt;
 
     /* Incoming interface */
     struct LiveDevice_ *livedev;
@@ -464,6 +490,30 @@ typedef struct Packet_
     /** packet number in the pcap file, matches wireshark */
     uint64_t pcap_cnt;
 
+
+    /* engine events */
+    PacketEngineEvents events;
+
+    AppLayerDecoderEvents *app_layer_events;
+
+    /* double linked list ptrs */
+    struct Packet_ *next;
+    struct Packet_ *prev;
+
+    /** data linktype in host order */
+    int datalink;
+
+    /* used to hold flowbits only if debuglog is enabled */
+    int debuglog_flowbits_names_len;
+    const char **debuglog_flowbits_names;
+
+    /* tunnel/encapsulation handling */
+    struct Packet_ *root; /* in case of tunnel this is a ptr
+                           * to the 'real' packet, the one we
+                           * need to set the verdict on --
+                           * It should always point to the lowest
+                           * packet in a encapsulated packet */
+
     /** mutex to protect access to:
      *  - tunnel_rtv_cnt
      *  - tunnel_tpr_cnt
@@ -474,44 +524,19 @@ typedef struct Packet_
     /* tunnel packet ref count */
     uint16_t tunnel_tpr_cnt;
 
-    /* engine events */
-    PacketEngineEvents events;
-
-    /* double linked list ptrs */
-    struct Packet_ *next;
-    struct Packet_ *prev;
-
-    /* tunnel/encapsulation handling */
-    struct Packet_ *root; /* in case of tunnel this is a ptr
-                           * to the 'real' packet, the one we
-                           * need to set the verdict on --
-                           * It should always point to the lowest
-                           * packet in a encapsulated packet */
-
-    /* required for cuda support */
-#ifdef __SC_CUDA_SUPPORT__
-    /* indicates if the cuda mpm would be conducted or a normal cpu mpm would
-     * be conduced on this packet.  If it is set to 0, the cpu mpm; else cuda mpm */
-    uint8_t cuda_mpm_enabled;
-    /* indicates if the cuda mpm has finished running the mpm and processed the
-     * results for this packet, assuming if cuda_mpm_enabled has been set for this
-     * packet */
-    uint16_t cuda_done;
-    /* used by the detect thread and the cuda mpm dispatcher thread.  The detect
-     * thread would wait on this cond var, if the cuda mpm dispatcher thread
-     * still hasn't processed the packet.  The dispatcher would use this cond
-     * to inform the detect thread(in case it is waiting on this packet), once
-     * the dispatcher is done processing the packet results */
-    SCMutex cuda_mutex;
-    SCCondT cuda_cond;
-    /* the extra 1 in the 1481, is to hold the no_of_matches from the mpm run */
-    uint16_t mpm_offsets[CUDA_MAX_PAYLOAD_SIZE + 1];
-#endif
 
 #ifdef PROFILING
-    PktProfiling profile;
+    PktProfiling *profile;
 #endif
-} Packet;
+#ifdef __SC_CUDA_SUPPORT__
+    CudaPacketVars cuda_pkt_vars;
+#endif
+}
+#ifdef HAVE_MPIPE
+    /* mPIPE requires packet buffers to be aligned to 128 byte boundaries. */
+    __attribute__((aligned(128)))
+#endif
+Packet;
 
 #define DEFAULT_PACKET_SIZE (1500 + ETHERNET_HEADER_LEN)
 /* storage: maximum ip packet size + link header */
@@ -530,42 +555,18 @@ typedef struct PacketQueue_ {
     SCCondT cond_q;
 } PacketQueue;
 
-/** \brief Specific ctx for AL proto detection */
-typedef struct AlpProtoDetectDirectionThread_ {
-    MpmThreadCtx mpm_ctx;
-    PatternMatcherQueue pmq;
-} AlpProtoDetectDirectionThread;
-
-/** \brief Specific ctx for AL proto detection */
-typedef struct AlpProtoDetectThreadCtx_ {
-    AlpProtoDetectDirectionThread toserver;
-    AlpProtoDetectDirectionThread toclient;
-
-    void *alproto_local_storage[ALPROTO_MAX];
-
-#ifdef PROFILING
-    uint64_t ticks_start;
-    uint64_t ticks_end;
-    uint64_t ticks_spent;
-    uint16_t alproto;
-    uint64_t proto_detect_ticks_start;
-    uint64_t proto_detect_ticks_end;
-    uint64_t proto_detect_ticks_spent;
-#endif
-} AlpProtoDetectThreadCtx;
-
 /** \brief Structure to hold thread specific data for all decode modules */
 typedef struct DecodeThreadVars_
 {
     /** Specific context for udp protocol detection (here atm) */
-    AlpProtoDetectThreadCtx udp_dp_ctx;
+    AppLayerThreadCtx *app_tctx;
+
+    int vlan_disabled;
 
     /** stats/counters */
     uint16_t counter_pkts;
-    uint16_t counter_pkts_per_sec;
     uint16_t counter_bytes;
-    uint16_t counter_bytes_per_sec;
-    uint16_t counter_mbit_per_sec;
+    uint16_t counter_invalid;
     uint16_t counter_ipv4;
     uint16_t counter_ipv6;
     uint16_t counter_eth;
@@ -579,6 +580,7 @@ typedef struct DecodeThreadVars_
     uint16_t counter_ppp;
     uint16_t counter_gre;
     uint16_t counter_vlan;
+    uint16_t counter_vlan_qinq;
     uint16_t counter_pppoe;
     uint16_t counter_teredo;
     uint16_t counter_ipv4inipv6;
@@ -594,38 +596,39 @@ typedef struct DecodeThreadVars_
     uint16_t counter_defrag_ipv6_reassembled;
     uint16_t counter_defrag_ipv6_timeouts;
     uint16_t counter_defrag_max_hit;
+
+#ifdef __SC_CUDA_SUPPORT__
+    CudaThreadVars cuda_vars;
+#endif
 } DecodeThreadVars;
 
 /**
  *  \brief reset these to -1(indicates that the packet is fresh from the queue)
  */
 #define PACKET_RESET_CHECKSUMS(p) do { \
-        (p)->ip4vars.comp_csum = -1;   \
-        (p)->tcpvars.comp_csum = -1;      \
-        (p)->udpvars.comp_csum = -1;      \
-        (p)->icmpv4vars.comp_csum = -1;   \
-        (p)->icmpv6vars.comp_csum = -1;   \
+        (p)->level3_comp_csum = -1;   \
+        (p)->level4_comp_csum = -1;   \
     } while (0)
 
 /**
  *  \brief Initialize a packet structure for use.
  */
-#ifndef __SC_CUDA_SUPPORT__
-#define PACKET_INITIALIZE(p) { \
-    memset((p), 0x00, SIZE_OF_PACKET); \
-    SCMutexInit(&(p)->tunnel_mutex, NULL); \
-    PACKET_RESET_CHECKSUMS((p)); \
-    (p)->pkt = ((uint8_t *)(p)) + sizeof(Packet); \
-    (p)->livedev = NULL; \
-}
+#ifdef __SC_CUDA_SUPPORT__
+#include "util-cuda-handlers.h"
+#include "util-mpm.h"
+
+#define PACKET_INITIALIZE(p) do {                                       \
+        memset((p), 0x00, SIZE_OF_PACKET);                              \
+        SCMutexInit(&(p)->tunnel_mutex, NULL);                          \
+        PACKET_RESET_CHECKSUMS((p));                                    \
+        (p)->livedev = NULL;                                            \
+        SCMutexInit(&(p)->cuda_pkt_vars.cuda_mutex, NULL);            \
+        SCCondInit(&(p)->cuda_pkt_vars.cuda_cond, NULL);                \
+    } while (0)
 #else
-#define PACKET_INITIALIZE(p) { \
-    memset((p), 0x00, SIZE_OF_PACKET); \
+#define PACKET_INITIALIZE(p) {         \
     SCMutexInit(&(p)->tunnel_mutex, NULL); \
     PACKET_RESET_CHECKSUMS((p)); \
-    SCMutexInit(&(p)->cuda_mutex, NULL); \
-    SCCondInit(&(p)->cuda_cond, NULL); \
-    (p)->pkt = ((uint8_t *)(p)) + sizeof(Packet); \
     (p)->livedev = NULL; \
 }
 #endif
@@ -641,9 +644,12 @@ typedef struct DecodeThreadVars_
         (p)->dp = 0;                            \
         (p)->proto = 0;                         \
         (p)->recursion_level = 0;               \
-        (p)->flags = 0;                         \
+        (p)->flags = (p)->flags & PKT_ALLOC;    \
         (p)->flowflags = 0;                     \
         (p)->pkt_src = 0;                       \
+        (p)->vlan_id[0] = 0;                    \
+        (p)->vlan_id[1] = 0;                    \
+        (p)->vlan_idx = 0;                      \
         FlowDeReference(&((p)->flow));          \
         (p)->ts.tv_sec = 0;                     \
         (p)->ts.tv_usec = 0;                    \
@@ -679,7 +685,8 @@ typedef struct DecodeThreadVars_
         (p)->pppoesh = NULL;                    \
         (p)->pppoedh = NULL;                    \
         (p)->greh = NULL;                       \
-        (p)->vlanh = NULL;                      \
+        (p)->vlanh[0] = NULL;                   \
+        (p)->vlanh[1] = NULL;                   \
         (p)->payload = NULL;                    \
         (p)->payload_len = 0;                   \
         (p)->pktlen = 0;                        \
@@ -692,105 +699,64 @@ typedef struct DecodeThreadVars_
         SCMutexDestroy(&(p)->tunnel_mutex);     \
         SCMutexInit(&(p)->tunnel_mutex, NULL);  \
         (p)->events.cnt = 0;                    \
+        AppLayerDecoderEventsResetEvents((p)->app_layer_events); \
         (p)->next = NULL;                       \
         (p)->prev = NULL;                       \
         (p)->root = NULL;                       \
         (p)->livedev = NULL;                    \
-        (p)->ReleaseData = NULL;                \
         PACKET_RESET_CHECKSUMS((p));            \
         PACKET_PROFILING_RESET((p));            \
     } while (0)
 
-#ifndef __SC_CUDA_SUPPORT__
 #define PACKET_RECYCLE(p) PACKET_DO_RECYCLE((p))
-#else
-#define PACKET_RECYCLE(p) do {                  \
-    PACKET_DO_RECYCLE((p));                     \
-    SCMutexDestroy(&(p)->cuda_mutex);           \
-    SCCondDestroy(&(p)->cuda_cond);             \
-    SCMutexInit(&(p)->cuda_mutex, NULL);        \
-    SCCondInit(&(p)->cuda_cond, NULL);          \
-    PACKET_RESET_CHECKSUMS((p));                \
-} while(0)
-#endif
 
 /**
  *  \brief Cleanup a packet so that we can free it. No memset needed..
  */
-#ifndef __SC_CUDA_SUPPORT__
 #define PACKET_CLEANUP(p) do {                  \
         if ((p)->pktvar != NULL) {              \
             PktVarFree((p)->pktvar);            \
         }                                       \
         SCMutexDestroy(&(p)->tunnel_mutex);     \
+        AppLayerDecoderEventsFreeEvents(&(p)->app_layer_events); \
+        PACKET_PROFILING_RESET((p));            \
     } while (0)
-#else
-#define PACKET_CLEANUP(p) do {                  \
-    if ((p)->pktvar != NULL) {                  \
-        PktVarFree((p)->pktvar);                \
-    }                                           \
-    SCMutexDestroy(&(p)->tunnel_mutex);         \
-    SCMutexDestroy(&(p)->cuda_mutex);           \
-    SCCondDestroy(&(p)->cuda_cond);             \
-} while(0)
-#endif
 
 
 /* macro's for setting the action
  * handle the case of a root packet
  * for tunnels */
-#define ALERT_PACKET(p) do { \
+
+#define PACKET_SET_ACTION(p, a) do { \
     ((p)->root ? \
-     ((p)->root->action = ACTION_ALERT) : \
-     ((p)->action = ACTION_ALERT)); \
+     ((p)->root->action = a) : \
+     ((p)->action = a)); \
 } while (0)
 
-#define ACCEPT_PACKET(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = ACTION_ACCEPT) : \
-     ((p)->action = ACTION_ACCEPT)); \
-} while (0)
+#define PACKET_ALERT(p) PACKET_SET_ACTION(p, ACTION_ALERT)
 
-#define DROP_PACKET(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = ACTION_DROP) : \
-     ((p)->action = ACTION_DROP)); \
-} while (0)
+#define PACKET_ACCEPT(p) PACKET_SET_ACTION(p, ACTION_ACCEPT)
 
-#define REJECT_PACKET(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = (ACTION_REJECT|ACTION_DROP)) : \
-     ((p)->action = (ACTION_REJECT|ACTION_DROP))); \
-} while (0)
+#define PACKET_DROP(p) PACKET_SET_ACTION(p, ACTION_DROP)
 
-#define REJECT_PACKET_DST(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = (ACTION_REJECT_DST|ACTION_DROP)) : \
-     ((p)->action = (ACTION_REJECT_DST|ACTION_DROP))); \
-} while (0)
+#define PACKET_REJECT(p) PACKET_SET_ACTION(p, (ACTION_REJECT|ACTION_DROP))
 
-#define REJECT_PACKET_BOTH(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = (ACTION_REJECT_BOTH|ACTION_DROP)) : \
-     ((p)->action = (ACTION_REJECT_BOTH|ACTION_DROP))); \
-} while (0)
+#define PACKET_REJECT_DST(p) PACKET_SET_ACTION(p, (ACTION_REJECT_DST|ACTION_DROP))
 
-#define PASS_PACKET(p) do { \
-    ((p)->root ? \
-     ((p)->root->action = ACTION_PASS) : \
-     ((p)->action = ACTION_PASS)); \
-} while (0)
+#define PACKET_REJECT_BOTH(p) PACKET_SET_ACTION(p, (ACTION_REJECT_BOTH|ACTION_DROP))
 
-#define UPDATE_PACKET_ACTION(p, a) do { \
-    ((p)->root ? \
-     ((p)->root->action |= a) : \
-     ((p)->action |= a)); \
-} while (0)
+#define PACKET_PASS(p) PACKET_SET_ACTION(p, ACTION_PASS)
 
 #define PACKET_TEST_ACTION(p, a) \
     ((p)->root ? \
      ((p)->root->action & a) : \
      ((p)->action & a))
+
+#define PACKET_UPDATE_ACTION(p, a) do { \
+    ((p)->root ? \
+     ((p)->root->action |= a) : \
+     ((p)->action |= a)); \
+} while (0)
 
 #define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
         SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
@@ -819,6 +785,7 @@ typedef struct DecodeThreadVars_
 
 #define IS_TUNNEL_PKT(p)            (((p)->flags & PKT_TUNNEL))
 #define SET_TUNNEL_PKT(p)           ((p)->flags |= PKT_TUNNEL)
+#define UNSET_TUNNEL_PKT(p)         ((p)->flags &= ~PKT_TUNNEL)
 #define IS_TUNNEL_ROOT_PKT(p)       (IS_TUNNEL_PKT(p) && (p)->root == NULL)
 
 #define IS_TUNNEL_PKT_VERDICTED(p)  (((p)->flags & PKT_TUNNEL_VERDICTED))
@@ -826,33 +793,39 @@ typedef struct DecodeThreadVars_
 
 
 void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
-Packet *PacketPseudoPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
+Packet *PacketTunnelPktSetup(ThreadVars *tv, DecodeThreadVars *dtv, Packet *parent,
+                             uint8_t *pkt, uint16_t len, uint8_t proto, PacketQueue *pq);
 Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
+void PacketDefragPktSetupParent(Packet *parent);
 Packet *PacketGetFromQueueOrAlloc(void);
 Packet *PacketGetFromAlloc(void);
+void PacketDecodeFinalize(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p);
+void PacketFree(Packet *p);
+void PacketFreeOrRelease(Packet *p);
 int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen);
+const char *PktSrcToString(enum PktSrcEnum pkt_src);
 
-DecodeThreadVars *DecodeThreadVarsAlloc();
+DecodeThreadVars *DecodeThreadVarsAlloc(ThreadVars *);
 
 /* decoder functions */
-void DecodeEthernet(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeSll(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodePPP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodePPPOESession(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodePPPOEDiscovery(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeTunnel(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *, uint8_t);
-void DecodeRaw(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeIPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeIPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeICMPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeICMPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeTCP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeUDP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeSCTP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-void DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeEthernet(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeSll(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodePPP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodePPPOESession(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodePPPOEDiscovery(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeTunnel(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *, uint8_t) __attribute__ ((warn_unused_result));
+int DecodeRaw(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeIPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeIPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeICMPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeICMPV6(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeTCP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeUDP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeSCTP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 
 void AddressDebugPrint(Address *);
 
@@ -880,6 +853,13 @@ void AddressDebugPrint(Address *);
         (p)->events.cnt++; \
     } \
 } while(0)
+
+#define ENGINE_SET_INVALID_EVENT(p, e) do { \
+    p->flags |= PKT_IS_INVALID; \
+    ENGINE_SET_EVENT(p, e); \
+} while(0)
+
+
 
 #define ENGINE_ISSET_EVENT(p, e) ({ \
     int r = 0; \
@@ -956,6 +936,8 @@ void AddressDebugPrint(Address *);
 #define PKT_HOST_DST_LOOKED_UP          (1<<18)
 
 #define PKT_IS_FRAGMENT                 (1<<19)     /**< Packet is a fragment */
+#define PKT_IS_INVALID                  (1<<20)
+#define PKT_PROFILE                     (1<<21)
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)

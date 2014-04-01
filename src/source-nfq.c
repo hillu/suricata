@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -107,7 +107,8 @@ extern int max_pending_packets;
 
 #define MAX_ALREADY_TREATED 5
 #define NFQ_VERDICT_RETRY_TIME 3
-int already_seen_warning;
+static int already_seen_warning;
+static int runmode_workers;
 
 #define NFQ_BURST_FACTOR 4
 
@@ -148,6 +149,8 @@ TmEcode VerdictNFQThreadDeinit(ThreadVars *, void *);
 TmEcode DecodeNFQ(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode DecodeNFQThreadInit(ThreadVars *, void *, void **);
 
+TmEcode NFQSetVerdict(Packet *p);
+
 typedef enum NFQMode_ {
     NFQ_ACCEPT_MODE,
     NFQ_REPEAT_MODE,
@@ -162,6 +165,7 @@ typedef struct NFQCnf_ {
     uint32_t mask;
     uint32_t next_queue;
     uint32_t flags;
+    uint8_t batchcount;
 } NFQCnf;
 
 NFQCnf nfq_config;
@@ -237,7 +241,7 @@ void NFQInitConfig(char quiet)
         nfq_config.flags |= NFQ_FLAG_FAIL_OPEN;
 #else
         SCLogError(SC_ERR_NFQ_NOSUPPORT,
-                   "nfq.fail-open set but NFQ library has no support for it.");
+                   "nfq.%s set but NFQ library has no support for it.", "fail-open");
 #endif
     }
 
@@ -251,6 +255,20 @@ void NFQInitConfig(char quiet)
 
     if ((ConfGetInt("nfq.route-queue", &value)) == 1) {
         nfq_config.next_queue = ((uint32_t)value) << 16;
+    }
+
+    if ((ConfGetInt("nfq.batchcount", &value)) == 1) {
+#ifdef HAVE_NFQ_SET_VERDICT_BATCH
+        if (value > 255) {
+            SCLogWarning(SC_ERR_INVALID_ARGUMENT, "nfq.batchcount cannot exceed 255.");
+            value = 255;
+        }
+        if (value > 1)
+            nfq_config.batchcount = (uint8_t) (value - 1);
+#else
+        SCLogWarning(SC_ERR_NFQ_NOSUPPORT,
+                   "nfq.%s set but NFQ library has no support for it.", "batchcount");
+#endif
     }
 
     if (!quiet) {
@@ -271,18 +289,99 @@ void NFQInitConfig(char quiet)
 
 }
 
+static uint8_t NFQVerdictCacheLen(NFQQueueVars *t)
+{
+#ifdef HAVE_NFQ_SET_VERDICT_BATCH
+    return t->verdict_cache.len;
+#else
+    return 0;
+#endif
+}
+
+static void NFQVerdictCacheFlush(NFQQueueVars *t)
+{
+#ifdef HAVE_NFQ_SET_VERDICT_BATCH
+    int ret;
+    int iter = 0;
+
+    do {
+        if (t->verdict_cache.mark_valid)
+            ret = nfq_set_verdict_batch2(t->qh,
+                                         t->verdict_cache.packet_id,
+                                         t->verdict_cache.verdict,
+                                         t->verdict_cache.mark);
+        else
+            ret = nfq_set_verdict_batch(t->qh,
+                                        t->verdict_cache.packet_id,
+                                        t->verdict_cache.verdict);
+    } while ((ret < 0) && (iter++ < NFQ_VERDICT_RETRY_TIME));
+
+    if (ret < 0) {
+        SCLogWarning(SC_ERR_NFQ_SET_VERDICT, "nfq_set_verdict_batch failed: %s",
+                     strerror(errno));
+    } else {
+        t->verdict_cache.len = 0;
+        t->verdict_cache.mark_valid = 0;
+    }
+#endif
+}
+
+static int NFQVerdictCacheAdd(NFQQueueVars *t, Packet *p, uint32_t verdict)
+{
+#ifdef HAVE_NFQ_SET_VERDICT_BATCH
+    if (t->verdict_cache.maxlen == 0)
+        return -1;
+
+    if (p->flags & PKT_STREAM_MODIFIED || verdict == NF_DROP)
+        goto flush;
+
+    if (p->flags & PKT_MARK_MODIFIED) {
+        if (!t->verdict_cache.mark_valid) {
+            if (t->verdict_cache.len)
+                goto flush;
+            t->verdict_cache.mark_valid = 1;
+            t->verdict_cache.mark = p->nfq_v.mark;
+        } else if (t->verdict_cache.mark != p->nfq_v.mark) {
+            goto flush;
+        }
+    } else if (t->verdict_cache.mark_valid) {
+        goto flush;
+    }
+
+    if (t->verdict_cache.len == 0) {
+        t->verdict_cache.verdict = verdict;
+    } else if (t->verdict_cache.verdict != verdict)
+        goto flush;
+
+    /* same verdict, mark not set or identical -> can cache */
+    t->verdict_cache.packet_id = p->nfq_v.id;
+
+    if (t->verdict_cache.len >= t->verdict_cache.maxlen)
+        NFQVerdictCacheFlush(t);
+    else
+        t->verdict_cache.len++;
+    return 0;
+ flush:
+    /* can't cache. Flush current cache and signal caller it should send single verdict */
+    if (NFQVerdictCacheLen(t) > 0)
+        NFQVerdictCacheFlush(t);
+#endif
+    return -1;
+}
+
 static inline void NFQMutexInit(NFQQueueVars *nq)
 {
     char *active_runmode = RunmodeGetActive();
 
     if (active_runmode && !strcmp("workers", active_runmode)) {
         nq->use_mutex = 0;
+        runmode_workers = 1;
         SCLogInfo("NFQ running in 'workers' runmode, will not use mutex.");
     } else {
         nq->use_mutex = 1;
-    }
-    if (nq->use_mutex)
+        runmode_workers = 0;
         SCMutexInit(&nq->mutex_qh, NULL);
+    }
 }
 
 #define NFQMutexLock(nq) do {           \
@@ -295,7 +394,13 @@ static inline void NFQMutexInit(NFQQueueVars *nq)
         SCMutexUnlock(&(nq)->mutex_qh); \
 } while (0)
 
-
+/**
+ * \brief Read data from nfq message and setup Packet
+ *
+ * \note
+ * In case of error, this function verdict the packet
+ * to avoid skb to get stuck in kernel.
+ */
 int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)
 {
     struct nfq_data *tb = (struct nfq_data *)data;
@@ -322,14 +427,15 @@ int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)
             } while ((ret < 0) && (iter++ < NFQ_VERDICT_RETRY_TIME));
             if (ret < 0) {
                 SCLogWarning(SC_ERR_NFQ_SET_VERDICT,
-                             "nfq_set_verdict of %p failed %" PRId32 "",
-                             p, ret);
+                             "nfq_set_verdict of %p failed %" PRId32 ": %s",
+                             p, ret, strerror(errno));
             }
             return -1 ;
         }
     }
     p->nfq_v.ifi  = nfq_get_indev(tb);
     p->nfq_v.ifo  = nfq_get_outdev(tb);
+    p->nfq_v.verdicted = 0;
 
 #ifdef NFQ_GET_PAYLOAD_SIGNED
     ret = nfq_get_payload(tb, &pktdata);
@@ -346,6 +452,8 @@ int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)
              * This is unlikely to happen */
             SCLogWarning(SC_ERR_INVALID_ARGUMENTS, "NFQ sent too big packet");
             SET_PKT_LEN(p, 0);
+        } else if (runmode_workers) {
+            PacketSetData(p, (uint8_t *)pktdata, ret);
         } else {
             PacketCopyData(p, (uint8_t *)pktdata, ret);
         }
@@ -363,6 +471,15 @@ int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)
 
     p->datalink = DLT_RAW;
     return 0;
+}
+
+static void NFQReleasePacket(Packet *p)
+{
+    if (unlikely(!p->nfq_v.verdicted)) {
+        PACKET_UPDATE_ACTION(p, ACTION_DROP);
+        NFQSetVerdict(p);
+    }
+    PacketFreeOrRelease(p);
 }
 
 static int NFQCallBack(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
@@ -388,10 +505,13 @@ static int NFQCallBack(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
         nfq_q->pkts++;
         nfq_q->bytes += GET_PKT_LEN(p);
 #endif /* COUNTERS */
-        /* recycle Packet and leave */
+        /* NFQSetupPkt is issuing a verdict
+           so we only recycle Packet and leave */
         TmqhOutputPacketpool(tv, p);
         return 0;
     }
+
+    p->ReleasePacket = NFQReleasePacket;
 
 #ifdef COUNTERS
     NFQQueueVars *nfq_q = NFQGetQueue(ntv->nfq_index);
@@ -502,13 +622,22 @@ TmEcode NFQInitThread(NFQThreadVars *nfq_t, uint32_t queue_maxlen)
 	performance */
     opt = 1;
 #ifdef NETLINK_BROADCAST_SEND_ERROR
-    setsockopt(nfq_q->fd, SOL_NETLINK,
-               NETLINK_BROADCAST_SEND_ERROR, &opt, sizeof(int));
+    if (setsockopt(nfq_q->fd, SOL_NETLINK,
+                   NETLINK_BROADCAST_SEND_ERROR, &opt, sizeof(int)) == -1) {
+        SCLogWarning(SC_ERR_NFQ_SETSOCKOPT,
+                     "can't set netlink broadcast error: %s",
+                     strerror(errno));
+    }
 #endif
     /* Don't send error about no buffer space available but drop the
 	packets instead */
 #ifdef NETLINK_NO_ENOBUFS
-    setsockopt(nfq_q->fd, SOL_NETLINK, NETLINK_NO_ENOBUFS, &opt, sizeof(int));
+    if (setsockopt(nfq_q->fd, SOL_NETLINK,
+                   NETLINK_NO_ENOBUFS, &opt, sizeof(int)) == -1) {
+        SCLogWarning(SC_ERR_NFQ_SETSOCKOPT,
+                     "can't set netlink enobufs: %s",
+                     strerror(errno));
+    }
 #endif
 
 #ifdef HAVE_NFQ_SET_QUEUE_FLAGS
@@ -523,6 +652,14 @@ TmEcode NFQInitThread(NFQThreadVars *nfq_t, uint32_t queue_maxlen)
         } else {
             SCLogInfo("fail-open mode should be set on queue");
         }
+    }
+#endif
+
+#ifdef HAVE_NFQ_SET_VERDICT_BATCH
+    if (runmode_workers) {
+        nfq_q->verdict_cache.maxlen = nfq_config.batchcount;
+    } else if (nfq_config.batchcount) {
+        SCLogError(SC_ERR_INVALID_ARGUMENT, "nfq.batchcount is only valid in workers runmode.");
     }
 #endif
 
@@ -718,13 +855,16 @@ void *NFQGetThread(int number) {
 #ifndef OS_WIN32
 void NFQRecvPkt(NFQQueueVars *t, NFQThreadVars *tv) {
     int rv, ret;
+    int flag = NFQVerdictCacheLen(t) ? MSG_DONTWAIT : 0;
 
     /* XXX what happens on rv == 0? */
-    rv = recv(t->fd, tv->data, tv->datalen, 0);
+    rv = recv(t->fd, tv->data, tv->datalen, flag);
 
     if (rv < 0) {
         if (errno == EINTR || errno == EWOULDBLOCK) {
             /* no error on timeout */
+            if (flag)
+                NFQVerdictCacheFlush(t);
         } else {
 #ifdef COUNTERS
             NFQMutexLock(t);
@@ -848,7 +988,7 @@ TmEcode ReceiveNFQLoop(ThreadVars *tv, void *data, void *slot)
         }
         NFQRecvPkt(nq, ntv);
 
-        SCPerfSyncCountersIfSignalled(tv, 0);
+        SCPerfSyncCountersIfSignalled(tv);
     }
     SCReturnInt(TM_ECODE_OK);
 }
@@ -860,10 +1000,10 @@ void ReceiveNFQThreadExitStats(ThreadVars *tv, void *data) {
     NFQThreadVars *ntv = (NFQThreadVars *)data;
     NFQQueueVars *nq = NFQGetQueue(ntv->nfq_index);
 #ifdef COUNTERS
-    SCLogInfo("(%s) Pkts %" PRIu32 ", Bytes %" PRIu64 ", Errors %" PRIu32 "",
+    SCLogNotice("(%s) Treated: Pkts %" PRIu32 ", Bytes %" PRIu64 ", Errors %" PRIu32 "",
             tv->name, nq->pkts, nq->bytes, nq->errs);
-    SCLogInfo("Pkts accepted %"PRIu32", dropped %"PRIu32", replaced %"PRIu32,
-            nq->accepted, nq->dropped, nq->replaced);
+    SCLogNotice("(%s) Verdict: Accepted %"PRIu32", Dropped %"PRIu32", Replaced %"PRIu32,
+            tv->name, nq->accepted, nq->dropped, nq->replaced);
 #endif
 }
 
@@ -880,6 +1020,8 @@ TmEcode NFQSetVerdict(Packet *p) {
     /** \todo add a test on validity of the entry NFQQueueVars could have been
      *  wipeout
      */
+
+    p->nfq_v.verdicted = 1;
 
     /* can't verdict a "fake" packet */
     if (p->flags & PKT_PSEUDO_STREAM_END) {
@@ -923,6 +1065,12 @@ TmEcode NFQSetVerdict(Packet *p) {
 #ifdef COUNTERS
         t->accepted++;
 #endif /* COUNTERS */
+    }
+
+    ret = NFQVerdictCacheAdd(t, p, verdict);
+    if (ret == 0) {
+        NFQMutexUnlock(t);
+        return TM_ECODE_OK;
     }
 
     do {
@@ -991,7 +1139,9 @@ TmEcode NFQSetVerdict(Packet *p) {
     NFQMutexUnlock(t);
 
     if (ret < 0) {
-        SCLogWarning(SC_ERR_NFQ_SET_VERDICT, "nfq_set_verdict of %p failed %" PRId32 "", p, ret);
+        SCLogWarning(SC_ERR_NFQ_SET_VERDICT,
+                     "nfq_set_verdict of %p failed %" PRId32 ": %s",
+                     p, ret, strerror(errno));
         return TM_ECODE_FAILED;
     }
     return TM_ECODE_OK;
@@ -1050,6 +1200,11 @@ TmEcode DecodeNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
     IPV6Hdr *ip6h = (IPV6Hdr *)GET_PKT_DATA(p);
     DecodeThreadVars *dtv = (DecodeThreadVars *)data;
 
+    /* XXX HACK: flow timeout can call us for injected pseudo packets
+     *           see bug: https://redmine.openinfosecfoundation.org/issues/1107 */
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return TM_ECODE_OK;
+
     SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
     SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
     SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
@@ -1070,6 +1225,8 @@ TmEcode DecodeNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
         SCLogDebug("packet unsupported by NFQ, first byte: %02x", *GET_PKT_DATA(p));
     }
 
+    PacketDecodeFinalize(tv, dtv, p);
+
     return TM_ECODE_OK;
 }
 
@@ -1079,7 +1236,7 @@ TmEcode DecodeNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
 TmEcode DecodeNFQThreadInit(ThreadVars *tv, void *initdata, void **data)
 {
     DecodeThreadVars *dtv = NULL;
-    dtv = DecodeThreadVarsAlloc();
+    dtv = DecodeThreadVarsAlloc(tv);
 
     if (dtv == NULL)
         SCReturnInt(TM_ECODE_FAILED);

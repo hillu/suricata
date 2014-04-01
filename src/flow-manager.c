@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -67,7 +67,7 @@
 /* Run mode selected at suricata.c */
 extern int run_mode;
 
-SC_ATOMIC_EXTERN(unsigned char, flow_flags);
+SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 /* 1 seconds */
 #define FLOW_NORMAL_MODE_UPDATE_DELAY_SEC 1
@@ -94,7 +94,7 @@ void FlowKillFlowManagerThread(void)
     ThreadVars *tv = NULL;
     int cnt = 0;
 
-    SCCondSignal(&flow_manager_cond);
+    SCCtrlCondSignal(&flow_manager_ctrl_cond);
 
     SCMutexLock(&tv_root_lock);
 
@@ -228,7 +228,8 @@ static int FlowManagerFlowTimedOut(Flow *f, struct timeval *ts) {
     }
 
     int server = 0, client = 0;
-    if (FlowForceReassemblyNeedReassmbly(f, &server, &client) == 1) {
+    if (!(f->flags & FLOW_TIMEOUT_REASSEMBLY_DONE) &&
+            FlowForceReassemblyNeedReassembly(f, &server, &client) == 1) {
         FlowForceReassemblyForFlowV2(f, server, client);
         return 0;
     }
@@ -364,6 +365,8 @@ next:
     return cnt;
 }
 
+extern int g_detect_disabled;
+
 /** \brief Thread that manages the flow table and times out flows.
  *
  *  \param td ThreadVars casted to void ptr
@@ -406,10 +409,10 @@ void *FlowManagerThread(void *td)
             SC_PERF_TYPE_UINT64,
             "NULL");
     uint16_t flow_mgr_memuse = SCPerfTVRegisterCounter("flow.memuse", th_v,
-            SC_PERF_TYPE_Q_NORMAL,
+            SC_PERF_TYPE_UINT64,
             "NULL");
     uint16_t flow_mgr_spare = SCPerfTVRegisterCounter("flow.spare", th_v,
-            SC_PERF_TYPE_Q_NORMAL,
+            SC_PERF_TYPE_UINT64,
             "NULL");
     uint16_t flow_emerg_mode_enter = SCPerfTVRegisterCounter("flow.emerg_mode_entered", th_v,
             SC_PERF_TYPE_UINT64,
@@ -423,7 +426,7 @@ void *FlowManagerThread(void *td)
 
     memset(&ts, 0, sizeof(ts));
 
-    FlowForceReassemblySetup();
+    FlowForceReassemblySetup(g_detect_disabled);
 
     /* set the thread name */
     if (SCSetThreadName(th_v->name) < 0) {
@@ -532,19 +535,20 @@ void *FlowManagerThread(void *td)
         }
 
         if (TmThreadsCheckFlag(th_v, THV_KILL)) {
-            SCPerfSyncCounters(th_v, 0);
+            SCPerfSyncCounters(th_v);
             break;
         }
 
         cond_time.tv_sec = time(NULL) + flow_update_delay_sec;
         cond_time.tv_nsec = flow_update_delay_nsec;
-        SCMutexLock(&flow_manager_mutex);
-        SCCondTimedwait(&flow_manager_cond, &flow_manager_mutex, &cond_time);
-        SCMutexUnlock(&flow_manager_mutex);
+        SCCtrlMutexLock(&flow_manager_ctrl_mutex);
+        SCCtrlCondTimedwait(&flow_manager_ctrl_cond, &flow_manager_ctrl_mutex,
+                            &cond_time);
+        SCCtrlMutexUnlock(&flow_manager_ctrl_mutex);
 
         SCLogDebug("woke up... %s", SC_ATOMIC_GET(flow_flags) & FLOW_EMERGENCY ? "emergency":"");
 
-        SCPerfSyncCountersIfSignalled(th_v, 0);
+        SCPerfSyncCountersIfSignalled(th_v);
     }
 
     TmThreadsSetFlag(th_v, THV_RUNNING_DONE);
@@ -566,8 +570,8 @@ void FlowManagerThreadSpawn()
 {
     ThreadVars *tv_flowmgr = NULL;
 
-    SCCondInit(&flow_manager_cond, NULL);
-    SCMutexInit(&flow_manager_mutex, NULL);
+    SCCtrlCondInit(&flow_manager_ctrl_cond, NULL);
+    SCCtrlMutexInit(&flow_manager_ctrl_mutex, NULL);
 
     tv_flowmgr = TmThreadCreateMgmtThread("FlowManagerThread",
                                           FlowManagerThread, 0);

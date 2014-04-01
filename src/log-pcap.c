@@ -262,17 +262,17 @@ TmEcode PcapLog (ThreadVars *t, Packet *p, void *data, PacketQueue *pq,
     len = sizeof(*pl->h) + GET_PKT_LEN(p);
 
     if (pl->filename == NULL) {
-        SCLogDebug("Opening PCAP log file %s", pl->filename);
         ret = PcapLogOpenFileCtx(pl);
         if (ret < 0) {
             SCMutexUnlock(&pl->plog_lock);
             return TM_ECODE_FAILED;
         }
+        SCLogDebug("Opening PCAP log file %s", pl->filename);
     }
 
     if (pl->mode == LOGMODE_SGUIL) {
         struct tm local_tm;
-        struct tm *tms = (struct tm *)SCLocalTime(p->ts.tv_sec, &local_tm);
+        struct tm *tms = SCLocalTime(p->ts.tv_sec, &local_tm);
         if (tms->tm_mday != pl->prev_day) {
             rotate = 1;
             pl->prev_day = tms->tm_mday;
@@ -342,7 +342,7 @@ TmEcode PcapLogDataInit(ThreadVars *t, void *initdata, void **data)
     memset(&ts, 0x00, sizeof(struct timeval));
     TimeGet(&ts);
     struct tm local_tm;
-    struct tm *tms = (struct tm *)SCLocalTime(ts.tv_sec, &local_tm);
+    struct tm *tms = SCLocalTime(ts.tv_sec, &local_tm);
     pl->prev_day = tms->tm_mday;
 
     *data = (void *)pl;
@@ -463,8 +463,7 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
                 exit(EXIT_FAILURE);
             } else {
                 char *log_dir = NULL;
-                if (ConfGet("default-log-dir", &log_dir) != 1)
-                    log_dir = DEFAULT_LOG_DIR;
+                log_dir = ConfigGetLogDirectory();
 
                 strlcpy(pl->dir,
                     log_dir, sizeof(pl->dir));
@@ -476,8 +475,7 @@ OutputCtx *PcapLogInitCtx(ConfNode *conf)
                         s_dir, sizeof(pl->dir));
             } else {
                 char *log_dir = NULL;
-                if (ConfGet("default-log-dir", &log_dir) != 1)
-                    log_dir = DEFAULT_LOG_DIR;
+                log_dir = ConfigGetLogDirectory();
 
                 snprintf(pl->dir, sizeof(pl->dir), "%s/%s",
                     log_dir, s_dir);
@@ -594,10 +592,11 @@ int PcapLogOpenFileCtx(PcapLogData *pl)
     if (pl->filename != NULL)
         filename = pl->filename;
     else {
-        filename = pl->filename = SCMalloc(PATH_MAX);
-        if (filename == NULL) {
+        filename = SCMalloc(PATH_MAX);
+        if (unlikely(filename == NULL)) {
             return -1;
         }
+        pl->filename = filename;
     }
 
     /** get the time so we can have a filename with seconds since epoch */
@@ -614,7 +613,7 @@ int PcapLogOpenFileCtx(PcapLogData *pl)
 
     if (pl->mode == LOGMODE_SGUIL) {
         struct tm local_tm;
-        struct tm *tms = (struct tm *)SCLocalTime(ts.tv_sec, &local_tm);
+        struct tm *tms = SCLocalTime(ts.tv_sec, &local_tm);
 
         char dirname[32], dirfull[PATH_MAX] = "";
 

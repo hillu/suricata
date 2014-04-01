@@ -32,7 +32,6 @@
 #include "runmode-nfq.h"
 #include "log-httplog.h"
 #include "output.h"
-#include "cuda-packet-batcher.h"
 #include "source-pfring.h"
 
 #include "alert-fastlog.h"
@@ -45,6 +44,7 @@
 #include "util-cpu.h"
 #include "util-affinity.h"
 #include "util-runmodes.h"
+#include "util-device.h"
 
 static const char *default_mode;
 
@@ -99,6 +99,8 @@ int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx)
 
     TimeModeSetLive();
 
+    LiveDeviceHasNoStats();
+
     ret = RunModeSetIPSAuto(de_ctx,
             NFQGetThread,
             "ReceiveNFQ",
@@ -119,6 +121,8 @@ int RunModeIpsNFQAutoFp(DetectEngineCtx *de_ctx)
 
     TimeModeSetLive();
 
+    LiveDeviceHasNoStats();
+
     ret = RunModeSetIPSAutoFp(de_ctx,
             NFQGetThread,
             "ReceiveNFQ",
@@ -137,6 +141,8 @@ int RunModeIpsNFQWorker(DetectEngineCtx *de_ctx)
     RunModeInitialize();
 
     TimeModeSetLive();
+
+    LiveDeviceHasNoStats();
 
     ret = RunModeSetIPSWorker(de_ctx,
             NFQGetThread,

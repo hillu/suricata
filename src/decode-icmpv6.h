@@ -47,6 +47,12 @@
 #define MLD_LISTENER_REPORT         131
 #define MLD_LISTENER_REDUCTION      132
 
+#define ND_ROUTER_SOLICIT           133
+#define ND_ROUTER_ADVERT            134
+#define ND_NEIGHBOR_SOLICIT         135
+#define ND_NEIGHBOR_ADVERT          136
+#define ND_REDIRECT                 137
+
 /** Destination Unreachable Message (type=1) Code: */
 
 #define ICMP6_DST_UNREACH_NOROUTE       0 /* no route to destination */
@@ -127,9 +133,6 @@ typedef struct ICMPV6Hdr_
 
 /** Data available from the decoded packet */
 typedef struct ICMPV6Vars_ {
-    /* checksum computed over the icmpv6 packet */
-    int32_t comp_csum;
-
     /* checksum of the icmpv6 packet */
     uint16_t  id;
     uint16_t  seq;
@@ -155,7 +158,7 @@ typedef struct ICMPV6Vars_ {
 
 
 #define CLEAR_ICMPV6_PACKET(p) do { \
-    (p)->icmpv6vars.comp_csum = -1; \
+    (p)->level4_comp_csum = -1; \
     (p)->icmpv6vars.id = 0; \
     (p)->icmpv6vars.seq = 0; \
     (p)->icmpv6vars.mtu = 0; \

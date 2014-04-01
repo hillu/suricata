@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -39,6 +39,10 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+
+#include "pkt-var.h"
+#include "host.h"
+#include "util-profiling.h"
 
 /*                         name             modifiers          value      */
 #define PARSE_REGEX "^\\s*([a-zA-Z][\\w\\d_.]+)\\s*,\\s*([+=-]{1}|==|!=|<|<=|>|>=|isset|notset)\\s*,?\\s*([a-zA-Z][\\w\\d]+|[\\d]{1,10})?\\s*$"
@@ -197,7 +201,9 @@ int DetectFlowintMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
                 break;
             default:
                 SCLogDebug("Unknown Modifier!");
-                exit(EXIT_FAILURE);
+#ifdef DEBUG
+                BUG_ON(1);
+#endif
         }
     } else {
         /* allow a add on a non-existing var, it will init to the "add" value,
@@ -215,6 +221,7 @@ int DetectFlowintMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
             return 0;
         }
     }
+    return 0;
 }
 
 /**
@@ -226,13 +233,12 @@ int DetectFlowintMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval NULL if invalid option
  * \retval DetectFlowintData pointer with the flowint parsed
  */
-DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
-                                       char *rawstr)
+DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx, char *rawstr)
 {
     DetectFlowintData *sfd = NULL;
-    char *str = rawstr;
     char *varname = NULL;
     char *varval = NULL;
+    char *modstr = NULL;
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
@@ -249,42 +255,42 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
 
     /* Get our flowint varname */
     res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-    if (res < 0) {
+    if (res < 0 || str_ptr == NULL) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-        return NULL;
+        goto error;
     }
-    varname =(char *) str_ptr;
+    varname = (char *)str_ptr;
 
-    res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 2,
-                               &str_ptr);
-    if (res < 0) {
+    res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    if (res < 0 || str_ptr == NULL) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-        return NULL;
+        goto error;
     }
+    modstr = (char *)str_ptr;
 
     /* Get the modifier */
-    if (strcmp("=", str_ptr) == 0)
+    if (strcmp("=", modstr) == 0)
         modifier = FLOWINT_MODIFIER_SET;
-    if (strcmp("+", str_ptr) == 0)
+    if (strcmp("+", modstr) == 0)
         modifier = FLOWINT_MODIFIER_ADD;
-    if (strcmp("-", str_ptr) == 0)
+    if (strcmp("-", modstr) == 0)
         modifier = FLOWINT_MODIFIER_SUB;
 
-    if (strcmp("<", str_ptr) == 0)
+    if (strcmp("<", modstr) == 0)
         modifier = FLOWINT_MODIFIER_LT;
-    if (strcmp("<=", str_ptr) == 0)
+    if (strcmp("<=", modstr) == 0)
         modifier = FLOWINT_MODIFIER_LE;
-    if (strcmp("!=", str_ptr) == 0)
+    if (strcmp("!=", modstr) == 0)
         modifier = FLOWINT_MODIFIER_NE;
-    if (strcmp("==", str_ptr) == 0)
+    if (strcmp("==", modstr) == 0)
         modifier = FLOWINT_MODIFIER_EQ;
-    if (strcmp(">=", str_ptr) == 0)
+    if (strcmp(">=", modstr) == 0)
         modifier = FLOWINT_MODIFIER_GE;
-    if (strcmp(">", str_ptr) == 0)
+    if (strcmp(">", modstr) == 0)
         modifier = FLOWINT_MODIFIER_GT;
-    if (strcmp("isset", str_ptr) == 0)
+    if (strcmp("isset", modstr) == 0)
         modifier = FLOWINT_MODIFIER_ISSET;
-    if (strcmp("notset", str_ptr) == 0)
+    if (strcmp("notset", modstr) == 0)
         modifier = FLOWINT_MODIFIER_NOTSET;
 
     if (modifier == FLOWINT_MODIFIER_UNKNOWN) {
@@ -301,26 +307,16 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
         if (ret < 4)
             goto error;
 
-        res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 3,
-                                   &str_ptr);
-        varval =(char *) str_ptr;
-        if (res < 0 || strcmp(varval,"") == 0) {
+        res = pcre_get_substring((char *) rawstr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
+        varval = (char *)str_ptr;
+        if (res < 0 || varval == NULL || strcmp(varval, "") == 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            SCFree(sfd);
-            return NULL;
-        }
-
-        /* get the target value to operate with
-        *(it should be a value or another var) */
-        str = SCStrdup(varval);
-        if (unlikely(str == NULL)) {
-            SCLogError(SC_ERR_MEM_ALLOC, "malloc from strdup failed");
             goto error;
         }
 
-        if (str[0] >= '0' && str[0] <= '9') { /* is digit, look at the regexp */
+        if (varval[0] >= '0' && varval[0] <= '9') { /* is digit, look at the regexp */
             sfd->targettype = FLOWINT_TARGET_VAL;
-            value_long = atoll(str);
+            value_long = atoll(varval);
             if (value_long > UINT32_MAX) {
                 SCLogDebug("DetectFlowintParse: Cannot load this value."
                             " Values should be between 0 and %"PRIu32, UINT32_MAX);
@@ -328,7 +324,11 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
             }
         } else {
             sfd->targettype = FLOWINT_TARGET_VAR;
-            sfd->target.tvar.name = str;
+            sfd->target.tvar.name = SCStrdup(varval);
+            if (unlikely(sfd->target.tvar.name == NULL)) {
+                SCLogError(SC_ERR_MEM_ALLOC, "malloc from strdup failed");
+                goto error;
+            }
         }
     } else {
         sfd->targettype = FLOWINT_TARGET_SELF;
@@ -336,14 +336,27 @@ DetectFlowintData *DetectFlowintParse(DetectEngineCtx *de_ctx,
 
     /* Set the name of the origin var to modify/compared with the target */
     sfd->name = SCStrdup(varname);
+    if (unlikely(sfd->name == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC, "malloc from strdup failed");
+        goto error;
+    }
     if (de_ctx != NULL)
         sfd->idx = VariableNameGetIdx(de_ctx, varname, DETECT_FLOWINT);
-    sfd->target.value =(uint32_t) value_long;
-
+    sfd->target.value = (uint32_t) value_long;
     sfd->modifier = modifier;
 
+    pcre_free_substring(varname);
+    pcre_free_substring(modstr);
+    if (varval)
+        pcre_free_substring(varval);
     return sfd;
 error:
+    if (varname)
+        pcre_free_substring(varname);
+    if (varval)
+        pcre_free_substring(varval);
+    if (modstr)
+        pcre_free_substring(modstr);
     if (sfd != NULL)
         SCFree(sfd);
     return NULL;
@@ -394,13 +407,17 @@ static int DetectFlowintSetup(DetectEngineCtx *de_ctx, Signature *s, char *rawst
         case FLOWINT_MODIFIER_NOTSET:
             SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
             break;
+        default:
+            goto error;
     }
 
     return 0;
 
 error:
-    if (sfd) DetectFlowintFree(sfd);
-    if (sm) SCFree(sm);
+    if (sfd)
+        DetectFlowintFree(sfd);
+    if (sm)
+        SCFree(sm);
     return -1;
 }
 
@@ -1323,7 +1340,7 @@ int DetectFlowintTestPacket01Real()
         sizeof(pkt11)
     };
 
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
@@ -1364,7 +1381,7 @@ int DetectFlowintTestPacket01Real()
     int i;
     for (i = 0;i < 11;i++) {
         memset(p, 0, SIZE_OF_PACKET);
-        p->pkt = (uint8_t *)(p + 1);
+        PACKET_INITIALIZE(p);
         DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1396,6 +1413,7 @@ int DetectFlowintTestPacket01Real()
                 break;
         }
         SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
+        PACKET_RECYCLE(p);
     }
 
     SigGroupCleanup(de_ctx);
@@ -1418,6 +1436,7 @@ end:
     if (de_ctx)
         DetectEngineCtxFree(de_ctx);
 
+    PACKET_RECYCLE(p);
     FlowShutdown();
     SCFree(p);
     return result;
@@ -1657,7 +1676,7 @@ int DetectFlowintTestPacket02Real()
         sizeof(pkt11)
     };
 
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
@@ -1700,7 +1719,7 @@ int DetectFlowintTestPacket02Real()
     /* Decode the packets, and test the matches*/
     for (i = 0;i < 11;i++) {
         memset(p, 0, SIZE_OF_PACKET);
-        p->pkt = (uint8_t *)(p + 1);
+        PACKET_INITIALIZE(p);
         DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1732,6 +1751,7 @@ int DetectFlowintTestPacket02Real()
                 break;
         }
         SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
+        PACKET_RECYCLE(p);
     }
 
     SigGroupCleanup(de_ctx);
@@ -1995,7 +2015,7 @@ int DetectFlowintTestPacket03Real()
         sizeof(pkt11)
     };
 
-    Packet *p = SCMalloc(SIZE_OF_PACKET);
+    Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
         return 0;
     DecodeThreadVars dtv;
@@ -2032,7 +2052,7 @@ int DetectFlowintTestPacket03Real()
     /* Decode the packets, and test the matches*/
     for (i = 0;i < 11;i++) {
         memset(p, 0, SIZE_OF_PACKET);
-        p->pkt = (uint8_t *)(p + 1);
+        PACKET_INITIALIZE(p);
         DecodeEthernet(&th_v, &dtv, p, pkts[i], pktssizes[i], NULL);
 
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -2061,6 +2081,7 @@ int DetectFlowintTestPacket03Real()
                 break;
         }
         SCLogDebug("Raw Packet %d has %u alerts ", i, p->alerts.cnt);
+        PACKET_RECYCLE(p);
     }
 
     SigGroupCleanup(de_ctx);

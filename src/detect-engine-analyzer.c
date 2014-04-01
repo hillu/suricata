@@ -99,6 +99,35 @@ void EngineAnalysisFP(Signature *s, char *line)
     else if (list_type == DETECT_SM_LIST_HUADMATCH)
         fprintf(fp_engine_analysis_FD, "http user agent content\n");
 
+    int flags_set = 0;
+    fprintf(fp_engine_analysis_FD, "        Flags:");
+    if (fp_cd->flags & DETECT_CONTENT_OFFSET) {
+        fprintf(fp_engine_analysis_FD, " Offset");
+        flags_set = 1;
+    } if (fp_cd->flags & DETECT_CONTENT_DEPTH) {
+        fprintf(fp_engine_analysis_FD, " Depth");
+        flags_set = 1;
+    }
+    if (fp_cd->flags & DETECT_CONTENT_WITHIN) {
+        fprintf(fp_engine_analysis_FD, " Within");
+        flags_set = 1;
+    }
+    if (fp_cd->flags & DETECT_CONTENT_DISTANCE) {
+        fprintf(fp_engine_analysis_FD, " Distance");
+        flags_set = 1;
+    }
+    if (fp_cd->flags & DETECT_CONTENT_NOCASE) {
+        fprintf(fp_engine_analysis_FD, " Nocase");
+        flags_set = 1;
+    }
+    if (fp_cd->flags & DETECT_CONTENT_NEGATED) {
+        fprintf(fp_engine_analysis_FD, " Negated");
+        flags_set = 1;
+    }
+    if (flags_set == 0)
+        fprintf(fp_engine_analysis_FD, " None");
+    fprintf(fp_engine_analysis_FD, "\n");
+
     fprintf(fp_engine_analysis_FD, "        Fast pattern set: %s\n", fast_pattern_set ? "yes" : "no");
     fprintf(fp_engine_analysis_FD, "        Fast pattern only set: %s\n",
             fast_pattern_only_set ? "yes" : "no");
@@ -108,8 +137,6 @@ void EngineAnalysisFP(Signature *s, char *line)
         fprintf(fp_engine_analysis_FD, "        Fast pattern offset, length: %u, %u\n",
                 fp_cd->fp_chop_offset, fp_cd->fp_chop_len);
     }
-    fprintf(fp_engine_analysis_FD, "        Content negated: %s\n",
-            (fp_cd->flags & DETECT_CONTENT_NEGATED) ? "yes" : "no");
 
     uint16_t patlen = fp_cd->content_len;
     uint8_t *pat = SCMalloc(fp_cd->content_len + 1);
@@ -165,8 +192,7 @@ int SetupFPAnalyzer(void)
         return 0;
 
     char *log_dir;
-    if (ConfGet("default-log-dir", &log_dir) != 1)
-        log_dir = DEFAULT_LOG_DIR;
+    log_dir = ConfigGetLogDirectory();
     snprintf(log_path, sizeof(log_path), "%s/%s", log_dir,
              "rules_fast_pattern.txt");
 
@@ -184,7 +210,7 @@ int SetupFPAnalyzer(void)
     struct tm *tms;
     gettimeofday(&tval, NULL);
     struct tm local_tm;
-    tms = (struct tm *)SCLocalTime(tval.tv_sec, &local_tm);
+    tms = SCLocalTime(tval.tv_sec, &local_tm);
     fprintf(fp_engine_analysis_FD, "----------------------------------------------"
             "---------------------\n");
     fprintf(fp_engine_analysis_FD, "Date: %" PRId32 "/%" PRId32 "/%04d -- "
@@ -216,8 +242,7 @@ int SetupRuleAnalyzer(void)
         }
         if (enabled) {
             char *log_dir;
-            if (ConfGet("default-log-dir", &log_dir) != 1)
-                log_dir = DEFAULT_LOG_DIR;
+            log_dir = ConfigGetLogDirectory();
             snprintf(log_path, sizeof(log_path), "%s/%s", log_dir, "rules_analysis.txt");
             rule_engine_analysis_FD = fopen(log_path, "w");
             if (rule_engine_analysis_FD == NULL) {
@@ -232,7 +257,7 @@ int SetupRuleAnalyzer(void)
             struct tm *tms;
             gettimeofday(&tval, NULL);
             struct tm local_tm;
-            tms = (struct tm *)localtime_r(&tval.tv_sec, &local_tm);
+            tms = SCLocalTime(tval.tv_sec, &local_tm);
             fprintf(rule_engine_analysis_FD, "----------------------------------------------"
                     "---------------------\n");
             fprintf(rule_engine_analysis_FD, "Date: %" PRId32 "/%" PRId32 "/%04d -- "
@@ -403,6 +428,8 @@ static void EngineAnalysisRulesPrintFP(Signature *s)
         fprintf(rule_engine_analysis_FD, "http stat msg content");
     else if (list_type == DETECT_SM_LIST_HUADMATCH)
         fprintf(rule_engine_analysis_FD, "http user agent content");
+    else if (list_type == DETECT_SM_LIST_DNSQUERY_MATCH)
+        fprintf(rule_engine_analysis_FD, "dns query name content");
 
     fprintf(rule_engine_analysis_FD, "\" buffer.\n");
 
@@ -758,7 +785,7 @@ void EngineAnalysisRules(Signature *s, char *line)
         if (http_stat_code_buf) fprintf(rule_engine_analysis_FD, "    Rule matches on http stat code buffer.\n");
         if (http_ua_buf) fprintf(rule_engine_analysis_FD, "    Rule matches on http user agent buffer.\n");
         if (s->alproto != ALPROTO_UNKNOWN) {
-            fprintf(rule_engine_analysis_FD, "    App layer protocol is %s.\n", TmModuleAlprotoToString(s->alproto));
+            fprintf(rule_engine_analysis_FD, "    App layer protocol is %s.\n", AppProtoToString(s->alproto));
         }
         if (rule_content || rule_content_http || rule_pcre || rule_pcre_http) {
             fprintf(rule_engine_analysis_FD, "    Rule contains %d content options, %d http content options, %d pcre options, and %d pcre options with http modifiers.\n", rule_content, rule_content_http, rule_pcre, rule_pcre_http);

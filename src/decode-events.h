@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -25,6 +25,7 @@
 #ifndef __DECODE_EVENTS_H__
 #define __DECODE_EVENTS_H__
 
+/* packet decoder events */
 enum {
     /* IPV4 EVENTS */
     IPV4_PKT_TOO_SMALL = 1,         /**< ipv4 pkt smaller than minimum header size */
@@ -41,6 +42,7 @@ enum {
     IPV4_OPT_DUPLICATE,             /**< duplicated ip option */
     IPV4_OPT_UNKNOWN,               /**< unknown ip option */
     IPV4_WRONG_IP_VER,              /**< wrong ip version in ip options */
+    IPV4_WITH_ICMPV6,               /**< IPv4 packet with ICMPv6 header */
 
     /* ICMP EVENTS */
     ICMPV4_PKT_TOO_SMALL,           /**< icmpv4 packet smaller than minimum size */
@@ -132,10 +134,12 @@ enum {
     /* VLAN EVENTS */
     VLAN_HEADER_TOO_SMALL,          /**< vlan header smaller than minimum size */
     VLAN_UNKNOWN_TYPE,              /**< vlan unknown type */
+    VLAN_HEADER_TOO_MANY_LAYERS,
 
     /* RAW EVENTS */
     IPRAW_INVALID_IPV,              /**< invalid ip version in ip raw */
 
+    /* STREAM EVENTS */
     STREAM_3WHS_ACK_IN_WRONG_DIR,
     STREAM_3WHS_ASYNC_WRONG_SEQ,
     STREAM_3WHS_RIGHT_SEQ_WRONG_ACK_EVASION,
@@ -144,6 +148,7 @@ enum {
     STREAM_3WHS_SYNACK_RESEND_WITH_DIFF_SEQ,
     STREAM_3WHS_SYNACK_TOSERVER_ON_SYN_RECV,
     STREAM_3WHS_SYNACK_WITH_WRONG_ACK,
+    STREAM_3WHS_SYNACK_FLOOD,
     STREAM_3WHS_SYN_RESEND_DIFF_SEQ_ON_SYN_RECV,
     STREAM_3WHS_SYN_TOCLIENT_ON_SYN_RECV,
     STREAM_3WHS_WRONG_SEQ_WRONG_ACK,
@@ -196,12 +201,12 @@ enum {
     STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA,
 
     /* SCTP EVENTS */
-    SCTP_PKT_TOO_SMALL,              /**< sctp packet smaller than minimum size */
+    SCTP_PKT_TOO_SMALL, /**< sctp packet smaller than minimum size */
 
     /* Fragmentation reasembly events. */
     IPV4_FRAG_PKT_TOO_LARGE,
-    IPV4_FRAG_OVERLAP,
     IPV6_FRAG_PKT_TOO_LARGE,
+    IPV4_FRAG_OVERLAP,
     IPV6_FRAG_OVERLAP,
     IPV4_FRAG_TOO_LARGE,
     IPV6_FRAG_TOO_LARGE,
@@ -219,168 +224,5 @@ enum {
     /* should always be last! */
     DECODE_EVENT_MAX,
 };
-
-#define DECODER_EVENTS_BUFFER_STEPS 5
-
-/**
- * \brief Data structure to store app layer decoder events.
- */
-typedef struct AppLayerDecoderEvents_ {
-    /* array of events */
-    uint8_t *events;
-    /* number of events in the above buffer */
-    uint8_t cnt;
-    /* current event buffer size */
-    uint8_t events_buffer_size;
-} AppLayerDecoderEvents;
-
-/**
- * \brief Store decoder event module
- */
-typedef struct AppLayerDecoderEventsModule_ {
-    /* the alproto module for which we are storing the event table */
-    uint16_t alproto;
-    /* the event table map */
-    SCEnumCharMap *table;
-
-    struct AppLayerDecoderEventsModule_ *next;
-} AppLayerDecoderEventsModule;
-
-#if 0
-
-#define AppLayerDecoderEventsSetEvent(module_id, devents_head, event)   \
-    do {                                                                \
-        DecoderEvents devents = *devents_head;                          \
-        while (devents != NULL && devents->module_id != module_id) {    \
-            devents = devents->next;                                    \
-        }                                                               \
-        if (devents == NULL) {                                          \
-            DecoderEvents new_devents = SCMalloc(sizeof(DecoderEvents));\
-            if (new_devents == NULL)                                    \
-                return;                                                 \
-            memset(new_devents, 0, sizeof(DecoderEvents));              \
-            devents_head = new_devents;                                 \
-        }                                                               \
-        if ((devents)->cnt == events_buffer_size) {                     \
-            devents->events = SCRealloc(devents->events,                \
-                                        (devents->cnt +                 \
-                                         DECODER_EVENTS_BUFFER_STEPS) * \
-                                         sizeof(uint8_t));              \
-            if (devents->events == NULL) {                              \
-                devents->events_buffer_size = 0;                        \
-                devents->cnt = 0;                                       \
-                break;                                                  \
-            }                                                           \
-            devents->events_buffer_size += DECODER_EVENTS_BUFFER_STEPS; \
-        }                                                               \
-        devents->events[devents->cnt++] = event;                        \
-    } while (0)
-
-static inline int AppLayerDecoderEventsIsEventSet(int module_id,
-                                                  DecoderEvents *devents,
-                                                  uint8_t event)
-{
-    while (devents != NULL && devents->module_id != module_id) {
-        devents = devents->next;
-    }
-
-    if (devents == NULL)
-        return 0;
-
-    int i;
-    int cnt = devents->cnt;
-    for (i = 0; i < cnt; i++) {
-        if (devents->events[i] == event)
-            return 1;
-    }
-
-    return 0;
-}
-
-#define DecoderEventsFreeEvents(devents)                    \
-    do {                                                    \
-        while ((devents) != NULL) {                         \
-            if ((devents)->events != NULL)                  \
-                SCFree((devents)->events);                  \
-            (devents) = (devents)->next;                    \
-        }                                                   \
-    } while (0)
-
-
-#endif /* #if 0 */
-
-/**
- * \brief Set an app layer decoder event.
- *
- * \param devents_head Pointer to a DecoderEvents pointer head.  If
- *                     the head points to a DecoderEvents instance, a
- *                     new instance would be created and the pointer head would
- *                     would be updated with this new instance
- * \param event        The event to be stored.
- */
-#define AppLayerDecoderEventsSetEvent(f, event)                         \
-    do {                                                                \
-        AppLayerParserStateStore *parser_state_store =                  \
-            (AppLayerParserStateStore *)(f)->alparser;                  \
-        AppLayerDecoderEvents *devents =                                \
-            parser_state_store->decoder_events;                         \
-        if (devents == NULL) {                                          \
-            AppLayerDecoderEvents *new_devents =                        \
-                SCMalloc(sizeof(AppLayerDecoderEvents));                \
-            if (new_devents == NULL)                                    \
-                break;                                                  \
-            memset(new_devents, 0, sizeof(AppLayerDecoderEvents));      \
-            parser_state_store->decoder_events = new_devents;           \
-            devents = new_devents;                                      \
-        }                                                               \
-        if (devents->cnt == devents->events_buffer_size) {              \
-            devents->events = SCRealloc(devents->events,                \
-                                        (devents->cnt +                 \
-                                         DECODER_EVENTS_BUFFER_STEPS) * \
-                                         sizeof(uint8_t));              \
-            if (devents->events == NULL) {                              \
-                devents->events_buffer_size = 0;                        \
-                devents->cnt = 0;                                       \
-                break;                                                  \
-            }                                                           \
-            devents->events_buffer_size += DECODER_EVENTS_BUFFER_STEPS; \
-        }                                                               \
-        devents->events[devents->cnt++] = (event);                      \
-        SCLogDebug("setting app-layer-event %u", (event));              \
-    } while (0)
-
-static inline int AppLayerDecoderEventsIsEventSet(AppLayerDecoderEvents *devents,
-                                                  uint8_t event)
-{
-    if (devents == NULL)
-        return 0;
-
-    int i;
-    int cnt = devents->cnt;
-    for (i = 0; i < cnt; i++) {
-        if (devents->events[i] == event)
-            return 1;
-    }
-
-    return 0;
-}
-
-#define AppLayerDecoderEventsFreeEvents(devents)            \
-    do {                                                    \
-        if ((devents) != NULL) {                            \
-            if ((devents)->events != NULL)                  \
-                SCFree((devents)->events);                  \
-        }                                                   \
-        SCFree((devents));                                  \
-    } while (0)
-
-void AppLayerDecoderEventsModuleRegister(uint16_t, SCEnumCharMap *);
-uint16_t AppLayerDecoderEventsModuleGetAlproto(const char *);
-int AppLayerDecoderEventsModuleGetEventId(uint16_t, const char *);
-void AppLayerDecodeEventsModuleDeRegister(void);
-
-/***** Unittest helper functions *****/
-void AppLayerDecoderEventsModuleCreateBackup(void);
-void AppLayerDecoderEventsModuleRestoreBackup(void);
 
 #endif /* __DECODE_EVENTS_H__ */

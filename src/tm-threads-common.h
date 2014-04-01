@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -52,12 +52,14 @@ typedef enum {
     TMM_ALERTSYSLOG4,
     TMM_ALERTSYSLOG6,
     TMM_RESPONDREJECT,
+    TMM_LOGDNSLOG,
     TMM_LOGHTTPLOG,
     TMM_LOGHTTPLOG4,
     TMM_LOGHTTPLOG6,
     TMM_LOGTLSLOG,
     TMM_LOGTLSLOG4,
     TMM_LOGTLSLOG6,
+    TMM_OUTPUTJSON,
     TMM_PCAPLOG,
     TMM_FILELOG,
     TMM_FILESTORE,
@@ -65,10 +67,6 @@ typedef enum {
     TMM_DECODEIPFW,
     TMM_VERDICTIPFW,
     TMM_RECEIVEIPFW,
-#ifdef __SC_CUDA_SUPPORT__
-    TMM_CUDA_MPM_B2G,
-    TMM_CUDA_PACKET_BATCHER,
-#endif
     TMM_RECEIVEERFFILE,
     TMM_DECODEERFFILE,
     TMM_RECEIVEERFDAG,
@@ -76,8 +74,21 @@ typedef enum {
     TMM_RECEIVEAFP,
     TMM_DECODEAFP,
     TMM_ALERTPCAPINFO,
+    TMM_RECEIVEMPIPE,
+    TMM_DECODEMPIPE,
     TMM_RECEIVENAPATECH,
     TMM_DECODENAPATECH,
+    TMM_PACKETLOGGER,
+    TMM_TXLOGGER,
+    TMM_FILELOGGER,
+    TMM_FILEDATALOGGER,
+    TMM_JSONALERTLOG,
+    TMM_JSONDROPLOG,
+    TMM_JSONHTTPLOG,
+    TMM_JSONDNSLOG,
+    TMM_JSONSSHLOG,
+    TMM_JSONTLSLOG,
+    TMM_JSONFILELOG,
     TMM_SIZE,
 } TmmId;
 

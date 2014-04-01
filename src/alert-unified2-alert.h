@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -37,8 +37,13 @@
 #define UNIFIED2_IDS_EVENT_IPV6_TYPE 72
 #define UNIFIED2_IDS_EVENT_MPLS_TYPE 99
 #define UNIFIED2_IDS_EVENT_IPV6_MPLS_TYPE 100
+#define UNIFIED2_IDS_EVENT_EXTRADATA_TYPE 110
+#define UNIFIED2_EXTRADATA_CLIENT_IPV4_TYPE 1
+#define UNIFIED2_EXTRADATA_CLIENT_IPV6_TYPE 1
+#define UNIFIED2_EXTRADATA_TYPE_BLOB 1
+#define UNIFIED2_EXTRADATA_TYPE_EXTRA_DATA 4
 
-void TmModuleUnified2AlertRegister (void);
+void TmModuleUnified2AlertRegister(void);
 OutputCtx *Unified2AlertInitCtx(ConfNode *);
 
 #endif /* __ALERT_UNIFIED2_ALERT_H__ */

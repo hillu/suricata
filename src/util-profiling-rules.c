@@ -163,8 +163,7 @@ void SCProfilingRulesGlobalInit(void) {
             if (filename != NULL) {
 
                 char *log_dir;
-                if (ConfGet("default-log-dir", &log_dir) != 1)
-                    log_dir = DEFAULT_LOG_DIR;
+                log_dir = ConfigGetLogDirectory();
 
                 profiling_file_name = SCMalloc(PATH_MAX);
                 if (unlikely(profiling_file_name == NULL)) {
@@ -263,6 +262,11 @@ SCProfileSummarySortByMaxTicks(const void *a, const void *b)
     return s1->max - s0->max;
 }
 
+/**
+ * \brief Dump rule profiling information to file
+ *
+ * \param de_ctx The active DetectEngineCtx, used to get at the loaded rules.
+ */
 void
 SCProfilingRuleDump(SCProfileDetectCtx *rules_ctx)
 {
@@ -360,7 +364,7 @@ SCProfilingRuleDump(SCProfileDetectCtx *rules_ctx)
 
     gettimeofday(&tval, NULL);
     struct tm local_tm;
-    tms = (struct tm *)SCLocalTime(tval.tv_sec, &local_tm);
+    tms = SCLocalTime(tval.tv_sec, &local_tm);
 
     fprintf(fp, "  ----------------------------------------------"
             "----------------------------\n");
@@ -478,7 +482,7 @@ void SCProfilingRuleDestroyCtx(SCProfileDetectCtx *ctx) {
 }
 
 void SCProfilingRuleThreadSetup(SCProfileDetectCtx *ctx, DetectEngineThreadCtx *det_ctx) {
-    if (ctx == NULL)
+    if (ctx == NULL|| ctx->size == 0)
         return;
 
     SCProfileData *a = SCMalloc(sizeof(SCProfileData) * ctx->size);
@@ -513,6 +517,10 @@ void SCProfilingRuleThreadCleanup(DetectEngineThreadCtx *det_ctx) {
     pthread_mutex_lock(&det_ctx->de_ctx->profile_ctx->data_m);
     SCProfilingRuleThreadMerge(det_ctx->de_ctx, det_ctx);
     pthread_mutex_unlock(&det_ctx->de_ctx->profile_ctx->data_m);
+
+    SCFree(det_ctx->rule_perf_data);
+    det_ctx->rule_perf_data = NULL;
+    det_ctx->rule_perf_data_size = 0;
 }
 
 /**
@@ -523,6 +531,9 @@ void SCProfilingRuleThreadCleanup(DetectEngineThreadCtx *det_ctx) {
 void
 SCProfilingRuleInitCounters(DetectEngineCtx *de_ctx)
 {
+    if (profiling_rules_enabled == 0)
+        return;
+
     de_ctx->profile_ctx = SCProfilingRuleInitCtx();
     BUG_ON(de_ctx->profile_ctx == NULL);
 

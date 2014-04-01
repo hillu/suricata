@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -19,6 +19,7 @@
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
+ * \author Anoop Saldanha <anoopsaldanha@gmail.com>
  */
 
 #ifndef __APP_LAYER_PROTOS_H__
@@ -37,8 +38,10 @@ enum {
     ALPROTO_SMB,
     ALPROTO_SMB2,
     ALPROTO_DCERPC,
-    ALPROTO_DCERPC_UDP,
     ALPROTO_IRC,
+
+    ALPROTO_DNS,
+
     /* used by the probing parser when alproto detection fails
      * permanently for that particular stream */
     ALPROTO_FAILED,
@@ -49,7 +52,15 @@ enum {
     ALPROTO_MAX,
 };
 
-const char *TmModuleAlprotoToString(int proto);
+typedef uint16_t AppProto;
+
+/**
+ * \brief Maps the ALPROTO_*, to its string equivalent.
+ *
+ * \param alproto App layer protocol id.
+ *
+ * \retval String equivalent for the alproto.
+ */
+const char *AppProtoToString(AppProto alproto);
 
 #endif /* __APP_LAYER_PROTOS_H__ */
-

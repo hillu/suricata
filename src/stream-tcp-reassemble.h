@@ -52,8 +52,7 @@ enum
 };
 
 typedef struct TcpReassemblyThreadCtx_ {
-    StreamMsgQueue *stream_q;
-    AlpProtoDetectThreadCtx dp_ctx;   /**< proto detection thread data */
+    void *app_tctx;
     /** TCP segments which are not being reassembled due to memcap was reached */
     uint16_t counter_tcp_segment_memcap;
     /** number of streams that stop reassembly because their depth is reached */
@@ -62,6 +61,11 @@ typedef struct TcpReassemblyThreadCtx_ {
     uint16_t counter_tcp_reass_memuse;
     /** count number of streams with a unrecoverable stream gap (missing pkts) */
     uint16_t counter_tcp_reass_gap;
+    /** account memory usage by suricata to handle HTTP protocol (not counting
+     * libhtp memory usage)*/
+    uint16_t counter_htp_memuse;
+    /* number of allocation failed due to memcap when handling HTTP protocol */
+    uint16_t counter_htp_memcap;
 } TcpReassemblyThreadCtx;
 
 #define OS_POLICY_DEFAULT   OS_POLICY_BSD
@@ -70,9 +74,15 @@ int StreamTcpReassembleHandleSegment(ThreadVars *, TcpReassemblyThreadCtx *, Tcp
 int StreamTcpReassembleInit(char);
 void StreamTcpReassembleFree(char);
 void StreamTcpReassembleRegisterTests(void);
-TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(void);
+TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(ThreadVars *tv);
 void StreamTcpReassembleFreeThreadCtx(TcpReassemblyThreadCtx *);
-int StreamTcpReassembleProcessAppLayer(TcpReassemblyThreadCtx *);
+int StreamTcpReassembleAppLayer (ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
+                                 TcpSession *ssn, TcpStream *stream,
+                                 Packet *p);
+int StreamTcpReassembleInlineAppLayer(ThreadVars *tv,
+                                      TcpReassemblyThreadCtx *ra_ctx,
+                                      TcpSession *ssn, TcpStream *stream,
+                                      Packet *p);
 
 void StreamTcpCreateTestPacket(uint8_t *, uint8_t, uint8_t, uint8_t);
 
@@ -94,5 +104,8 @@ void StreamTcpReassembleTriggerRawReassembly(TcpSession *);
 void StreamTcpPruneSession(Flow *, uint8_t);
 int StreamTcpReassembleDepthReached(Packet *p);
 
+void StreamTcpReassembleIncrMemuse(uint64_t size);
+void StreamTcpReassembleDecrMemuse(uint64_t size);
+int StreamTcpReassembleCheckMemcap(uint32_t size);
 #endif /* __STREAM_TCP_REASSEMBLE_H__ */
 

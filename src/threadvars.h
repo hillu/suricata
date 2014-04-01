@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -60,17 +60,17 @@ typedef struct ThreadVars_ {
     char *name;
     char *thread_group_name;
 
-    SC_ATOMIC_DECLARE(unsigned short, flags);
+    SC_ATOMIC_DECLARE(unsigned int, flags);
 
     /** aof(action on failure) determines what should be done with the thread
         when it encounters certain conditions like failures */
     uint8_t aof;
 
-    /** the type of thread as defined in tm-threads.h (TVT_PPT, TVT_MGMT) */
-    uint8_t type;
-
     /** no of times the thread has been restarted on failure */
     uint8_t restarted;
+
+    /** local id */
+    int id;
 
     /** queue's */
     Tmq *inq;
@@ -88,6 +88,10 @@ typedef struct ThreadVars_ {
     struct TmSlot_ *tm_slots;
 
     uint8_t thread_setup_flags;
+
+    /** the type of thread as defined in tm-threads.h (TVT_PPT, TVT_MGMT) */
+    uint8_t type;
+
     uint16_t cpu_affinity; /** cpu or core number to set affinity to */
     int thread_priority; /** priority (real time) for this thread. Look at threads.h */
 
@@ -95,8 +99,8 @@ typedef struct ThreadVars_ {
     SCPerfContext sc_perf_pctx;
     SCPerfCounterArray *sc_perf_pca;
 
-    SCMutex *m;
-    SCCondT *cond;
+    SCCtrlMutex *ctrl_mutex;
+    SCCtrlCondT *ctrl_cond;
 
     uint8_t cap_flags; /**< Flags to indicate the capabilities of all the
                             TmModules resgitered under this thread */

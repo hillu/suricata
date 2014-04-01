@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -38,18 +38,19 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 
-void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
+int DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+                   uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
     SCPerfCounterIncr(dtv->counter_eth, tv->sc_perf_pca);
 
-    if (len < ETHERNET_HEADER_LEN) {
-        ENGINE_SET_EVENT(p,ETHERNET_PKT_TOO_SMALL);
-        return;
+    if (unlikely(len < ETHERNET_HEADER_LEN)) {
+        ENGINE_SET_INVALID_EVENT(p, ETHERNET_PKT_TOO_SMALL);
+        return TM_ECODE_FAILED;
     }
 
     p->ethh = (EthernetHdr *)pkt;
-    if (p->ethh == NULL)
-        return;
+    if (unlikely(p->ethh == NULL))
+        return TM_ECODE_FAILED;
 
     SCLogDebug("p %p pkt %p ether type %04x", p, pkt, ntohs(p->ethh->eth_type));
 
@@ -75,6 +76,7 @@ void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *p
                                  len - ETHERNET_HEADER_LEN, pq);
             break;
         case ETHERNET_TYPE_VLAN:
+        case ETHERNET_TYPE_8021QINQ:
             DecodeVLAN(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
                                  len - ETHERNET_HEADER_LEN, pq);
             break;
@@ -83,7 +85,7 @@ void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *p
                        pkt, ntohs(p->ethh->eth_type));
     }
 
-    return;
+    return TM_ECODE_OK;
 }
 
 #ifdef UNITTESTS
@@ -91,8 +93,8 @@ void DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *p
  *  \brief Valid Ethernet packet
  *  \retval 0 Expected test value
  */
-static int DecodeEthernetTest01 (void)   {
-
+static int DecodeEthernetTest01 (void)
+{
     /* ICMP packet wrapped in PPPOE */
     uint8_t raw_eth[] = {
         0x00, 0x10, 0x94, 0x55, 0x00, 0x01, 0x00, 0x10,
@@ -114,14 +116,13 @@ static int DecodeEthernetTest01 (void)   {
 
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (unlikely(p == NULL))
-    return 0;
+        return 0;
     ThreadVars tv;
     DecodeThreadVars dtv;
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));
     memset(&tv,  0, sizeof(ThreadVars));
     memset(p, 0, SIZE_OF_PACKET);
-    p->pkt = (uint8_t *)(p + 1);
 
     DecodeEthernet(&tv, &dtv, p, raw_eth, sizeof(raw_eth), NULL);
 
@@ -135,7 +136,8 @@ static int DecodeEthernetTest01 (void)   {
  * \brief Registers Ethernet unit tests
  * \todo More Ethernet tests
  */
-void DecodeEthernetRegisterTests(void) {
+void DecodeEthernetRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DecodeEthernetTest01", DecodeEthernetTest01, 0);
 #endif /* UNITTESTS */

@@ -80,9 +80,9 @@ host_triplet = @host@
 subdir = .
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/configure $(am__configure_deps) \
-	$(srcdir)/config.h.in mkinstalldirs $(srcdir)/suricata.yaml.in \
-	COPYING ChangeLog config.guess config.sub install-sh missing \
-	ltmain.sh
+	$(srcdir)/config.h.in $(srcdir)/suricata.yaml.in COPYING \
+	ChangeLog config.guess config.rpath config.sub install-sh \
+	missing ltmain.sh
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/libtool.m4 $(top_srcdir)/m4/ltoptions.m4 \
@@ -92,7 +92,7 @@ am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
 am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
  configure.lineno config.status.lineno
-mkinstalldirs = $(SHELL) $(top_srcdir)/mkinstalldirs
+mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = config.h
 CONFIG_CLEAN_FILES = suricata.yaml
 CONFIG_CLEAN_VPATH_FILES =
@@ -152,7 +152,7 @@ am__define_uniq_tagged_files = \
 ETAGS = etags
 CTAGS = ctags
 CSCOPE = cscope
-DIST_SUBDIRS = libhtp src qa rules doc contrib scripts
+DIST_SUBDIRS = $(SUBDIRS)
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 distdir = $(PACKAGE)-$(VERSION)
 top_distdir = $(distdir)
@@ -222,10 +222,15 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GREP = @GREP@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
+HAVE_CURL = @HAVE_CURL@
+HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_WGET = @HAVE_WGET@
+HTP_DIR = @HTP_DIR@
+HTP_LDADD = @HTP_LDADD@
 INSTALL = @INSTALL@
 INSTALL_DATA = @INSTALL_DATA@
 INSTALL_PROGRAM = @INSTALL_PROGRAM@
@@ -233,8 +238,8 @@ INSTALL_SCRIPT = @INSTALL_SCRIPT@
 INSTALL_STRIP_PROGRAM = @INSTALL_STRIP_PROGRAM@
 LD = @LD@
 LDFLAGS = @LDFLAGS@
-LIBHTPMAXVERSION_CFLAGS = @LIBHTPMAXVERSION_CFLAGS@
-LIBHTPMAXVERSION_LIBS = @LIBHTPMAXVERSION_LIBS@
+LIBHTPDEVVERSION_CFLAGS = @LIBHTPDEVVERSION_CFLAGS@
+LIBHTPDEVVERSION_LIBS = @LIBHTPDEVVERSION_LIBS@
 LIBHTPMINVERSION_CFLAGS = @LIBHTPMINVERSION_CFLAGS@
 LIBHTPMINVERSION_LIBS = @LIBHTPMINVERSION_LIBS@
 LIBOBJS = @LIBOBJS@
@@ -308,6 +313,7 @@ datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
 e_localstatedir = @e_localstatedir@
+e_logcertsdir = @e_logcertsdir@
 e_logdir = @e_logdir@
 e_logfilesdir = @e_logfilesdir@
 e_magic_file = @e_magic_file@
@@ -326,6 +332,10 @@ infodir = @infodir@
 install_sh = @install_sh@
 libdir = @libdir@
 libexecdir = @libexecdir@
+libnspr_CFLAGS = @libnspr_CFLAGS@
+libnspr_LIBS = @libnspr_LIBS@
+libnss_CFLAGS = @libnss_CFLAGS@
+libnss_LIBS = @libnss_LIBS@
 localedir = @localedir@
 localstatedir = @localstatedir@
 mandir = @mandir@
@@ -357,8 +367,8 @@ EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
              reference.config
 
-@BUILD_LIBHTP_TRUE@HTP_DIR = libhtp
 SUBDIRS = $(HTP_DIR) src qa rules doc contrib scripts
+CLEANFILES = stamp-h[0-9]*
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
 
@@ -738,6 +748,7 @@ install-strip:
 mostlyclean-generic:
 
 clean-generic:
+	-test -z "$(CLEANFILES)" || rm -f $(CLEANFILES)
 
 distclean-generic:
 	-test -z "$(CONFIG_CLEAN_FILES)" || rm -f $(CONFIG_CLEAN_FILES)
@@ -846,16 +857,20 @@ install-conf:
 	@test -e "$(e_sysconfdir)/reference.config" || install -m 600 "$(top_srcdir)/reference.config" "$(e_sysconfdir)"
 	@test -e "$(e_sysconfdir)/threshold.config" || install -m 600 "$(top_srcdir)/threshold.config" "$(e_sysconfdir)"
 	install -d "$(e_logfilesdir)"
+	install -d "$(e_logcertsdir)"
 	install -d "$(e_rundir)"
 	install -m 770 -d "$(e_localstatedir)"
 
 install-rules:
 	install -d "$(e_sysconfrulesdir)"
-	wget -qO - http://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz | tar -x -z -C "$(e_sysconfdir)" -f -
+@HAVE_FETCH_COMMAND_TRUE@@HAVE_WGET_COMMAND_TRUE@	$(HAVE_WGET) -qO - http://rules.emergingthreats.net/open/suricata-2.0/emerging.rules.tar.gz | tar -x -z -C "$(e_sysconfdir)" -f -
+@HAVE_FETCH_COMMAND_TRUE@@HAVE_WGET_COMMAND_FALSE@	$(HAVE_CURL) -s http://rules.emergingthreats.net/open/suricata-2.0/emerging.rules.tar.gz | tar -x -z -C "$(e_sysconfdir)" -f -
+@HAVE_FETCH_COMMAND_FALSE@	@echo "UNABLE to load ruleset wget or curl are not installed on system."
 	@test -e "$(e_sysconfrulesdir)decoder-events.rules" || install -m 600 "$(top_srcdir)/rules/decoder-events.rules" "$(e_sysconfrulesdir)"
 	@test -e "$(e_sysconfrulesdir)stream-events.rules" || install -m 600 "$(top_srcdir)/rules/stream-events.rules" "$(e_sysconfrulesdir)"
 	@test -e "$(e_sysconfrulesdir)smtp-events.rules" || install -m 600 "$(top_srcdir)/rules/smtp-events.rules" "$(e_sysconfrulesdir)"
 	@test -e "$(e_sysconfrulesdir)http-events.rules" || install -m 600 "$(top_srcdir)/rules/http-events.rules" "$(e_sysconfrulesdir)"
+	@test -e "$(e_sysconfrulesdir)dns-events.rules" || install -m 600 "$(top_srcdir)/rules/dns-events.rules" "$(e_sysconfrulesdir)"
 	@echo ""
 	@echo "You can now start suricata by running as root something like '$(bindir)/suricata -c $(e_sysconfdir)/suricata.yaml -i eth0'."
 	@echo ""

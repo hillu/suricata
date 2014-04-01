@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -42,6 +42,7 @@
 #include "flow-private.h"
 #include "flow-timeout.h"
 #include "flow-manager.h"
+#include "flow-storage.h"
 
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
@@ -79,7 +80,7 @@
 SC_ATOMIC_DECLARE(unsigned int, flow_prune_idx);
 
 /** atomic flags */
-SC_ATOMIC_DECLARE(unsigned char, flow_flags);
+SC_ATOMIC_DECLARE(unsigned int, flow_flags);
 
 void FlowRegisterTests(void);
 void FlowInitFlowProto();
@@ -93,10 +94,12 @@ extern int run_mode;
 
 void FlowCleanupAppLayer(Flow *f)
 {
-    if (f == NULL)
+    if (f == NULL || f->proto == 0)
         return;
 
-    AppLayerParserCleanupState(f);
+    AppLayerParserStateCleanup(f->proto, f->alproto, f->alstate, f->alparser);
+    f->alstate = NULL;
+    f->alparser = NULL;
     return;
 }
 
@@ -172,38 +175,11 @@ void FlowSetIPOnlyFlagNoLock(Flow *f, char direction)
 }
 
 /**
- *  \brief increase the use cnt of a flow
- *
- *  \param f flow to decrease use cnt for
- */
-void FlowIncrUsecnt(Flow *f)
-{
-    if (f == NULL)
-        return;
-
-    (void) SC_ATOMIC_ADD(f->use_cnt, 1);
-    return;
-}
-/**
- *  \brief decrease the use cnt of a flow
- *
- *  \param f flow to decrease use cnt for
- */
-void FlowDecrUsecnt(Flow *f)
-{
-    if (f == NULL)
-        return;
-
-    (void) SC_ATOMIC_SUB(f->use_cnt, 1);
-    return;
-}
-
-/**
  *  \brief determine the direction of the packet compared to the flow
  *  \retval 0 to_server
  *  \retval 1 to_client
  */
-int FlowGetPacketDirection(Flow *f, Packet *p)
+int FlowGetPacketDirection(Flow *f, const Packet *p)
 {
     if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP || p->proto == IPPROTO_SCTP) {
         if (!(CMP_PORT(p->sp,p->dp))) {
@@ -240,7 +216,7 @@ int FlowGetPacketDirection(Flow *f, Packet *p)
  *  \retval 1 true
  *  \retval 0 false
  */
-static inline int FlowUpdateSeenFlag(Packet *p)
+static inline int FlowUpdateSeenFlag(const Packet *p)
 {
     if (PKT_IS_ICMPV4(p)) {
         if (ICMPV4_IS_ERROR_MSG(p)) {
@@ -258,7 +234,7 @@ static inline int FlowUpdateSeenFlag(Packet *p)
  *  \param tv threadvars
  *  \param p packet to handle flow for
  */
-void FlowHandlePacket (ThreadVars *tv, Packet *p)
+void FlowHandlePacket(ThreadVars *tv, Packet *p)
 {
     /* Get this packet's flow from the hash. FlowHandlePacket() will setup
      * a new flow if nescesary. If we get NULL, we're out of flow memory.
@@ -267,11 +243,14 @@ void FlowHandlePacket (ThreadVars *tv, Packet *p)
     if (f == NULL)
         return;
 
+    /* Point the Packet at the Flow */
+    FlowReference(&p->flow, f);
+
     /* update the last seen timestamp of this flow */
     f->lastts_sec = p->ts.tv_sec;
 
     /* update flags and counters */
-    if (FlowGetPacketDirection(f,p) == TOSERVER) {
+    if (FlowGetPacketDirection(f, p) == TOSERVER) {
         if (FlowUpdateSeenFlag(p)) {
             f->flags |= FLOW_TO_DST_SEEN;
         }
@@ -760,6 +739,8 @@ int FlowClearMemory(Flow* f, uint8_t proto_map)
         flow_proto[proto_map].Freefunc(f->protoctx);
     }
 
+    FlowFreeStorage(f);
+
     FLOW_RECYCLE(f);
 
     SCReturnInt(1);
@@ -845,6 +826,16 @@ int FlowSetProtoEmergencyTimeout(uint8_t proto, uint32_t emerg_new_timeout,
     return 1;
 }
 
+AppProto FlowGetAppProtocol(Flow *f)
+{
+    return f->alproto;
+}
+
+void *FlowGetAppState(Flow *f)
+{
+    return f->alstate;
+}
+
 /************************************Unittests*******************************/
 
 #ifdef UNITTESTS
@@ -857,8 +848,8 @@ int FlowSetProtoEmergencyTimeout(uint8_t proto, uint32_t emerg_new_timeout,
  *  \retval On success it returns 1 and on failure 0.
  */
 
-static int FlowTest01 (void) {
-
+static int FlowTest01 (void)
+{
     uint8_t proto_map;
 
     FlowInitFlowProto();
@@ -896,7 +887,7 @@ static int FlowTest01 (void) {
 
 /*Test function for the unit test FlowTest02*/
 
-void test(void *f){}
+void test(void *f) {}
 
 /**
  *  \test   Test the setting of the per protocol free function to free the
@@ -905,8 +896,8 @@ void test(void *f){}
  *  \retval On success it returns 1 and on failure 0.
  */
 
-static int FlowTest02 (void) {
-
+static int FlowTest02 (void)
+{
     FlowSetProtoFreeFunc(IPPROTO_DCCP, test);
     FlowSetProtoFreeFunc(IPPROTO_TCP, test);
     FlowSetProtoFreeFunc(IPPROTO_UDP, test);
@@ -938,8 +929,8 @@ static int FlowTest02 (void) {
  *  \retval On success it returns 1 and on failure 0.
  */
 
-static int FlowTest07 (void) {
-
+static int FlowTest07 (void)
+{
     int result = 0;
 
     FlowInitConfig(FLOW_QUIET);
@@ -985,8 +976,8 @@ static int FlowTest07 (void) {
  *  \retval On success it returns 1 and on failure 0.
  */
 
-static int FlowTest08 (void) {
-
+static int FlowTest08 (void)
+{
     int result = 0;
 
     FlowInitConfig(FLOW_QUIET);
@@ -1032,8 +1023,8 @@ static int FlowTest08 (void) {
  *  \retval On success it returns 1 and on failure 0.
  */
 
-static int FlowTest09 (void) {
-
+static int FlowTest09 (void)
+{
     int result = 0;
 
     FlowInitConfig(FLOW_QUIET);
@@ -1076,7 +1067,8 @@ static int FlowTest09 (void) {
 /**
  *  \brief   Function to register the Flow Unitests.
  */
-void FlowRegisterTests (void) {
+void FlowRegisterTests (void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("FlowTest01 -- Protocol Specific Timeouts", FlowTest01, 1);
     UtRegisterTest("FlowTest02 -- Setting Protocol Specific Free Function", FlowTest02, 1);
@@ -1085,5 +1077,6 @@ void FlowRegisterTests (void) {
     UtRegisterTest("FlowTest09 -- Test flow Allocations when it reach memcap", FlowTest09, 1);
 
     FlowMgrRegisterTests();
+    RegisterFlowStorageTests();
 #endif /* UNITTESTS */
 }
