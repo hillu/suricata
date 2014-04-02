@@ -1,0 +1,13 @@
+Index: suricata/libhtp/configure.ac
+===================================================================
+--- suricata.orig/libhtp/configure.ac	2014-04-01 08:25:37.604832456 +0200
++++ suricata/libhtp/configure.ac	2014-04-02 20:11:01.504628889 +0200
+@@ -3,7 +3,7 @@
+ dnl Initialization macros
+ dnl ----------------------
+ 
+-AC_INIT([LibHTP], m4_esyscmd([./get-version.sh VERSION]))
++AC_INIT([LibHTP], 0.5.10)
+ AM_INIT_AUTOMAKE()
+ 
+ AC_CONFIG_HEADERS([config.h])

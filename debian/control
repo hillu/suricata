@@ -5,8 +5,7 @@ Maintainer: Pierre Chifflier <pollux@debian.org>
 Build-Depends: debhelper (>= 9),
     autotools-dev,
     dh-autoreconf,
-    libhtp-dev (>= 0.2.3),
-    libhtp-dev (<< 0.5),
+    libhtp-dev (>= 0.5.5),
     libnet1-dev | libnet-dev,
     libnspr4-dev,
     libnss3-dev,
@@ -30,7 +29,6 @@ Architecture: any
 Depends: ${shlibs:Depends},
     ${misc:Depends},
     ${python:Depends}
-Conflicts:  libhtp1 (>= 0.5)
 Recommends: oinkmaster, snort-rules-default, python
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
