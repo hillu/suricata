@@ -1,3 +1,11 @@
+suricata (2.0-1) unstable; urgency=medium
+
+  * Imported Upstream version 2.0
+  * Update build, require a recent libhtp, and disable coccinelle tests.
+  * Upload to unstable
+
+ -- Pierre Chifflier <pollux@debian.org>  Wed, 02 Apr 2014 20:23:10 +0200
+
 suricata (1.4.7-1) unstable; urgency=low
 
   * Imported Upstream version 1.4.7
