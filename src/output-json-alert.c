@@ -62,8 +62,6 @@
 
 #ifdef HAVE_LIBJANSSON
 
-extern int engine_mode;
-
 typedef struct JsonAlertLogThread_ {
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */
     LogFileCtx* file_ctx;
@@ -96,7 +94,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         char *action = "allowed";
         if (pa->action & (ACTION_REJECT|ACTION_REJECT_DST|ACTION_REJECT_BOTH)) {
             action = "blocked";
-        } else if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
+        } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
             action = "blocked";
         }
 
@@ -151,7 +149,7 @@ static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const 
         char *action = "allowed";
         if (pa->action & (ACTION_REJECT|ACTION_REJECT_DST|ACTION_REJECT_BOTH)) {
             action = "blocked";
-        } else if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
+        } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
             action = "blocked";
         }
 
@@ -260,8 +258,15 @@ static TmEcode JsonAlertLogThreadDeinit(ThreadVars *t, void *data)
 
 static void JsonAlertLogDeInitCtx(OutputCtx *output_ctx)
 {
+    SCLogDebug("cleaning up output_ctx");
     LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
     LogFileFreeCtx(logfile_ctx);
+    SCFree(output_ctx);
+}
+
+static void JsonAlertLogDeInitCtxSub(OutputCtx *output_ctx)
+{
+    SCLogDebug("cleaning up sub output_ctx %p", output_ctx);
     SCFree(output_ctx);
 }
 
@@ -307,7 +312,7 @@ static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
         return NULL;
 
     output_ctx->data = ajt->file_ctx;
-    output_ctx->DeInit = JsonAlertLogDeInitCtx;
+    output_ctx->DeInit = JsonAlertLogDeInitCtxSub;
 
     return output_ctx;
 }

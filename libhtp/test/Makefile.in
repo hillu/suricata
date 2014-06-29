@@ -110,7 +110,7 @@ am_test_all_OBJECTS = test_bstr.$(OBJEXT) test_gunzip.$(OBJEXT) \
 	test_hybrid.$(OBJEXT) test_main.$(OBJEXT) \
 	test_multipart.$(OBJEXT) test.$(OBJEXT) test_utils.$(OBJEXT)
 test_all_OBJECTS = $(am_test_all_OBJECTS)
-am__DEPENDENCIES_1 = $(top_builddir)/htp/.libs/libhtp.a
+am__DEPENDENCIES_1 = $(top_builddir)/htp/libhtp.la
 test_all_DEPENDENCIES = libgtest.a $(am__DEPENDENCIES_1)
 AM_V_lt = $(am__v_lt_@AM_V@)
 am__v_lt_ = $(am__v_lt_@AM_DEFAULT_V@)
@@ -528,7 +528,7 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-LDADD = $(top_builddir)/htp/.libs/libhtp.a -lz @LIBICONV@ 
+LDADD = $(top_builddir)/htp/libhtp.la -lz @LIBICONV@ 
 AM_CFLAGS = -g -std=gnu99
 AM_CPPFLAGS = -I$(top_srcdir) -I$(top_builddir)/htp -Wno-write-strings -DGTEST_USE_OWN_TR1_TUPLE=1
 AUTOMAKE_OPTIONS = subdir-objects

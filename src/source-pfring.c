@@ -68,6 +68,7 @@ TmEcode ReceivePfringThreadDeinit(ThreadVars *, void *);
 
 TmEcode DecodePfringThreadInit(ThreadVars *, void *, void **);
 TmEcode DecodePfring(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
+TmEcode DecodePfringThreadDeinit(ThreadVars *tv, void *data);
 
 extern int max_pending_packets;
 extern uint8_t suricata_ctl_flags;
@@ -183,7 +184,7 @@ void TmModuleDecodePfringRegister (void) {
     tmm_modules[TMM_DECODEPFRING].ThreadInit = DecodePfringThreadInit;
     tmm_modules[TMM_DECODEPFRING].Func = DecodePfring;
     tmm_modules[TMM_DECODEPFRING].ThreadExitPrintStats = NULL;
-    tmm_modules[TMM_DECODEPFRING].ThreadDeinit = NULL;
+    tmm_modules[TMM_DECODEPFRING].ThreadDeinit = DecodePfringThreadDeinit;
     tmm_modules[TMM_DECODEPFRING].RegisterTests = NULL;
     tmm_modules[TMM_DECODEPFRING].flags = TM_FLAG_DECODE_TM;
 }
@@ -471,6 +472,8 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     if ((ptv->threads == 1) && (strncmp(ptv->interface, "dna", 3) == 0)) {
         SCLogInfo("DNA interface detected, not adding thread to cluster");
+    } else if (strncmp(ptv->interface, "zc", 2) == 0) {
+        SCLogInfo("ZC interface detected, not adding thread to cluster");
     } else {
 #ifdef HAVE_PFRING_CLUSTER_TYPE
         ptv->ctype = pfconf->ctype;
@@ -662,5 +665,14 @@ TmEcode DecodePfringThreadInit(ThreadVars *tv, void *initdata, void **data)
 
     return TM_ECODE_OK;
 }
+
+TmEcode DecodePfringThreadDeinit(ThreadVars *tv, void *data)
+{
+    if (data != NULL)
+        DecodeThreadVarsFree(data);
+    SCReturnInt(TM_ECODE_OK);
+}
+
+
 #endif /* HAVE_PFRING */
 /* eof */

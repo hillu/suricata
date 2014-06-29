@@ -174,6 +174,8 @@ LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
 LUAJIT_CFLAGS = @LUAJIT_CFLAGS@
 LUAJIT_LIBS = @LUAJIT_LIBS@
+LUA_CFLAGS = @LUA_CFLAGS@
+LUA_LIBS = @LUA_LIBS@
 MAKEINFO = @MAKEINFO@
 MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
@@ -390,7 +392,6 @@ maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
 @HAVE_PYTHON_FALSE@uninstall-local:
-@HAVE_PYTHON_FALSE@distclean-local:
 @HAVE_PYTHON_FALSE@install-exec-local:
 @HAVE_PYTHON_FALSE@clean-local:
 clean: clean-am
@@ -399,7 +400,7 @@ clean-am: clean-generic clean-libtool clean-local mostlyclean-am
 
 distclean: distclean-am
 	-rm -f Makefile
-distclean-am: clean-am distclean-generic distclean-local
+distclean-am: clean-am distclean-generic
 
 dvi: dvi-am
 
@@ -463,10 +464,10 @@ uninstall-am: uninstall-local
 
 .PHONY: all all-am all-local check check-am clean clean-generic \
 	clean-libtool clean-local cscopelist-am ctags-am distclean \
-	distclean-generic distclean-libtool distclean-local distdir \
-	dvi dvi-am html html-am info info-am install install-am \
-	install-data install-data-am install-dvi install-dvi-am \
-	install-exec install-exec-am install-exec-local install-html \
+	distclean-generic distclean-libtool distdir dvi dvi-am html \
+	html-am info info-am install install-am install-data \
+	install-data-am install-dvi install-dvi-am install-exec \
+	install-exec-am install-exec-local install-html \
 	install-html-am install-info install-info-am install-man \
 	install-pdf install-pdf-am install-ps install-ps-am \
 	install-strip installcheck installcheck-am installdirs \
@@ -489,9 +490,6 @@ uninstall-am: uninstall-local
 @HAVE_PYTHON_TRUE@uninstall-local:
 @HAVE_PYTHON_TRUE@	[ ! -f "$(DESTDIR)$(prefix)/bin/suricatasc" ] || rm -f "$(DESTDIR)$(prefix)/bin/suricatasc"
 @HAVE_PYTHON_TRUE@	find "$(DESTDIR)$(prefix)/lib" -name "suricatasc-*.egg-info" -delete ||true
-
-@HAVE_PYTHON_TRUE@distclean-local:
-@HAVE_PYTHON_TRUE@	-rm -rf $(top_builddir)/scripts/suricatasc/src
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

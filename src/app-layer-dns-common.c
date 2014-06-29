@@ -587,7 +587,8 @@ static uint16_t DNSResponseGetNameByOffset(const uint8_t * const input, const ui
     }
 
     while (length != 0) {
-        if (length & 0xc0) {
+        int cnt = 0;
+        while (length & 0xc0) {
             uint16_t offset = ((length & 0x3f) << 8) + *(qdata+1);
             qdata = (const uint8_t *)input + offset;
 
@@ -598,6 +599,11 @@ static uint16_t DNSResponseGetNameByOffset(const uint8_t * const input, const ui
 
             length = *qdata;
             SCLogDebug("qry length %u", length);
+
+            if (cnt++ == 100) {
+                SCLogDebug("too many pointer iterations, loop?");
+                goto bad_data;
+            }
         }
         qdata++;
 
@@ -894,6 +900,42 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
             data += ntohs(head->len);
             break;
         }
+        case DNS_RECORD_TYPE_TXT:
+        {
+            data += sizeof(DNSAnswerHeader);
+
+            if (input + input_len < data + ntohs(head->len)) {
+                SCLogDebug("input buffer too small for data of len %u", ntohs(head->len));
+                goto insufficient_data;
+            }
+
+            uint16_t datalen = ntohs(head->len);
+            uint8_t txtlen = *data;
+            const uint8_t *tdata = data + 1;
+
+            do {
+                //PrintRawDataFp(stdout, (uint8_t*)tdata, txtlen);
+
+                if (txtlen > datalen)
+                    goto bad_data;
+
+                DNSStoreAnswerInState(dns_state, list, fqdn, fqdn_len,
+                        ntohs(head->type), ntohs(head->class), ntohl(head->ttl),
+                        (uint8_t*)tdata, (uint16_t)txtlen, ntohs(dns_header->tx_id));
+
+                datalen -= txtlen;
+                tdata += txtlen;
+                txtlen = *tdata;
+
+                tdata++;
+                datalen--;
+
+                SCLogDebug("datalen %u, txtlen %u", datalen, txtlen);
+            } while (datalen > 1);
+
+            data += ntohs(head->len);
+            break;
+        }
         default:    /* unsupported record */
         {
             data += sizeof(DNSAnswerHeader);
@@ -913,6 +955,65 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
         }
     }
     return data;
+bad_data:
 insufficient_data:
     return NULL;
+}
+
+void DNSCreateTypeString(uint16_t type, char *str, size_t str_size) {
+    switch (type) {
+        case DNS_RECORD_TYPE_A:
+            snprintf(str, str_size, "A");
+            break;
+        case DNS_RECORD_TYPE_NS:
+            snprintf(str, str_size, "NS");
+            break;
+        case DNS_RECORD_TYPE_AAAA:
+            snprintf(str, str_size, "AAAA");
+            break;
+        case DNS_RECORD_TYPE_TXT:
+            snprintf(str, str_size, "TXT");
+            break;
+        case DNS_RECORD_TYPE_CNAME:
+            snprintf(str, str_size, "CNAME");
+            break;
+        case DNS_RECORD_TYPE_SOA:
+            snprintf(str, str_size, "SOA");
+            break;
+        case DNS_RECORD_TYPE_MX:
+            snprintf(str, str_size, "MX");
+            break;
+        case DNS_RECORD_TYPE_PTR:
+            snprintf(str, str_size, "PTR");
+            break;
+        case DNS_RECORD_TYPE_ANY:
+            snprintf(str, str_size, "ANY");
+            break;
+        case DNS_RECORD_TYPE_TKEY:
+            snprintf(str, str_size, "TKEY");
+            break;
+        case DNS_RECORD_TYPE_TSIG:
+            snprintf(str, str_size, "TSIG");
+            break;
+        case DNS_RECORD_TYPE_SRV:
+            snprintf(str, str_size, "SRV");
+            break;
+        case DNS_RECORD_TYPE_NAPTR:
+            snprintf(str, str_size, "NAPTR");
+            break;
+        case DNS_RECORD_TYPE_DS:
+            snprintf(str, str_size, "DS");
+            break;
+        case DNS_RECORD_TYPE_RRSIG:
+            snprintf(str, str_size, "RRSIG");
+            break;
+        case DNS_RECORD_TYPE_NSEC:
+            snprintf(str, str_size, "NSEC");
+            break;
+        case DNS_RECORD_TYPE_NSEC3:
+            snprintf(str, str_size, "NSEC3");
+            break;
+        default:
+            snprintf(str, str_size, "%04x/%u", type, type);
+    }
 }

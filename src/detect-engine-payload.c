@@ -46,16 +46,13 @@
  *  \param det_ctx Detection engine thread context
  *  \param s Signature to inspect
  *  \param f flow (for pcre flowvar storage)
- *  \param flags app layer flags
- *  \param state App layer state
  *  \param p Packet
  *
  *  \retval 0 no match
  *  \retval 1 match
  */
 int DetectEngineInspectPacketPayload(DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags,
-        void *alstate, Packet *p)
+        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, Packet *p)
 {
     SCEnter();
     int r = 0;
@@ -505,7 +502,7 @@ static int PayloadTestSig13(void)
     tv_diff.tv_sec = tv_end.tv_sec - tv_start.tv_sec;
     tv_diff.tv_usec = tv_end.tv_usec - tv_start.tv_usec;
 
-    printf("%ld.%06ld\n", tv_diff.tv_sec, (long int)tv_diff.tv_usec);
+    printf("%ld.%06ld\n", (long int)tv_diff.tv_sec, (long int)tv_diff.tv_usec);
 
     result = 1;
 

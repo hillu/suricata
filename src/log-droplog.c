@@ -120,9 +120,12 @@ static TmEcode LogDropLogThreadDeinit(ThreadVars *t, void *data)
  */
 static void LogDropLogDeInitCtx(OutputCtx *output_ctx)
 {
+    OutputDropLoggerDisable();
+
     if (output_ctx != NULL) {
         LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
         if (logfile_ctx != NULL) {
+            OutputUnregisterFileRotationFlag(&logfile_ctx->rotation_flag);
             LogFileFreeCtx(logfile_ctx);
         }
         SCFree(output_ctx);
@@ -152,6 +155,7 @@ static OutputCtx *LogDropLogInitCtx(ConfNode *conf)
         LogFileFreeCtx(logfile_ctx);
         return NULL;
     }
+    OutputRegisterFileRotationFlag(&logfile_ctx->rotation_flag);
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
@@ -183,6 +187,15 @@ static int LogDropLogNetFilter (ThreadVars *tv, const Packet *p, void *data)
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     SCMutexLock(&dlt->file_ctx->fp_mutex);
+
+    if (dlt->file_ctx->rotation_flag) {
+        dlt->file_ctx->rotation_flag  = 0;
+        if (SCConfLogReopen(dlt->file_ctx) != 0) {
+            /* Rotation failed, error already logged. */
+            SCMutexUnlock(&dlt->file_ctx->fp_mutex);
+            return TM_ECODE_FAILED;
+        }
+    }
 
     char srcip[46] = "";
     char dstip[46] = "";
@@ -266,8 +279,7 @@ static int LogDropLogNetFilter (ThreadVars *tv, const Packet *p, void *data)
  * \retval bool TRUE or FALSE
  */
 static int LogDropCondition(ThreadVars *tv, const Packet *p) {
-    extern uint8_t engine_mode;
-    if (!IS_ENGINE_MODE_IPS(engine_mode)) {
+    if (!EngineModeIsIPS()) {
         SCLogDebug("engine is not running in inline mode, so returning");
         return FALSE;
     }
@@ -339,8 +351,7 @@ static void LogDropLogExitPrintStats(ThreadVars *tv, void *data) {
 int LogDropLogTest01()
 {
     int result = 0;
-    extern uint8_t engine_mode;
-    SET_ENGINE_MODE_IPS(engine_mode);
+    EngineModeSetIPS();
 
     uint8_t *buf = (uint8_t *) "GET /one/ HTTP/1.1\r\n"
         "Host: one.example.org\r\n";
@@ -402,6 +413,7 @@ int LogDropLogTest01()
     DetectEngineCtxFree(de_ctx);
 
     UTHFreePackets(&p, 1);
+    EngineModeSetIDS();
     return result;
 }
 
@@ -409,8 +421,7 @@ int LogDropLogTest01()
 int LogDropLogTest02()
 {
     int result = 0;
-    extern uint8_t engine_mode;
-    SET_ENGINE_MODE_IPS(engine_mode);
+    EngineModeSetIPS();
 
     uint8_t *buf = (uint8_t *) "GET";
 
@@ -471,6 +482,8 @@ int LogDropLogTest02()
     DetectEngineCtxFree(de_ctx);
 
     UTHFreePackets(&p, 1);
+
+    EngineModeSetIDS();
     return result;
 }
 

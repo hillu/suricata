@@ -81,18 +81,19 @@ static json_t *LogFileMetaGetUri(const Packet *p, const File *ff) {
         htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, ff->txid);
         if (tx != NULL) {
             HtpTxUserData *tx_ud = htp_tx_get_user_data(tx);
-            if (tx_ud->request_uri_normalized != NULL) {
+            if (tx_ud != NULL && tx_ud->request_uri_normalized != NULL) {
                 char *s = bstr_util_strdup_to_c(tx_ud->request_uri_normalized);
                 if (s != NULL) {
                     js = json_string(s);
                     SCFree(s);
+                    if (js != NULL)
+                        return js;
                 }
             }
-            return js;
         }
     }
 
-    return json_string("<unknown>");
+    return NULL;
 }
 
 static json_t *LogFileMetaGetHost(const Packet *p, const File *ff) {
@@ -105,12 +106,13 @@ static json_t *LogFileMetaGetHost(const Packet *p, const File *ff) {
             if (s != NULL) {
                 js = json_string(s);
                 SCFree(s);
+                if (js != NULL)
+                    return js;
             }
-            return js;
         }
     }
 
-    return json_string("<unknown>");
+    return NULL;
 }
 
 static json_t *LogFileMetaGetReferer(const Packet *p, const File *ff) {
@@ -127,13 +129,14 @@ static json_t *LogFileMetaGetReferer(const Packet *p, const File *ff) {
                 if (s != NULL) {
                     js = json_string(s);
                     SCFree(s);
+                    if (js != NULL)
+                        return js;
                 }
-                return js;
             }
         }
     }
 
-    return json_string("<unknown>");
+    return NULL;
 }
 
 static json_t *LogFileMetaGetUserAgent(const Packet *p, const File *ff) {
@@ -150,13 +153,14 @@ static json_t *LogFileMetaGetUserAgent(const Packet *p, const File *ff) {
                 if (s != NULL) {
                     js = json_string(s);
                     SCFree(s);
+                    if (js != NULL)
+                        return js;
                 }
-                return js;
             }
         }
     }
 
-    return json_string("<unknown>");
+    return NULL;
 }
 
 /**
@@ -197,8 +201,6 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
         SCFree(s);
     if (ff->magic)
         json_object_set_new(fjs, "magic", json_string((char *)ff->magic));
-    else
-        json_object_set_new(fjs, "magic", json_string("unknown"));
     switch (ff->state) {
         case FILE_STATE_CLOSED:
             json_object_set_new(fjs, "state", json_string("CLOSED"));
@@ -298,6 +300,12 @@ static TmEcode JsonFileLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
+static void OutputFileLogDeinitSub(OutputCtx *output_ctx)
+{
+    OutputFileCtx *ff_ctx = output_ctx->data;
+    SCFree(ff_ctx);
+    SCFree(output_ctx);
+}
 
 /** \brief Create a new http log LogFileCtx.
  *  \param conf Pointer to ConfNode containing this loggers configuration.
@@ -338,6 +346,7 @@ OutputCtx *OutputFileLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     }
 
     output_ctx->data = output_file_ctx;
+    output_ctx->DeInit = OutputFileLogDeinitSub;
 
     FileForceTrackingEnable();
     return output_ctx;
