@@ -35,6 +35,18 @@ static TAILQ_HEAD(, OutputModule_) output_modules =
     TAILQ_HEAD_INITIALIZER(output_modules);
 
 /**
+ * Registry of flags to be updated on file rotation notification.
+ */
+typedef struct OutputFileRolloverFlag_ {
+    int *flag;
+
+    TAILQ_ENTRY(OutputFileRolloverFlag_) entries;
+} OutputFileRolloverFlag;
+
+TAILQ_HEAD(, OutputFileRolloverFlag_) output_file_rotation_flags =
+    TAILQ_HEAD_INITIALIZER(output_file_rotation_flags);
+
+/**
  * \brief Register an output module.
  *
  * This function will register an output module so it can be
@@ -384,6 +396,11 @@ int OutputDropLoggerEnable(void) {
     return 0;
 }
 
+void OutputDropLoggerDisable(void) {
+    if (drop_loggers)
+        drop_loggers--;
+}
+
 static int tls_loggers = 0;
 
 int OutputTlsLoggerEnable(void) {
@@ -393,6 +410,11 @@ int OutputTlsLoggerEnable(void) {
     return 0;
 }
 
+void OutputTlsLoggerDisable(void) {
+    if (tls_loggers)
+        tls_loggers--;
+}
+
 static int ssh_loggers = 0;
 
 int OutputSshLoggerEnable(void) {
@@ -400,4 +422,59 @@ int OutputSshLoggerEnable(void) {
         return -1;
     ssh_loggers++;
     return 0;
+}
+
+void OutputSshLoggerDisable(void) {
+    if (ssh_loggers)
+        ssh_loggers--;
+}
+
+/**
+ * \brief Register a flag for file rotation notification.
+ *
+ * \param flag A pointer that will be set to 1 when file rotation is
+ *   requested.
+ */
+void OutputRegisterFileRotationFlag(int *flag) {
+    OutputFileRolloverFlag *flag_entry = SCCalloc(1, sizeof(*flag_entry));
+    if (unlikely(flag_entry == NULL)) {
+        SCLogError(SC_ERR_MEM_ALLOC,
+            "Failed to allocate memory to register file rotation flag");
+        return;
+    }
+    flag_entry->flag = flag;
+    TAILQ_INSERT_TAIL(&output_file_rotation_flags, flag_entry, entries);
+}
+
+/**
+ * \brief Unregister a file rotation flag.
+ *
+ * Note that it is safe to call this function with a flag that may not
+ * have been registered, in which case this function won't do
+ * anything.
+ *
+ * \param flag A pointer that has been previously registered for file
+ *   rotation notifications.
+ */
+void OutputUnregisterFileRotationFlag(int *flag) {
+    OutputFileRolloverFlag *entry, *next;
+    for (entry = TAILQ_FIRST(&output_file_rotation_flags); entry != NULL;
+         entry = next) {
+        next = TAILQ_NEXT(entry, entries);
+        if (entry->flag == flag) {
+            TAILQ_REMOVE(&output_file_rotation_flags, entry, entries);
+            SCFree(entry);
+            break;
+        }
+    }
+}
+
+/**
+ * \brief Notifies all registered file rotation notification flags.
+ */
+void OutputNotifyFileRotation(void) {
+    OutputFileRolloverFlag *flag;
+    TAILQ_FOREACH(flag, &output_file_rotation_flags, entries) {
+        *(flag->flag) = 1;
+    }
 }

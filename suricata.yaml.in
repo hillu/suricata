@@ -96,6 +96,9 @@ outputs:
         - alert
         - http:
             extended: yes     # enable this for extended logging information
+            # custom allows additional http fields to be included in eve-log
+            # the example below adds three additional fields when uncommented
+            #custom: [Accept-Encoding, Accept-Language, Authorization]
         - dns
         - tls:
             extended: yes     # enable this for extended logging information
@@ -286,6 +289,23 @@ nfq:
 #  route-queue: 2
 #  batchcount: 20
 #  fail-open: yes
+
+#nflog support
+nflog:
+    # netlink multicast group
+    # (the same as the iptables --nflog-group param)
+    # Group 0 is used by the kernel, so you can't use it
+  - group: 2
+    # netlink buffer size
+    buffer-size: 18432
+    # put default value here
+  - group: default
+    # set number of packet to queue inside kernel
+    qthreshold: 1
+    # set the delay before flushing packet in the queue inside kernel
+    qtimeout: 100
+    # netlink max buffer size
+    max-size: 20000
 
 # af-packet support
 # Set threads to > 1 to use PACKET_FANOUT support
@@ -1074,7 +1094,7 @@ app-layer:
     tls:
       enabled: yes
       detection-ports:
-        toserver: 443
+        dp: 443
 
       #no-reassemble: yes
     dcerpc:
@@ -1092,7 +1112,7 @@ app-layer:
     smb:
       enabled: yes
       detection-ports:
-        toserver: 139
+        dp: 139
     # smb2 detection is disabled internally inside the engine.
     #smb2:
     #  enabled: yes
@@ -1108,11 +1128,11 @@ app-layer:
       tcp:
         enabled: yes
         detection-ports:
-          toserver: 53
+          dp: 53
       udp:
         enabled: yes
         detection-ports:
-          toserver: 53
+          dp: 53
     http:
       enabled: yes
       # memcap: 64mb

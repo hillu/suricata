@@ -116,7 +116,6 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
     int i;
     char timebuf[64];
     int decoder_event = 0;
-    extern uint8_t engine_mode;
 
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
@@ -146,7 +145,7 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
         }
 
         char *action = "";
-        if ((pa->action & ACTION_DROP) && IS_ENGINE_MODE_IPS(engine_mode)) {
+        if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
             action = "[wDrop] ";
@@ -253,6 +252,7 @@ OutputCtx *AlertFastLogInitCtx(ConfNode *conf)
         LogFileFreeCtx(logfile_ctx);
         return NULL;
     }
+    OutputRegisterFileRotationFlag(&logfile_ctx->rotation_flag);
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL))
@@ -266,6 +266,7 @@ OutputCtx *AlertFastLogInitCtx(ConfNode *conf)
 static void AlertFastLogDeInitCtx(OutputCtx *output_ctx)
 {
     LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
+    OutputUnregisterFileRotationFlag(&logfile_ctx->rotation_flag);
     LogFileFreeCtx(logfile_ctx);
     SCFree(output_ctx);
 }

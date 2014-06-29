@@ -212,6 +212,11 @@ void DetectEngineStateFree(DetectEngineState *state)
     return;
 }
 
+/**
+ *  \retval 0 no inspectable state
+ *  \retval 1 inspectable state
+ *  \retval 2 inspectable state, but no update
+ */
 int DeStateFlowHasInspectableState(Flow *f, AppProto alproto, uint16_t alversion, uint8_t flags)
 {
     int r = 0;
@@ -220,10 +225,12 @@ int DeStateFlowHasInspectableState(Flow *f, AppProto alproto, uint16_t alversion
     if (f->de_state == NULL || f->de_state->dir_state[flags & STREAM_TOSERVER ? 0 : 1].cnt == 0) {
         if (AppLayerParserProtocolSupportsTxs(f->proto, alproto)) {
             FLOWLOCK_RDLOCK(f);
-            if (AppLayerParserGetTransactionInspectId(f->alparser, flags) >= AppLayerParserGetTxCnt(f->proto, alproto, f->alstate))
-                r = 2;
-            else
-                r = 0;
+            if (f->alparser != NULL && f->alstate != NULL) {
+                if (AppLayerParserGetTransactionInspectId(f->alparser, flags) >=
+                    AppLayerParserGetTxCnt(f->proto, alproto, f->alstate)) {
+                    r = 2;
+                }
+            }
             FLOWLOCK_UNLOCK(f);
         }
     } else if (!(flags & STREAM_EOF) &&
@@ -240,13 +247,14 @@ int DeStateFlowHasInspectableState(Flow *f, AppProto alproto, uint16_t alversion
 int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                                 DetectEngineThreadCtx *det_ctx,
                                 Signature *s, Packet *p, Flow *f, uint8_t flags,
-                                void *alstate, AppProto alproto, uint16_t alversion)
+                                AppProto alproto, uint16_t alversion)
 {
     DetectEngineAppInspectionEngine *engine = NULL;
     SigMatch *sm = NULL;
     uint16_t file_no_match = 0;
     uint32_t inspect_flags = 0;
 
+    void *alstate = NULL;
     HtpState *htp_state = NULL;
     SMBState *smb_state = NULL;
 
@@ -263,12 +271,13 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
     int alert_cnt = 0;
 
-    if (alstate == NULL)
-        goto end;
-
     if (AppLayerParserProtocolSupportsTxs(f->proto, alproto)) {
         FLOWLOCK_WRLOCK(f);
-
+        alstate = FlowGetAppState(f);
+        if (alstate == NULL) {
+            FLOWLOCK_UNLOCK(f);
+            goto end;
+        }
         if (alproto == ALPROTO_HTTP) {
             htp_state = (HtpState *)alstate;
             if (htp_state->conn == NULL) {
@@ -345,6 +354,13 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                (alproto == ALPROTO_DCERPC || alproto == ALPROTO_SMB ||
                 alproto == ALPROTO_SMB2))
     {
+        FLOWLOCK_WRLOCK(f);
+        alstate = FlowGetAppState(f);
+        if (alstate == NULL) {
+            FLOWLOCK_UNLOCK(f);
+            goto end;
+        }
+
         KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_DMATCH);
         if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
             smb_state = (SMBState *)alstate;
@@ -374,37 +390,49 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
             }
         }
+        FLOWLOCK_UNLOCK(f);
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_AMATCH];
     KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_AMATCH);
-    for (match = 0; sm != NULL; sm = sm->next) {
-        match = 0;
-        if (sigmatch_table[sm->type].AppLayerMatch != NULL) {
-            if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
-                smb_state = (SMBState *)alstate;
-                if (smb_state->dcerpc_present) {
+    sm = s->sm_lists[DETECT_SM_LIST_AMATCH];
+    if (sm != NULL) {
+        /* RDLOCK would be nicer, but at least tlsstore needs
+         * write lock currently. */
+        FLOWLOCK_WRLOCK(f);
+        alstate = FlowGetAppState(f);
+        if (alstate == NULL) {
+            FLOWLOCK_UNLOCK(f);
+            goto end;
+        }
+
+        for (match = 0; sm != NULL; sm = sm->next) {
+            match = 0;
+            if (sigmatch_table[sm->type].AppLayerMatch != NULL) {
+                if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
+                    smb_state = (SMBState *)alstate;
+                    if (smb_state->dcerpc_present) {
+                        KEYWORD_PROFILING_START;
+                        match = sigmatch_table[sm->type].
+                            AppLayerMatch(tv, det_ctx, f, flags, &smb_state->dcerpc, s, sm);
+                        KEYWORD_PROFILING_END(det_ctx, sm->type, (match > 0));
+                    }
+                } else {
                     KEYWORD_PROFILING_START;
                     match = sigmatch_table[sm->type].
-                        AppLayerMatch(tv, det_ctx, f, flags, &smb_state->dcerpc, s, sm);
+                        AppLayerMatch(tv, det_ctx, f, flags, alstate, s, sm);
                     KEYWORD_PROFILING_END(det_ctx, sm->type, (match > 0));
                 }
-            } else {
-                KEYWORD_PROFILING_START;
-                match = sigmatch_table[sm->type].
-                    AppLayerMatch(tv, det_ctx, f, flags, alstate, s, sm);
-                KEYWORD_PROFILING_END(det_ctx, sm->type, (match > 0));
-            }
 
-            if (match == 0)
-                break;
-            if (match == 2) {
-                inspect_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
-                break;
+                if (match == 0)
+                    break;
+                if (match == 2) {
+                    inspect_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                    break;
+                }
             }
         }
-    }
-    if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
+        FLOWLOCK_UNLOCK(f);
+
         store_de_state = 1;
         if (sm == NULL || inspect_flags & DE_STATE_FLAG_SIG_CANT_MATCH) {
             if (match == 1) {
@@ -451,7 +479,7 @@ int DeStateDetectStartDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
 void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                                     DetectEngineThreadCtx *det_ctx,
-                                    Packet *p, Flow *f, uint8_t flags, void *alstate,
+                                    Packet *p, Flow *f, uint8_t flags,
                                     AppProto alproto, uint16_t alversion)
 {
     SCMutexLock(&f->de_state_m);
@@ -461,6 +489,7 @@ void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
     uint16_t file_no_match = 0;
     uint32_t inspect_flags = 0;
 
+    void *alstate = NULL;
     HtpState *htp_state = NULL;
     SMBState *smb_state = NULL;
 
@@ -485,6 +514,13 @@ void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
     if (AppLayerParserProtocolSupportsTxs(f->proto, alproto)) {
         FLOWLOCK_RDLOCK(f);
+        alstate = FlowGetAppState(f);
+        if (alstate == NULL) {
+            FLOWLOCK_UNLOCK(f);
+            SCMutexUnlock(&f->de_state_m);
+            return;
+        }
+
         inspect_tx_id = AppLayerParserGetTransactionInspectId(f->alparser, flags);
         total_txs = AppLayerParserGetTxCnt(f->proto, alproto, alstate);
         inspect_tx = AppLayerParserGetTx(f->proto, alproto, alstate, inspect_tx_id);
@@ -571,6 +607,12 @@ void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
 
             if (alproto_supports_txs) {
                 FLOWLOCK_WRLOCK(f);
+                alstate = FlowGetAppState(f);
+                if (alstate == NULL) {
+                    FLOWLOCK_UNLOCK(f);
+                    RULE_PROFILING_END(det_ctx, s, match, p);
+                    goto end;
+                }
 
                 if (alproto == ALPROTO_HTTP) {
                     htp_state = (HtpState *)alstate;
@@ -621,10 +663,23 @@ void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                 FLOWLOCK_UNLOCK(f);
             }
 
+            /* count AMATCH matches */
+            total_matches = 0;
+
             KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_AMATCH);
-            for (sm = item->nm; sm != NULL; sm = sm->next) {
-                if (sigmatch_table[sm->type].AppLayerMatch != NULL &&
-                    (alproto == s->alproto || alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2))
+            if (item->nm != NULL) {
+                /* RDLOCK would be nicer, but at least tlsstore needs
+                 * write lock currently. */
+                FLOWLOCK_WRLOCK(f);
+                alstate = FlowGetAppState(f);
+                if (alstate == NULL) {
+                    FLOWLOCK_UNLOCK(f);
+                    RULE_PROFILING_END(det_ctx, s, 0 /* no match */, p);
+                    goto end;
+                }
+
+                for (sm = item->nm; sm != NULL; sm = sm->next) {
+                    if (sigmatch_table[sm->type].AppLayerMatch != NULL)
                     {
                         if (alproto == ALPROTO_SMB || alproto == ALPROTO_SMB2) {
                             smb_state = (SMBState *)alstate;
@@ -645,12 +700,16 @@ void DeStateDetectContinueDetection(ThreadVars *tv, DetectEngineCtx *de_ctx,
                             break;
                         else if (match == 2)
                             inspect_flags |= DE_STATE_FLAG_SIG_CANT_MATCH;
+                        else if (match == 1)
+                            total_matches++;
                     }
+                }
+                FLOWLOCK_UNLOCK(f);
             }
             RULE_PROFILING_END(det_ctx, s, match, p);
 
             if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
-                if (sm == NULL || inspect_flags & DE_STATE_FLAG_SIG_CANT_MATCH) {
+                if (total_matches > 0 && (sm == NULL || inspect_flags & DE_STATE_FLAG_SIG_CANT_MATCH)) {
                     if (sm == NULL)
                         alert = 1;
                     inspect_flags |= DE_STATE_FLAG_FULL_INSPECT;
@@ -709,10 +768,15 @@ end:
     return;
 }
 
+/** \brief update flow's inspection id's
+ *
+ *  \note it is possible that f->alstate, f->alparser are NULL */
 void DeStateUpdateInspectTransactionId(Flow *f, uint8_t direction)
 {
     FLOWLOCK_WRLOCK(f);
-    AppLayerParserSetTransactionInspectId(f->alparser, f->proto, f->alproto, f->alstate, direction);
+    if (f->alparser && f->alstate) {
+        AppLayerParserSetTransactionInspectId(f->alparser, f->proto, f->alproto, f->alstate, direction);
+    }
     FLOWLOCK_UNLOCK(f);
 
     return;

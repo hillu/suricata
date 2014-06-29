@@ -117,7 +117,6 @@ void OutputJsonRegisterTests (void)
 
 #define OUTPUT_BUFFER_SIZE 65535
 
-extern uint8_t engine_mode;
 #ifndef OS_WIN32
 static int alert_syslog_level = DEFAULT_ALERT_SYSLOG_LEVEL;
 #endif /* OS_WIN32 */
@@ -163,7 +162,7 @@ json_t *CreateJSONHeader(Packet *p, int direction_sensitive, char *event_type)
     srcip[0] = '\0';
     dstip[0] = '\0';
     if (direction_sensitive) {
-        if ((PKT_IS_TOCLIENT(p))) {
+        if ((PKT_IS_TOSERVER(p))) {
             if (PKT_IS_IPV4(p)) {
                 PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
                 PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
@@ -304,8 +303,8 @@ int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer *buffer) {
         syslog(alert_syslog_level, "%s", js_s);
     } else if (json_out == ALERT_FILE) {
         MemBufferWriteString(buffer, "%s\n", js_s);
-        (void)MemBufferPrintToFPAsString(buffer, file_ctx->fp);
-        fflush(file_ctx->fp);
+        file_ctx->Write((const char *)MEMBUFFER_BUFFER(buffer),
+            MEMBUFFER_OFFSET(buffer), file_ctx);
     }
     SCMutexUnlock(&file_ctx->fp_mutex);
     free(js_s);
@@ -412,6 +411,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
                 SCFree(output_ctx);
                 return NULL;
             }
+            OutputRegisterFileRotationFlag(&json_ctx->file_ctx->rotation_flag);
 
             const char *format_s = ConfNodeLookupChildValue(conf, "format");
             if (format_s != NULL) {
@@ -469,6 +469,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
         json_out = json_ctx->json_out;
     }
 
+    SCLogInfo("returning output_ctx %p", output_ctx);
     return output_ctx;
 }
 
@@ -476,7 +477,9 @@ static void OutputJsonDeInitCtx(OutputCtx *output_ctx)
 {
     OutputJsonCtx *json_ctx = (OutputJsonCtx *)output_ctx->data;
     LogFileCtx *logfile_ctx = json_ctx->file_ctx;
+    OutputUnregisterFileRotationFlag(&logfile_ctx->rotation_flag);
     LogFileFreeCtx(logfile_ctx);
+    SCFree(json_ctx);
     SCFree(output_ctx);
 }
 

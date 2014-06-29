@@ -88,6 +88,9 @@
 /* Define to 1 if you have the `net' library (-lnet). */
 #undef HAVE_LIBNET
 
+/* Define to 1 if you have the `netfilter_log' library (-lnetfilter_log). */
+#undef HAVE_LIBNETFILTER_LOG
+
 /* Define to 1 if you have the `netfilter_queue' library (-lnetfilter_queue).
    */
 #undef HAVE_LIBNETFILTER_QUEUE
@@ -137,6 +140,9 @@
 /* Define to 1 if you have the <linux/sockios.h> header file. */
 #undef HAVE_LINUX_SOCKIOS_H
 
+/* lua support available */
+#undef HAVE_LUA
+
 /* libluajit available */
 #undef HAVE_LUAJIT
 
@@ -167,6 +173,9 @@
 
 /* Define to 1 if you have the <net/if.h> header file. */
 #undef HAVE_NET_IF_H
+
+/* nflog available */
+#undef HAVE_NFLOG
 
 /* Found queue max length support in netfilter_queue */
 #undef HAVE_NFQ_MAXLEN
