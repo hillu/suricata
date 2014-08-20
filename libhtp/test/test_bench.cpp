@@ -33,21 +33,46 @@
 
 /**
  * @file
+ *
  * @author Ivan Ristic <ivanr@webkreator.com>
  */
 
-#ifndef HTP_VERSION_H
-#define	HTP_VERSION_H
+#include <iostream>
+#include <gtest/gtest.h>
+#include <htp/htp_private.h>
+#include "test.h"
 
-#ifdef	__cplusplus
-extern "C" {
-#endif
+class Benchmark : public testing::Test {
+protected:
 
-#define HTP_VERSION_STRING          "0.5.15"
-#define HTP_VERSION_STRING_FULL     "LibHTP v" HTP_VERSION_STRING
+    virtual void SetUp() {
+        home = getenv("srcdir");
+        if (home == NULL) {
+            fprintf(stderr, "This program needs environment variable 'srcdir' set.");
+            exit(EXIT_FAILURE);
+        }
 
-#ifdef	__cplusplus
+        cfg = htp_config_create();
+        htp_config_set_server_personality(cfg, HTP_SERVER_APACHE_2);
+        htp_config_register_urlencoded_parser(cfg);
+        htp_config_register_multipart_parser(cfg);
+    }
+
+    virtual void TearDown() {
+        htp_connp_destroy_all(connp);
+        htp_config_destroy(cfg);
+    }
+
+    htp_connp_t *connp;
+
+    htp_cfg_t *cfg;
+
+    char *home;
+};
+
+TEST_F(Benchmark, ConnectionWithManyTransactions) {
+    int rc = test_run_ex(home, "01-get.t", cfg, &connp, 2000);
+    ASSERT_GE(rc, 0);
+
+    ASSERT_EQ(2000, htp_list_size(connp->conn->transactions));
 }
-#endif
-
-#endif	/* HTP_VERSION_H */
