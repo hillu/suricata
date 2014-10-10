@@ -1,3 +1,12 @@
+suricata (2.0.4-1) unstable; urgency=high
+
+  * Imported Upstream version 2.0.4
+  * Security: fix out-of-bounds access in SSH parser (Closes: #762828)
+  * Urgency high, CVE-2014-6603
+    Stable and Oldstable versions are not affected.
+
+ -- Pierre Chifflier <pollux@debian.org>  Fri, 10 Oct 2014 13:19:59 +0200
+
 suricata (2.0.3-1) unstable; urgency=medium
 
   * Imported Upstream version 2.0.3
