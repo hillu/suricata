@@ -76,8 +76,6 @@
 
 #define min(a,b) (((a) < (b)) ? (a) : (b))
 
-extern uint8_t suricata_ctl_flags;
-
 /** storage for mpipe device names */
 typedef struct MpipeDevice_ {
     char *dev;  /**< the device (e.g. "xgbe1") */
@@ -330,7 +328,7 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
     TmSlot *s = (TmSlot *)slot;
     ptv->slot = s->slot_next;
     Packet *p = NULL;
-    int cpu = tmc_cpus_get_my_cpu();
+    //int cpu = tmc_cpus_get_my_cpu();
     int rank = tv->rank;
     int max_queued = 0;
     char *ctype;
@@ -541,7 +539,7 @@ static TmEcode ReceiveMpipeAllocatePacketBuffers(void)
     unsigned long available_pagesizes = tmc_alloc_get_pagesizes();
 
     void *packet_page = NULL;
-    size_t tile_vhuge_size;
+    size_t tile_vhuge_size = 64 * 1024;
 
     /* Try the largest available page size first to see if any
      * pages of that size can be allocated. */
@@ -915,7 +913,7 @@ TmEcode ReceiveMpipeThreadInit(ThreadVars *tv, void *initdata, void **data)
                 SCReturnInt(TM_ECODE_FAILED);
             }
         }
-        gxio_mpipe_init(context, instance);
+        result = gxio_mpipe_init(context, instance);
         VERIFY(result, "gxio_mpipe_init()");
         /* open ingress interfaces */
         for (int i = 0; i < nlive; i++) {

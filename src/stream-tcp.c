@@ -835,6 +835,8 @@ static int StreamTcpPacketStateNone(ThreadVars *tv, Packet *p,
         ssn->client.last_ack = TCP_GET_ACK(p);
         ssn->server.last_ack = TCP_GET_SEQ(p);
 
+        ssn->server.next_win = ssn->server.last_ack + ssn->server.window;
+
         /** If the client has a wscale option the server had it too,
          *  so set the wscale for the server to max. Otherwise none
          *  will have the wscale opt just like it should. */
@@ -1481,8 +1483,11 @@ static int StreamTcpPacketStateSynSent(ThreadVars *tv, Packet *p,
                 ,ssn, TCP_GET_SEQ(p), p->payload_len, TCP_GET_SEQ(p)
                 + p->payload_len, ssn->client.next_seq);
 
-        ssn->client.wscale = TCP_WSCALE_MAX;
-        ssn->server.wscale = TCP_WSCALE_MAX;
+        /* if SYN had wscale, assume it to be supported. Otherwise
+         * we know it not to be supported. */
+        if (ssn->flags & STREAMTCP_FLAG_SERVER_WSCALE) {
+            ssn->client.wscale = TCP_WSCALE_MAX;
+        }
 
         /* Set the timestamp values used to validate the timestamp of
          * received packets.*/
@@ -1500,6 +1505,9 @@ static int StreamTcpPacketStateSynSent(ThreadVars *tv, Packet *p,
         if (ssn->flags & STREAMTCP_FLAG_CLIENT_SACKOK) {
             ssn->flags |= STREAMTCP_FLAG_SACKOK;
         }
+
+        StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                &ssn->client, p, pq);
 
     } else {
         SCLogDebug("ssn %p: default case", ssn);
@@ -1742,14 +1750,17 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
             ssn->server.next_win = ssn->server.last_ack + ssn->server.window;
 
             if (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) {
-                ssn->client.window = TCP_GET_WINDOW(p);
+                ssn->client.window = TCP_GET_WINDOW(p) << ssn->client.wscale;
+                ssn->client.next_win = ssn->client.last_ack + ssn->client.window;
                 ssn->server.next_win = ssn->server.last_ack +
                     ssn->server.window;
-                /* window scaling for midstream pickups, we can't do much
-                 * other than assume that it's set to the max value: 14 */
-                ssn->server.wscale = TCP_WSCALE_MAX;
-                ssn->client.wscale = TCP_WSCALE_MAX;
-                ssn->flags |= STREAMTCP_FLAG_SACKOK;
+                if (!(ssn->flags & STREAMTCP_FLAG_MIDSTREAM_SYNACK)) {
+                    /* window scaling for midstream pickups, we can't do much
+                     * other than assume that it's set to the max value: 14 */
+                    ssn->server.wscale = TCP_WSCALE_MAX;
+                    ssn->client.wscale = TCP_WSCALE_MAX;
+                    ssn->flags |= STREAMTCP_FLAG_SACKOK;
+                }
             }
 
             StreamTcpPacketSetState(p, ssn, TCP_ESTABLISHED);
@@ -1809,6 +1820,42 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
 
             StreamTcpSetEvent(p, STREAM_3WHS_RIGHT_SEQ_WRONG_ACK_EVASION);
             return -1;
+
+        /* if we get a packet with a proper ack, but a seq that is beyond
+         * next_seq but in-window, we probably missed some packets */
+        } else if (SEQ_GT(TCP_GET_SEQ(p), ssn->client.next_seq) &&
+                   SEQ_LEQ(TCP_GET_SEQ(p),ssn->client.next_win) &&
+                   SEQ_EQ(TCP_GET_ACK(p), ssn->server.next_seq))
+        {
+            SCLogDebug("ssn %p: ACK for missing data", ssn);
+
+            if (ssn->flags & STREAMTCP_FLAG_TIMESTAMP) {
+                StreamTcpHandleTimestamp(ssn, p);
+            }
+
+            StreamTcpUpdateLastAck(ssn, &ssn->server, TCP_GET_ACK(p));
+
+            ssn->client.next_seq = TCP_GET_SEQ(p) + p->payload_len;
+            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+
+            ssn->server.next_win = ssn->server.last_ack + ssn->server.window;
+
+            if (ssn->flags & STREAMTCP_FLAG_MIDSTREAM) {
+                ssn->client.window = TCP_GET_WINDOW(p);
+                ssn->server.next_win = ssn->server.last_ack +
+                    ssn->server.window;
+                /* window scaling for midstream pickups, we can't do much
+                 * other than assume that it's set to the max value: 14 */
+                ssn->server.wscale = TCP_WSCALE_MAX;
+                ssn->client.wscale = TCP_WSCALE_MAX;
+                ssn->flags |= STREAMTCP_FLAG_SACKOK;
+            }
+
+            StreamTcpPacketSetState(p, ssn, TCP_ESTABLISHED);
+            SCLogDebug("ssn %p: =~ ssn state is now TCP_ESTABLISHED", ssn);
+
+            StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                    &ssn->client, p, pq);
         } else {
             SCLogDebug("ssn %p: wrong seq nr on packet", ssn);
 
@@ -4186,6 +4233,45 @@ static int StreamTcpPacketIsWindowUpdate(TcpSession *ssn, Packet *p) {
 }
 
 /**
+ *  Try to detect whether a packet is a valid FIN 4whs final ack.
+ *
+ */
+static int StreamTcpPacketIsFinShutdownAck(TcpSession *ssn, Packet *p)
+{
+    TcpStream *stream = NULL, *ostream = NULL;
+    uint32_t seq;
+    uint32_t ack;
+
+    if (p->flags & PKT_PSEUDO_STREAM_END)
+        return 0;
+    if (!(ssn->state == TCP_TIME_WAIT || ssn->state == TCP_CLOSE_WAIT || ssn->state == TCP_LAST_ACK))
+        return 0;
+    if (p->tcph->th_flags != TH_ACK)
+        return 0;
+    if (p->payload_len != 0)
+        return 0;
+
+    if (PKT_IS_TOSERVER(p)) {
+        stream = &ssn->client;
+        ostream = &ssn->server;
+    } else {
+        stream = &ssn->server;
+        ostream = &ssn->client;
+    }
+
+    seq = TCP_GET_SEQ(p);
+    ack = TCP_GET_ACK(p);
+
+    SCLogDebug("%"PRIu64", seq %u ack %u stream->next_seq %u ostream->next_seq %u",
+            p->pcap_cnt, seq, ack, stream->next_seq, ostream->next_seq);
+
+    if (SEQ_EQ(stream->next_seq + 1, seq) && SEQ_EQ(ack, ostream->next_seq + 1)) {
+        return 1;
+    }
+    return 0;
+}
+
+/**
  *  Try to detect packets doing bad window updates
  *
  *  See bug 1238.
@@ -4195,9 +4281,10 @@ static int StreamTcpPacketIsWindowUpdate(TcpSession *ssn, Packet *p) {
  *
  *  The logic we use here is:
  *  - packet seq > next_seq
- *  - packet acq > next_seq (packet acks unseen data)
+ *  - packet ack > next_seq (packet acks unseen data)
  *  - packet shrinks window more than it's own data size
- *    (in case of no data, any shrinking is rejected)
+ *  - packet shrinks window more than the diff between it's ack and the
+ *    last_ack value
  *
  *  Packets coming in after packet loss can look quite a bit like this.
  */
@@ -4211,7 +4298,7 @@ static int StreamTcpPacketIsBadWindowUpdate(TcpSession *ssn, Packet *p)
     if (p->flags & PKT_PSEUDO_STREAM_END)
         return 0;
 
-    if (ssn->state < TCP_ESTABLISHED)
+    if (ssn->state < TCP_ESTABLISHED || ssn->state == TCP_CLOSED)
         return 0;
 
     if ((p->tcph->th_flags & (TH_SYN|TH_FIN|TH_RST)) != 0)
@@ -4240,12 +4327,25 @@ static int StreamTcpPacketIsBadWindowUpdate(TcpSession *ssn, Packet *p)
                 p->pcap_cnt, pkt_win, ostream->window, diff, p->payload_len);
             SCLogDebug("%"PRIu64", pkt_win %u, stream win %u",
                 p->pcap_cnt, pkt_win, ostream->window);
-            SCLogDebug("%"PRIu64", seq %u ack %u ostream->next_seq %u stream->last_ack %u, diff %u (%u)",
-                p->pcap_cnt, seq, ack, ostream->next_seq, stream->last_ack,
-                ostream->next_seq - ostream->last_ack, stream->next_seq - stream->last_ack);
+            SCLogDebug("%"PRIu64", seq %u ack %u ostream->next_seq %u ostream->last_ack %u, ostream->next_win %u, diff %u (%u)",
+                    p->pcap_cnt, seq, ack, ostream->next_seq, ostream->last_ack, ostream->next_win,
+                    ostream->next_seq - ostream->last_ack, stream->next_seq - stream->last_ack);
 
-            StreamTcpSetEvent(p, STREAM_PKT_BAD_WINDOW_UPDATE);
-            return 1;
+            /* get the expected window shrinking from looking at ack vs last_ack.
+             * Observed a lot of just a little overrunning that value. So added some
+             * margin that is still ok. To make sure this isn't a loophole to still
+             * close the window, this is limited to windows above 1024. Both values
+             * are rather arbitrary. */
+            uint32_t adiff = ack - ostream->last_ack;
+            if (((pkt_win > 1024) && (diff > (adiff + 32))) ||
+                ((pkt_win <= 1024) && (diff > adiff)))
+            {
+                SCLogDebug("pkt ACK %u is %u bytes beyond last_ack %u, shrinks window by %u "
+                        "(allowing 32 bytes extra): pkt WIN %u", ack, adiff, ostream->last_ack, diff, pkt_win);
+                SCLogDebug("%u - %u = %u (state %u)", diff, adiff, diff - adiff, ssn->state);
+                StreamTcpSetEvent(p, STREAM_PKT_BAD_WINDOW_UPDATE);
+                return 1;
+            }
         }
 
     }
@@ -4320,9 +4420,10 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
 
         /* if packet is not a valid window update, check if it is perhaps
          * a bad window update that we should ignore (and alert on) */
-        if (StreamTcpPacketIsWindowUpdate(ssn, p) == 0)
-            if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
-                goto skip;
+        if (StreamTcpPacketIsFinShutdownAck(ssn, p) == 0)
+            if (StreamTcpPacketIsWindowUpdate(ssn, p) == 0)
+                if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
+                    goto skip;
 
         switch (ssn->state) {
             case TCP_SYN_SENT:
@@ -4410,6 +4511,12 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
                                        ~FLOW_TS_PP_ALPROTO_DETECT_DONE &
                                        ~FLOW_TC_PM_ALPROTO_DETECT_DONE &
                                        ~FLOW_TC_PP_ALPROTO_DETECT_DONE);
+                    p->flow->flags &= ~ FLOW_NO_APPLAYER_INSPECTION;
+                    if (p->flow->de_state != NULL) {
+                        SCMutexLock(&p->flow->de_state_m);
+                        DetectEngineStateReset(p->flow->de_state, (STREAM_TOSERVER | STREAM_TOCLIENT));
+                        SCMutexUnlock(&p->flow->de_state_m);
+                    }
 
                     if (StreamTcpPacketStateNone(tv,p,stt,ssn, &stt->pseudo_queue)) {
                         goto error;
