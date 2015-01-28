@@ -43,7 +43,7 @@
 extern "C" {
 #endif
 
-#define HTP_VERSION_STRING          "0.5.15"
+#define HTP_VERSION_STRING          "0.5.16"
 #define HTP_VERSION_STRING_FULL     "LibHTP v" HTP_VERSION_STRING
 
 #ifdef	__cplusplus

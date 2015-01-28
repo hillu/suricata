@@ -1911,7 +1911,10 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
     if (!(stream->flags & STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED)) {\
         flag |= STREAM_START; \
     } \
-    if (stream->flags & STREAMTCP_STREAM_FLAG_CLOSE_INITIATED) {    \
+    if (ssn->state == TCP_CLOSED) { \
+        flag |= STREAM_EOF; \
+    } \
+    if (p->flags & PKT_PSEUDO_STREAM_END) { \
         flag |= STREAM_EOF; \
     } \
     if ((p)->flowflags & FLOW_PKT_TOSERVER) { \
@@ -1929,7 +1932,10 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
     if (!(stream->flags & STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED)) {\
         flag |= STREAM_START; \
     } \
-    if (stream->flags & STREAMTCP_STREAM_FLAG_CLOSE_INITIATED) {    \
+    if (ssn->state == TCP_CLOSED) { \
+        flag |= STREAM_EOF; \
+    } \
+    if (p->flags & PKT_PSEUDO_STREAM_END) { \
         flag |= STREAM_EOF; \
     } \
     if ((p)->flowflags & FLOW_PKT_TOSERVER) { \
@@ -2018,6 +2024,59 @@ static int StreamTcpReassembleRawCheckLimit(TcpSession *ssn, TcpStream *stream,
     SCReturnInt(1);
 }
 
+/**
+ *  \brief see if app layer is done with a segment
+ *
+ *  \retval 1 app layer is done with this segment
+ *  \retval 0 not done yet
+ */
+#define StreamTcpAppLayerSegmentProcessed(stream, segment) \
+    (( ( (stream)->flags & STREAMTCP_STREAM_FLAG_GAP ) || \
+       ( (segment)->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED ) ? 1 :0 ))
+
+/** \internal
+ *  \brief check if we can remove a segment from our segment list
+ *
+ *  If a segment is entirely before the oldest smsg, we can discard it. Otherwise
+ *  we keep it around to be able to log it.
+ *
+ *  \retval 1 yes
+ *  \retval 0 no
+ */
+static inline int StreamTcpReturnSegmentCheck(const Flow *f, TcpSession *ssn, TcpStream *stream, TcpSegment *seg)
+{
+    if (stream == &ssn->client && ssn->toserver_smsg_head != NULL) {
+        /* not (seg is entirely before first smsg, skip) */
+        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toserver_smsg_head->seq))) {
+            SCReturnInt(0);
+        }
+    } else if (stream == &ssn->server && ssn->toclient_smsg_head != NULL) {
+        /* not (seg is entirely before first smsg, skip) */
+        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toclient_smsg_head->seq))) {
+            SCReturnInt(0);
+        }
+    }
+
+    /* if proto detect isn't done, we're not returning */
+    if (!(StreamTcpIsSetStreamFlagAppProtoDetectionCompleted(stream))) {
+        SCReturnInt(0);
+    }
+
+    /* check app layer conditions */
+    if (!(f->flags & FLOW_NO_APPLAYER_INSPECTION)) {
+        if (!(StreamTcpAppLayerSegmentProcessed(stream, seg))) {
+            SCReturnInt(0);
+        }
+    }
+
+    /* check raw reassembly conditions */
+    if (!(seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED)) {
+        SCReturnInt(0);
+    }
+
+    SCReturnInt(1);
+}
+
 static void StreamTcpRemoveSegmentFromStream(TcpStream *stream, TcpSegment *seg) {
     if (seg->prev == NULL) {
         stream->seg_list = seg->next;
@@ -2032,16 +2091,6 @@ static void StreamTcpRemoveSegmentFromStream(TcpStream *stream, TcpSegment *seg)
     if (stream->seg_list_tail == seg)
         stream->seg_list_tail = seg->prev;
 }
-
-/**
- *  \brief see if app layer is done with a segment
- *
- *  \retval 1 app layer is done with this segment
- *  \retval 0 not done yet
- */
-#define StreamTcpAppLayerSegmentProcessed(stream, segment) \
-    (( ( (stream)->flags & STREAMTCP_STREAM_FLAG_GAP ) || \
-       ( (segment)->flags & SEGMENTTCP_FLAG_APPLAYER_PROCESSED ) ? 1 :0 ))
 
 /**
  *  \brief Update the stream reassembly upon receiving a data segment
@@ -2112,53 +2161,69 @@ int StreamTcpReassembleInlineAppLayer(ThreadVars *tv,
     uint16_t payload_len = 0;
     uint32_t next_seq = ra_base_seq + 1;
     uint32_t data_sent = 0;
+    TcpSegment *seg = stream->seg_list;
 
     SCLogDebug("ra_base_seq %u", ra_base_seq);
 
+    /* Check if we have a gap at the start of the list. If last_ack is
+     * bigger than the list start and the list start is bigger than
+     * next_seq, we know we are missing data that has been ack'd. That
+     * won't get retransmitted, so it's a data gap.
+     */
+    if (!(p->flow->flags & FLOW_NO_APPLAYER_INSPECTION)) {
+        if (SEQ_GT(seg->seq, next_seq) && SEQ_LT(seg->seq, stream->last_ack)) {
+            /* send gap signal */
+            STREAM_SET_INLINE_FLAGS(ssn, stream, p, flags);
+            AppLayerHandleTCPData(tv, ra_ctx, p, p->flow, ssn, stream,
+                    NULL, 0, flags|STREAM_GAP);
+            AppLayerProfilingStore(ra_ctx->app_tctx, p);
+
+            /* set a GAP flag and make sure not bothering this stream anymore */
+            SCLogDebug("STREAMTCP_STREAM_FLAG_GAP set");
+            stream->flags |= STREAMTCP_STREAM_FLAG_GAP;
+
+            StreamTcpSetEvent(p, STREAM_REASSEMBLY_SEQ_GAP);
+            SCPerfCounterIncr(ra_ctx->counter_tcp_reass_gap, tv->sc_perf_pca);
+#ifdef DEBUG
+            dbg_app_layer_gap++;
+#endif
+            SCReturnInt(0);
+        }
+    }
+
     /* loop through the segments and fill one or more msgs */
-    TcpSegment *seg = stream->seg_list;
     SCLogDebug("pre-loop seg %p", seg);
     for (; seg != NULL;) {
-        SCLogDebug("seg %p", seg);
+        SCLogDebug("seg %p, SEQ %"PRIu32", LEN %"PRIu16", SUM %"PRIu32,
+                seg, seg->seq, seg->payload_len,
+                (uint32_t)(seg->seq + seg->payload_len));
 
         if (p->flow->flags & FLOW_NO_APPLAYER_INSPECTION) {
-            if (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) {
-                SCLogDebug("removing seg %p seq %"PRIu32
-                           " len %"PRIu16"", seg, seg->seq, seg->payload_len);
+            SCLogDebug("FLOW_NO_APPLAYER_INSPECTION set, breaking out");
+            break;
+        }
 
-                TcpSegment *next_seg = seg->next;
-                StreamTcpRemoveSegmentFromStream(stream, seg);
-                StreamTcpSegmentReturntoPool(seg);
-                seg = next_seg;
-                continue;
-            } else {
-                break;
-            }
-
-            /* if app layer protocol has been detected, then remove all the segments
-             * which has been previously processed and reassembled */
-        } else if (StreamTcpIsSetStreamFlagAppProtoDetectionCompleted(stream) &&
-                   (seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED) &&
-                   StreamTcpAppLayerSegmentProcessed(stream, seg)) {
-            SCLogDebug("segment(%p) of length %"PRIu16" has been processed,"
-                    " so return it to pool", seg, seg->payload_len);
+        if (StreamTcpReturnSegmentCheck(p->flow, ssn, stream, seg) == 1) {
+            SCLogDebug("removing segment");
             TcpSegment *next_seg = seg->next;
             StreamTcpRemoveSegmentFromStream(stream, seg);
             StreamTcpSegmentReturntoPool(seg);
             seg = next_seg;
             continue;
+        } else if (StreamTcpAppLayerSegmentProcessed(stream, seg)) {
+            TcpSegment *next_seg = seg->next;
+            seg = next_seg;
+            continue;
         }
-
-        /* If packets are fully before ra_base_seq, skip them. We do this
-         * because we've reassembled up to the ra_base_seq point already,
-         * so we won't do anything with segments before it anyway. */
-        SCLogDebug("checking for pre ra_base_seq %"PRIu32" seg %p seq %"PRIu32""
-                   " len %"PRIu16", combined %"PRIu32" and stream->last_ack "
-                   "%"PRIu32"", ra_base_seq, seg, seg->seq,
-                   seg->payload_len, seg->seq+seg->payload_len, stream->last_ack);
 
         /* we've run into a sequence gap */
         if (SEQ_GT(seg->seq, next_seq)) {
+            SCLogDebug("GAP: we expected %u, got %u. Diff %u", next_seq, seg->seq, seg->seq - next_seq);
+
+            /* don't conclude it's a gap until we see that the data
+             * that is missing was acked. */
+            if (SEQ_GT(seg->seq,stream->last_ack) && ssn->state != TCP_CLOSED)
+                break;
 
             /* first, pass on data before the gap */
             if (data_len > 0) {
@@ -2170,55 +2235,40 @@ int StreamTcpReassembleInlineAppLayer(ThreadVars *tv,
                 AppLayerHandleTCPData(tv, ra_ctx, p, p->flow, ssn, stream,
                                       data, data_len, flags);
                 AppLayerProfilingStore(ra_ctx->app_tctx, p);
-
-                data_sent += data_len;
                 data_len = 0;
             }
 
-            /* don't conclude it's a gap straight away. If ra_base_seq is lower
-             * than last_ack - the window, we consider it a gap. */
-            if (SEQ_GT((stream->last_ack - stream->window), ra_base_seq))
-            {
-                /* see what the length of the gap is, gap length is seg->seq -
-                 * (ra_base_seq +1) */
+            /* see what the length of the gap is, gap length is seg->seq -
+             * (ra_base_seq +1) */
 #ifdef DEBUG
-                uint32_t gap_len = seg->seq - next_seq;
-                SCLogDebug("expected next_seq %" PRIu32 ", got %" PRIu32 " , "
-                        "stream->last_ack %" PRIu32 ". Seq gap %" PRIu32"",
-                        next_seq, seg->seq, stream->last_ack, gap_len);
+            uint32_t gap_len = seg->seq - next_seq;
+            SCLogDebug("expected next_seq %" PRIu32 ", got %" PRIu32 " , "
+                    "stream->last_ack %" PRIu32 ". Seq gap %" PRIu32"",
+                    next_seq, seg->seq, stream->last_ack, gap_len);
 #endif
+            /* We have missed the packet and end host has ack'd it, so
+             * IDS should advance it's ra_base_seq and should not consider this
+             * packet any longer, even if it is retransmitted, as end host will
+             * drop it anyway */
+            ra_base_seq = seg->seq - 1;
 
-                /* We have missed the packet and end host has ack'd it, so
-                 * IDS should advance it's ra_base_seq and should not consider this
-                 * packet any longer, even if it is retransmitted, as end host will
-                 * drop it anyway */
-                ra_base_seq = seg->seq - 1;
+            /* send gap signal */
+            STREAM_SET_INLINE_FLAGS(ssn, stream, p, flags);
+            AppLayerHandleTCPData(tv, ra_ctx, p, p->flow, ssn, stream,
+                    NULL, 0, flags|STREAM_GAP);
+            AppLayerProfilingStore(ra_ctx->app_tctx, p);
+            data_sent += data_len;
 
-                /* send gap signal */
-                STREAM_SET_INLINE_FLAGS(ssn, stream, p, flags);
-                AppLayerHandleTCPData(tv, ra_ctx, p, p->flow, ssn, stream,
-                                      NULL, 0, flags|STREAM_GAP);
-                AppLayerProfilingStore(ra_ctx->app_tctx, p);
-                data_len = 0;
+            /* set a GAP flag and make sure not bothering this stream anymore */
+            SCLogDebug("STREAMTCP_STREAM_FLAG_GAP set");
+            stream->flags |= STREAMTCP_STREAM_FLAG_GAP;
 
-                /* set a GAP flag and make sure not bothering this stream anymore */
-                SCLogDebug("set STREAMTCP_STREAM_FLAG_GAP flag");
-                stream->flags |= STREAMTCP_STREAM_FLAG_GAP;
-
-                StreamTcpSetEvent(p, STREAM_REASSEMBLY_SEQ_GAP);
-                SCPerfCounterIncr(ra_ctx->counter_tcp_reass_gap, tv->sc_perf_pca);
+            StreamTcpSetEvent(p, STREAM_REASSEMBLY_SEQ_GAP);
+            SCPerfCounterIncr(ra_ctx->counter_tcp_reass_gap, tv->sc_perf_pca);
 #ifdef DEBUG
-                dbg_app_layer_gap++;
+            dbg_app_layer_gap++;
 #endif
-                break;
-            } else {
-                SCLogDebug("possible GAP, but waiting to see if out of order "
-                        "packets might solve that");
-#ifdef DEBUG
-                dbg_app_layer_gap_candidate++;
-#endif
-                break;
-            }
+            break;
         }
 
         /* if the segment ends beyond ra_base_seq we need to consider it */
@@ -2376,6 +2426,12 @@ int StreamTcpReassembleInlineAppLayer(ThreadVars *tv,
     /* store ra_base_seq in the stream */
     if (StreamTcpIsSetStreamFlagAppProtoDetectionCompleted(stream)) {
         stream->ra_app_base_seq = ra_base_seq;
+    } else {
+        TcpSegment *tmp_seg = stream->seg_list;
+        while (tmp_seg != NULL) {
+            tmp_seg->flags &= ~SEGMENTTCP_FLAG_APPLAYER_PROCESSED;
+            tmp_seg = tmp_seg->next;
+        }
     }
 
     SCLogDebug("stream->ra_app_base_seq %u", stream->ra_app_base_seq);
@@ -2702,48 +2758,6 @@ static int StreamTcpReassembleInlineRaw (TcpReassemblyThreadCtx *ra_ctx,
     }
     SCLogDebug("stream->ra_raw_base_seq %u", stream->ra_raw_base_seq);
     SCReturnInt(0);
-}
-
-/** \internal
- *  \brief check if we can remove a segment from our segment list
- *
- *  If a segment is entirely before the oldest smsg, we can discard it. Otherwise
- *  we keep it around to be able to log it.
- *
- *  \retval 1 yes
- *  \retval 0 no
- */
-static inline int StreamTcpReturnSegmentCheck(const Flow *f, TcpSession *ssn, TcpStream *stream, TcpSegment *seg) {
-    if (stream == &ssn->client && ssn->toserver_smsg_head != NULL) {
-        /* not (seg is entirely before first smsg, skip) */
-        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toserver_smsg_head->seq))) {
-            SCReturnInt(0);
-        }
-    } else if (stream == &ssn->server && ssn->toclient_smsg_head != NULL) {
-        /* not (seg is entirely before first smsg, skip) */
-        if (!(SEQ_LEQ(seg->seq + seg->payload_len, ssn->toclient_smsg_head->seq))) {
-            SCReturnInt(0);
-        }
-    }
-
-    /* if proto detect isn't done, we're not returning */
-    if (!(StreamTcpIsSetStreamFlagAppProtoDetectionCompleted(stream))) {
-        SCReturnInt(0);
-    }
-
-    /* check app layer conditions */
-    if (!(f->flags & FLOW_NO_APPLAYER_INSPECTION)) {
-        if (!(StreamTcpAppLayerSegmentProcessed(stream, seg))) {
-            SCReturnInt(0);
-        }
-    }
-
-    /* check raw reassembly conditions */
-    if (!(seg->flags & SEGMENTTCP_FLAG_RAW_PROCESSED)) {
-        SCReturnInt(0);
-    }
-
-    SCReturnInt(1);
 }
 
 /** \brief Remove idle TcpSegments from TcpSession
