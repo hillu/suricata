@@ -1,3 +1,4 @@
 etc/suricata
 usr/bin
+usr/lib
 var/log/suricata
