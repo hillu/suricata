@@ -1,9 +1,13 @@
 suricata (2.0.6-1) unstable; urgency=medium
 
+  [ Pierre Chifflier ]
   * Imported Upstream version 2.0.6
   * Add Arturo to uploaders
 
- -- Pierre Chifflier <pollux@debian.org>  Tue, 03 Feb 2015 13:12:27 +0100
+  [ Arturo Borrero Gonzalez ]
+  * suricata: use embedded copy of libhtp (Closes: #772551)
+
+ -- Pierre Chifflier <pollux@debian.org>  Tue, 17 Feb 2015 11:31:22 +0100
 
 suricata (2.0.4-1) unstable; urgency=high
 
