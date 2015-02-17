@@ -6,7 +6,6 @@ Uploaders: Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
 Build-Depends: debhelper (>= 9),
     autotools-dev,
     dh-autoreconf,
-    libhtp-dev (>= 0.5.5),
     libnet1-dev | libnet-dev,
     libnspr4-dev,
     libnss3-dev,

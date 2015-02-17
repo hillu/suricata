@@ -24,7 +24,7 @@ ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
 endif
 
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude \
-	--enable-non-bundled-htp --enable-gccprotect --disable-gccmarch-native \
+	--enable-gccprotect --disable-gccmarch-native \
 	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--disable-coccinelle \
@@ -35,6 +35,7 @@ override_dh_auto_install:
 	rm -rf $(DEB_DESTDIR)/usr/lib/python*;\
 	(cd scripts/suricatasc &&\
 		python -B setup.py install --install-layout=deb --prefix $(DEB_DESTDIR)/usr)
+	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.la
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
