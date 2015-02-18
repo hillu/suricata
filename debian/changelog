@@ -1,3 +1,14 @@
+suricata (2.0.6-2) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * d/patches: drop 10-fix-missing-script-autoreconf.patch (Closes: #778670)
+  * d/rules: prevent not .so libhtp files from entering binary suricata package
+
+  [ Pierre Chifflier ]
+  * Add conflicts/replaces fields for transition from libhtp (Closes: #778668)
+
+ -- Pierre Chifflier <pollux@debian.org>  Wed, 18 Feb 2015 11:19:31 +0100
+
 suricata (2.0.6-1) unstable; urgency=medium
 
   [ Pierre Chifflier ]
