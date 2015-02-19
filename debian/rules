@@ -39,6 +39,7 @@ override_dh_auto_install:
 	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.la
 	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.a
 	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/pkgconfig
+	find $(CURDIR)/debian/suricata/usr/lib -type l -delete
 	rm -rf $(CURDIR)/debian/suricata/usr/include
 
 override_dh_auto_configure:
