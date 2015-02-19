@@ -1,3 +1,15 @@
+suricata (2.0.6-3) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * suricata: don't deploy .so links
+
+  [ Pierre Chifflier ]
+  * Add missing installation files (Closes: #778724)
+  * Fix .so symlinks removal
+  * Update default-rules-path
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 19 Feb 2015 11:55:05 +0100
+
 suricata (2.0.6-2) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
