@@ -45,7 +45,7 @@ override_dh_auto_install:
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
 	sed \
-		-e 's|^default-rule-path: .*$$|default-rule-path: /etc/snort/rules|' \
+		-e 's|^default-rule-path: .*$$|default-rule-path: /etc/suricata/rules|' \
 		 suricata.yaml > suricata-debian.yaml
 
 override_dh_clean:
