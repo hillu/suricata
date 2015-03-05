@@ -1,7 +1,7 @@
 #TODO A better place for default CFLAGS?
 
 
-    AC_INIT(suricata, 2.0.6)
+    AC_INIT(suricata, 2.0.7)
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
     AC_CONFIG_MACRO_DIR(m4)
@@ -11,6 +11,7 @@
     AC_LANG_C
     AC_PROG_CC_C99
     AC_PROG_LIBTOOL
+    PKG_PROG_PKG_CONFIG(0.21) # 0.21 is the CentOS 5.11 version
 
     AC_DEFUN([FAIL_MESSAGE],[
             echo

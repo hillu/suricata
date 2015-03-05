@@ -49,6 +49,10 @@ extern "C" {
 #define __STDC_FORMAT_MACROS
 #endif
 
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
 #include <ctype.h>
 #include <errno.h>
 #include <iconv.h>
@@ -232,6 +236,14 @@ htp_status_t htp_tx_res_process_body_data_ex(htp_tx_t *tx, const void *data, siz
 
 htp_status_t htp_tx_urldecode_uri_inplace(htp_tx_t *tx, bstr *input);
 htp_status_t htp_tx_urldecode_params_inplace(htp_tx_t *tx, bstr *input);
+
+#ifndef HAVE_STRLCAT
+size_t strlcat(char *dst, const char *src, size_t size);
+#endif
+
+#ifndef HAVE_STRLCPY
+size_t strlcpy(char *dst, const char *src, size_t size);
+#endif
 
 #ifdef	__cplusplus
 }
