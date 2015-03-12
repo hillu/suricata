@@ -1,3 +1,11 @@
+suricata (2.0.7-1) unstable; urgency=medium
+
+  [ Pierre Chifflier ]
+  * Imported Upstream version 2.0.7
+  * Fix problems with upstream version import
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 12 Mar 2015 07:06:49 +0100
+
 suricata (2.0.6-3) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
