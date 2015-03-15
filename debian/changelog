@@ -1,3 +1,14 @@
+suricata (2.0.7-2) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * d/suricata.init: fix proc nfqueue file checking (Closes: #725301)
+
+  [ Pierre Chifflier ]
+  * Check for both proc entries for nfqueue (backwards compatibility) and
+    issue warning only
+
+ -- Pierre Chifflier <pollux@debian.org>  Sun, 15 Mar 2015 11:17:27 +0100
+
 suricata (2.0.7-1) unstable; urgency=medium
 
   [ Pierre Chifflier ]
