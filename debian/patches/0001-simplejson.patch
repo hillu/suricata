@@ -1,0 +1,20 @@
+Description: use json python lib rather than simplejson
+ This prevents an additional depends on python-simplejson, since
+ json is part of python stdlib and no specific dependency on simplejson
+ symbols exists. This was ACKd by upstream.
+Origin: vendor, https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=759475
+Bug-Debian: https://bugs.debian.org/759475
+Author: Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+Last-Update: 2015-03-17
+
+--- a/scripts/suricatasc/src/suricatasc.py
++++ b/scripts/suricatasc/src/suricatasc.py
+@@ -14,7 +14,7 @@
+ # along with this program; if not, write to the Free Software
+ # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ 
+-import simplejson as json
++import json
+ import re
+ import readline
+ from socket import socket, AF_UNIX, error
