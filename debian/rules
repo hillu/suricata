@@ -23,7 +23,7 @@ ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
 	ENABLE_LUAJIT="--enable-luajit"
 endif
 
-CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude \
+CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \
 	--enable-gccprotect --disable-gccmarch-native \
 	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
