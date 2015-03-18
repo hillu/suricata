@@ -1,154 +1,86 @@
-This work was packaged for Debian by:
+Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: suricata
+Source: http://www.openinfosecfoundation.org/
 
-    Pierre Chifflier <pollux@debian.org> on Sat, 30 Jan 2010 18:25:05 +0100
+Files: *
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
 
-It was downloaded from http://www.openinfosecfoundation.org/
+Files: debian/*
+Copyright: 2010 Pierre Chifflier <pollux@debian.org>
+License: GPL-2
 
-Copyright:
+Files: src/queue.h
+Copyright: 1991-1993 The Regents of the University of California
+License: BSD-3-Clause
 
-    Open Information Security Foundation Team <team@openinfosecfoundation.org>
+Files: src/util-fix_checksum.h src/util-fix_checksum.c
+Copyright: 2001 Daniel Hartmeier
+	   2002-2008 Henning Brauer
+License: BSD-2-Clause
 
-License:
+License: BSD-2-Clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ 1. Redistributions of source code must retain the above copyright notice, this
+ list of conditions and the following disclaimer.
+ .
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+ this list of conditions and the following disclaimer in the documentation
+ and/or other materials provided with the distribution.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ THE POSSIBILITY OF SUCH DAMAGE.
 
-    This program is free software; you can redistribute it and/or modify
-    it under the terms of the GNU Library General Public License version 2
-    as published by the Free Software Foundation
+License: BSD-3-Clause
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions are met:
+ .
+ 1. Redistributions of source code must retain the above copyright notice, this
+ list of conditions and the following disclaimer.
+ .
+ 2. Redistributions in binary form must reproduce the above copyright notice,
+ this list of conditions and the following disclaimer in the documentation
+ and/or other materials provided with the distribution.
+ .
+ 3. Neither the name of the copyright holder nor the names of its contributors
+ may be used to endorse or promote products derived from this software without
+ specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+ THE POSSIBILITY OF SUCH DAMAGE.
 
-see `/usr/share/common-licenses/GPL-2'.
-
-The Debian packaging is:
-
-    Copyright (C) 2010 Pierre Chifflier <pollux@debian.org>
-
-and is licensed under the GPL version 2, 
-see `/usr/share/common-licenses/GPL-2'.
-
-Other files/licences:
-src/queue.h
-
- is Copyright (c) 1991, 1993 The Regents of the University of California and
-is licensed under BSD (3-clause) license.
-
-src/util-fix_checksum.h
-src/util-fix_checksum.c
-
- are Copyright (c) 2001 Daniel Hartmeier, Copyright (c) 2002 - 2008 Henning Brauer and
-are licensed under BSD (2-clause) license.
-
-src/action-globals.h
-src/alert-debuglog.c
-src/alert-debuglog.h
-src/alert-fastlog.c
-src/alert-fastlog.h
-src/alert-unified-alert.c
-src/alert-unified-alert.h
-src/alert-unified-log.c
-src/alert-unified-log.h
-src/app-layer-detect-proto.c
-src/app-layer-http.c
-src/app-layer-parser.c
-src/app-layer-tls.c
-src/debug.h
-src/decode.c
-src/decode-ethernet.c
-src/decode-ethernet.h
-src/decode-events.h
-src/decode.h
-src/decode-icmpv4.c
-src/decode-icmpv4.h
-src/decode-icmpv6.c
-src/decode-icmpv6.h
-src/decode-ipv4.h
-src/decode-ipv6.c
-src/decode-ipv6.h
-src/decode-sll.c
-src/decode-sll.h
-src/decode-tcp.c
-src/decode-tcp.h
-src/decode-udp.c
-src/decode-udp.h
-src/detect-content.c
-src/detect-engine-address-ipv4.c
-src/detect-engine-address-ipv4.h
-src/detect-engine-address-ipv6.c
-src/detect-engine-address-ipv6.h
-src/detect-engine.c
-src/detect-engine-port.c
-src/detect-engine-proto.c
-src/detect-flowvar.c
-src/detect-pktvar.c
-src/detect-uricontent.c
-src/flow-alert-sid.h
-src/flow-bit.h
-src/flow.c
-src/flow.h
-src/flow-hash.c
-src/flow-hash.h
-src/flow-private.h
-src/flow-queue.c
-src/flow-queue.h
-src/flow-util.c
-src/flow-util.h
-src/log-httplog.c
-src/log-httplog.h
-src/packet-queue.c
-src/packet-queue.h
-src/pkt-var.h
-src/respond-reject.c
-src/respond-reject.h
-src/respond-reject-libnet11.c
-src/respond-reject-libnet11.h
-src/source-nfq.c
-src/source-nfq.h
-src/source-nfq-prototypes.h
-src/source-pcap.c
-src/source-pcap-file.c
-src/source-pcap-file.h
-src/source-pcap.h
-src/source-pfring.c
-src/source-pfring.h
-src/stream.c
-src/stream-tcp.c
-src/stream-tcp.h
-src/stream-tcp-reassemble.c
-src/stream-tcp-reassemble.h
-src/suricata.c
-src/suricata-common.h
-src/suricata.h
-src/threadvars.h
-src/tm-modules.c
-src/tmqh-flow.h
-src/tmqh-nfq.c
-src/tmqh-nfq.h
-src/tmqh-packetpool.h
-src/tmqh-simple.h
-src/tm-queuehandlers.c
-src/tm-queuehandlers.h
-src/util-binsearch.h
-src/util-bloomfilter.c
-src/util-bloomfilter-counting.c
-src/util-bloomfilter-counting.h
-src/util-bloomfilter.h
-src/util-cidr.h
-src/util-hash.c
-src/util-hash.h
-src/util-hashlist.c
-src/util-hashlist.h
-src/util-mpm-b2g.c
-src/util-mpm-b3g.c
-src/util-mpm.h
-src/util-mpm-wumanber.c
-src/util-mpm-wumanber.h
-src/util-pool.c
-src/util-pool.h
-src/util-print.c
-src/util-print.h
-  Copyright (c) 2008 by Victor Julien <victor@inliniac.net>
-
-doxygen.cfg
-  Copyright 2005 Dorr H. Clark - Santa Clara University
-    This software source is made available under the "THE BEER-WARE LICENSE"
-    dclark@applmath.scu.edu wrote this file.  As long as you
-    retain this notice you can do whatever you want with this stuff.
-    If we meet some day, and you think this stuff is worth it,
-    you can buy me a beer in return.  - Dorr H. Clark
+License: GPL-2
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU Library General Public License as published by
+ the Free Software Foundation.
+ .
+ This program is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU Library General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
