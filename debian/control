@@ -3,24 +3,24 @@ Section: net
 Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
-Build-Depends: debhelper (>= 9),
-    autotools-dev,
-    dh-autoreconf,
-    libnet1-dev | libnet-dev,
-    libnspr4-dev,
-    libnss3-dev,
-    libpcap-dev,
-    libpcre3-dev,
-    libyaml-dev,
-    libnetfilter-queue-dev,
-    libnetfilter-log-dev,
-    libprelude-dev,
-    zlib1g-dev | libz-dev,
-    libcap-ng-dev,
-    libmagic-dev,
-    libjansson-dev,
-    libluajit-5.1-dev [i386 amd64 powerpc mips armel armhf],
-    python
+Build-Depends: autotools-dev,
+               debhelper (>= 9),
+               dh-autoreconf,
+               libcap-ng-dev,
+               libjansson-dev,
+               libluajit-5.1-dev [i386 amd64 powerpc mips armel armhf],
+               libmagic-dev,
+               libnet1-dev | libnet-dev,
+               libnetfilter-log-dev,
+               libnetfilter-queue-dev,
+               libnspr4-dev,
+               libnss3-dev,
+               libpcap-dev,
+               libpcre3-dev,
+               libprelude-dev,
+               libyaml-dev,
+               python,
+               zlib1g-dev | libz-dev
 Build-Conflicts: libhtp-dev
 X-Python-Version: >= 2.6
 Standards-Version: 3.9.6
@@ -28,12 +28,10 @@ Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
 Architecture: any
-Depends: ${shlibs:Depends},
-    ${misc:Depends},
-    ${python:Depends}
+Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)
-Recommends: oinkmaster, snort-rules-default, python
+Recommends: oinkmaster, python, snort-rules-default
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
  rules (and is fully compatible with snort rules) to detect a variety of
