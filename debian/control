@@ -27,7 +27,7 @@ Standards-Version: 3.9.6
 Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
-Architecture: any
+Architecture: linux-any
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)
