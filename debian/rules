@@ -41,6 +41,8 @@ override_dh_auto_install:
 	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.so
 	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/pkgconfig
 	rm -rf $(CURDIR)/debian/suricata/usr/include
+	# clean upstream install documentation
+	rm -rf $(CURDIR)/debian/suricata/usr/share/doc/suricata/*
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
