@@ -33,6 +33,7 @@ Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)
 Recommends: oinkmaster, python, snort-rules-default
+Suggests: libtcmalloc-minimal4
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
  rules (and is fully compatible with snort rules) to detect a variety of

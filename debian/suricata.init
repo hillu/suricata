@@ -55,7 +55,13 @@ check_run_dir() {
     fi
 }
 
+load_libtcmalloc_minimal() {
+	lib="/usr/lib/libtcmalloc_minimal.so.4"
 
+	if [ -f "$lib" ] && [ "x$TCMALLOC" = "xYES" ]; then
+		export LD_PRELOAD="$lib"
+	fi
+}
 
 check_root
 
@@ -93,10 +99,7 @@ case "$1" in
        fi
        check_run_dir
        echo -n "Starting suricata in $IDMODE mode..."
-       if [ -f /usr/lib/libtcmalloc_minimal.so.0 ] && [ "x$TCMALLOC" = "xYES" ]; then
-           export LD_PRELOAD="/usr/lib/libtcmalloc_minimal.so.0"
-           #echo "Using googles tcmalloc for minor performance boost!?!"
-       fi
+	load_libtcmalloc_minimal
        $DAEMON $SURICATA_OPTIONS > /var/log/suricata/suricata-start.log  2>&1 &
        echo " done."
        ;;
