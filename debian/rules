@@ -50,6 +50,9 @@ override_dh_auto_configure:
 		-e 's|^default-rule-path: .*$$|default-rule-path: /etc/suricata/rules|' \
 		 suricata.yaml > suricata-debian.yaml
 
+override_dh_strip:
+	dh_strip --dbg-package=suricata-dbg
+
 override_dh_clean:
 	rm -f suricata-debian.yaml
 	dh_clean
