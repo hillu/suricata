@@ -27,7 +27,8 @@ Homepage: http://www.openinfosecfoundation.org/
 
 Package: suricata
 Architecture: any
-Depends: ${shlibs:Depends},
+Depends: python-simplejson,
+    ${shlibs:Depends},
     ${misc:Depends},
     ${python:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
