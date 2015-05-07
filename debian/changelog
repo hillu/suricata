@@ -1,3 +1,18 @@
+suricata (2.0.8-1) unstable; urgency=high
+
+  [ Arturo Borrero Gonzalez ]
+  * d/suricata.logrotate: add logrotate configuration (Closes: #767249)
+  * d/patches: patch suricatasc to prevent depends on python-symplejson
+    (Closes: #759475)
+  * Revert "d/patches: patch suricatasc to prevent depends on python-symplejson"
+
+  [ Pierre Chifflier ]
+  * Imported Upstream version 2.0.8
+  * Bump Standards Version to 3.9.6
+    Fixes CVE-2015-0971 (Integer overflow in the DER parser)
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 07 May 2015 11:03:19 +0200
+
 suricata (2.0.7-2) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
