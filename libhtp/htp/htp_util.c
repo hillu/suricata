@@ -36,6 +36,8 @@
  * @author Ivan Ristic <ivanr@webkreator.com>
  */
 
+#include "htp_config_auto.h"
+
 #include "htp_private.h"
 
 /**
@@ -189,7 +191,7 @@ int htp_convert_method_to_number(bstr *method) {
     if (bstr_cmp_c(method, "MOVE") == 0) return HTP_M_MOVE;
     if (bstr_cmp_c(method, "LOCK") == 0) return HTP_M_LOCK;
     if (bstr_cmp_c(method, "UNLOCK") == 0) return HTP_M_UNLOCK;
-    if (bstr_cmp_c(method, "VERSION_CONTROL") == 0) return HTP_M_VERSION_CONTROL;
+    if (bstr_cmp_c(method, "VERSION-CONTROL") == 0) return HTP_M_VERSION_CONTROL;
     if (bstr_cmp_c(method, "CHECKOUT") == 0) return HTP_M_CHECKOUT;
     if (bstr_cmp_c(method, "UNCHECKOUT") == 0) return HTP_M_UNCHECKOUT;
     if (bstr_cmp_c(method, "CHECKIN") == 0) return HTP_M_CHECKIN;
@@ -198,7 +200,7 @@ int htp_convert_method_to_number(bstr *method) {
     if (bstr_cmp_c(method, "REPORT") == 0) return HTP_M_REPORT;
     if (bstr_cmp_c(method, "MKWORKSPACE") == 0) return HTP_M_MKWORKSPACE;
     if (bstr_cmp_c(method, "MKACTIVITY") == 0) return HTP_M_MKACTIVITY;
-    if (bstr_cmp_c(method, "BASELINE_CONTROL") == 0) return HTP_M_BASELINE_CONTROL;
+    if (bstr_cmp_c(method, "BASELINE-CONTROL") == 0) return HTP_M_BASELINE_CONTROL;
     if (bstr_cmp_c(method, "MERGE") == 0) return HTP_M_MERGE;
     if (bstr_cmp_c(method, "INVALID") == 0) return HTP_M_INVALID;
     if (bstr_cmp_c(method, "HEAD") == 0) return HTP_M_HEAD;
@@ -2357,6 +2359,9 @@ int htp_treat_response_line_as_body(htp_tx_t *tx) {
 htp_status_t htp_req_run_hook_body_data(htp_connp_t *connp, htp_tx_data_t *d) {
     // Do not invoke callbacks with an empty data chunk
     if ((d->data != NULL) && (d->len == 0)) return HTP_OK;
+
+    // Do not invoke callbacks without a transaction.
+    if (connp->in_tx == NULL) return HTP_OK;
 
     // Run transaction hooks first
     htp_status_t rc = htp_hook_run_all(connp->in_tx->hook_request_body_data, d);
