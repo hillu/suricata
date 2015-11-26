@@ -116,14 +116,15 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	decode-ethernet.$(OBJEXT) decode-events.$(OBJEXT) \
 	decode-gre.$(OBJEXT) decode-icmpv4.$(OBJEXT) \
 	decode-icmpv6.$(OBJEXT) decode-ipv4.$(OBJEXT) \
-	decode-ipv6.$(OBJEXT) decode-ppp.$(OBJEXT) \
-	decode-pppoe.$(OBJEXT) decode-raw.$(OBJEXT) \
-	decode-sctp.$(OBJEXT) decode-sll.$(OBJEXT) \
-	decode-tcp.$(OBJEXT) decode-teredo.$(OBJEXT) \
-	decode-udp.$(OBJEXT) decode-vlan.$(OBJEXT) \
-	defrag-config.$(OBJEXT) defrag.$(OBJEXT) defrag-hash.$(OBJEXT) \
-	defrag-queue.$(OBJEXT) defrag-timeout.$(OBJEXT) \
-	detect-ack.$(OBJEXT) detect-app-layer-event.$(OBJEXT) \
+	decode-ipv6.$(OBJEXT) decode-null.$(OBJEXT) \
+	decode-ppp.$(OBJEXT) decode-pppoe.$(OBJEXT) \
+	decode-raw.$(OBJEXT) decode-sctp.$(OBJEXT) \
+	decode-sll.$(OBJEXT) decode-tcp.$(OBJEXT) \
+	decode-teredo.$(OBJEXT) decode-udp.$(OBJEXT) \
+	decode-vlan.$(OBJEXT) defrag-config.$(OBJEXT) defrag.$(OBJEXT) \
+	defrag-hash.$(OBJEXT) defrag-queue.$(OBJEXT) \
+	defrag-timeout.$(OBJEXT) detect-ack.$(OBJEXT) \
+	detect-app-layer-event.$(OBJEXT) \
 	detect-app-layer-protocol.$(OBJEXT) detect-asn1.$(OBJEXT) \
 	detect-byte-extract.$(OBJEXT) detect-bytejump.$(OBJEXT) \
 	detect-bytetest.$(OBJEXT) detect.$(OBJEXT) \
@@ -558,6 +559,7 @@ decode-icmpv4.c decode-icmpv4.h \
 decode-icmpv6.c decode-icmpv6.h \
 decode-ipv4.c decode-ipv4.h \
 decode-ipv6.c decode-ipv6.h \
+decode-null.c decode-null.h \
 decode-ppp.c decode-ppp.h \
 decode-pppoe.c decode-pppoe.h \
 decode-raw.c decode-raw.h \
@@ -1053,6 +1055,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-icmpv6.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ipv4.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ipv6.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-null.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ppp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-pppoe.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-raw.Po@am__quote@
