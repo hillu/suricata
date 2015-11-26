@@ -1,3 +1,9 @@
+suricata (2.0.10-1) unstable; urgency=medium
+
+  * Imported Upstream version 2.0.10
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 26 Nov 2015 10:35:53 +0100
+
 suricata (2.0.9-1) unstable; urgency=medium
 
   * Imported Upstream version 2.0.9
