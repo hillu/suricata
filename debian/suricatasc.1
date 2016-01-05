@@ -1,0 +1,126 @@
+.\" (C) Copyright 2015 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>,
+.\"
+.\"
+.TH SURICATASC 1 "Mar  31, 2015"
+.\" Please adjust this date whenever revising the manpage.
+.\"
+.\"usage: suricatasc [-h] [-v] [socket]
+.\"
+.\"Client for Suricata unix socket
+.\"
+.\"positional arguments:
+.\"  socket         socket file to connnect to
+.\"
+.\"optional arguments:
+.\"  -h, --help     show this help message and exit
+.\"  -v, --verbose  verbose output (including JSON dump)
+.\"
+
+.SH NAME
+suricatasc \- client for Suricata unix socket
+.SH SYNOPSIS
+.B suricatasc
+[-h] [-v] [\fIsocket\fP]
+.br
+.SH DESCRIPTION
+This manual page documents briefly the \fBsuricatasc\fP command.
+.PP
+\fBsuricatasc\fP is a Python script that allows you communicate with \fBsuricata(8)\fP daemon using
+standard Unix sockets. The exchange protocol is JSON-based.
+.PP
+The creation of the socket is activated by setting \fBenabled: yes\fP under \fBunix-command\fP in Suricata YAML configuration file:
+
+.IP
+[...]
+.br
+unix-command:
+.br
+  enabled: yes
+.br
+  #filename: custom.socket # use this to specify an alternate file
+.br
+[...]
+.PP
+You can also start \fBsuricata(8)\fP with the \fB--unix-socket\fP argument:
+.IP
+suricata --unix-socket
+.br
+suricata --unix-socket=\fIsocket\fP
+.br
+.PP
+In case you don't specify \fIsocket\fP, the default is \fI/var/run/suricata/suricata-command.socket\fP.
+.PP
+To know if the \fBsuricata(8)\fP daemon is build with the required
+capabilities run \fBsuricata --build-info\fP and look for "Unix socket enabled: yes".
+.SH OPTIONS
+The program follows the usual GNU command line syntax, with long
+options starting with two dashes (`-').
+A summary of options is included below.
+
+.TP
+.B \-h, \-\-help
+Show summary of options.
+
+.TP
+.B \-v, \-\-verbose
+Verbose output (including JSON dump).
+
+.SH COMMANDS
+When running \fBsuricatasc\fP, you will get an 'interactive' CLI. The list of available commands will show up.
+.TP
+.B command-list
+list available commands
+.TP
+.B shutdown
+this shutdown suricata
+.TP
+.B help
+alias of command-list
+.TP
+.B version
+display Suricata's version
+.TP
+.B uptime
+display Suricata's uptime
+.TP
+.B running-mode
+display running mode (workers, autofp, simple)
+.TP
+.B capture-mode
+display capture system used
+.TP
+.B conf-get <key>
+get configuration item.
+
+.IP
+>>> conf-get unix-command.enabled
+.br
+Success:
+.br
+"yes"
+
+.TP
+.B dump-counters
+dump Suricata's performance counters
+.TP
+.B pcap-file <file>
+load a file for pcap treatment
+.TP
+.B pcap-file-number
+to know how much files are waiting to get processed
+.TP
+.B pcap-file-list
+list of queued files
+.TP
+.B pcap-file-current
+the current processed file
+
+.SH SEE ALSO
+\fBsuricata(8)\fP
+
+.SH ABOUT
+\fBsuricatasc\fP was written by the Open Information Security Foundation.
+
+This man page was written by Arturo Borrero Gonzalez
+<arturo.borrero.glez@gmail.com> for the Debian GNU/Linux distribution (but it may be used by others).
+
