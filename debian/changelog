@@ -1,3 +1,26 @@
+suricata (2.0.10-2) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * d/copyright: update file to follow Debian Policy 3.9.6.1
+  * d/control: bump standards to 3.9.6
+  * suricata: add nflog support (Closes: #775074)
+  * d/: wrap-and-sort
+  * d/control: architecture is linux-any
+  * d/rules: don't include upstream install documentation
+  * d/tests: add first basic test
+  * d/control: add missing Testsuite declaration
+  * suritaca: add package suricata-dbg (Closes: #753438)
+  * suricata sysvinit: fix libtcmalloc-minimal integration (Closes: #725249)
+  * d/suricata.init: cleanup file
+  * suricatasc: add manpage
+
+  [ Pierre Chifflier ]
+  * Merge unstable-next branch
+  * Fix dependencies and priority for -dbg package
+  * Install manpage for suricatasc
+
+ -- Pierre Chifflier <pollux@debian.org>  Tue, 05 Jan 2016 21:02:40 +0100
+
 suricata (2.0.10-1) unstable; urgency=medium
 
   * Imported Upstream version 2.0.10
