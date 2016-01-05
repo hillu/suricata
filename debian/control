@@ -49,7 +49,8 @@ Description: Next Generation Intrusion Detection and Prevention Tool
 Package: suricata-dbg
 Section: debug
 Architecture: any
-Depends: ${misc:Depends}, ${shlibs:Depends}
+Priority: extra
+Depends: ${misc:Depends}, ${shlibs:Depends}, suricata (= ${binary:Version})
 Description: Next Generation Intrusion Detection and Prevention Tool - debug symbols
  Suricata is a network Intrusion Detection System (IDS). It is based on
  rules (and is fully compatible with snort rules) to detect a variety of
