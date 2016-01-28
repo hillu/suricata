@@ -88,7 +88,7 @@ static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -236,7 +236,8 @@ end:
  * distance works, if the previous keyword is byte_jump and content
  * (bug 163)
  */
-int DetectDistanceTestPacket01 (void) {
+int DetectDistanceTestPacket01 (void)
+{
     int result = 0;
     uint8_t buf[] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 };
     uint16_t buflen = sizeof(buf);
@@ -259,7 +260,8 @@ end:
 }
 #endif /* UNITTESTS */
 
-void DetectDistanceRegisterTests(void) {
+void DetectDistanceRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectDistanceTest01 -- distance / within mix", DetectDistanceTest01, 1);
     UtRegisterTest("DetectDistanceTestPacket01", DetectDistanceTestPacket01, 1);

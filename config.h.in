@@ -9,6 +9,12 @@
 /* Our CONFIG_DIR */
 #undef CONFIG_DIR
 
+/* Enable debug output */
+#undef DEBUG
+
+/* Enable (debug) validation code output */
+#undef DEBUG_VALIDATION
+
 /* AF_PACKET support is available */
 #undef HAVE_AF_PACKET
 
@@ -20,6 +26,9 @@
 
 /* Define to 1 if you have the <ctype.h> header file. */
 #undef HAVE_CTYPE_H
+
+/* (Endace DAG card support enabled) */
+#undef HAVE_DAG
 
 /* Detection is disabled */
 #undef HAVE_DETECT_DISABLED
@@ -58,7 +67,7 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
-/* Define to 1 if you have the `cap-ng' library (-lcap-ng). */
+/* Libpcap-ng support */
 #undef HAVE_LIBCAP_NG
 
 /* Define to 1 if you have the `cuda' library (-lcuda). */
@@ -69,6 +78,9 @@
 
 /* Define to 1 if you have the `GeoIP' library (-lGeoIP). */
 #undef HAVE_LIBGEOIP
+
+/* libhiredis available */
+#undef HAVE_LIBHIREDIS
 
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
@@ -88,12 +100,18 @@
 /* Define to 1 if you have the `net' library (-lnet). */
 #undef HAVE_LIBNET
 
+/* (libnet 1.1 available) */
+#undef HAVE_LIBNET11
+
 /* Define to 1 if you have the `netfilter_log' library (-lnetfilter_log). */
 #undef HAVE_LIBNETFILTER_LOG
 
 /* Define to 1 if you have the `netfilter_queue' library (-lnetfilter_queue).
    */
 #undef HAVE_LIBNETFILTER_QUEUE
+
+/* (libnet_build_icmpv6_unreach available) */
+#undef HAVE_LIBNET_ICMPV6_UNREACH
 
 /* Define to 1 if you have the `nfnetlink' library (-lnfnetlink). */
 #undef HAVE_LIBNFNETLINK
@@ -165,11 +183,20 @@
 /* mPIPE support is available */
 #undef HAVE_MPIPE
 
+/* (Napatech capture card support) */
+#undef HAVE_NAPATECH
+
 /* Define to 1 if you have the <netdb.h> header file. */
 #undef HAVE_NETDB_H
 
 /* Define to 1 if you have the <netinet/in.h> header file. */
 #undef HAVE_NETINET_IN_H
+
+/* (NETMAP support enabled) */
+#undef HAVE_NETMAP
+
+/* (ethernet.h) */
+#undef HAVE_NET_ETHERNET_H
 
 /* Define to 1 if you have the <net/if.h> header file. */
 #undef HAVE_NET_IF_H
@@ -192,7 +219,10 @@
 /* libnss available for md5 */
 #undef HAVE_NSS
 
-/* Packet fanout support is available */
+/* Use workaround for old barnyard2 in unified2 output */
+#undef HAVE_OLD_BARNYARD2
+
+/* Recent packet fanout support is available */
 #undef HAVE_PACKET_FANOUT
 
 /* Define to 1 if you have the <pcap/bpf.h> header file. */
@@ -204,23 +234,14 @@
 /* Define to 1 if you have the <pcap/pcap.h> header file. */
 #undef HAVE_PCAP_PCAP_H
 
+/* (libpcap has pcap_set_buffer_size function) */
+#undef HAVE_PCAP_SET_BUFF
+
 /* Pcre pcre_free_study supported */
 #undef HAVE_PCRE_FREE_STUDY
 
-/* PF_RING pfring_set_cluster is available */
-#undef HAVE_PFRING_CLUSTER_TYPE
-
-/* PF_RING pfring_enable_ring is available */
-#undef HAVE_PFRING_ENABLE
-
-/* For post 5.4.0 version of pfring_open */
-#undef HAVE_PFRING_OPEN_NEW
-
-/* PF_RING pfring_recv buffer is u_char** */
-#undef HAVE_PFRING_RECV_UCHAR
-
-/* PF_RING pfring_set_bpf_filter is available */
-#undef HAVE_PFRING_SET_BPF_FILTER
+/* (PF_RING support enabled) */
+#undef HAVE_PFRING
 
 /* Define to 1 if you have the <poll.h> header file. */
 #undef HAVE_POLL_H
@@ -334,12 +355,24 @@
 /* Define to 1 if the system has the type `_Bool'. */
 #undef HAVE__BOOL
 
+/* Enable FreeBSD IPFW support for inline IDP */
+#undef IPFW
+
+/* (libpcap version 0.x) */
+#undef LIBPCAP_VERSION_MAJOR
+
 /* Define to the sub-directory in which libtool stores uninstalled libraries.
    */
 #undef LT_OBJDIR
 
+/* Enable Linux Netfilter NFQUEUE support for inline IDP */
+#undef NFQ
+
 /* For signed version of nfq_get_payload */
 #undef NFQ_GET_PAYLOAD_SIGNED
+
+/* Pcre PCRE_EXTRA_MATCH_LIMIT_RECURSION not available */
+#undef NO_PCRE_MATCH_RLIMIT
 
 /* Name of package */
 #undef PACKAGE
@@ -371,8 +404,20 @@
 /* Define whether application use libtool >= 2.0 */
 #undef PRELUDE_APPLICATION_USE_LIBTOOL2
 
+/* Enable performance profiling for locks */
+#undef PROFILE_LOCKING
+
+/* Enable performance profiling */
+#undef PROFILING
+
 /* Official release */
 #undef RELEASE
+
+/* Git revision */
+#undef REVISION
+
+/* (CUDA support enabled) */
+#undef SC_CUDA_SUPPORT__
 
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
@@ -380,13 +425,22 @@
 /* Thread local storage */
 #undef TLS
 
+/* Enable built-in unittests */
+#undef UNITTESTS
+
 /* Version number of package */
 #undef VERSION
+
+/* (bsd source) */
+#undef _BSD_SOURCE
 
 /* Enable large inode numbers on Mac OS X 10.5.  */
 #ifndef _DARWIN_USE_64_BIT_INODE
 # define _DARWIN_USE_64_BIT_INODE 1
 #endif
+
+/* (default source) */
+#undef _DEFAULT_SOURCE
 
 /* Number of bits in a file offset, on hosts where this is settable. */
 #undef _FILE_OFFSET_BITS
@@ -408,6 +462,12 @@
    <pthread.h>, or <semaphore.h> is not used. If the typedef was allowed, the
    #define below would cause a syntax error. */
 #undef _UINT8_T
+
+/* (bsd source) */
+#undef __BSD_SOURCE
+
+/* (favor bsd) */
+#undef __FAVOR_BSD
 
 /* Fake GCC atomic support */
 #undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_1

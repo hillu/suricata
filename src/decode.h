@@ -52,8 +52,7 @@ enum PktSrcEnum {
     PKT_SRC_DECODER_TEREDO,
     PKT_SRC_DEFRAG,
     PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO,
-    PKT_SRC_FFR_V2,
-    PKT_SRC_FFR_SHUTDOWN,
+    PKT_SRC_FFR,
 };
 
 #include "source-nflog.h"
@@ -62,9 +61,11 @@ enum PktSrcEnum {
 #include "source-pcap.h"
 #include "source-af-packet.h"
 #include "source-mpipe.h"
+#include "source-netmap.h"
 
 #include "action-globals.h"
 
+#include "decode-erspan.h"
 #include "decode-ethernet.h"
 #include "decode-gre.h"
 #include "decode-ppp.h"
@@ -80,6 +81,7 @@ enum PktSrcEnum {
 #include "decode-raw.h"
 #include "decode-null.h"
 #include "decode-vlan.h"
+#include "decode-mpls.h"
 
 #include "detect-reference.h"
 
@@ -88,6 +90,8 @@ enum PktSrcEnum {
 /* forward declarations */
 struct DetectionEngineThreadCtx_;
 typedef struct AppLayerThreadCtx_ AppLayerThreadCtx;
+
+struct PktPool_;
 
 /* declare these here as they are called from the
  * PACKET_RECYCLE and PACKET_CLEANUP macro's. */
@@ -253,7 +257,6 @@ typedef uint16_t Port;
  * found in this packet */
 typedef struct PacketAlert_ {
     SigIntId num; /* Internal num, used for sorting */
-    SigIntId order_id; /* Internal num, used for sorting */
     uint8_t action; /* Internal num, used for sorting */
     uint8_t flags;
     struct Signature_ *s;
@@ -276,6 +279,9 @@ typedef struct PacketAlert_ {
 typedef struct PacketAlerts_ {
     uint16_t cnt;
     PacketAlert alerts[PACKET_ALERT_MAX];
+    /* single pa used when we're dropping,
+     * so we can log it out in the drop log. */
+    PacketAlert drop;
 } PacketAlerts;
 
 /** number of decoder events we support per packet. Power of 2 minus 1
@@ -413,6 +419,9 @@ typedef struct Packet_
         /* tilegx mpipe stuff */
         MpipePacketVars mpipe_v;
 #endif
+#ifdef HAVE_NETMAP
+        NetmapPacketVars netmap_v;
+#endif
 
         /** libpcap vars: shared by Pcap Live mode and Pcap File mode */
         PcapPacketVars pcap_v;
@@ -529,6 +538,13 @@ typedef struct Packet_
     /* tunnel packet ref count */
     uint16_t tunnel_tpr_cnt;
 
+    /** tenant id for this packet, if any. If 0 then no tenant was assigned. */
+    uint32_t tenant_id;
+
+    /* The Packet pool from which this packet was allocated. Used when returning
+     * the packet to its owner's stack. If NULL, then allocated with malloc.
+     */
+    struct PktPool_ *pool;
 
 #ifdef PROFILING
     PktProfiling *profile;
@@ -571,28 +587,33 @@ typedef struct DecodeThreadVars_
     /** stats/counters */
     uint16_t counter_pkts;
     uint16_t counter_bytes;
+    uint16_t counter_avg_pkt_size;
+    uint16_t counter_max_pkt_size;
+
     uint16_t counter_invalid;
+
+    uint16_t counter_eth;
     uint16_t counter_ipv4;
     uint16_t counter_ipv6;
-    uint16_t counter_eth;
+    uint16_t counter_tcp;
+    uint16_t counter_udp;
+    uint16_t counter_icmpv4;
+    uint16_t counter_icmpv6;
+
     uint16_t counter_sll;
     uint16_t counter_raw;
     uint16_t counter_null;
-    uint16_t counter_tcp;
-    uint16_t counter_udp;
     uint16_t counter_sctp;
-    uint16_t counter_icmpv4;
-    uint16_t counter_icmpv6;
     uint16_t counter_ppp;
     uint16_t counter_gre;
     uint16_t counter_vlan;
     uint16_t counter_vlan_qinq;
     uint16_t counter_pppoe;
     uint16_t counter_teredo;
+    uint16_t counter_mpls;
     uint16_t counter_ipv4inipv6;
     uint16_t counter_ipv6inipv6;
-    uint16_t counter_avg_pkt_size;
-    uint16_t counter_max_pkt_size;
+    uint16_t counter_erspan;
 
     /** frag stats - defrag runs in the context of the decoder. */
     uint16_t counter_defrag_ipv4_fragments;
@@ -603,10 +624,28 @@ typedef struct DecodeThreadVars_
     uint16_t counter_defrag_ipv6_timeouts;
     uint16_t counter_defrag_max_hit;
 
+    uint16_t counter_flow_memcap;
+
+    /* thread data for flow logging api: only used at forced
+     * flow recycle during lookups */
+    void *output_flow_thread_data;
+
 #ifdef __SC_CUDA_SUPPORT__
     CudaThreadVars cuda_vars;
 #endif
 } DecodeThreadVars;
+
+typedef struct CaptureStats_ {
+
+    uint16_t counter_ips_accepted;
+    uint16_t counter_ips_blocked;
+    uint16_t counter_ips_rejected;
+    uint16_t counter_ips_replaced;
+
+} CaptureStats;
+
+void CaptureStatsUpdate(ThreadVars *tv, CaptureStats *s, const Packet *p);
+void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
 
 /**
  *  \brief reset these to -1(indicates that the packet is fresh from the queue)
@@ -615,6 +654,16 @@ typedef struct DecodeThreadVars_
         (p)->level3_comp_csum = -1;   \
         (p)->level4_comp_csum = -1;   \
     } while (0)
+
+/* if p uses extended data, free them */
+#define PACKET_FREE_EXTDATA(p) do {                 \
+        if ((p)->ext_pkt) {                         \
+            if (!((p)->flags & PKT_ZERO_COPY)) {    \
+                SCFree((p)->ext_pkt);               \
+            }                                       \
+            (p)->ext_pkt = NULL;                    \
+        }                                           \
+    } while(0)
 
 /**
  *  \brief Initialize a packet structure for use.
@@ -639,24 +688,29 @@ typedef struct DecodeThreadVars_
 }
 #endif
 
+#define PACKET_RELEASE_REFS(p) do {              \
+        FlowDeReference(&((p)->flow));          \
+        HostDeReference(&((p)->host_src));      \
+        HostDeReference(&((p)->host_dst));      \
+    } while (0)
+
 /**
  *  \brief Recycle a packet structure for reuse.
- *  \todo the mutex destroy & init is necessary because of the memset, reconsider
  */
-#define PACKET_DO_RECYCLE(p) do {               \
+#define PACKET_REINIT(p) do {             \
         CLEAR_ADDR(&(p)->src);                  \
         CLEAR_ADDR(&(p)->dst);                  \
         (p)->sp = 0;                            \
         (p)->dp = 0;                            \
         (p)->proto = 0;                         \
         (p)->recursion_level = 0;               \
+        PACKET_FREE_EXTDATA((p));               \
         (p)->flags = (p)->flags & PKT_ALLOC;    \
         (p)->flowflags = 0;                     \
         (p)->pkt_src = 0;                       \
         (p)->vlan_id[0] = 0;                    \
         (p)->vlan_id[1] = 0;                    \
         (p)->vlan_idx = 0;                      \
-        FlowDeReference(&((p)->flow));          \
         (p)->ts.tv_sec = 0;                     \
         (p)->ts.tv_usec = 0;                    \
         (p)->datalink = 0;                      \
@@ -697,13 +751,10 @@ typedef struct DecodeThreadVars_
         (p)->payload_len = 0;                   \
         (p)->pktlen = 0;                        \
         (p)->alerts.cnt = 0;                    \
-        HostDeReference(&((p)->host_src));      \
-        HostDeReference(&((p)->host_dst));      \
+        (p)->alerts.drop.action = 0;            \
         (p)->pcap_cnt = 0;                      \
         (p)->tunnel_rtv_cnt = 0;                \
         (p)->tunnel_tpr_cnt = 0;                \
-        SCMutexDestroy(&(p)->tunnel_mutex);     \
-        SCMutexInit(&(p)->tunnel_mutex, NULL);  \
         (p)->events.cnt = 0;                    \
         AppLayerDecoderEventsResetEvents((p)->app_layer_events); \
         (p)->next = NULL;                       \
@@ -712,17 +763,22 @@ typedef struct DecodeThreadVars_
         (p)->livedev = NULL;                    \
         PACKET_RESET_CHECKSUMS((p));            \
         PACKET_PROFILING_RESET((p));            \
+        p->tenant_id = 0;                       \
     } while (0)
 
-#define PACKET_RECYCLE(p) PACKET_DO_RECYCLE((p))
+#define PACKET_RECYCLE(p) do { \
+        PACKET_RELEASE_REFS((p)); \
+        PACKET_REINIT((p)); \
+    } while (0)
 
 /**
  *  \brief Cleanup a packet so that we can free it. No memset needed..
  */
-#define PACKET_CLEANUP(p) do {                  \
+#define PACKET_DESTRUCTOR(p) do {                  \
         if ((p)->pktvar != NULL) {              \
             PktVarFree((p)->pktvar);            \
         }                                       \
+        PACKET_FREE_EXTDATA((p));               \
         SCMutexDestroy(&(p)->tunnel_mutex);     \
         AppLayerDecoderEventsFreeEvents(&(p)->app_layer_events); \
         PACKET_PROFILING_RESET((p));            \
@@ -797,24 +853,35 @@ typedef struct DecodeThreadVars_
 #define IS_TUNNEL_PKT_VERDICTED(p)  (((p)->flags & PKT_TUNNEL_VERDICTED))
 #define SET_TUNNEL_PKT_VERDICTED(p) ((p)->flags |= PKT_TUNNEL_VERDICTED)
 
+enum DecodeTunnelProto {
+    DECODE_TUNNEL_ETHERNET,
+    DECODE_TUNNEL_ERSPAN,
+    DECODE_TUNNEL_VLAN,
+    DECODE_TUNNEL_IPV4,
+    DECODE_TUNNEL_IPV6,
+    DECODE_TUNNEL_PPP,
+};
 
-void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
 Packet *PacketTunnelPktSetup(ThreadVars *tv, DecodeThreadVars *dtv, Packet *parent,
-                             uint8_t *pkt, uint16_t len, uint8_t proto, PacketQueue *pq);
+                             uint8_t *pkt, uint16_t len, enum DecodeTunnelProto proto, PacketQueue *pq);
 Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t proto);
 void PacketDefragPktSetupParent(Packet *parent);
+void DecodeRegisterPerfCounters(DecodeThreadVars *, ThreadVars *);
 Packet *PacketGetFromQueueOrAlloc(void);
 Packet *PacketGetFromAlloc(void);
 void PacketDecodeFinalize(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p);
 void PacketFree(Packet *p);
 void PacketFreeOrRelease(Packet *p);
+int PacketCallocExtPkt(Packet *p, int datalen);
 int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen);
 const char *PktSrcToString(enum PktSrcEnum pkt_src);
 
 DecodeThreadVars *DecodeThreadVarsAlloc(ThreadVars *);
-void DecodeThreadVarsFree(DecodeThreadVars *);
+void DecodeThreadVarsFree(ThreadVars *, DecodeThreadVars *);
+void DecodeUpdatePacketCounters(ThreadVars *tv,
+                                const DecodeThreadVars *dtv, const Packet *p);
 
 /* decoder functions */
 int DecodeEthernet(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
@@ -822,7 +889,7 @@ int DecodeSll(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, P
 int DecodePPP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodePPPOESession(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodePPPOEDiscovery(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
-int DecodeTunnel(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *, uint8_t) __attribute__ ((warn_unused_result));
+int DecodeTunnel(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *, enum DecodeTunnelProto) __attribute__ ((warn_unused_result));
 int DecodeNull(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeRaw(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeIPV4(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
@@ -834,6 +901,8 @@ int DecodeUDP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, P
 int DecodeSCTP(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeMPLS(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeERSPAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 
 void AddressDebugPrint(Address *);
 
@@ -845,12 +914,19 @@ void AddressDebugPrint(Address *);
         (p)->flags |= PKT_NOPAYLOAD_INSPECTION;  \
     } while (0)
 
+#define DecodeUnsetNoPayloadInspectionFlag(p) do { \
+        (p)->flags &= ~PKT_NOPAYLOAD_INSPECTION;  \
+    } while (0)
+
 /** \brief Set the No packet inspection Flag for the packet.
  *
  * \param p Packet to set the flag in
  */
 #define DecodeSetNoPacketInspectionFlag(p) do { \
         (p)->flags |= PKT_NOPACKET_INSPECTION;  \
+    } while (0)
+#define DecodeUnsetNoPacketInspectionFlag(p) do { \
+        (p)->flags &= ~PKT_NOPACKET_INSPECTION;  \
     } while (0)
 
 

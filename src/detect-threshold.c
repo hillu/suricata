@@ -65,7 +65,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectThresholdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+static int DetectThresholdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectThresholdSetup(DetectEngineCtx *, Signature *, char *);
 static void DetectThresholdFree(void *);
 
@@ -108,7 +108,7 @@ error:
 
 }
 
-static int DetectThresholdMatch(ThreadVars *thv, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *sm)
+static int DetectThresholdMatch(ThreadVars *thv, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
     return 1;
 }
@@ -142,8 +142,11 @@ static DetectThresholdData *DetectThresholdParse(char *rawstr)
         goto error;
     }
 
-    for(pos = 0, threshold_opt = strtok(copy_str,",");  pos < strlen(copy_str) &&  threshold_opt != NULL;  pos++, threshold_opt = strtok(NULL,",")) {
-
+    char *saveptr = NULL;
+    for (pos = 0, threshold_opt = strtok_r(copy_str,",", &saveptr);
+         pos < strlen(copy_str) && threshold_opt != NULL;
+         pos++, threshold_opt = strtok_r(NULL,"," , &saveptr))
+    {
         if(strstr(threshold_opt,"count"))
             count_found++;
         if(strstr(threshold_opt,"second"))
@@ -261,7 +264,7 @@ static int DetectThresholdSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
         goto error;
 
     sm->type = DETECT_THRESHOLD;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_THRESHOLD);
 
@@ -283,7 +286,7 @@ static void DetectThresholdFree(void *de_ptr)
 {
     DetectThresholdData *de = (DetectThresholdData *)de_ptr;
     if (de) {
-        DetectAddressFree(de->addr);
+        DetectAddressHeadCleanup(&de->addrs);
         SCFree(de);
     }
 }
@@ -1119,7 +1122,8 @@ end:
 /**
  * \test Test drop action being set even if thresholded
  */
-static int DetectThresholdTestSig9(void) {
+static int DetectThresholdTestSig9(void)
+{
     Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars th_v;
@@ -1483,7 +1487,7 @@ cleanup:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineThreadCtxDeinit(&th_v, (void*)det_ctx);
     DetectEngineCtxFree(de_ctx);
 end:
     UTHFreePackets(&p, 1);

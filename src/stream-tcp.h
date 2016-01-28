@@ -51,6 +51,9 @@ typedef struct TcpStreamCnf_ {
     uint32_t ssn_init_flags; /**< new ssn flags will be initialized to this */
     uint8_t segment_init_flags; /**< new seg flags will be initialized to this */
 
+    uint16_t zero_copy_size;    /**< use zero copy for app layer above segments
+                                 *   of this size */
+
     uint32_t prealloc_sessions; /**< ssns to prealloc per stream thread */
     int midstream;
     int async_oneside;
@@ -73,6 +76,10 @@ typedef struct TcpStreamCnf_ {
 typedef struct StreamTcpThread_ {
     int ssn_pool_id;
 
+    /** if set to true, we activate the TCP tuple reuse code in the
+     *  stream engine. */
+    int runmode_flow_stream_async;
+
     uint64_t pkts;
 
     /** queue for pseudo packet(s) that were created in the stream
@@ -85,14 +92,14 @@ typedef struct StreamTcpThread_ {
     uint16_t counter_tcp_ssn_memcap;
     /** pseudo packets processed */
     uint16_t counter_tcp_pseudo;
+    /** pseudo packets failed to setup */
+    uint16_t counter_tcp_pseudo_failed;
     /** packets rejected because their csum is invalid */
     uint16_t counter_tcp_invalid_checksum;
     /** TCP packets with no associated flow */
     uint16_t counter_tcp_no_flow;
     /** sessions reused */
     uint16_t counter_tcp_reused_ssn;
-    /** sessions reused */
-    uint16_t counter_tcp_memuse;
     /** syn pkts */
     uint16_t counter_tcp_syn;
     /** syn/ack pkts */
@@ -134,7 +141,8 @@ void StreamTcpReassembleConfigEnableOverlapCheck(void);
   * \retval 1 if we must drop this stream
   * \retval 0 if the stream still legal
   */
-static inline int StreamTcpCheckFlowDrops(Packet *p) {
+static inline int StreamTcpCheckFlowDrops(Packet *p)
+{
     /* If we are on IPS mode, and got a drop action triggered from
      * the IP only module, or from a reassembled msg and/or from an
      * applayer detection, then drop the rest of the packets of the
@@ -161,9 +169,19 @@ static inline void StreamTcpPacketSwitchDir(TcpSession *ssn, Packet *p)
     if (PKT_IS_TOSERVER(p)) {
         p->flowflags &= ~FLOW_PKT_TOSERVER;
         p->flowflags |= FLOW_PKT_TOCLIENT;
+
+        if (p->flowflags & FLOW_PKT_TOSERVER_FIRST) {
+            p->flowflags &= ~FLOW_PKT_TOSERVER_FIRST;
+            p->flowflags |= FLOW_PKT_TOCLIENT_FIRST;
+        }
     } else {
         p->flowflags &= ~FLOW_PKT_TOCLIENT;
         p->flowflags |= FLOW_PKT_TOSERVER;
+
+        if (p->flowflags & FLOW_PKT_TOCLIENT_FIRST) {
+            p->flowflags &= ~FLOW_PKT_TOCLIENT_FIRST;
+            p->flowflags |= FLOW_PKT_TOSERVER_FIRST;
+        }
     }
 }
 

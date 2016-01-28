@@ -52,12 +52,20 @@ typedef struct SCACPattern_ {
     /* pattern id */
     uint32_t id;
 
+    /* sid(s) for this pattern */
+    uint32_t sids_size;
+    SigIntId *sids;
+
     struct SCACPattern_ *next;
 } SCACPattern;
 
 typedef struct SCACPatternList_ {
     uint8_t *cs;
     uint16_t patlen;
+
+    /* sid(s) for this pattern */
+    uint32_t sids_size;
+    SigIntId *sids;
 } SCACPatternList;
 
 typedef struct SCACOutputTable_ {
@@ -91,6 +99,8 @@ typedef struct SCACCtx_ {
     /* the size of each state */
     uint16_t single_state_size;
     uint16_t max_pat_id;
+
+    uint32_t allocated_state_count;
 
 #ifdef __SC_CUDA_SUPPORT__
     CUdeviceptr state_table_u16_cuda;
@@ -202,6 +212,8 @@ void SCACCudaKillDispatcher(void);
 uint32_t  SCACCudaPacketResultsProcessing(Packet *p, MpmCtx *mpm_ctx,
                                           PatternMatcherQueue *pmq);
 void DetermineCudaStateTableSize(DetectEngineCtx *de_ctx);
+
+void CudaReleasePacket(Packet *p);
 
 #endif /* __SC_CUDA_SUPPORT__ */
 

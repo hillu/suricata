@@ -265,7 +265,8 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
     SCReturnInt(ret);
 }
 
-static int DetectPcreSetList(int list, int set) {
+static int DetectPcreSetList(int list, int set)
+{
     if (list != DETECT_SM_LIST_NOTSET) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "only one pcre option to specify a buffer type is allowed");
         return -1;
@@ -463,7 +464,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
                     break;
                 case 'Q':
                     /* suricata extension (http response body inspection) */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HSBDMATCH);
+                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_FILEDATA);
                     break;
                 case 'Y':
                     /* snort's option */
@@ -633,9 +634,9 @@ static int DetectPcreParseCapture(char *regexstr, DetectEngineCtx *de_ctx, Detec
     }
     if (pd->capname != NULL) {
         if (pd->flags & DETECT_PCRE_CAPTURE_PKT)
-            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, DETECT_PKTVAR);
+            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, VAR_TYPE_PKT_VAR);
         else if (pd->flags & DETECT_PCRE_CAPTURE_FLOW)
-            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, DETECT_FLOWVAR);
+            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, VAR_TYPE_FLOW_VAR);
     }
 
     SCLogDebug("pd->capname %s", pd->capname);
@@ -666,7 +667,7 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     if (parsed_sm_list == DETECT_SM_LIST_UMATCH ||
         parsed_sm_list == DETECT_SM_LIST_HRUDMATCH ||
         parsed_sm_list == DETECT_SM_LIST_HCBDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HSBDMATCH ||
+        parsed_sm_list == DETECT_SM_LIST_FILEDATA ||
         parsed_sm_list == DETECT_SM_LIST_HHDMATCH ||
         parsed_sm_list == DETECT_SM_LIST_HRHDMATCH ||
         parsed_sm_list == DETECT_SM_LIST_HSMDMATCH ||
@@ -694,13 +695,13 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
     int sm_list = -1;
     if (s->list != DETECT_SM_LIST_NOTSET) {
-        if (s->list == DETECT_SM_LIST_HSBDMATCH) {
+        if (s->list == DETECT_SM_LIST_FILEDATA) {
             SCLogDebug("adding to http server body list because of file data");
             AppLayerHtpEnableResponseBodyCallback();
         } else if (s->list == DETECT_SM_LIST_DMATCH) {
             SCLogDebug("adding to dmatch list because of dce_stub_data");
-        } else if (s->list == DETECT_SM_LIST_DNSQUERY_MATCH) {
-            SCLogDebug("adding to DETECT_SM_LIST_DNSQUERY_MATCH list because of dns_query");
+        } else if (s->list == DETECT_SM_LIST_DNSQUERYNAME_MATCH) {
+            SCLogDebug("adding to DETECT_SM_LIST_DNSQUERYNAME_MATCH list because of dns_query");
         }
         s->flags |= SIG_FLAG_APPLAYER;
         sm_list = s->list;
@@ -713,7 +714,7 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
                 sm_list = parsed_sm_list;
                 break;
 
-            case DETECT_SM_LIST_HSBDMATCH:
+            case DETECT_SM_LIST_FILEDATA:
                 AppLayerHtpEnableResponseBodyCallback();
                 s->flags |= SIG_FLAG_APPLAYER;
                 s->alproto = ALPROTO_HTTP;
@@ -1180,17 +1181,17 @@ static int DetectPcreParseTest12(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
         printf("empty server body list: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_PCRE) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
         printf("last sm not pcre: ");
         goto end;
     }
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE)) {
         printf("flags not right: ");
@@ -1229,17 +1230,17 @@ static int DetectPcreParseTest13(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
         printf("empty server body list: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_PCRE) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
         printf("last sm not pcre: ");
         goto end;
     }
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE)) {
         printf("flags not right: ");
@@ -1278,17 +1279,17 @@ static int DetectPcreParseTest14(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
         printf("empty server body list: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_PCRE) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
         printf("last sm not pcre: ");
         goto end;
     }
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
     if (data->flags & DETECT_PCRE_RAWBYTES ||
         data->flags & DETECT_PCRE_RELATIVE) {
         printf("flags not right: ");
@@ -3729,7 +3730,7 @@ static int DetectPcreFlowvarCapture01(void)
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
         goto end;
     }
-    DetectPcreData *pd = s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    DetectPcreData *pd = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -3855,7 +3856,7 @@ static int DetectPcreFlowvarCapture02(void)
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
         goto end;
     }
-    DetectPcreData *pd1 = s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; priority:3; sid:2;)");
     if (s == NULL) {
@@ -3868,7 +3869,7 @@ static int DetectPcreFlowvarCapture02(void)
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
         goto end;
     }
-    DetectPcreData *pd2 = s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     if (pd1->capidx != pd2->capidx) {
         printf("capidx mismatch, %u != %u: ", pd1->capidx, pd2->capidx);
@@ -4001,7 +4002,7 @@ static int DetectPcreFlowvarCapture03(void)
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
         goto end;
     }
-    DetectPcreData *pd1 = s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; content:\"xyz\"; http_header; priority:3; sid:2;)");
     if (s == NULL) {
@@ -4014,7 +4015,7 @@ static int DetectPcreFlowvarCapture03(void)
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
         goto end;
     }
-    DetectPcreData *pd2 = s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     if (pd1->capidx != pd2->capidx) {
         printf("capidx mismatch, %u != %u: ", pd1->capidx, pd2->capidx);
@@ -4122,7 +4123,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectPcre
  */
-void DetectPcreRegisterTests(void) {
+void DetectPcreRegisterTests(void)
+{
 #ifdef UNITTESTS /* UNITTESTS */
     UtRegisterTest("DetectPcreParseTest01", DetectPcreParseTest01, 1);
     UtRegisterTest("DetectPcreParseTest02", DetectPcreParseTest02, 1);

@@ -65,7 +65,33 @@ typedef struct JsonSshLogThread_ {
     MemBuffer *buffer;
 } JsonSshLogThread;
 
-static int JsonSshLogger(ThreadVars *tv, void *thread_data, const Packet *p) {
+
+void JsonSshLogJSON(json_t *tjs, SshState *ssh_state)
+{
+    json_t *cjs = json_object();
+    if (cjs != NULL) {
+        json_object_set_new(cjs, "proto_version",
+                json_string((char *)ssh_state->cli_hdr.proto_version));
+
+        json_object_set_new(cjs, "software_version",
+                json_string((char *)ssh_state->cli_hdr.software_version));
+    }
+    json_object_set_new(tjs, "client", cjs);
+
+    json_t *sjs = json_object();
+    if (sjs != NULL) {
+        json_object_set_new(sjs, "proto_version",
+                json_string((char *)ssh_state->srv_hdr.proto_version));
+
+        json_object_set_new(sjs, "software_version",
+                json_string((char *)ssh_state->srv_hdr.software_version));
+    }
+    json_object_set_new(tjs, "server", sjs);
+
+}
+
+static int JsonSshLogger(ThreadVars *tv, void *thread_data, const Packet *p)
+{
     JsonSshLogThread *aft = (JsonSshLogThread *)thread_data;
     MemBuffer *buffer = (MemBuffer *)aft->buffer;
     OutputSshCtx *ssh_ctx = aft->sshlog_ctx;
@@ -101,25 +127,7 @@ static int JsonSshLogger(ThreadVars *tv, void *thread_data, const Packet *p) {
     /* reset */
     MemBufferReset(buffer);
 
-    json_t *cjs = json_object();
-    if (cjs != NULL) {
-        json_object_set_new(cjs, "proto_version",
-                json_string((char *)ssh_state->cli_hdr.proto_version));
-
-        json_object_set_new(cjs, "software_version",
-                json_string((char *)ssh_state->cli_hdr.software_version));
-    }
-    json_object_set_new(tjs, "client", cjs);
-
-    json_t *sjs = json_object();
-    if (sjs != NULL) {
-        json_object_set_new(sjs, "proto_version",
-                json_string((char *)ssh_state->srv_hdr.proto_version));
-
-        json_object_set_new(sjs, "software_version",
-                json_string((char *)ssh_state->srv_hdr.software_version));
-    }
-    json_object_set_new(tjs, "server", sjs);
+    JsonSshLogJSON(tjs, ssh_state);
 
     json_object_set_new(js, "ssh", tjs);
 
@@ -240,7 +248,7 @@ static void OutputSshLogDeinitSub(OutputCtx *output_ctx)
 
 OutputCtx *OutputSshLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
-    AlertJsonThread *ajt = parent_ctx->data;
+    OutputJsonCtx *ojc = parent_ctx->data;
 
     if (OutputSshLoggerEnable() != 0) {
         SCLogError(SC_ERR_CONF_YAML_ERROR, "only one 'ssh' logger "
@@ -258,7 +266,7 @@ OutputCtx *OutputSshLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
         return NULL;
     }
 
-    ssh_ctx->file_ctx = ajt->file_ctx;
+    ssh_ctx->file_ctx = ojc->file_ctx;
 
     output_ctx->data = ssh_ctx;
     output_ctx->DeInit = OutputSshLogDeinitSub;
@@ -270,7 +278,8 @@ OutputCtx *OutputSshLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
  *  \brief Condition function for SSH logger
  *  \retval bool true or false -- log now?
  */
-static int JsonSshCondition(ThreadVars *tv, const Packet *p) {
+static int JsonSshCondition(ThreadVars *tv, const Packet *p)
+{
     if (p->flow == NULL) {
         return FALSE;
     }
@@ -307,7 +316,8 @@ dontlog:
     return FALSE;
 }
 
-void TmModuleJsonSshLogRegister (void) {
+void TmModuleJsonSshLogRegister (void)
+{
     tmm_modules[TMM_JSONSSHLOG].name = "JsonSshLog";
     tmm_modules[TMM_JSONSSHLOG].ThreadInit = JsonSshLogThreadInit;
     tmm_modules[TMM_JSONSSHLOG].ThreadDeinit = JsonSshLogThreadDeinit;

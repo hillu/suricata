@@ -60,7 +60,7 @@ typedef struct RunMode_ {
     const char *name;
     const char *description;
     /* runmode function */
-    int (*RunModeFunc)(DetectEngineCtx *);
+    int (*RunModeFunc)(void);
 } RunMode;
 
 typedef struct RunModes_ {
@@ -134,6 +134,12 @@ static const char *RunModeTranslateModeToName(int runmode)
             return "MPIPE";
         case RUNMODE_AFP_DEV:
             return "AF_PACKET_DEV";
+        case RUNMODE_NETMAP:
+#ifdef HAVE_NETMAP
+            return "NETMAP";
+#else
+            return "NETMAP(DISABLED)";
+#endif
         case RUNMODE_UNIX_SOCKET:
             return "UNIX_SOCKET";
         default:
@@ -149,7 +155,6 @@ static const char *RunModeTranslateModeToName(int runmode)
  *
  * \param runmode            The runmode type.
  * \param runmode_customd_id The runmode custom id.
- * \param de_ctx             Detection Engine Context.
  */
 static RunMode *RunModeGetCustomMode(int runmode, const char *custom_mode)
 {
@@ -206,6 +211,7 @@ void RunModeRegisterRunModes(void)
     RunModeErfDagRegister();
     RunModeNapatechRegister();
     RunModeIdsAFPRegister();
+    RunModeIdsNetmapRegister();
     RunModeIdsNflogRegister();
     RunModeTileMpipeRegister();
     RunModeUnixSocketRegister();
@@ -224,7 +230,7 @@ void RunModeListRunmodes(void)
            "-----------------------\n");
 
     printf("| %-17s | %-17s | %-10s \n",
-           "RunMode Type", "Custom Mode ", "Descripition");
+           "RunMode Type", "Custom Mode ", "Description");
     printf("|-----------------------------------------------------------------"
            "-----------------------\n");
     int i = RUNMODE_UNKNOWN + 1;
@@ -250,17 +256,18 @@ void RunModeListRunmodes(void)
             if (mode_displayed == 0)
                 mode_displayed = 1;
         }
-        printf("|-----------------------------------------------------------------"
-               "-----------------------\n");
+        if (mode_displayed == 1) {
+            printf("|-----------------------------------------------------------------"
+                   "-----------------------\n");
+        } 
     }
 
     return;
 }
 
 /**
- *  \param de_ctx Detection engine ctx. Can be NULL is detect is disabled.
  */
-void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_ctx)
+void RunModeDispatch(int runmode, const char *custom_mode)
 {
     char *local_custom_mode = NULL;
 
@@ -273,7 +280,7 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
         }
     }
 
-    if (custom_mode == NULL) {
+    if (custom_mode == NULL || strcmp(custom_mode, "auto") == 0) {
         switch (runmode) {
             case RUNMODE_PCAP_DEV:
                 custom_mode = RunModeIdsGetDefaultMode();
@@ -306,6 +313,9 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
                 break;
             case RUNMODE_AFP_DEV:
                 custom_mode = RunModeAFPGetDefaultMode();
+                break;
+            case RUNMODE_NETMAP:
+                custom_mode = RunModeNetmapGetDefaultMode();
                 break;
             case RUNMODE_UNIX_SOCKET:
                 custom_mode = RunModeUnixSocketGetDefaultMode();
@@ -356,7 +366,7 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
         exit(EXIT_FAILURE);
     }
 
-    mode->RunModeFunc(de_ctx);
+    mode->RunModeFunc();
 
     if (local_custom_mode != NULL)
         SCFree(local_custom_mode);
@@ -374,7 +384,7 @@ void RunModeDispatch(int runmode, const char *custom_mode, DetectEngineCtx *de_c
  */
 void RunModeRegisterNewRunMode(int runmode, const char *name,
                                const char *description,
-                               int (*RunModeFunc)(DetectEngineCtx *))
+                               int (*RunModeFunc)(void))
 {
     void *ptmp;
     if (RunModeGetCustomMode(runmode, name) != NULL) {
@@ -435,6 +445,7 @@ static TmModule *pkt_logger_module = NULL;
 static TmModule *tx_logger_module = NULL;
 static TmModule *file_logger_module = NULL;
 static TmModule *filedata_logger_module = NULL;
+static TmModule *streaming_logger_module = NULL;
 
 int RunModeOutputFileEnabled(void)
 {
@@ -457,6 +468,9 @@ void RunModeShutDown(void)
     OutputTxShutdown();
     OutputFileShutdown();
     OutputFiledataShutdown();
+    OutputStreamingShutdown();
+    OutputStatsShutdown();
+    OutputFlowShutdown();
 
     /* Close any log files. */
     RunModeOutput *output;
@@ -471,6 +485,7 @@ void RunModeShutDown(void)
     tx_logger_module = NULL;
     file_logger_module = NULL;
     filedata_logger_module = NULL;
+    streaming_logger_module = NULL;
 }
 
 /** \internal
@@ -491,6 +506,7 @@ static void AddOutputToFreeList(OutputModule *module, OutputCtx *output_ctx)
     fl_output->output_ctx = output_ctx;
     TAILQ_INSERT_TAIL(&output_free_list, fl_output, entries);
 }
+
 
 static int GetRunModeOutputPriority(RunModeOutput *module)
 {
@@ -520,6 +536,17 @@ static void InsertInRunModeOutputs(RunModeOutput *runmode_output)
 /** \brief Turn output into thread module */
 static void SetupOutput(const char *name, OutputModule *module, OutputCtx *output_ctx)
 {
+    /* flow logger doesn't run in the packet path */
+    if (module->FlowLogFunc) {
+        OutputRegisterFlowLogger(module->name, module->FlowLogFunc, output_ctx);
+        return;
+    }
+    /* stats logger doesn't run in the packet path */
+    if (module->StatsLogFunc) {
+        OutputRegisterStatsLogger(module->name, module->StatsLogFunc, output_ctx);
+        return;
+    }
+
     TmModule *tm_module = TmModuleGetByName(module->name);
     if (tm_module == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT,
@@ -619,15 +646,39 @@ static void SetupOutput(const char *name, OutputModule *module, OutputCtx *outpu
             InsertInRunModeOutputs(runmode_output);
             SCLogDebug("__file_logger__ added");
         }
+    } else if (module->StreamingLogFunc) {
+        SCLogDebug("%s is a streaming logger", module->name);
+        OutputRegisterStreamingLogger(module->name, module->StreamingLogFunc,
+                output_ctx, module->stream_type);
+
+        /* need one instance of the streaming logger module */
+        if (streaming_logger_module == NULL) {
+            streaming_logger_module = TmModuleGetByName("__streaming_logger__");
+            if (streaming_logger_module == NULL) {
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "TmModuleGetByName for __streaming_logger__ failed");
+                exit(EXIT_FAILURE);
+            }
+
+            RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
+            if (unlikely(runmode_output == NULL))
+                return;
+            runmode_output->name = module->name;
+            runmode_output->tm_module = streaming_logger_module;
+            runmode_output->output_ctx = NULL;
+            InsertInRunModeOutputs(runmode_output);
+            SCLogDebug("__streaming_logger__ added");
+        }
     } else {
         SCLogDebug("%s is a regular logger", module->name);
 
         RunModeOutput *runmode_output = SCCalloc(1, sizeof(RunModeOutput));
         if (unlikely(runmode_output == NULL))
             return;
+        runmode_output->name = module->name;
         runmode_output->tm_module = tm_module;
         runmode_output->output_ctx = output_ctx;
-        TAILQ_INSERT_TAIL(&RunModeOutputs, runmode_output, entries);
+        InsertInRunModeOutputs(runmode_output);
     }
 }
 
@@ -644,18 +695,20 @@ void RunModeInitializeOutputs(void)
 
     ConfNode *output, *output_config;
     const char *enabled;
+    char tls_log_enabled = 0;
+    char tls_store_present = 0;
 
     TAILQ_FOREACH(output, &outputs->head, next) {
-
-        if (strcmp(output->val, "stats") == 0)
-            continue;
 
         output_config = ConfNodeLookupChild(output, output->val);
         if (output_config == NULL) {
             /* Shouldn't happen. */
-            SCLogError(SC_ERR_INVALID_ARGUMENT,
-                "Failed to lookup configuration child node: fast");
-            exit(1);
+            FatalError(SC_ERR_INVALID_ARGUMENT,
+                "Failed to lookup configuration child node: %s", output->val);
+        }
+
+        if (strcmp(output->val, "tls-store") == 0) {
+            tls_store_present = 1;
         }
 
         enabled = ConfNodeLookupChildValue(output_config, "enabled");
@@ -686,12 +739,22 @@ void RunModeInitializeOutputs(void)
                     "files installed to add eve-log support.");
             continue;
 #endif
+        } else if (strcmp(output->val, "lua") == 0) {
+#ifndef HAVE_LUA
+            SCLogWarning(SC_ERR_NOT_SUPPORTED,
+                    "lua support not compiled in. Reconfigure/"
+                    "recompile with lua(jit) and its development "
+                    "files installed to add lua support.");
+            continue;
+#endif
+        } else if (strcmp(output->val, "tls-log") == 0) {
+            tls_log_enabled = 1;
         }
 
         OutputModule *module = OutputGetModuleByConfName(output->val);
         if (module == NULL) {
-            SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                "No output module named %s, ignoring", output->val);
+            FatalErrorOnInit(SC_ERR_INVALID_ARGUMENT,
+                "No output module named %s", output->val);
             continue;
         }
 
@@ -699,8 +762,7 @@ void RunModeInitializeOutputs(void)
         if (module->InitFunc != NULL) {
             output_ctx = module->InitFunc(output_config);
             if (output_ctx == NULL) {
-                /* In most cases the init function will have logged the
-                 * error. Maybe we should exit on init errors? */
+                FatalErrorOnInit(SC_ERR_INVALID_ARGUMENT, "output module setup failed");
                 continue;
             }
         } else if (module->InitSubFunc != NULL) {
@@ -722,20 +784,18 @@ void RunModeInitializeOutputs(void)
 
                     OutputModule *sub_module = OutputGetModuleByConfName(subname);
                     if (sub_module == NULL) {
-                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                                "No output module named %s, ignoring", subname);
+                        FatalErrorOnInit(SC_ERR_INVALID_ARGUMENT,
+                                "No output module named %s", subname);
                         continue;
                     }
                     if (sub_module->parent_name == NULL ||
                             strcmp(sub_module->parent_name,output->val) != 0) {
-                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                                "bad parent for %s, ignoring", subname);
-                        continue;
+                        FatalError(SC_ERR_INVALID_ARGUMENT,
+                                "bad parent for %s", subname);
                     }
                     if (sub_module->InitSubFunc == NULL) {
-                        SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                                "bad sub-module for %s, ignoring", subname);
-                        continue;
+                        FatalError(SC_ERR_INVALID_ARGUMENT,
+                                "bad sub-module for %s", subname);
                     }
                     ConfNode *sub_output_config = ConfNodeLookupChild(type, type->val);
                     // sub_output_config may be NULL if no config
@@ -755,11 +815,76 @@ void RunModeInitializeOutputs(void)
              * main output ctx from which the sub-modules share the
              * LogFileCtx */
             AddOutputToFreeList(module, output_ctx);
+
+        } else if (strcmp(output->val, "lua") == 0) {
+            SCLogDebug("handle lua");
+
+            ConfNode *scripts = ConfNodeLookupChild(output_config, "scripts");
+            BUG_ON(scripts == NULL); //TODO
+
+            OutputModule *m;
+            TAILQ_FOREACH(m, &output_ctx->submodules, entries) {
+                SCLogDebug("m %p %s:%s", m, m->name, m->conf_name);
+
+                ConfNode *script = NULL;
+                TAILQ_FOREACH(script, &scripts->head, next) {
+                    SCLogDebug("script %s", script->val);
+                    if (strcmp(script->val, m->conf_name) == 0) {
+                        break;
+                    }
+                }
+                BUG_ON(script == NULL);
+
+                /* pass on parent output_ctx */
+                OutputCtx *sub_output_ctx =
+                    m->InitSubFunc(script, output_ctx);
+                if (sub_output_ctx == NULL) {
+                    SCLogInfo("sub_output_ctx NULL, skipping");
+                    continue;
+                }
+
+                SetupOutput(m->name, m, sub_output_ctx);
+            }
+
         } else {
             AddOutputToFreeList(module, output_ctx);
             SetupOutput(module->name, module, output_ctx);
         }
     }
+
+    /* Backward compatibility code */
+    if (!tls_store_present && tls_log_enabled) {
+        /* old YAML with no "tls-store" in outputs. "tls-log" value needs
+         * to be started using 'tls-log' config as own config */
+        SCLogWarning(SC_ERR_CONF_YAML_ERROR,
+                     "Please use 'tls-store' in YAML to configure TLS storage");
+
+        TAILQ_FOREACH(output, &outputs->head, next) {
+            output_config = ConfNodeLookupChild(output, output->val);
+
+            if (strcmp(output->val, "tls-log") == 0) {
+
+                OutputModule *module = OutputGetModuleByConfName("tls-store");
+                if (module == NULL) {
+                    SCLogWarning(SC_ERR_INVALID_ARGUMENT,
+                            "No output module named %s, ignoring", "tls-store");
+                    continue;
+                }
+
+                OutputCtx *output_ctx = NULL;
+                if (module->InitFunc != NULL) {
+                    output_ctx = module->InitFunc(output_config);
+                    if (output_ctx == NULL) {
+                        continue;
+                    }
+                }
+
+                AddOutputToFreeList(module, output_ctx);
+                SetupOutput(module->name, module, output_ctx);
+            }
+        }
+    }
+
 }
 
 /**

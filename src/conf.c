@@ -61,8 +61,7 @@ static ConfNode *root_backup = NULL;
  * \retval The existing configuration node if it exists, or a newly
  *   created node for the provided name.  On error, NULL will be returned.
  */
-static ConfNode *
-ConfGetNodeOrCreate(char *name, int final)
+static ConfNode *ConfGetNodeOrCreate(const char *name, int final)
 {
     ConfNode *parent = root;
     ConfNode *node = NULL;
@@ -111,8 +110,7 @@ end:
 /**
  * \brief Initialize the configuration system.
  */
-void
-ConfInit(void)
+void ConfInit(void)
 {
     if (root != NULL) {
         SCLogDebug("already initialized");
@@ -133,8 +131,7 @@ ConfInit(void)
  *
  * \retval An allocated configuration node on success, NULL on failure.
  */
-ConfNode *
-ConfNodeNew(void)
+ConfNode *ConfNodeNew(void)
 {
     ConfNode *new;
 
@@ -152,8 +149,7 @@ ConfNodeNew(void)
  *
  * \param node The configuration node to SCFree.
  */
-void
-ConfNodeFree(ConfNode *node)
+void ConfNodeFree(ConfNode *node)
 {
     ConfNode *tmp;
 
@@ -177,8 +173,7 @@ ConfNodeFree(ConfNode *node)
  * \retval A pointer to ConfNode is found or NULL if the configuration
  *    node does not exist.
  */
-ConfNode *
-ConfGetNode(char *name)
+ConfNode *ConfGetNode(const char *name)
 {
     ConfNode *node = root;
     char node_name[NODE_NAME_MAX];
@@ -205,8 +200,7 @@ ConfGetNode(char *name)
 /**
  * \brief Get the root configuration node.
  */
-ConfNode *
-ConfGetRootNode(void)
+ConfNode *ConfGetRootNode(void)
 {
     return root;
 }
@@ -223,8 +217,7 @@ ConfGetRootNode(void)
  *
  * \retval 1 if the value was set otherwise 0.
  */
-int
-ConfSet(char *name, char *val)
+int ConfSet(const char *name, char *val)
 {
     ConfNode *node = ConfGetNodeOrCreate(name, 0);
     if (node == NULL || node->final) {
@@ -237,6 +230,56 @@ ConfSet(char *name, char *val)
         return 0;
     }
     return 1;
+}
+
+/**
+ * \brief Set a configuration parameter from a string.
+ *
+ * Where the input string is something like:
+ *    stream.midstream=true
+ *
+ * \param input the input string to be parsed.
+ *
+ * \retval 1 if the value of set, otherwise 0.
+ */
+int ConfSetFromString(const char *input, int final)
+{
+    int retval = 0;
+    char *name = SCStrdup(input), *val = NULL;
+    if (unlikely(name == NULL)) {
+        goto done;
+    }
+    val = strchr(name, '=');
+    if (val == NULL) {
+        goto done;
+    }
+    *val++ = '\0';
+
+    while (isspace((int)name[strlen(name) - 1])) {
+        name[strlen(name) - 1] = '\0';
+    }
+
+    while (isspace((int)*val)) {
+        val++;
+    }
+
+    if (final) {
+        if (!ConfSetFinal(name, val)) {
+            goto done;
+        }
+    }
+    else {
+        if (!ConfSet(name, val)) {
+            goto done;
+        }
+    }
+
+    retval = 1;
+done:
+    if (name != NULL) {
+        SCFree(name);
+    }
+    return retval;
 }
 
 /**
@@ -253,8 +296,7 @@ ConfSet(char *name, char *val)
  *
  * \retval 1 if the value was set otherwise 0.
  */
-int
-ConfSetFinal(char *name, char *val)
+int ConfSetFinal(const char *name, char *val)
 {
     ConfNode *node = ConfGetNodeOrCreate(name, 1);
     if (node == NULL) {
@@ -286,8 +328,7 @@ ConfSetFinal(char *name, char *val)
  * \retval 1 will be returned if the name is found, otherwise 0 will
  *   be returned.
  */
-int
-ConfGet(char *name, char **vptr)
+int ConfGet(const char *name, char **vptr)
 {
     ConfNode *node = ConfGetNode(name);
     if (node == NULL) {
@@ -300,7 +341,7 @@ ConfGet(char *name, char **vptr)
     }
 }
 
-int ConfGetChildValue(ConfNode *base, char *name, char **vptr)
+int ConfGetChildValue(const ConfNode *base, const char *name, char **vptr)
 {
     ConfNode *node = ConfNodeLookupChild(base, name);
 
@@ -315,7 +356,8 @@ int ConfGetChildValue(ConfNode *base, char *name, char **vptr)
 }
 
 
-int ConfGetChildValueWithDefault(ConfNode *base, ConfNode *dflt, char *name, char **vptr)
+int ConfGetChildValueWithDefault(const ConfNode *base, const ConfNode *dflt,
+    const char *name, char **vptr)
 {
     int ret = ConfGetChildValue(base, name, vptr);
     /* Get 'default' value */
@@ -335,8 +377,7 @@ int ConfGetChildValueWithDefault(ConfNode *base, ConfNode *dflt, char *name, cha
  * \retval 1 will be returned if the name is found and was properly
  * converted to an interger, otherwise 0 will be returned.
  */
-int
-ConfGetInt(char *name, intmax_t *val)
+int ConfGetInt(const char *name, intmax_t *val)
 {
     char *strval;
     intmax_t tmpint;
@@ -356,7 +397,7 @@ ConfGetInt(char *name, intmax_t *val)
     return 1;
 }
 
-int ConfGetChildValueInt(ConfNode *base, char *name, intmax_t *val)
+int ConfGetChildValueInt(const ConfNode *base, const char *name, intmax_t *val)
 {
     char *strval;
     intmax_t tmpint;
@@ -376,7 +417,8 @@ int ConfGetChildValueInt(ConfNode *base, char *name, intmax_t *val)
 
 }
 
-int ConfGetChildValueIntWithDefault(ConfNode *base, ConfNode *dflt, char *name, intmax_t *val)
+int ConfGetChildValueIntWithDefault(const ConfNode *base, const ConfNode *dflt,
+    const char *name, intmax_t *val)
 {
     int ret = ConfGetChildValueInt(base, name, val);
     /* Get 'default' value */
@@ -397,8 +439,7 @@ int ConfGetChildValueIntWithDefault(ConfNode *base, ConfNode *dflt, char *name, 
  * \retval 1 will be returned if the name is found and was properly
  * converted to a boolean, otherwise 0 will be returned.
  */
-int
-ConfGetBool(char *name, int *val)
+int ConfGetBool(const char *name, int *val)
 {
     char *strval;
 
@@ -411,7 +452,7 @@ ConfGetBool(char *name, int *val)
     return 1;
 }
 
-int ConfGetChildValueBool(ConfNode *base, char *name, int *val)
+int ConfGetChildValueBool(const ConfNode *base, const char *name, int *val)
 {
     char *strval;
 
@@ -424,7 +465,8 @@ int ConfGetChildValueBool(ConfNode *base, char *name, int *val)
     return 1;
 }
 
-int ConfGetChildValueBoolWithDefault(ConfNode *base, ConfNode *dflt, char *name, int *val)
+int ConfGetChildValueBoolWithDefault(const ConfNode *base, const ConfNode *dflt,
+    const char *name, int *val)
 {
     int ret = ConfGetChildValueBool(base, name, val);
     /* Get 'default' value */
@@ -446,8 +488,7 @@ int ConfGetChildValueBoolWithDefault(ConfNode *base, ConfNode *dflt, char *name,
  *
  * \retval 1 If the value is true, 0 if not.
  */
-int
-ConfValIsTrue(const char *val)
+int ConfValIsTrue(const char *val)
 {
     char *trues[] = {"1", "yes", "true", "on"};
     size_t u;
@@ -472,8 +513,7 @@ ConfValIsTrue(const char *val)
  *
  * \retval 1 If the value is false, 0 if not.
  */
-int
-ConfValIsFalse(const char *val)
+int ConfValIsFalse(const char *val)
 {
     char *falses[] = {"0", "no", "false", "off"};
     size_t u;
@@ -497,8 +537,7 @@ ConfValIsFalse(const char *val)
  * \retval 1 will be returned if the name is found and was properly
  * converted to a double, otherwise 0 will be returned.
  */
-int
-ConfGetDouble(char *name, double *val)
+int ConfGetDouble(const char *name, double *val)
 {
     char *strval;
     double tmpdo;
@@ -528,8 +567,7 @@ ConfGetDouble(char *name, double *val)
  * \retval 1 will be returned if the name is found and was properly
  * converted to a double, otherwise 0 will be returned.
  */
-int
-ConfGetFloat(char *name, float *val)
+int ConfGetFloat(const char *name, float *val)
 {
     char *strval;
     double tmpfl;
@@ -552,8 +590,7 @@ ConfGetFloat(char *name, float *val)
 /**
  * \brief Remove (and SCFree) the provided configuration node.
  */
-void
-ConfNodeRemove(ConfNode *node)
+void ConfNodeRemove(ConfNode *node)
 {
     if (node->parent != NULL)
         TAILQ_REMOVE(&node->parent->head, node, next);
@@ -568,8 +605,7 @@ ConfNodeRemove(ConfNode *node)
  * \retval Returns 1 if the parameter was removed, otherwise 0 is returned
  *   most likely indicating the parameter was not set.
  */
-int
-ConfRemove(char *name)
+int ConfRemove(const char *name)
 {
     ConfNode *node;
 
@@ -585,8 +621,7 @@ ConfRemove(char *name)
 /**
  * \brief Creates a backup of the conf_hash hash_table used by the conf API.
  */
-void
-ConfCreateContextBackup(void)
+void ConfCreateContextBackup(void)
 {
     root_backup = root;
     root = NULL;
@@ -598,8 +633,7 @@ ConfCreateContextBackup(void)
  * \brief Restores the backup of the hash_table present in backup_conf_hash
  *        back to conf_hash.
  */
-void
-ConfRestoreContextBackup(void)
+void ConfRestoreContextBackup(void)
 {
     root = root_backup;
     root_backup = NULL;
@@ -610,8 +644,7 @@ ConfRestoreContextBackup(void)
 /**
  * \brief De-initializes the configuration system.
  */
-void
-ConfDeInit(void)
+void ConfDeInit(void)
 {
     if (root != NULL) {
         ConfNodeFree(root);
@@ -621,8 +654,7 @@ ConfDeInit(void)
     SCLogDebug("configuration module de-initialized");
 }
 
-static char *
-ConfPrintNameArray(char **name_arr, int level)
+static char *ConfPrintNameArray(char **name_arr, int level)
 {
     static char name[128*128];
     int i;
@@ -640,8 +672,7 @@ ConfPrintNameArray(char **name_arr, int level)
 /**
  * \brief Dump a configuration node and all its children.
  */
-void
-ConfNodeDump(ConfNode *node, const char *prefix)
+void ConfNodeDump(const ConfNode *node, const char *prefix)
 {
     ConfNode *child;
 
@@ -671,8 +702,7 @@ ConfNodeDump(ConfNode *node, const char *prefix)
 /**
  * \brief Dump configuration to stdout.
  */
-void
-ConfDump(void)
+void ConfDump(void)
 {
     ConfNodeDump(root, NULL);
 }
@@ -688,8 +718,7 @@ ConfDump(void)
  *
  * \retval A pointer the child ConfNode if found otherwise NULL.
  */
-ConfNode *
-ConfNodeLookupChild(ConfNode *node, const char *name)
+ConfNode *ConfNodeLookupChild(const ConfNode *node, const char *name)
 {
     ConfNode *child;
 
@@ -713,8 +742,7 @@ ConfNodeLookupChild(ConfNode *node, const char *name)
  *
  * \retval A pointer the child ConfNodes value if found otherwise NULL.
  */
-const char *
-ConfNodeLookupChildValue(ConfNode *node, const char *name)
+const char *ConfNodeLookupChildValue(const ConfNode *node, const char *name)
 {
     ConfNode *child;
 
@@ -731,7 +759,8 @@ ConfNodeLookupChildValue(ConfNode *node, const char *name)
  * \return the ConfNode matching or NULL
  */
 
-ConfNode *ConfNodeLookupKeyValue(ConfNode *base, const char *key, const char *value)
+ConfNode *ConfNodeLookupKeyValue(const ConfNode *base, const char *key,
+    const char *value)
 {
     ConfNode *child;
 
@@ -758,8 +787,7 @@ ConfNode *ConfNodeLookupKeyValue(ConfNode *base, const char *key, const char *va
  * \retval 1 if the child node has a true value, otherwise 0 is
  *     returned, even if the child node does not exist.
  */
-int
-ConfNodeChildValueIsTrue(ConfNode *node, const char *key)
+int ConfNodeChildValueIsTrue(const ConfNode *node, const char *key)
 {
     const char *val;
 
@@ -773,7 +801,7 @@ ConfNodeChildValueIsTrue(ConfNode *node, const char *key)
  *  \param file The name of the file
  *  \retval str Pointer to the string path + sig_file
  */
-char *ConfLoadCompleteIncludePath(char *file)
+char *ConfLoadCompleteIncludePath(const char *file)
 {
     char *defaultpath = NULL;
     char *path = NULL;
@@ -814,8 +842,7 @@ char *ConfLoadCompleteIncludePath(char *file)
  *
  * \param node The configuration node to prune.
  */
-void
-ConfNodePrune(ConfNode *node)
+void ConfNodePrune(ConfNode *node)
 {
     ConfNode *item, *it;
 
@@ -840,13 +867,24 @@ ConfNodePrune(ConfNode *node)
     }
 }
 
+/**
+ * \brief Check if a node is a sequence or node.
+ *
+ * \param node the node to check.
+ *
+ * \return 1 if node is a seuence, otherwise 0.
+ */
+int ConfNodeIsSequence(const ConfNode *node)
+{
+    return node->is_seq == 0 ? 0 : 1;
+}
+
 #ifdef UNITTESTS
 
 /**
  * Lookup a non-existant value.
  */
-static int
-ConfTestGetNonExistant(void)
+static int ConfTestGetNonExistant(void)
 {
     char name[] = "non-existant-value";
     char *value;
@@ -857,8 +895,7 @@ ConfTestGetNonExistant(void)
 /**
  * Set then lookup a value.
  */
-static int
-ConfTestSetAndGet(void)
+static int ConfTestSetAndGet(void)
 {
     char name[] = "some-name";
     char value[] = "some-value";
@@ -881,8 +918,7 @@ ConfTestSetAndGet(void)
  * Test that overriding a value is allowed provided allow_override is
  * true and that the config parameter gets the new value.
  */
-static int
-ConfTestOverrideValue1(void)
+static int ConfTestOverrideValue1(void)
 {
     char name[] = "some-name";
     char value0[] = "some-value";
@@ -908,8 +944,7 @@ ConfTestOverrideValue1(void)
 /**
  * Test that a final value will not be overrided by a ConfSet.
  */
-static int
-ConfTestOverrideValue2(void)
+static int ConfTestOverrideValue2(void)
 {
     char name[] = "some-name";
     char value0[] = "some-value";
@@ -935,8 +970,7 @@ ConfTestOverrideValue2(void)
 /**
  * Test retrieving an integer value from the configuration db.
  */
-static int
-ConfTestGetInt(void)
+static int ConfTestGetInt(void)
 {
     char name[] = "some-int.x";
     intmax_t val;
@@ -974,8 +1008,7 @@ ConfTestGetInt(void)
 /**
  * Test retrieving a boolean value from the configuration db.
  */
-static int
-ConfTestGetBool(void)
+static int ConfTestGetBool(void)
 {
     char name[] = "some-bool";
     char *trues[] = {
@@ -1015,8 +1048,7 @@ ConfTestGetBool(void)
     return 1;
 }
 
-static int
-ConfNodeLookupChildTest(void)
+static int ConfNodeLookupChildTest(void)
 {
     char *test_vals[] = { "one", "two", "three" };
     size_t u;
@@ -1064,8 +1096,7 @@ ConfNodeLookupChildTest(void)
     return 1;
 }
 
-static int
-ConfNodeLookupChildValueTest(void)
+static int ConfNodeLookupChildValueTest(void)
 {
     char *test_vals[] = { "one", "two", "three" };
     size_t u;
@@ -1199,8 +1230,7 @@ static int ConfGetChildValueBoolWithDefaultTest(void)
 /**
  * Test the removal of a configuration node.
  */
-static int
-ConfNodeRemoveTest(void)
+static int ConfNodeRemoveTest(void)
 {
     ConfCreateContextBackup();
     ConfInit();
@@ -1223,8 +1253,7 @@ ConfNodeRemoveTest(void)
     return 1;
 }
 
-static int
-ConfSetTest(void)
+static int ConfSetTest(void)
 {
     ConfCreateContextBackup();
     ConfInit();
@@ -1257,8 +1286,7 @@ ConfSetTest(void)
     return 1;
 }
 
-static int
-ConfGetNodeOrCreateTest(void)
+static int ConfGetNodeOrCreateTest(void)
 {
     ConfNode *node;
     int ret = 0;
@@ -1350,8 +1378,7 @@ end:
     return ret;
 }
 
-static int
-ConfNodePruneTest(void)
+static int ConfNodePruneTest(void)
 {
     int ret = 0;
     ConfNode *node;
@@ -1398,8 +1425,90 @@ end:
     return ret;
 }
 
-void
-ConfRegisterTests(void)
+int ConfNodeIsSequenceTest(void)
+{
+    int retval = 0;
+    ConfNode *node = ConfNodeNew();
+    if (node == NULL) {
+        goto end;
+    }
+    if (ConfNodeIsSequence(node)) {
+        goto end;
+    }
+    node->is_seq = 1;
+    if (!ConfNodeIsSequence(node)) {
+        goto end;
+    }
+
+    retval = 1;
+
+end:
+    if (node != NULL) {
+        ConfNodeFree(node);
+    }
+    return retval;
+}
+
+static int ConfSetFromStringTest(void)
+{
+    int retval = 0;
+    ConfNode *n;
+
+    ConfCreateContextBackup();
+    ConfInit();
+
+    if (!ConfSetFromString("stream.midstream=true", 0)) {
+        goto end;
+    }
+    n = ConfGetNode("stream.midstream");
+    if (n == NULL) {
+        goto end;
+    }
+    if (n->val == NULL || strcmp("true", n->val)) {
+        goto end;
+    }
+
+    if (!ConfSetFromString("stream.midstream =false", 0)) {
+        goto end;
+    }
+    n = ConfGetNode("stream.midstream");
+    if (n == NULL) {
+        goto end;
+    }
+    if (n->val == NULL || strcmp("false", n->val)) {
+        goto end;
+    }
+
+    if (!ConfSetFromString("stream.midstream= true", 0)) {
+        goto end;
+    }
+    n = ConfGetNode("stream.midstream");
+    if (n == NULL) {
+        goto end;
+    }
+    if (n->val == NULL || strcmp("true", n->val)) {
+        goto end;
+    }
+
+    if (!ConfSetFromString("stream.midstream = false", 0)) {
+        goto end;
+    }
+    n = ConfGetNode("stream.midstream");
+    if (n == NULL) {
+        goto end;
+    }
+    if (n->val == NULL || strcmp("false", n->val)) {
+        goto end;
+    }
+
+    retval = 1;
+end:
+    ConfDeInit();
+    ConfRestoreContextBackup();
+    return retval;
+}
+
+void ConfRegisterTests(void)
 {
     UtRegisterTest("ConfTestGetNonExistant", ConfTestGetNonExistant, 1);
     UtRegisterTest("ConfSetTest", ConfSetTest, 1);
@@ -1416,6 +1525,8 @@ ConfRegisterTests(void)
     UtRegisterTest("ConfGetChildValueBoolWithDefaultTest", ConfGetChildValueBoolWithDefaultTest, 1);
     UtRegisterTest("ConfGetNodeOrCreateTest", ConfGetNodeOrCreateTest, 1);
     UtRegisterTest("ConfNodePruneTest", ConfNodePruneTest, 1);
+    UtRegisterTest("ConfNodeIsSequenceTest", ConfNodeIsSequenceTest, 1);
+    UtRegisterTest("ConfSetFromStringTest", ConfSetFromStringTest, 1);
 }
 
 #endif /* UNITTESTS */

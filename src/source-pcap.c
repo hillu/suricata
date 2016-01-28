@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2013 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -122,7 +122,8 @@ static SCMutex pcap_bpf_compile_lock = SCMUTEX_INITIALIZER;
  * \brief Registration Function for RecievePcap.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleReceivePcapRegister (void) {
+void TmModuleReceivePcapRegister (void)
+{
     tmm_modules[TMM_RECEIVEPCAP].name = "ReceivePcap";
     tmm_modules[TMM_RECEIVEPCAP].ThreadInit = ReceivePcapThreadInit;
     tmm_modules[TMM_RECEIVEPCAP].Func = NULL;
@@ -138,7 +139,8 @@ void TmModuleReceivePcapRegister (void) {
  * \brief Registration Function for DecodePcap.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleDecodePcapRegister (void) {
+void TmModuleDecodePcapRegister (void)
+{
     tmm_modules[TMM_DECODEPCAP].name = "DecodePcap";
     tmm_modules[TMM_DECODEPCAP].ThreadInit = DecodePcapThreadInit;
     tmm_modules[TMM_DECODEPCAP].Func = DecodePcap;
@@ -153,10 +155,10 @@ static inline void PcapDumpCounters(PcapThreadVars *ptv)
 {
     struct pcap_stat pcap_s;
     if (likely((pcap_stats(ptv->pcap_handle, &pcap_s) >= 0))) {
-        SCPerfCounterSetUI64(ptv->capture_kernel_packets, ptv->tv->sc_perf_pca, pcap_s.ps_recv);
-        SCPerfCounterSetUI64(ptv->capture_kernel_drops, ptv->tv->sc_perf_pca, pcap_s.ps_drop);
+        StatsSetUI64(ptv->tv, ptv->capture_kernel_packets, pcap_s.ps_recv);
+        StatsSetUI64(ptv->tv, ptv->capture_kernel_drops, pcap_s.ps_drop);
         (void) SC_ATOMIC_SET(ptv->livedev->drop, pcap_s.ps_drop);
-        SCPerfCounterSetUI64(ptv->capture_kernel_ifdrops, ptv->tv->sc_perf_pca, pcap_s.ps_ifdrop);
+        StatsSetUI64(ptv->tv, ptv->capture_kernel_ifdrops, pcap_s.ps_ifdrop);
     }
 }
 
@@ -225,7 +227,8 @@ static int PcapTryReopen(PcapThreadVars *ptv)
 
 #endif
 
-void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt) {
+void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt)
+{
     SCEnter();
 
     PcapThreadVars *ptv = (PcapThreadVars *)user;
@@ -292,7 +295,7 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
 {
     SCEnter();
 
-    uint16_t packet_q_len = 0;
+    int packet_q_len = 64;
     PcapThreadVars *ptv = (PcapThreadVars *)data;
     int r;
     TmSlot *s = (TmSlot *)slot;
@@ -307,15 +310,10 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
 
         /* make sure we have at least one packet in the packet pool, to prevent
          * us from alloc'ing packets at line rate */
-        do {
-            packet_q_len = PacketPoolSize();
-            if (unlikely(packet_q_len == 0)) {
-                PacketPoolWait();
-            }
-        } while (packet_q_len == 0);
+        PacketPoolWait();
 
         /* Right now we just support reading packets one at a time. */
-        r = pcap_dispatch(ptv->pcap_handle, (int)packet_q_len,
+        r = pcap_dispatch(ptv->pcap_handle, packet_q_len,
                           (pcap_handler)PcapCallbackLoop, (u_char *)ptv);
         if (unlikely(r < 0)) {
             int dbreak = 0;
@@ -342,11 +340,11 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
             SCReturnInt(TM_ECODE_FAILED);
         }
 
-        SCPerfSyncCountersIfSignalled(tv);
+        StatsSyncCountersIfSignalled(tv);
     }
 
     PcapDumpCounters(ptv);
-    SCPerfSyncCountersIfSignalled(tv);
+    StatsSyncCountersIfSignalled(tv);
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -366,7 +364,8 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
  * \todo Create a general pcap setup function.
  */
 #if LIBPCAP_VERSION_MAJOR == 1
-TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
+TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
+{
     SCEnter();
     PcapIfaceConfig *pcapconfig = initdata;
 
@@ -522,24 +521,19 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     pcapconfig->DerefFunc(pcapconfig);
 
-    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_ifdrops = SCPerfTVRegisterCounter("capture.kernel_ifdrops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
+    ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
+            ptv->tv);
+    ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
+            ptv->tv);
+    ptv->capture_kernel_ifdrops = StatsRegisterCounter("capture.kernel_ifdrops",
+            ptv->tv);
 
     *data = (void *)ptv;
     SCReturnInt(TM_ECODE_OK);
 }
 #else /* implied LIBPCAP_VERSION_MAJOR == 0 */
-TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
+TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
+{
     SCEnter();
     PcapIfaceConfig *pcapconfig = initdata;
 
@@ -627,18 +621,12 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
 
     ptv->datalink = pcap_datalink(ptv->pcap_handle);
 
-    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_ifdrops = SCPerfTVRegisterCounter("capture.kernel_ifdrops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
+    ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
+            ptv->tv);
+    ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
+            ptv->tv);
+    ptv->capture_kernel_ifdrops = StatsRegisterCounter("capture.kernel_ifdrops",
+            ptv->tv);
 
     *data = (void *)ptv;
 
@@ -653,7 +641,8 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data) {
  * \param tv pointer to ThreadVars
  * \param data pointer that gets cast into PcapThreadVars for ptv
  */
-void ReceivePcapThreadExitStats(ThreadVars *tv, void *data) {
+void ReceivePcapThreadExitStats(ThreadVars *tv, void *data)
+{
     SCEnter();
     PcapThreadVars *ptv = (PcapThreadVars *)data;
     struct pcap_stat pcap_s;
@@ -686,7 +675,8 @@ void ReceivePcapThreadExitStats(ThreadVars *tv, void *data) {
  * \param tv pointer to ThreadVars
  * \param data pointer that gets cast into PcapThreadVars for ptv
  */
-TmEcode ReceivePcapThreadDeinit(ThreadVars *tv, void *data) {
+TmEcode ReceivePcapThreadDeinit(ThreadVars *tv, void *data)
+{
     PcapThreadVars *ptv = (PcapThreadVars *)data;
 
     pcap_close(ptv->pcap_handle);
@@ -715,18 +705,7 @@ TmEcode DecodePcap(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-#if 0
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (GET_PKT_LEN(p) * 8)/1000000.0);
-#endif
-
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
     /* call the decoder */
     switch(p->datalink) {
@@ -780,7 +759,7 @@ TmEcode DecodePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
 TmEcode DecodePcapThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 

@@ -42,11 +42,12 @@
 /* prototypes */
 static int DetectAckSetup(DetectEngineCtx *, Signature *, char *);
 static int DetectAckMatch(ThreadVars *, DetectEngineThreadCtx *,
-                          Packet *, Signature *, SigMatch *);
+                          Packet *, Signature *, const SigMatchCtx *);
 static void DetectAckRegisterTests(void);
 static void DetectAckFree(void *);
 
-void DetectAckRegister(void) {
+void DetectAckRegister(void)
+{
     sigmatch_table[DETECT_ACK].name = "ack";
     sigmatch_table[DETECT_ACK].desc = "check for a specific TCP acknowledgement number";
     sigmatch_table[DETECT_ACK].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#ack";
@@ -69,9 +70,9 @@ void DetectAckRegister(void) {
  * \retval 1 match
  */
 static int DetectAckMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                          Packet *p, Signature *s, SigMatch *m)
+                          Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
-    DetectAckData *data = (DetectAckData *)m->ctx;
+    const DetectAckData *data = (const DetectAckData *)ctx;
 
     /* This is only needed on TCP packets */
     if (!(PKT_IS_TCP(p)) || PKT_IS_PSEUDOPKT(p)) {
@@ -111,7 +112,7 @@ static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
     if (-1 == ByteExtractStringUint32(&data->ack, 10, 0, optstr)) {
         goto error;
     }
-    sm->ctx = data;
+    sm->ctx = (SigMatchCtx*)data;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;

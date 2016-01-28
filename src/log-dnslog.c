@@ -40,6 +40,7 @@
 
 #include "output.h"
 #include "log-dnslog.h"
+#include "app-layer-dns-common.h"
 #include "app-layer-dns-udp.h"
 #include "app-layer.h"
 #include "util-privs.h"
@@ -71,7 +72,8 @@ typedef struct LogDnsLogThread_ {
     MemBuffer *buffer;
 } LogDnsLogThread;
 
-static void LogQuery(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSQueryEntry *entry) {
+static void LogQuery(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSQueryEntry *entry)
+{
     LogDnsFileCtx *hlog = aft->dnslog_ctx;
 
     SCLogDebug("got a DNS request and now logging !!");
@@ -100,23 +102,26 @@ static void LogQuery(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dst
     SCMutexUnlock(&hlog->file_ctx->fp_mutex);
 }
 
-static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSAnswerEntry *entry) {
+static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSAnswerEntry *entry)
+{
     LogDnsFileCtx *hlog = aft->dnslog_ctx;
 
     SCLogDebug("got a DNS response and now logging !!");
 
     /* reset */
     MemBufferReset(aft->buffer);
-
     /* time & tx*/
     MemBufferWriteString(aft->buffer,
             "%s [**] Response TX %04x [**] ", timebuf, tx->tx_id);
 
     if (entry == NULL) {
-        if (tx->no_such_name)
-            MemBufferWriteString(aft->buffer, "No Such Name");
-        else if (tx->recursion_desired)
+        if (tx->rcode) {
+            char rcode[16] = "";
+            DNSCreateRcodeString(tx->rcode, rcode, sizeof(rcode));
+            MemBufferWriteString(aft->buffer, "%s", rcode);
+        } else if (tx->recursion_desired) {
             MemBufferWriteString(aft->buffer, "Recursion Desired");
+        }
     } else {
         /* query */
         if (entry->fqdn_len > 0) {
@@ -214,7 +219,7 @@ static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p, Flow *f,
         LogQuery(aft, timebuf, dstip, srcip, dp, sp, dns_tx, query);
     }
 
-    if (dns_tx->no_such_name)
+    if (dns_tx->rcode)
         LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
     if (dns_tx->recursion_desired)
         LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
@@ -276,7 +281,8 @@ static TmEcode LogDnsLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-static void LogDnsLogExitPrintStats(ThreadVars *tv, void *data) {
+static void LogDnsLogExitPrintStats(ThreadVars *tv, void *data)
+{
     LogDnsLogThread *aft = (LogDnsLogThread *)data;
     if (aft == NULL) {
         return;
@@ -338,7 +344,8 @@ static OutputCtx *LogDnsLogInitCtx(ConfNode *conf)
     return output_ctx;
 }
 
-void TmModuleLogDnsLogRegister (void) {
+void TmModuleLogDnsLogRegister (void)
+{
     tmm_modules[TMM_LOGDNSLOG].name = MODULE_NAME;
     tmm_modules[TMM_LOGDNSLOG].ThreadInit = LogDnsLogThreadInit;
     tmm_modules[TMM_LOGDNSLOG].ThreadExitPrintStats = LogDnsLogExitPrintStats;

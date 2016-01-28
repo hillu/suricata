@@ -60,7 +60,8 @@ static void DetectFileextFree(void *);
 /**
  * \brief Registration function for keyword: fileext
  */
-void DetectFileextRegister(void) {
+void DetectFileextRegister(void)
+{
     sigmatch_table[DETECT_FILEEXT].name = "fileext";
     sigmatch_table[DETECT_FILEEXT].desc = "match on the extension of a file name";
     sigmatch_table[DETECT_FILEEXT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#fileext";
@@ -210,14 +211,15 @@ static int DetectFileextSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
 
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
-    AppLayerHtpNeedFileInspection();
-    s->alproto = ALPROTO_HTTP;
+    if (s->alproto == ALPROTO_HTTP) {
+        AppLayerHtpNeedFileInspection();
+    }
+
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_FILENAME);
     return 0;
 
@@ -235,7 +237,8 @@ error:
  *
  * \param fileext pointer to DetectFileextData
  */
-static void DetectFileextFree(void *ptr) {
+static void DetectFileextFree(void *ptr)
+{
     if (ptr != NULL) {
         DetectFileextData *fileext = (DetectFileextData *)ptr;
         if (fileext->ext != NULL)
@@ -249,7 +252,8 @@ static void DetectFileextFree(void *ptr) {
 /**
  * \test DetectFileextTestParse01
  */
-int DetectFileextTestParse01 (void) {
+int DetectFileextTestParse01 (void)
+{
     DetectFileextData *dfd = DetectFileextParse("\"doc\"");
     if (dfd != NULL) {
         DetectFileextFree(dfd);
@@ -261,7 +265,8 @@ int DetectFileextTestParse01 (void) {
 /**
  * \test DetectFileextTestParse02
  */
-int DetectFileextTestParse02 (void) {
+int DetectFileextTestParse02 (void)
+{
     int result = 0;
 
     DetectFileextData *dfd = DetectFileextParse("\"tar.gz\"");
@@ -279,7 +284,8 @@ int DetectFileextTestParse02 (void) {
 /**
  * \test DetectFileextTestParse03
  */
-int DetectFileextTestParse03 (void) {
+int DetectFileextTestParse03 (void)
+{
     int result = 0;
 
     DetectFileextData *dfd = DetectFileextParse("\"pdf\"");
@@ -299,7 +305,8 @@ int DetectFileextTestParse03 (void) {
 /**
  * \brief this function registers unit tests for DetectFileext
  */
-void DetectFileextRegisterTests(void) {
+void DetectFileextRegisterTests(void)
+{
 #ifdef UNITTESTS /* UNITTESTS */
     UtRegisterTest("DetectFileextTestParse01", DetectFileextTestParse01, 1);
     UtRegisterTest("DetectFileextTestParse02", DetectFileextTestParse02, 1);

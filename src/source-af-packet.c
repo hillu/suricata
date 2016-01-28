@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2013 Open Information Security Foundation
+/* Copyright (C) 2011-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -102,7 +102,8 @@ extern int max_pending_packets;
 
 TmEcode NoAFPSupportExit(ThreadVars *, void *, void **);
 
-void TmModuleReceiveAFPRegister (void) {
+void TmModuleReceiveAFPRegister (void)
+{
     tmm_modules[TMM_RECEIVEAFP].name = "ReceiveAFP";
     tmm_modules[TMM_RECEIVEAFP].ThreadInit = NoAFPSupportExit;
     tmm_modules[TMM_RECEIVEAFP].Func = NULL;
@@ -117,7 +118,8 @@ void TmModuleReceiveAFPRegister (void) {
  * \brief Registration Function for DecodeAFP.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleDecodeAFPRegister (void) {
+void TmModuleDecodeAFPRegister (void)
+{
     tmm_modules[TMM_DECODEAFP].name = "DecodeAFP";
     tmm_modules[TMM_DECODEAFP].ThreadInit = NoAFPSupportExit;
     tmm_modules[TMM_DECODEAFP].Func = NULL;
@@ -263,7 +265,8 @@ static int AFPRefSocket(AFPPeer* peer);
  * \brief Registration Function for RecieveAFP.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleReceiveAFPRegister (void) {
+void TmModuleReceiveAFPRegister (void)
+{
     tmm_modules[TMM_RECEIVEAFP].name = "ReceiveAFP";
     tmm_modules[TMM_RECEIVEAFP].ThreadInit = ReceiveAFPThreadInit;
     tmm_modules[TMM_RECEIVEAFP].Func = NULL;
@@ -483,7 +486,8 @@ void AFPPeersListClean()
  * \brief Registration Function for DecodeAFP.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleDecodeAFPRegister (void) {
+void TmModuleDecodeAFPRegister (void)
+{
     tmm_modules[TMM_DECODEAFP].name = "DecodeAFP";
     tmm_modules[TMM_DECODEAFP].ThreadInit = DecodeAFPThreadInit;
     tmm_modules[TMM_DECODEAFP].Func = DecodeAFP;
@@ -507,8 +511,8 @@ static inline void AFPDumpCounters(AFPThreadVars *ptv)
         SCLogDebug("(%s) Kernel: Packets %" PRIu32 ", dropped %" PRIu32 "",
                 ptv->tv->name,
                 kstats.tp_packets, kstats.tp_drops);
-        SCPerfCounterAddUI64(ptv->capture_kernel_packets, ptv->tv->sc_perf_pca, kstats.tp_packets);
-        SCPerfCounterAddUI64(ptv->capture_kernel_drops, ptv->tv->sc_perf_pca, kstats.tp_drops);
+        StatsAddUI64(ptv->tv, ptv->capture_kernel_packets, kstats.tp_packets);
+        StatsAddUI64(ptv->tv, ptv->capture_kernel_drops, kstats.tp_drops);
         (void) SC_ATOMIC_ADD(ptv->livedev->drop, (uint64_t) kstats.tp_drops);
         (void) SC_ATOMIC_ADD(ptv->livedev->pkts, (uint64_t) kstats.tp_packets);
     }
@@ -1069,7 +1073,7 @@ static int AFPSynchronizeStart(AFPThreadVars *ptv)
             }
         /* no packets */
         } else if (r == 0 && AFPPeersListStarted()) {
-            SCLogInfo("Starting to read on %s", ptv->tv->name);
+            SCLogDebug("Starting to read on %s", ptv->tv->name);
             return 1;
         } else if (r < 0) { /* only exit on error */
             SCLogWarning(SC_ERR_AFP_READ, "poll failed with retval %d", r);
@@ -1117,7 +1121,6 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
 {
     SCEnter();
 
-    uint16_t packet_q_len = 0;
     AFPThreadVars *ptv = (AFPThreadVars *)data;
     struct pollfd fds;
     int r;
@@ -1151,7 +1154,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
         AFPPeersListReachedInc();
     }
     if (ptv->afp_state == AFP_STATE_UP) {
-        SCLogInfo("Thread %s using socket %d", tv->name, ptv->socket);
+        SCLogDebug("Thread %s using socket %d", tv->name, ptv->socket);
         AFPSynchronizeStart(ptv);
     }
 
@@ -1178,12 +1181,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
 
         /* make sure we have at least one packet in the packet pool, to prevent
          * us from alloc'ing packets at line rate */
-        do {
-            packet_q_len = PacketPoolSize();
-            if (unlikely(packet_q_len == 0)) {
-                PacketPoolWait();
-            }
-        } while (packet_q_len == 0);
+        PacketPoolWait();
 
         r = poll(&fds, 1, POLL_TIMEOUT);
 
@@ -1249,11 +1247,11 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
             AFPSwitchState(ptv, AFP_STATE_DOWN);
             continue;
         }
-        SCPerfSyncCountersIfSignalled(tv);
+        StatsSyncCountersIfSignalled(tv);
     }
 
     AFPDumpCounters(ptv);
-    SCPerfSyncCountersIfSignalled(tv);
+    StatsSyncCountersIfSignalled(tv);
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -1341,6 +1339,15 @@ frame size: TPACKET_ALIGN(snaplen + TPACKET_ALIGN(TPACKET_ALIGN(tp_hdrlen) + siz
      */
     int tp_hdrlen = sizeof(struct tpacket_hdr);
     int snaplen = default_packet_size;
+
+    if (snaplen == 0) {
+        snaplen = GetIfaceMaxPacketSize(ptv->iface);
+        if (snaplen <= 0) {
+            SCLogWarning(SC_ERR_INVALID_VALUE,
+                         "Unable to get MTU, setting snaplen to sane default of 1514");
+            snaplen = 1514;
+        }
+    }
 
     ptv->req.tp_frame_size = TPACKET_ALIGN(snaplen +TPACKET_ALIGN(TPACKET_ALIGN(tp_hdrlen) + sizeof(struct sockaddr_ll) + ETH_HLEN) - ETH_HLEN);
     ptv->req.tp_block_size = getpagesize() << order;
@@ -1504,11 +1511,6 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
             goto socket_err;
         }
 
-        if (GetIfaceOffloading(devname) == 1) {
-            SCLogWarning(SC_ERR_AFP_CREATE,
-                         "Using mmap mode with GRO or LRO activated can lead to capture problems");
-        }
-
         /* Allocate RX ring */
 #define DEFAULT_ORDER 3
         for (order = DEFAULT_ORDER; order >= 0; order--) {
@@ -1568,8 +1570,7 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
         ptv->frame_offset = 0;
     }
 
-    SCLogInfo("Using interface '%s' via socket %d", (char *)devname, ptv->socket);
-
+    SCLogDebug("Using interface '%s' via socket %d", (char *)devname, ptv->socket);
 
     ptv->datalink = AFPGetDevLinktype(ptv->socket, ptv->iface);
     switch (ptv->datalink) {
@@ -1644,7 +1645,6 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
         return TM_ECODE_FAILED;
     }
 
-    SCMutexUnlock(&afpacket_bpf_set_filter_lock);
     return TM_ECODE_OK;
 }
 
@@ -1658,7 +1658,8 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
  *
  * \todo Create a general AFP setup function.
  */
-TmEcode ReceiveAFPThreadInit(ThreadVars *tv, void *initdata, void **data) {
+TmEcode ReceiveAFPThreadInit(ThreadVars *tv, void *initdata, void **data)
+{
     SCEnter();
     AFPIfaceConfig *afpconfig = initdata;
 
@@ -1700,9 +1701,9 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, void *initdata, void **data) {
     ptv->cluster_id = 1;
     /* We only set cluster info if the number of reader threads is greater than 1 */
     if (afpconfig->threads > 1) {
-            ptv->cluster_id = afpconfig->cluster_id;
-            ptv->cluster_type = afpconfig->cluster_type;
-            ptv->threads = afpconfig->threads;
+        ptv->cluster_id = afpconfig->cluster_id;
+        ptv->cluster_type = afpconfig->cluster_type;
+        ptv->threads = afpconfig->threads;
     }
 #endif
     ptv->flags = afpconfig->flags;
@@ -1712,32 +1713,11 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, void *initdata, void **data) {
     }
 
 #ifdef PACKET_STATISTICS
-    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
+    ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
+            ptv->tv);
+    ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
+            ptv->tv);
 #endif
-
-    char *active_runmode = RunmodeGetActive();
-
-    if (active_runmode && !strcmp("workers", active_runmode)) {
-        ptv->flags |= AFP_ZERO_COPY;
-        SCLogInfo("Enabling zero copy mode");
-    } else {
-        /* If we are using copy mode we need a lock */
-        ptv->flags |= AFP_SOCK_PROTECT;
-    }
-
-    /* If we are in RING mode, then we can use ZERO copy
-     * by using the data release mechanism */
-    if (ptv->flags & AFP_RING_MODE) {
-        ptv->flags |= AFP_ZERO_COPY;
-        SCLogInfo("Enabling zero copy mode by using data release call");
-    }
 
     ptv->copy_mode = afpconfig->copy_mode;
     if (ptv->copy_mode != AFP_COPY_MODE_NONE) {
@@ -1794,7 +1774,8 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, void *initdata, void **data) {
  * \param tv pointer to ThreadVars
  * \param data pointer that gets cast into AFPThreadVars for ptv
  */
-void ReceiveAFPThreadExitStats(ThreadVars *tv, void *data) {
+void ReceiveAFPThreadExitStats(ThreadVars *tv, void *data)
+{
     SCEnter();
     AFPThreadVars *ptv = (AFPThreadVars *)data;
 
@@ -1802,8 +1783,8 @@ void ReceiveAFPThreadExitStats(ThreadVars *tv, void *data) {
     AFPDumpCounters(ptv);
     SCLogInfo("(%s) Kernel: Packets %" PRIu64 ", dropped %" PRIu64 "",
             tv->name,
-            (uint64_t) SCPerfGetLocalCounterValue(ptv->capture_kernel_packets, tv->sc_perf_pca),
-            (uint64_t) SCPerfGetLocalCounterValue(ptv->capture_kernel_drops, tv->sc_perf_pca));
+            StatsGetLocalCounterValue(tv, ptv->capture_kernel_packets),
+            StatsGetLocalCounterValue(tv, ptv->capture_kernel_drops));
 #endif
 
     SCLogInfo("(%s) Packets %" PRIu64 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
@@ -1814,7 +1795,8 @@ void ReceiveAFPThreadExitStats(ThreadVars *tv, void *data) {
  * \param tv pointer to ThreadVars
  * \param data pointer that gets cast into AFPThreadVars for ptv
  */
-TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data) {
+TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data)
+{
     AFPThreadVars *ptv = (AFPThreadVars *)data;
 
     AFPSwitchState(ptv, AFP_STATE_DOWN);
@@ -1852,37 +1834,29 @@ TmEcode DecodeAFP(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-#if 0
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (GET_PKT_LEN(p) * 8)/1000000.0);
-#endif
-
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
     /* If suri has set vlan during reading, we increase vlan counter */
     if (p->vlan_idx) {
-        SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
+        StatsIncr(tv, dtv->counter_vlan);
     }
 
     /* call the decoder */
-    switch(p->datalink) {
-        case LINKTYPE_LINUX_SLL:
-            DecodeSll(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
-            break;
+    switch (p->datalink) {
         case LINKTYPE_ETHERNET:
             DecodeEthernet(tv, dtv, p,GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
+            break;
+        case LINKTYPE_LINUX_SLL:
+            DecodeSll(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_PPP:
             DecodePPP(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_RAW:
             DecodeRaw(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
+            break;
+        case LINKTYPE_NULL:
+            DecodeNull(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         default:
             SCLogError(SC_ERR_DATALINK_UNIMPLEMENTED, "Error: datalink type %" PRId32 " not yet supported in module DecodeAFP", p->datalink);
@@ -1919,7 +1893,7 @@ TmEcode DecodeAFPThreadInit(ThreadVars *tv, void *initdata, void **data)
 TmEcode DecodeAFPThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 

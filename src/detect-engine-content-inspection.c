@@ -41,7 +41,9 @@
 #include "detect-engine-content-inspection.h"
 #include "detect-uricontent.h"
 #include "detect-urilen.h"
-#include "detect-luajit.h"
+#include "detect-lua.h"
+#include "detect-base64-decode.h"
+#include "detect-base64-data.h"
 
 #include "app-layer-dcerpc.h"
 
@@ -53,6 +55,10 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 #include "util-profiling.h"
+
+#ifdef HAVE_LUA
+#include "util-lua.h"
+#endif
 
 /**
  * \brief Run the actual payload match functions
@@ -274,9 +280,9 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 
             /* do the actual search */
             if (cd->flags & DETECT_CONTENT_NOCASE)
-                found = BoyerMooreNocase(cd->content, cd->content_len, sbuffer, sbuffer_len, cd->bm_ctx->bmGs, cd->bm_ctx->bmBc);
+                found = BoyerMooreNocase(cd->content, cd->content_len, sbuffer, sbuffer_len, cd->bm_ctx);
             else
-                found = BoyerMoore(cd->content, cd->content_len, sbuffer, sbuffer_len, cd->bm_ctx->bmGs, cd->bm_ctx->bmBc);
+                found = BoyerMoore(cd->content, cd->content_len, sbuffer, sbuffer_len, cd->bm_ctx);
 
             /* next we evaluate the result in combination with the
              * negation flag. */
@@ -427,7 +433,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 
         /* if we have dce enabled we will have to use the endianness
          * specified by the dce header */
-        if (flags & DETECT_BYTETEST_DCE && data != NULL) {
+        if (flags & DETECT_BYTETEST_DCE) {
             DCERPCState *dcerpc_state = (DCERPCState *)data;
             /* enable the endianness flag temporarily.  once we are done
              * processing we reset the flags to the original value*/
@@ -435,7 +441,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                       DETECT_BYTETEST_LITTLE: 0);
         }
 
-        if (DetectBytetestDoMatch(det_ctx, s, sm, buffer, buffer_len, flags,
+        if (DetectBytetestDoMatch(det_ctx, s, sm->ctx, buffer, buffer_len, flags,
                                   offset, value) != 1) {
             goto no_match;
         }
@@ -453,7 +459,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 
         /* if we have dce enabled we will have to use the endianness
          * specified by the dce header */
-        if (flags & DETECT_BYTEJUMP_DCE && data != NULL) {
+        if (flags & DETECT_BYTEJUMP_DCE) {
             DCERPCState *dcerpc_state = (DCERPCState *)data;
             /* enable the endianness flag temporarily.  once we are done
              * processing we reset the flags to the original value*/
@@ -461,7 +467,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                       DETECT_BYTEJUMP_LITTLE: 0);
         }
 
-        if (DetectBytejumpDoMatch(det_ctx, s, sm, buffer, buffer_len,
+        if (DetectBytejumpDoMatch(det_ctx, s, sm->ctx, buffer, buffer_len,
                                   flags, offset) != 1) {
             goto no_match;
         }
@@ -476,7 +482,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         /* if we have dce enabled we will have to use the endianness
          * specified by the dce header */
         if ((bed->flags & DETECT_BYTE_EXTRACT_FLAG_ENDIAN) &&
-            endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE && data != NULL) {
+            endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE) {
 
             DCERPCState *dcerpc_state = (DCERPCState *)data;
             /* enable the endianness flag temporarily.  once we are done
@@ -531,15 +537,15 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         goto no_match;
 #ifdef HAVE_LUA
     }
-    else if (sm->type == DETECT_LUAJIT) {
+    else if (sm->type == DETECT_LUA) {
         SCLogDebug("lua starting");
         /* for flowvar gets and sets we need to know the flow's lock status */
-        int need_flow_lock = 0;
+        int flow_lock = LUA_FLOW_LOCKED_BY_PARENT;
         if (inspection_mode <= DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM)
-            need_flow_lock = 1;
+            flow_lock = LUA_FLOW_NOT_LOCKED_BY_PARENT;
 
-        if (DetectLuajitMatchBuffer(det_ctx, s, sm, buffer, buffer_len,
-                    det_ctx->buffer_offset, f, need_flow_lock) != 1)
+        if (DetectLuaMatchBuffer(det_ctx, s, sm, buffer, buffer_len,
+                    det_ctx->buffer_offset, f, flow_lock) != 1)
         {
             SCLogDebug("lua no_match");
             goto no_match;
@@ -547,6 +553,16 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         SCLogDebug("lua match");
         goto match;
 #endif /* HAVE_LUA */
+    } else if (sm->type == DETECT_BASE64_DECODE) {
+        if (DetectBase64DecodeDoMatch(det_ctx, s, sm, buffer, buffer_len)) {
+            if (s->sm_arrays[DETECT_SM_LIST_BASE64_DATA] != NULL) {
+                KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
+                if (DetectBase64DataDoMatch(de_ctx, det_ctx, s, f)) {
+                    /* Base64 is a terminal list. */
+                    goto final_match;
+                }
+            }
+        }
     } else {
         SCLogDebug("sm->type %u", sm->type);
 #ifdef DEBUG
@@ -565,8 +581,8 @@ match:
         KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
         int r = DetectEngineContentInspection(de_ctx, det_ctx, s, sm->next, f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
         SCReturnInt(r);
-    } else {
-        KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
-        SCReturnInt(1);
     }
+final_match:
+    KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
+    SCReturnInt(1);
 }

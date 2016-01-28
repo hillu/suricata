@@ -30,16 +30,19 @@ static DefragTracker *DefragTrackerGetUsedDefragTracker(void);
 /** queue with spare tracker */
 static DefragTrackerQueue defragtracker_spare_q;
 
-uint32_t DefragTrackerSpareQueueGetSize(void) {
+uint32_t DefragTrackerSpareQueueGetSize(void)
+{
     return DefragTrackerQueueLen(&defragtracker_spare_q);
 }
 
-void DefragTrackerMoveToSpare(DefragTracker *h) {
+void DefragTrackerMoveToSpare(DefragTracker *h)
+{
     DefragTrackerEnqueue(&defragtracker_spare_q, h);
     (void) SC_ATOMIC_SUB(defragtracker_counter, 1);
 }
 
-DefragTracker *DefragTrackerAlloc(void) {
+DefragTracker *DefragTrackerAlloc(void)
+{
     if (!(DEFRAG_CHECK_MEMCAP(sizeof(DefragTracker)))) {
         return NULL;
     }
@@ -60,7 +63,8 @@ error:
     return NULL;
 }
 
-void DefragTrackerFree(DefragTracker *dt) {
+void DefragTrackerFree(DefragTracker *dt)
+{
     if (dt != NULL) {
         DefragTrackerClearMemory(dt);
 
@@ -75,7 +79,8 @@ void DefragTrackerFree(DefragTracker *dt) {
 #define DefragTrackerDecrUsecnt(dt) \
     SC_ATOMIC_SUB((dt)->use_cnt, 1)
 
-static void DefragTrackerInit(DefragTracker *dt, Packet *p) {
+static void DefragTrackerInit(DefragTracker *dt, Packet *p)
+{
     /* copy address */
     COPY_ADDRESS(&p->src, &dt->src_addr);
     COPY_ADDRESS(&p->dst, &dt->dst_addr);
@@ -104,7 +109,8 @@ void DefragTrackerRelease(DefragTracker *t)
     SCMutexUnlock(&t->lock);
 }
 
-void DefragTrackerClearMemory(DefragTracker *dt) {
+void DefragTrackerClearMemory(DefragTracker *dt)
+{
     DefragTrackerFreeFrags(dt);
     SC_ATOMIC_DESTROY(dt->use_cnt);
 }
@@ -340,7 +346,8 @@ typedef struct DefragHashKey6_ {
  *  id
  *  vlan_id
  */
-static inline uint32_t DefragHashGetKey(Packet *p) {
+static inline uint32_t DefragHashGetKey(Packet *p)
+{
     uint32_t key;
 
     if (p->ip4h != NULL) {
@@ -402,7 +409,8 @@ static inline uint32_t DefragHashGetKey(Packet *p) {
      (d1)->vlan_id[0] == (d2)->vlan_id[0] && \
      (d1)->vlan_id[1] == (d2)->vlan_id[1])
 
-static inline int DefragTrackerCompare(DefragTracker *t, Packet *p) {
+static inline int DefragTrackerCompare(DefragTracker *t, Packet *p)
+{
     uint32_t id;
     if (PKT_IS_IPV4(p)) {
         id = (uint32_t)IPV4_GET_IPID(p);
@@ -421,7 +429,8 @@ static inline int DefragTrackerCompare(DefragTracker *t, Packet *p) {
  *
  *  \retval dt *LOCKED* tracker on succes, NULL on error.
  */
-static DefragTracker *DefragTrackerGetNew(Packet *p) {
+static DefragTracker *DefragTrackerGetNew(Packet *p)
+{
     DefragTracker *dt = NULL;
 
     /* get a tracker from the spare queue */
@@ -646,7 +655,8 @@ DefragTracker *DefragLookupTrackerFromHash (Packet *p)
  *
  *  \retval dt tracker or NULL
  */
-static DefragTracker *DefragTrackerGetUsedDefragTracker(void) {
+static DefragTracker *DefragTrackerGetUsedDefragTracker(void)
+{
     uint32_t idx = SC_ATOMIC_GET(defragtracker_prune_idx) % defrag_config.hash_size;
     uint32_t cnt = defrag_config.hash_size;
 

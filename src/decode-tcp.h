@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2013 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -66,7 +66,7 @@
 #define TCP_OPTS_CNT                         tcpvars.tcp_opt_cnt
 
 #define TCP_GET_RAW_OFFSET(tcph)             (((tcph)->th_offx2 & 0xf0) >> 4)
-#define TCP_GET_RAW_X2(tcph)                 ((tcph)->th_offx2 & 0x0f)
+#define TCP_GET_RAW_X2(tcph)                 (unsigned char)((tcph)->th_offx2 & 0x0f)
 #define TCP_GET_RAW_SRC_PORT(tcph)           ntohs((tcph)->th_sport)
 #define TCP_GET_RAW_DST_PORT(tcph)           ntohs((tcph)->th_dport)
 
@@ -136,7 +136,7 @@ typedef struct TCPHdr_
     uint16_t th_win;    /**< pkt window */
     uint16_t th_sum;    /**< checksum */
     uint16_t th_urp;    /**< urgent pointer */
-} TCPHdr;
+} __attribute__((__packed__)) TCPHdr;
 
 typedef struct TCPVars_
 {

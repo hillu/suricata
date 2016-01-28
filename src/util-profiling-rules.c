@@ -38,10 +38,6 @@
 
 #ifdef PROFILING
 
-#ifndef MIN
-#define MIN(a, b) (((a) < (b)) ? (a) : (b))
-#endif
-
 /**
  * Extra data for rule profiling.
  */
@@ -85,6 +81,7 @@ extern int profiling_output_to_file;
 int profiling_rules_enabled = 0;
 static char *profiling_file_name = "";
 static const char *profiling_file_mode = "a";
+static int profiling_rule_json = 0;
 
 /**
  * Sort orders for dumping profiled rules.
@@ -105,7 +102,8 @@ static int profiling_rules_sort_order = SC_PROFILING_RULES_SORT_BY_TICKS;
  */
 static uint32_t profiling_rules_limit = UINT32_MAX;
 
-void SCProfilingRulesGlobalInit(void) {
+void SCProfilingRulesGlobalInit(void)
+{
     ConfNode *conf;
     const char *val;
 
@@ -181,6 +179,13 @@ void SCProfilingRulesGlobalInit(void) {
 
                 profiling_output_to_file = 1;
             }
+            if (ConfNodeChildValueIsTrue(conf, "json")) {
+#ifdef HAVE_LIBJANSSON
+                profiling_rule_json = 1;
+#else
+                SCLogWarning(SC_ERR_NO_JSON_SUPPORT, "no json support compiled in, using plain output");
+#endif
+            }
         }
     }
 }
@@ -193,7 +198,10 @@ SCProfileSummarySortByTicks(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->ticks - s0->ticks;
+    if (s1->ticks == s0->ticks)
+        return 0;
+    else
+        return s0->ticks > s1->ticks ? -1 : 1;
 }
 
 /**
@@ -204,7 +212,10 @@ SCProfileSummarySortByAvgTicksMatch(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->avgticks_match - s0->avgticks_match;
+    if (s1->avgticks_match == s0->avgticks_match)
+        return 0;
+    else
+        return s0->avgticks_match > s1->avgticks_match ? -1 : 1;
 }
 
 /**
@@ -215,7 +226,10 @@ SCProfileSummarySortByAvgTicksNoMatch(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->avgticks_no_match - s0->avgticks_no_match;
+    if (s1->avgticks_no_match == s0->avgticks_no_match)
+        return 0;
+    else
+        return s0->avgticks_no_match > s1->avgticks_no_match ? -1 : 1;
 }
 
 /**
@@ -226,7 +240,10 @@ SCProfileSummarySortByAvgTicks(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->avgticks - s0->avgticks;
+    if (s1->avgticks == s0->avgticks)
+        return 0;
+    else
+        return s0->avgticks > s1->avgticks ? -1 : 1;
 }
 
 /**
@@ -237,7 +254,10 @@ SCProfileSummarySortByChecks(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->checks - s0->checks;
+    if (s1->checks == s0->checks)
+        return 0;
+    else
+        return s0->checks > s1->checks ? -1 : 1;
 }
 
 /**
@@ -248,7 +268,10 @@ SCProfileSummarySortByMatches(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->matches - s0->matches;
+    if (s1->matches == s0->matches)
+        return 0;
+    else
+        return s0->matches > s1->matches ? -1 : 1;
 }
 
 /**
@@ -259,7 +282,138 @@ SCProfileSummarySortByMaxTicks(const void *a, const void *b)
 {
     const SCProfileSummary *s0 = a;
     const SCProfileSummary *s1 = b;
-    return s1->max - s0->max;
+    if (s1->max == s0->max)
+        return 0;
+    else
+        return s0->max > s1->max ? -1 : 1;
+}
+
+#ifdef HAVE_LIBJANSSON
+
+static void DumpJson(FILE *fp, SCProfileSummary *summary, uint32_t count, uint64_t total_ticks)
+{
+    char timebuf[64];
+    uint32_t i;
+    struct timeval tval;
+
+    json_t *js = json_object();
+    if (js == NULL)
+        return;
+    json_t *jsa = json_array();
+    if (jsa == NULL) {
+        json_decref(js);
+        return;
+    }
+
+    gettimeofday(&tval, NULL);
+    CreateIsoTimeString(&tval, timebuf, sizeof(timebuf));
+    json_object_set_new(js, "timestamp", json_string(timebuf));
+
+    for (i = 0; i < count; i++) {
+        /* Stop dumping when we hit our first rule with 0 checks.  Due
+         * to sorting this will be the beginning of all the rules with
+         * 0 checks. */
+        if (summary[i].checks == 0)
+            break;
+
+        json_t *jsm = json_object();
+        if (jsm) {
+            json_object_set_new(jsm, "signature_id", json_integer(summary[i].sid));
+            json_object_set_new(jsm, "gid", json_integer(summary[i].gid));
+            json_object_set_new(jsm, "rev", json_integer(summary[i].rev));
+
+            json_object_set_new(jsm, "checks", json_integer(summary[i].checks));
+            json_object_set_new(jsm, "matches", json_integer(summary[i].matches));
+
+            json_object_set_new(jsm, "ticks_total", json_integer(summary[i].ticks));
+            json_object_set_new(jsm, "ticks_max", json_integer(summary[i].max));
+            json_object_set_new(jsm, "ticks_avg", json_integer(summary[i].avgticks));
+            json_object_set_new(jsm, "ticks_avg_match", json_integer(summary[i].avgticks_match));
+            json_object_set_new(jsm, "ticks_avg_nomatch", json_integer(summary[i].avgticks_no_match));
+
+            double percent = (long double)summary[i].ticks /
+                (long double)total_ticks * 100;
+            json_object_set_new(jsm, "percent", json_integer(percent));
+            json_array_append(jsa, jsm);
+        }
+    }
+    json_object_set_new(js, "rules", jsa);
+
+    char *js_s = json_dumps(js,
+            JSON_PRESERVE_ORDER|JSON_COMPACT|JSON_ENSURE_ASCII|
+#ifdef JSON_ESCAPE_SLASH
+            JSON_ESCAPE_SLASH
+#else
+            0
+#endif
+            );
+
+    if (unlikely(js_s == NULL))
+        return;
+    fprintf(fp, "%s", js_s);
+    free(js_s);
+    json_decref(js);
+}
+
+#endif /* HAVE_LIBJANSSON */
+
+static void DumpText(FILE *fp, SCProfileSummary *summary, uint32_t count, uint64_t total_ticks)
+{
+    uint32_t i;
+    struct timeval tval;
+    struct tm *tms;
+    gettimeofday(&tval, NULL);
+    struct tm local_tm;
+    tms = SCLocalTime(tval.tv_sec, &local_tm);
+
+    fprintf(fp, "  ----------------------------------------------"
+            "----------------------------\n");
+    fprintf(fp, "  Date: %" PRId32 "/%" PRId32 "/%04d -- "
+            "%02d:%02d:%02d\n", tms->tm_mon + 1, tms->tm_mday, tms->tm_year + 1900,
+            tms->tm_hour,tms->tm_min, tms->tm_sec);
+    fprintf(fp, "  ----------------------------------------------"
+            "----------------------------\n");
+    fprintf(fp, "   %-8s %-12s %-8s %-8s %-12s %-6s %-8s %-8s %-11s %-11s %-11s %-11s\n", "Num", "Rule", "Gid", "Rev", "Ticks", "%", "Checks", "Matches", "Max Ticks", "Avg Ticks", "Avg Match", "Avg No Match");
+    fprintf(fp, "  -------- "
+        "------------ "
+        "-------- "
+        "-------- "
+        "------------ "
+        "------ "
+        "-------- "
+        "-------- "
+        "----------- "
+        "----------- "
+        "----------- "
+        "-------------- "
+        "\n");
+    for (i = 0; i < MIN(count, profiling_rules_limit); i++) {
+
+        /* Stop dumping when we hit our first rule with 0 checks.  Due
+         * to sorting this will be the beginning of all the rules with
+         * 0 checks. */
+        if (summary[i].checks == 0)
+            break;
+
+        double percent = (long double)summary[i].ticks /
+            (long double)total_ticks * 100;
+        fprintf(fp,
+            "  %-8"PRIu32" %-12u %-8"PRIu32" %-8"PRIu32" %-12"PRIu64" %-6.2f %-8"PRIu64" %-8"PRIu64" %-11"PRIu64" %-11.2f %-11.2f %-11.2f\n",
+            i + 1,
+            summary[i].sid,
+            summary[i].gid,
+            summary[i].rev,
+            summary[i].ticks,
+            percent,
+            summary[i].checks,
+            summary[i].matches,
+            summary[i].max,
+            summary[i].avgticks,
+            summary[i].avgticks_match,
+            summary[i].avgticks_no_match);
+    }
+
+    fprintf(fp,"\n");
 }
 
 /**
@@ -276,8 +430,6 @@ SCProfilingRuleDump(SCProfileDetectCtx *rules_ctx)
     if (rules_ctx == NULL)
         return;
 
-    struct timeval tval;
-    struct tm *tms;
     if (profiling_output_to_file == 1) {
         fp = fopen(profiling_file_name, profiling_file_mode);
 
@@ -361,59 +513,15 @@ SCProfilingRuleDump(SCProfileDetectCtx *rules_ctx)
                     SCProfileSummarySortByAvgTicksNoMatch);
             break;
     }
-
-    gettimeofday(&tval, NULL);
-    struct tm local_tm;
-    tms = SCLocalTime(tval.tv_sec, &local_tm);
-
-    fprintf(fp, "  ----------------------------------------------"
-            "----------------------------\n");
-    fprintf(fp, "  Date: %" PRId32 "/%" PRId32 "/%04d -- "
-            "%02d:%02d:%02d\n", tms->tm_mon + 1, tms->tm_mday, tms->tm_year + 1900,
-            tms->tm_hour,tms->tm_min, tms->tm_sec);
-    fprintf(fp, "  ----------------------------------------------"
-            "----------------------------\n");
-    fprintf(fp, "   %-8s %-12s %-8s %-8s %-12s %-6s %-8s %-8s %-11s %-11s %-11s %-11s\n", "Num", "Rule", "Gid", "Rev", "Ticks", "%", "Checks", "Matches", "Max Ticks", "Avg Ticks", "Avg Match", "Avg No Match");
-    fprintf(fp, "  -------- "
-        "------------ "
-        "-------- "
-        "-------- "
-        "------------ "
-        "------ "
-        "-------- "
-        "-------- "
-        "----------- "
-        "----------- "
-        "----------- "
-        "-------------- "
-        "\n");
-    for (i = 0; i < MIN(count, profiling_rules_limit); i++) {
-
-        /* Stop dumping when we hit our first rule with 0 checks.  Due
-         * to sorting this will be the beginning of all the rules with
-         * 0 checks. */
-        if (summary[i].checks == 0)
-            break;
-
-        double percent = (long double)summary[i].ticks /
-            (long double)total_ticks * 100;
-        fprintf(fp,
-            "  %-8"PRIu32" %-12u %-8"PRIu32" %-8"PRIu32" %-12"PRIu64" %-6.2f %-8"PRIu64" %-8"PRIu64" %-11"PRIu64" %-11.2f %-11.2f %-11.2f\n",
-            i + 1,
-            summary[i].sid,
-            summary[i].gid,
-            summary[i].rev,
-            summary[i].ticks,
-            percent,
-            summary[i].checks,
-            summary[i].matches,
-            summary[i].max,
-            summary[i].avgticks,
-            summary[i].avgticks_match,
-            summary[i].avgticks_no_match);
+#ifdef HAVE_LIBJANSSON
+    if (profiling_rule_json) {
+        DumpJson(fp, summary, count, total_ticks);
+    } else
+#endif
+    {
+        DumpText(fp, summary, count, total_ticks);
     }
 
-    fprintf(fp,"\n");
     if (fp != stdout)
         fclose(fp);
     SCFree(summary);
@@ -456,7 +564,8 @@ SCProfilingRuleUpdateCounter(DetectEngineThreadCtx *det_ctx, uint16_t id, uint64
     }
 }
 
-SCProfileDetectCtx *SCProfilingRuleInitCtx(void) {
+SCProfileDetectCtx *SCProfilingRuleInitCtx(void)
+{
     SCProfileDetectCtx *ctx = SCMalloc(sizeof(SCProfileDetectCtx));
     if (ctx != NULL) {
         memset(ctx, 0x00, sizeof(SCProfileDetectCtx));
@@ -471,7 +580,8 @@ SCProfileDetectCtx *SCProfilingRuleInitCtx(void) {
     return ctx;
 }
 
-void SCProfilingRuleDestroyCtx(SCProfileDetectCtx *ctx) {
+void SCProfilingRuleDestroyCtx(SCProfileDetectCtx *ctx)
+{
     if (ctx != NULL) {
         SCProfilingRuleDump(ctx);
         if (ctx->data != NULL)
@@ -481,7 +591,8 @@ void SCProfilingRuleDestroyCtx(SCProfileDetectCtx *ctx) {
     }
 }
 
-void SCProfilingRuleThreadSetup(SCProfileDetectCtx *ctx, DetectEngineThreadCtx *det_ctx) {
+void SCProfilingRuleThreadSetup(SCProfileDetectCtx *ctx, DetectEngineThreadCtx *det_ctx)
+{
     if (ctx == NULL|| ctx->size == 0)
         return;
 
@@ -494,7 +605,8 @@ void SCProfilingRuleThreadSetup(SCProfileDetectCtx *ctx, DetectEngineThreadCtx *
     }
 }
 
-static void SCProfilingRuleThreadMerge(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+static void SCProfilingRuleThreadMerge(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx)
+{
     if (de_ctx == NULL || de_ctx->profile_ctx == NULL || de_ctx->profile_ctx->data == NULL ||
         det_ctx == NULL || det_ctx->rule_perf_data == NULL)
         return;
@@ -510,7 +622,8 @@ static void SCProfilingRuleThreadMerge(DetectEngineCtx *de_ctx, DetectEngineThre
     }
 }
 
-void SCProfilingRuleThreadCleanup(DetectEngineThreadCtx *det_ctx) {
+void SCProfilingRuleThreadCleanup(DetectEngineThreadCtx *det_ctx)
+{
     if (det_ctx == NULL || det_ctx->de_ctx == NULL || det_ctx->rule_perf_data == NULL)
         return;
 

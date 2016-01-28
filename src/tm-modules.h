@@ -33,6 +33,8 @@
 #define TM_FLAG_STREAM_TM       0x04
 #define TM_FLAG_DETECT_TM       0x08
 #define TM_FLAG_LOGAPI_TM       0x10 /**< TM is run by Log API */
+#define TM_FLAG_MANAGEMENT_TM   0x20
+#define TM_FLAG_COMMAND_TM      0x40
 
 typedef struct TmModule_ {
     char *name;
@@ -46,6 +48,8 @@ typedef struct TmModule_ {
     TmEcode (*Func)(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
     TmEcode (*PktAcqLoop)(ThreadVars *, void *, void *);
+
+    TmEcode (*Management)(ThreadVars *, void *);
 
     /** global Init/DeInit */
     TmEcode (*Init)(void);
@@ -73,6 +77,8 @@ typedef struct OutputCtx_ {
 
     /** Pointer to a cleanup function. */
     void (*DeInit)(struct OutputCtx_ *);
+
+    TAILQ_HEAD(, OutputModule_) submodules;
 } OutputCtx;
 
 TmModule *TmModuleGetByName(const char *name);

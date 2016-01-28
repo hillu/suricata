@@ -67,7 +67,8 @@ void DetectHttpMethodFree(void *);
 /**
  * \brief Registration function for keyword: http_method
  */
-void DetectHttpMethodRegister(void) {
+void DetectHttpMethodRegister(void)
+{
     sigmatch_table[DETECT_AL_HTTP_METHOD].name = "http_method";
     sigmatch_table[DETECT_AL_HTTP_METHOD].desc = "content modifier to match only on the HTTP method-buffer";
     sigmatch_table[DETECT_AL_HTTP_METHOD].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_method";
@@ -108,7 +109,8 @@ static int DetectHttpMethodSetup(DetectEngineCtx *de_ctx, Signature *s, char *st
  *
  * \param id_d pointer to DetectContentData
  */
-void DetectHttpMethodFree(void *ptr) {
+void DetectHttpMethodFree(void *ptr)
+{
     DetectContentData *data = (DetectContentData *)ptr;
 
     if (data->content != NULL)
@@ -290,8 +292,8 @@ static int DetectHttpMethodTest12(void)
         goto end;
     }
 
-    DetectContentData *hmd1 = de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
-    DetectContentData *hmd2 = de_ctx->sig_list->next->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *hmd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *hmd2 = (DetectContentData *)de_ctx->sig_list->next->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
 
     if (!(hmd1->flags & DETECT_CONTENT_NOCASE)) {
         printf("nocase flag not set on sig 1: ");
@@ -806,7 +808,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectHttpMethod
  */
-void DetectHttpMethodRegisterTests(void) {
+void DetectHttpMethodRegisterTests(void)
+{
 #ifdef UNITTESTS /* UNITTESTS */
     SCLogDebug("Registering tests for DetectHttpMethod...");
     UtRegisterTest("DetectHttpMethodTest01", DetectHttpMethodTest01, 1);

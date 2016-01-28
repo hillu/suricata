@@ -87,7 +87,6 @@ void FlowInitFlowProto();
 int FlowSetProtoTimeout(uint8_t , uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoEmergencyTimeout(uint8_t , uint32_t ,uint32_t ,uint32_t);
 int FlowSetProtoFreeFunc(uint8_t, void (*Free)(void *));
-int FlowSetFlowStateFunc(uint8_t , int (*GetProtoState)(void *));
 
 /* Run mode selected at suricata.c */
 extern int run_mode;
@@ -179,7 +178,7 @@ void FlowSetIPOnlyFlagNoLock(Flow *f, char direction)
  *  \retval 0 to_server
  *  \retval 1 to_client
  */
-int FlowGetPacketDirection(Flow *f, const Packet *p)
+int FlowGetPacketDirection(const Flow *f, const Packet *p)
 {
     if (p->proto == IPPROTO_TCP || p->proto == IPPROTO_UDP || p->proto == IPPROTO_SCTP) {
         if (!(CMP_PORT(p->sp,p->dp))) {
@@ -227,53 +226,83 @@ static inline int FlowUpdateSeenFlag(const Packet *p)
     return 1;
 }
 
-/** \brief Entry point for packet flow handling
+/**
  *
- * This is called for every packet.
+ *  Remove packet from flow. This assumes this happens *before* the packet
+ *  is added to the stream engine and other higher state.
  *
- *  \param tv threadvars
- *  \param p packet to handle flow for
+ *  \todo we can't restore the lastts
  */
-void FlowHandlePacket(ThreadVars *tv, Packet *p)
+void FlowHandlePacketUpdateRemove(Flow *f, Packet *p)
 {
-    /* Get this packet's flow from the hash. FlowHandlePacket() will setup
-     * a new flow if nescesary. If we get NULL, we're out of flow memory.
-     * The returned flow is locked. */
-    Flow *f = FlowGetFlowFromHash(p);
-    if (f == NULL)
-        return;
+    if (p->flowflags & FLOW_PKT_TOSERVER) {
+        f->todstpktcnt--;
+        f->todstbytecnt -= GET_PKT_LEN(p);
+        p->flowflags &= ~(FLOW_PKT_TOSERVER|FLOW_PKT_TOSERVER_FIRST);
+    } else {
+        f->tosrcpktcnt--;
+        f->tosrcbytecnt -= GET_PKT_LEN(p);
+        p->flowflags &= ~(FLOW_PKT_TOCLIENT|FLOW_PKT_TOCLIENT_FIRST);
+    }
+    p->flowflags &= ~FLOW_PKT_ESTABLISHED;
+
+    /*set the detection bypass flags*/
+    if (f->flags & FLOW_NOPACKET_INSPECTION) {
+        SCLogDebug("unsetting FLOW_NOPACKET_INSPECTION flag on flow %p", f);
+        DecodeUnsetNoPacketInspectionFlag(p);
+    }
+    if (f->flags & FLOW_NOPAYLOAD_INSPECTION) {
+        SCLogDebug("unsetting FLOW_NOPAYLOAD_INSPECTION flag on flow %p", f);
+        DecodeUnsetNoPayloadInspectionFlag(p);
+    }
+}
+
+/** \brief Update Packet and Flow
+ *
+ *  Updates packet and flow based on the new packet.
+ *
+ *  \param f locked flow
+ *  \param p packet
+ *
+ *  \note overwrites p::flowflags
+ */
+void FlowHandlePacketUpdate(Flow *f, Packet *p)
+{
+    SCLogDebug("packet %"PRIu64" -- flow %p", p->pcap_cnt, f);
 
     /* Point the Packet at the Flow */
     FlowReference(&p->flow, f);
 
-    /* update the last seen timestamp of this flow */
-    f->lastts_sec = p->ts.tv_sec;
-
     /* update flags and counters */
     if (FlowGetPacketDirection(f, p) == TOSERVER) {
-        if (FlowUpdateSeenFlag(p)) {
-            f->flags |= FLOW_TO_DST_SEEN;
-        }
-#ifdef DEBUG
         f->todstpktcnt++;
-#endif
-        p->flowflags |= FLOW_PKT_TOSERVER;
-    } else {
-        if (FlowUpdateSeenFlag(p)) {
-            f->flags |= FLOW_TO_SRC_SEEN;
+        f->todstbytecnt += GET_PKT_LEN(p);
+        p->flowflags = FLOW_PKT_TOSERVER;
+        if (!(f->flags & FLOW_TO_DST_SEEN)) {
+            if (FlowUpdateSeenFlag(p)) {
+                f->flags |= FLOW_TO_DST_SEEN;
+                p->flowflags |= FLOW_PKT_TOSERVER_FIRST;
+            }
         }
-#ifdef DEBUG
+    } else {
         f->tosrcpktcnt++;
-#endif
-        p->flowflags |= FLOW_PKT_TOCLIENT;
+        f->tosrcbytecnt += GET_PKT_LEN(p);
+        p->flowflags = FLOW_PKT_TOCLIENT;
+        if (!(f->flags & FLOW_TO_SRC_SEEN)) {
+            if (FlowUpdateSeenFlag(p)) {
+                f->flags |= FLOW_TO_SRC_SEEN;
+                p->flowflags |= FLOW_PKT_TOCLIENT_FIRST;
+            }
+        }
     }
-#ifdef DEBUG
-    f->bytecnt += GET_PKT_LEN(p);
-#endif
 
-    if ((f->flags & FLOW_TO_DST_SEEN) && (f->flags & FLOW_TO_SRC_SEEN)) {
+    if ((f->flags & (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) == (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) {
         SCLogDebug("pkt %p FLOW_PKT_ESTABLISHED", p);
         p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+        if (f->proto != IPPROTO_TCP) {
+            SC_ATOMIC_SET(f->flow_state, FLOW_STATE_ESTABLISHED);
+        }
     }
 
     /*set the detection bypass flags*/
@@ -285,6 +314,26 @@ void FlowHandlePacket(ThreadVars *tv, Packet *p)
         SCLogDebug("setting FLOW_NOPAYLOAD_INSPECTION flag on flow %p", f);
         DecodeSetNoPayloadInspectionFlag(p);
     }
+}
+
+/** \brief Entry point for packet flow handling
+ *
+ * This is called for every packet.
+ *
+ *  \param tv threadvars
+ *  \param dtv decode thread vars (for flow output api thread data)
+ *  \param p packet to handle flow for
+ */
+void FlowHandlePacket(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p)
+{
+    /* Get this packet's flow from the hash. FlowHandlePacket() will setup
+     * a new flow if nescesary. If we get NULL, we're out of flow memory.
+     * The returned flow is locked. */
+    Flow *f = FlowGetFlowFromHash(tv, dtv, p);
+    if (f == NULL)
+        return;
+
+    FlowHandlePacketUpdate(f, p);
 
     FLOWLOCK_UNLOCK(f);
 
@@ -304,6 +353,7 @@ void FlowInitConfig(char quiet)
     SC_ATOMIC_INIT(flow_memuse);
     SC_ATOMIC_INIT(flow_prune_idx);
     FlowQueueInit(&flow_spare_q);
+    FlowQueueInit(&flow_recycle_q);
 
     unsigned int seed = RandomTimePreseed();
     /* set defaults */
@@ -393,7 +443,7 @@ void FlowInitConfig(char quiet)
 
     /* pre allocate flows */
     for (i = 0; i < flow_config.prealloc; i++) {
-        if (!(FLOW_CHECK_MEMCAP(sizeof(Flow)))) {
+        if (!(FLOW_CHECK_MEMCAP(sizeof(Flow) + FlowStorageSize()))) {
             SCLogError(SC_ERR_FLOW_INIT, "preallocating flows failed: "
                     "max flow memcap reached. Memcap %"PRIu64", "
                     "Memuse %"PRIu64".", flow_config.memcap,
@@ -412,7 +462,7 @@ void FlowInitConfig(char quiet)
 
     if (quiet == FALSE) {
         SCLogInfo("preallocated %" PRIu32 " flows of size %" PRIuMAX "",
-                flow_spare_q.len, (uintmax_t)sizeof(Flow));
+                flow_spare_q.len, (uintmax_t)(sizeof(Flow) + + FlowStorageSize()));
         SCLogInfo("flow memory usage: %llu bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(flow_memuse), flow_config.memcap);
     }
@@ -442,8 +492,11 @@ void FlowShutdown(void)
 
     FlowPrintStats();
 
-    /* free spare queue */
+    /* free queues */
     while((f = FlowDequeue(&flow_spare_q))) {
+        FlowFree(f);
+    }
+    while((f = FlowDequeue(&flow_recycle_q))) {
         FlowFree(f);
     }
 
@@ -470,6 +523,7 @@ void FlowShutdown(void)
     }
     (void) SC_ATOMIC_SUB(flow_memuse, flow_config.hash_size * sizeof(FlowBucket));
     FlowQueueDestroy(&flow_spare_q);
+    FlowQueueDestroy(&flow_recycle_q);
 
     SC_ATOMIC_DESTROY(flow_prune_idx);
     SC_ATOMIC_DESTROY(flow_memuse);
@@ -496,7 +550,6 @@ void FlowInitFlowProto(void)
     flow_proto[FLOW_PROTO_DEFAULT].emerg_closed_timeout =
         FLOW_DEFAULT_EMERG_CLOSED_TIMEOUT;
     flow_proto[FLOW_PROTO_DEFAULT].Freefunc = NULL;
-    flow_proto[FLOW_PROTO_DEFAULT].GetProtoState = NULL;
     /*TCP*/
     flow_proto[FLOW_PROTO_TCP].new_timeout = FLOW_IPPROTO_TCP_NEW_TIMEOUT;
     flow_proto[FLOW_PROTO_TCP].est_timeout = FLOW_IPPROTO_TCP_EST_TIMEOUT;
@@ -508,7 +561,6 @@ void FlowInitFlowProto(void)
     flow_proto[FLOW_PROTO_TCP].emerg_closed_timeout =
         FLOW_DEFAULT_EMERG_CLOSED_TIMEOUT;
     flow_proto[FLOW_PROTO_TCP].Freefunc = NULL;
-    flow_proto[FLOW_PROTO_TCP].GetProtoState = NULL;
     /*UDP*/
     flow_proto[FLOW_PROTO_UDP].new_timeout = FLOW_IPPROTO_UDP_NEW_TIMEOUT;
     flow_proto[FLOW_PROTO_UDP].est_timeout = FLOW_IPPROTO_UDP_EST_TIMEOUT;
@@ -520,7 +572,6 @@ void FlowInitFlowProto(void)
     flow_proto[FLOW_PROTO_UDP].emerg_closed_timeout =
         FLOW_DEFAULT_EMERG_CLOSED_TIMEOUT;
     flow_proto[FLOW_PROTO_UDP].Freefunc = NULL;
-    flow_proto[FLOW_PROTO_UDP].GetProtoState = NULL;
     /*ICMP*/
     flow_proto[FLOW_PROTO_ICMP].new_timeout = FLOW_IPPROTO_ICMP_NEW_TIMEOUT;
     flow_proto[FLOW_PROTO_ICMP].est_timeout = FLOW_IPPROTO_ICMP_EST_TIMEOUT;
@@ -532,7 +583,6 @@ void FlowInitFlowProto(void)
     flow_proto[FLOW_PROTO_ICMP].emerg_closed_timeout =
         FLOW_DEFAULT_EMERG_CLOSED_TIMEOUT;
     flow_proto[FLOW_PROTO_ICMP].Freefunc = NULL;
-    flow_proto[FLOW_PROTO_ICMP].GetProtoState = NULL;
 
     /* Let's see if we have custom timeouts defined from config */
     const char *new = NULL;
@@ -764,22 +814,6 @@ int FlowSetProtoFreeFunc (uint8_t proto, void (*Free)(void *))
 }
 
 /**
- *  \brief  Function to set the function to get protocol specific flow state.
- *
- *  \param   proto            protocol of which function is needed to be set.
- *  \param   GetFlowState     Function pointer which will be called to get state.
- */
-
-int FlowSetFlowStateFunc (uint8_t proto, int (*GetProtoState)(void *))
-{
-    uint8_t proto_map;
-    proto_map = FlowGetProtoMapping(proto);
-
-    flow_proto[proto_map].GetProtoState = GetProtoState;
-    return 1;
-}
-
-/**
  *  \brief   Function to set the timeout values for the specified protocol.
  *
  *  \param   proto            protocol of which timeout value is needed to be set.
@@ -826,14 +860,45 @@ int FlowSetProtoEmergencyTimeout(uint8_t proto, uint32_t emerg_new_timeout,
     return 1;
 }
 
-AppProto FlowGetAppProtocol(Flow *f)
+AppProto FlowGetAppProtocol(const Flow *f)
 {
     return f->alproto;
 }
 
-void *FlowGetAppState(Flow *f)
+void *FlowGetAppState(const Flow *f)
 {
     return f->alstate;
+}
+
+/**
+ *  \brief get 'disruption' flags: GAP/DEPTH/PASS
+ *  \param f locked flow
+ *  \param flags existing flags to be ammended
+ *  \retval flags original flags + disrupt flags (if any)
+ *  \TODO handle UDP
+ */
+uint8_t FlowGetDisruptionFlags(const Flow *f, uint8_t flags)
+{
+    if (f->proto != IPPROTO_TCP) {
+        return flags;
+    }
+    if (f->protoctx == NULL) {
+        return flags;
+    }
+
+    uint8_t newflags = flags;
+    TcpSession *ssn = f->protoctx;
+    TcpStream *stream = flags & STREAM_TOSERVER ? &ssn->client : &ssn->server;
+
+    if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) {
+        newflags |= STREAM_DEPTH;
+    }
+    if (stream->flags & STREAMTCP_STREAM_FLAG_GAP) {
+        newflags |= STREAM_GAP;
+    }
+    /* todo: handle pass case (also for UDP!) */
+
+    return newflags;
 }
 
 /************************************Unittests*******************************/

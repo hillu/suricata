@@ -66,7 +66,8 @@ static uint32_t detect_siggroup_matcharray_memory = 0;
 static uint32_t detect_siggroup_matcharray_init_cnt = 0;
 static uint32_t detect_siggroup_matcharray_free_cnt = 0;
 
-void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
+void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid)
+{
     if (sghid->content_array != NULL) {
         SCFree(sghid->content_array);
         sghid->content_array = NULL;
@@ -90,7 +91,8 @@ void SigGroupHeadInitDataFree(SigGroupHeadInitData *sghid) {
     detect_siggroup_head_initdata_memory -= sizeof(SigGroupHeadInitData);
 }
 
-static SigGroupHeadInitData *SigGroupHeadInitDataAlloc(uint32_t size) {
+static SigGroupHeadInitData *SigGroupHeadInitDataAlloc(uint32_t size)
+{
     SigGroupHeadInitData *sghid = SCMalloc(sizeof(SigGroupHeadInitData));
     if (unlikely(sghid == NULL))
         return NULL;
@@ -116,14 +118,16 @@ error:
     return NULL;
 }
 
-void SigGroupHeadStore(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+void SigGroupHeadStore(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     void *ptmp;
     //printf("de_ctx->sgh_array_cnt %u, de_ctx->sgh_array_size %u, de_ctx->sgh_array %p\n", de_ctx->sgh_array_cnt, de_ctx->sgh_array_size, de_ctx->sgh_array);
     if (de_ctx->sgh_array_cnt < de_ctx->sgh_array_size) {
         de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
     } else {
+        int increase = 16;
         ptmp = SCRealloc(de_ctx->sgh_array,
-                         sizeof(SigGroupHead *) * (16 + de_ctx->sgh_array_size));
+                         sizeof(SigGroupHead *) * (increase + de_ctx->sgh_array_size));
         if (ptmp == NULL) {
             SCFree(de_ctx->sgh_array);
             de_ctx->sgh_array = NULL;
@@ -131,7 +135,7 @@ void SigGroupHeadStore(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
         }
         de_ctx->sgh_array = ptmp;
 
-        de_ctx->sgh_array_size += 10;
+        de_ctx->sgh_array_size += increase;
         de_ctx->sgh_array[de_ctx->sgh_array_cnt] = sgh;
     }
     de_ctx->sgh_array_cnt++;
@@ -181,24 +185,17 @@ void SigGroupHeadFree(SigGroupHead *sgh)
 
     PatternMatchDestroyGroup(sgh);
 
-#if defined(__SSE3__) || defined(__tile__)
-    if (sgh->mask_array != NULL) {
-        /* mask is aligned */
-        SCFreeAligned(sgh->mask_array);
-        sgh->mask_array = NULL;
-    }
-#endif
-
-    if (sgh->head_array != NULL) {
-        SCFree(sgh->head_array);
-        sgh->head_array = NULL;
-    }
-
     if (sgh->match_array != NULL) {
         detect_siggroup_matcharray_free_cnt++;
         detect_siggroup_matcharray_memory -= (sgh->sig_cnt * sizeof(Signature *));
         SCFree(sgh->match_array);
         sgh->match_array = NULL;
+    }
+
+    if (sgh->non_mpm_store_array != NULL) {
+        SCFree(sgh->non_mpm_store_array);
+        sgh->non_mpm_store_array = NULL;
+        sgh->non_mpm_store_cnt = 0;
     }
 
     sgh->sig_cnt = 0;
@@ -611,7 +608,7 @@ uint32_t SigGroupHeadHashFunc(HashListTable *ht, void *data, uint16_t datalen)
     uint32_t hash = 0;
     uint32_t b = 0;
 
-    SCLogDebug("hashing sgh %p (mpm_content_maxlen %u)", sgh, sgh->mpm_content_maxlen);
+    SCLogDebug("hashing sgh %p (mpm_content_minlen %u)", sgh, sgh->mpm_content_minlen);
 
     for (b = 0; b < sgh->init->sig_size; b++)
         hash += sgh->init->sig_array[b];
@@ -689,7 +686,8 @@ int SigGroupHeadHashAdd(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     return ret;
 }
 
-int SigGroupHeadHashRemove(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+int SigGroupHeadHashRemove(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     return HashListTableRemove(de_ctx->sgh_hash_table, (void *)sgh, 0);
 }
 
@@ -849,7 +847,8 @@ int SigGroupHeadSPortHashAdd(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     return ret;
 }
 
-int SigGroupHeadSPortHashRemove(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+int SigGroupHeadSPortHashRemove(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     return HashListTableRemove(de_ctx->sgh_sport_hash_table, (void *)sgh, 0);
 }
 
@@ -999,6 +998,17 @@ void SigGroupHeadFreeMpmArrays(DetectEngineCtx *de_ctx)
     return;
 }
 
+static uint16_t SignatureGetMpmPatternLen(Signature *s, int list)
+{
+    if (s->sm_lists[list] != NULL && s->mpm_sm != NULL &&
+        SigMatchListSMBelongsTo(s, s->mpm_sm) == list)
+    {
+        DetectContentData *cd = (DetectContentData *)s->mpm_sm->ctx;
+        return cd->content_len;
+    }
+    return 0;
+}
+
 /**
  * \brief Add a Signature to a SigGroupHead.
  *
@@ -1026,28 +1036,18 @@ int SigGroupHeadAppendSig(DetectEngineCtx *de_ctx, SigGroupHead **sgh,
     /* enable the sig in the bitarray */
     (*sgh)->init->sig_array[s->num / 8] |= 1 << (s->num % 8);
 
-    /* update maxlen for mpm */
+    /* update minlen for mpm */
     if (s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL) {
         /* check with the precalculated values from the sig */
-        if (s->mpm_content_maxlen > 0) {
-            if ((*sgh)->mpm_content_maxlen == 0)
-                (*sgh)->mpm_content_maxlen = s->mpm_content_maxlen;
+        uint16_t mpm_content_minlen = SignatureGetMpmPatternLen(s, DETECT_SM_LIST_PMATCH);
+        if (mpm_content_minlen > 0) {
+            if ((*sgh)->mpm_content_minlen == 0)
+                (*sgh)->mpm_content_minlen = mpm_content_minlen;
 
-            if ((*sgh)->mpm_content_maxlen > s->mpm_content_maxlen)
-                (*sgh)->mpm_content_maxlen = s->mpm_content_maxlen;
+            if ((*sgh)->mpm_content_minlen > mpm_content_minlen)
+                (*sgh)->mpm_content_minlen = mpm_content_minlen;
 
-            SCLogDebug("(%p)->mpm_content_maxlen %u", *sgh, (*sgh)->mpm_content_maxlen);
-        }
-    }
-    if (s->sm_lists[DETECT_SM_LIST_UMATCH] != NULL) {
-        if (s->mpm_uricontent_maxlen > 0) {
-            if ((*sgh)->mpm_uricontent_maxlen == 0)
-                (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
-
-            if ((*sgh)->mpm_uricontent_maxlen > s->mpm_uricontent_maxlen)
-                (*sgh)->mpm_uricontent_maxlen = s->mpm_uricontent_maxlen;
-
-            SCLogDebug("(%p)->mpm_uricontent_maxlen %u", *sgh, (*sgh)->mpm_uricontent_maxlen);
+            SCLogDebug("(%p)->mpm_content_minlen %u", *sgh, (*sgh)->mpm_content_minlen);
         }
     }
     return 0;
@@ -1104,23 +1104,16 @@ int SigGroupHeadCopySigs(DetectEngineCtx *de_ctx, SigGroupHead *src, SigGroupHea
     for (idx = 0; idx < src->init->sig_size; idx++)
         (*dst)->init->sig_array[idx] = (*dst)->init->sig_array[idx] | src->init->sig_array[idx];
 
-    if (src->mpm_content_maxlen != 0) {
-        if ((*dst)->mpm_content_maxlen == 0)
-            (*dst)->mpm_content_maxlen = src->mpm_content_maxlen;
+    if (src->mpm_content_minlen != 0) {
+        if ((*dst)->mpm_content_minlen == 0)
+            (*dst)->mpm_content_minlen = src->mpm_content_minlen;
 
-        if ((*dst)->mpm_content_maxlen > src->mpm_content_maxlen)
-            (*dst)->mpm_content_maxlen = src->mpm_content_maxlen;
+        if ((*dst)->mpm_content_minlen > src->mpm_content_minlen)
+            (*dst)->mpm_content_minlen = src->mpm_content_minlen;
 
-        SCLogDebug("src (%p)->mpm_content_maxlen %u", src, src->mpm_content_maxlen);
-        SCLogDebug("dst (%p)->mpm_content_maxlen %u", (*dst), (*dst)->mpm_content_maxlen);
-        BUG_ON((*dst)->mpm_content_maxlen == 0);
-    }
-    if (src->mpm_uricontent_maxlen != 0) {
-        if ((*dst)->mpm_uricontent_maxlen == 0)
-            (*dst)->mpm_uricontent_maxlen = src->mpm_uricontent_maxlen;
-
-        if ((*dst)->mpm_uricontent_maxlen > src->mpm_uricontent_maxlen)
-            (*dst)->mpm_uricontent_maxlen = src->mpm_uricontent_maxlen;
+        SCLogDebug("src (%p)->mpm_content_minlen %u", src, src->mpm_content_minlen);
+        SCLogDebug("dst (%p)->mpm_content_minlen %u", (*dst), (*dst)->mpm_content_minlen);
+        BUG_ON((*dst)->mpm_content_minlen == 0);
     }
     return 0;
 
@@ -1226,7 +1219,7 @@ void SigGroupHeadPrintSigs(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
     for (u = 0; u < (sgh->init->sig_size * 8); u++) {
         if (sgh->init->sig_array[u / 8] & (1 << (u % 8))) {
             SCLogDebug("%" PRIu32, u);
-            printf("s->num %"PRIu16" ", u);
+            printf("s->num %"PRIu32" ", u);
         }
     }
 
@@ -1584,7 +1577,8 @@ int SigGroupHeadBuildMatchArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh,
  *  \param de_ctx detection engine ctx for the signatures
  *  \param sgh sig group head to set the flag in
  */
-void SigGroupHeadSetFilemagicFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+void SigGroupHeadSetFilemagicFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     Signature *s = NULL;
     uint32_t sig = 0;
 
@@ -1606,12 +1600,49 @@ void SigGroupHeadSetFilemagicFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
 }
 
 /**
+ *  \brief Get size of the shortest mpm pattern.
+ *
+ *  \param de_ctx detection engine ctx for the signatures
+ *  \param sgh sig group head to set the flag in
+ *  \param list sm_list to consider
+ */
+uint16_t SigGroupHeadGetMinMpmSize(DetectEngineCtx *de_ctx,
+                                   SigGroupHead *sgh, int list)
+{
+    Signature *s = NULL;
+    uint32_t sig = 0;
+    uint16_t min = USHRT_MAX;
+
+    if (sgh == NULL)
+        return 0;
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        uint16_t mpm_content_minlen = SignatureGetMpmPatternLen(s, DETECT_SM_LIST_PMATCH);
+        if (mpm_content_minlen > 0) {
+            if (mpm_content_minlen < min)
+                min = mpm_content_minlen;
+            SCLogDebug("mpm_content_minlen %u", mpm_content_minlen);
+        }
+    }
+
+    if (min == USHRT_MAX)
+        min = 0;
+    SCLogDebug("min mpm size %u", min);
+    return min;
+}
+
+/**
  *  \brief Set the need size flag in the sgh.
  *
  *  \param de_ctx detection engine ctx for the signatures
  *  \param sgh sig group head to set the flag in
  */
-void SigGroupHeadSetFilesizeFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+void SigGroupHeadSetFilesizeFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     Signature *s = NULL;
     uint32_t sig = 0;
 
@@ -1638,7 +1669,8 @@ void SigGroupHeadSetFilesizeFlag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
  *  \param de_ctx detection engine ctx for the signatures
  *  \param sgh sig group head to set the flag in
  */
-void SigGroupHeadSetFileMd5Flag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+void SigGroupHeadSetFileMd5Flag(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     Signature *s = NULL;
     uint32_t sig = 0;
 
@@ -1666,7 +1698,8 @@ void SigGroupHeadSetFileMd5Flag(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
  *  \param de_ctx detection engine ctx for the signatures
  *  \param sgh sig group head to set the counter in
  */
-void SigGroupHeadSetFilestoreCount(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
+void SigGroupHeadSetFilestoreCount(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+{
     Signature *s = NULL;
     uint32_t sig = 0;
 
@@ -1686,63 +1719,61 @@ void SigGroupHeadSetFilestoreCount(DetectEngineCtx *de_ctx, SigGroupHead *sgh) {
     return;
 }
 
-int SigGroupHeadBuildHeadArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
+/** \brief build an array of rule id's for sigs with no mpm
+ *  Also updated de_ctx::non_mpm_store_cnt_max to track the highest cnt
+ */
+int SigGroupHeadBuildNonMpmArray(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
     Signature *s = NULL;
-    uint32_t idx = 0;
     uint32_t sig = 0;
+    uint32_t non_mpm = 0;
 
     if (sgh == NULL)
         return 0;
 
-    BUG_ON(sgh->head_array != NULL);
-#if defined(__SSE3__) || defined(__tile__)
-    BUG_ON(sgh->mask_array != NULL);
-
-    /* mask array is 16 byte aligned for SIMD checking, also we always
-     * alloc a multiple of 32/64 bytes */
-    int cnt = sgh->sig_cnt;
-#if __WORDSIZE == 32
-    if (cnt % 32 != 0) {
-        cnt += (32 - (cnt % 32));
-    }
-#elif __WORDSIZE == 64
-    if (cnt % 64 != 0) {
-        cnt += (64 - (cnt % 64));
-    }
-#endif /* __WORDSIZE */
-
-    sgh->mask_array = (SignatureMask *)SCMallocAligned((cnt * sizeof(SignatureMask)), 16);
-    if (sgh->mask_array == NULL)
-        return -1;
-
-    memset(sgh->mask_array, 0, (cnt * sizeof(SignatureMask)));
-#endif
-
-    sgh->head_array = SCMalloc(sgh->sig_cnt * sizeof(SignatureHeader));
-    if (sgh->head_array == NULL)
-        return -1;
-
-    memset(sgh->head_array, 0, sgh->sig_cnt * sizeof(SignatureHeader));
-
-    detect_siggroup_matcharray_init_cnt++;
-    detect_siggroup_matcharray_memory += (sgh->sig_cnt * sizeof(SignatureHeader *));
+    BUG_ON(sgh->non_mpm_store_array != NULL);
 
     for (sig = 0; sig < sgh->sig_cnt; sig++) {
         s = sgh->match_array[sig];
         if (s == NULL)
             continue;
 
-        sgh->head_array[idx].hdr_copy1 = s->hdr_copy1;
-        sgh->head_array[idx].hdr_copy2 = s->hdr_copy2;
-        sgh->head_array[idx].hdr_copy3 = s->hdr_copy3;
-        sgh->head_array[idx].full_sig = s;
-
-#if defined(__SSE3__) || defined(__tile__)
-        sgh->mask_array[idx] = s->mask;
-#endif
-        idx++;
+        if (s->mpm_sm == NULL)
+            non_mpm++;
+        else if (s->flags & (SIG_FLAG_MPM_PACKET_NEG|SIG_FLAG_MPM_STREAM_NEG|SIG_FLAG_MPM_APPLAYER_NEG))
+            non_mpm++;
     }
+
+    if (non_mpm == 0) {
+        sgh->non_mpm_store_array = NULL;
+        return 0;
+    }
+
+    sgh->non_mpm_store_array = SCMalloc(non_mpm * sizeof(SignatureNonMpmStore));
+    BUG_ON(sgh->non_mpm_store_array == NULL);
+    memset(sgh->non_mpm_store_array, 0, non_mpm * sizeof(SignatureNonMpmStore));
+
+    for (sig = 0; sig < sgh->sig_cnt; sig++) {
+        s = sgh->match_array[sig];
+        if (s == NULL)
+            continue;
+
+        if (s->mpm_sm == NULL) {
+            BUG_ON(sgh->non_mpm_store_cnt >= non_mpm);
+            sgh->non_mpm_store_array[sgh->non_mpm_store_cnt].id = s->num;
+            sgh->non_mpm_store_array[sgh->non_mpm_store_cnt].mask = s->mask;
+            sgh->non_mpm_store_cnt++;
+        } else if (s->flags & (SIG_FLAG_MPM_PACKET_NEG|SIG_FLAG_MPM_STREAM_NEG|SIG_FLAG_MPM_APPLAYER_NEG)) {
+            BUG_ON(sgh->non_mpm_store_cnt >= non_mpm);
+            sgh->non_mpm_store_array[sgh->non_mpm_store_cnt].id = s->num;
+            sgh->non_mpm_store_array[sgh->non_mpm_store_cnt].mask = s->mask;
+            sgh->non_mpm_store_cnt++;
+        }
+    }
+
+    /* track highest cnt for any sgh in our de_ctx */
+    if (sgh->non_mpm_store_cnt > de_ctx->non_mpm_store_cnt_max)
+        de_ctx->non_mpm_store_cnt_max = sgh->non_mpm_store_cnt;
 
     return 0;
 }

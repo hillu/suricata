@@ -55,7 +55,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIsdataatMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectIsdataatMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 int DetectIsdataatSetup (DetectEngineCtx *, Signature *, char *);
 void DetectIsdataatRegisterTests(void);
 void DetectIsdataatFree(void *);
@@ -109,9 +109,9 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectIsdataatMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectIsdataatMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
-    DetectIsdataatData *idad = (DetectIsdataatData *)m->ctx;
+    const DetectIsdataatData *idad = (const DetectIsdataatData *)ctx;
 
     SCLogDebug("payload_len: %u , dataat? %u ; relative? %u...", p->payload_len,idad->dataat,idad->flags &ISDATAAT_RELATIVE);
 
@@ -261,7 +261,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
 
     int sm_list;
     if (s->list != DETECT_SM_LIST_NOTSET) {
-        if (s->list == DETECT_SM_LIST_HSBDMATCH) {
+        if (s->list == DETECT_SM_LIST_FILEDATA) {
             AppLayerHtpEnableResponseBodyCallback();
             s->alproto = ALPROTO_HTTP;
         }
@@ -277,7 +277,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -292,7 +292,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -307,7 +307,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -322,7 +322,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -337,7 +337,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -352,7 +352,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                              DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
@@ -390,7 +390,7 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, char *isdataatst
     if (sm == NULL)
         goto end;
     sm->type = DETECT_ISDATAAT;
-    sm->ctx = (void *)idad;
+    sm->ctx = (SigMatchCtx *)idad;
     SigMatchAppendSMToList(s, sm, sm_list);
 
     if (!(idad->flags & ISDATAAT_RELATIVE)) {
@@ -424,7 +424,8 @@ end:
  *
  * \param idad pointer to DetectIsdataatData
  */
-void DetectIsdataatFree(void *ptr) {
+void DetectIsdataatFree(void *ptr)
+{
     DetectIsdataatData *idad = (DetectIsdataatData *)ptr;
     SCFree(idad);
 }
@@ -436,7 +437,8 @@ void DetectIsdataatFree(void *ptr) {
  * \test DetectIsdataatTestParse01 is a test to make sure that we return a correct IsdataatData structure
  *  when given valid isdataat opt
  */
-int DetectIsdataatTestParse01 (void) {
+int DetectIsdataatTestParse01 (void)
+{
     int result = 0;
     DetectIsdataatData *idad = NULL;
     idad = DetectIsdataatParse("30 ", NULL);
@@ -452,7 +454,8 @@ int DetectIsdataatTestParse01 (void) {
  * \test DetectIsdataatTestParse02 is a test to make sure that we return a correct IsdataatData structure
  *  when given valid isdataat opt
  */
-int DetectIsdataatTestParse02 (void) {
+int DetectIsdataatTestParse02 (void)
+{
     int result = 0;
     DetectIsdataatData *idad = NULL;
     idad = DetectIsdataatParse("30 , relative", NULL);
@@ -468,7 +471,8 @@ int DetectIsdataatTestParse02 (void) {
  * \test DetectIsdataatTestParse03 is a test to make sure that we return a correct IsdataatData structure
  *  when given valid isdataat opt
  */
-int DetectIsdataatTestParse03 (void) {
+int DetectIsdataatTestParse03 (void)
+{
     int result = 0;
     DetectIsdataatData *idad = NULL;
     idad = DetectIsdataatParse("30,relative, rawbytes ", NULL);
@@ -983,17 +987,17 @@ static int DetectIsdataatTestParse14(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
         printf("server body list empty: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_ISDATAAT) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_ISDATAAT) {
         printf("last server body sm not isdataat: ");
         goto end;
     }
 
-    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
+    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
     if ( !(data->flags & ISDATAAT_RELATIVE) ||
          (data->flags & ISDATAAT_RAWBYTES) ||
          !(data->flags & ISDATAAT_NEGATED) ) {
@@ -1033,17 +1037,17 @@ static int DetectIsdataatTestParse15(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
         printf("server body list empty: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->type != DETECT_ISDATAAT) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_ISDATAAT) {
         printf("last server body sm not isdataat: ");
         goto end;
     }
 
-    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH]->ctx;
+    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
     if ( !(data->flags & ISDATAAT_RELATIVE) ||
          (data->flags & ISDATAAT_RAWBYTES) ||
          !(data->flags & ISDATAAT_NEGATED) ) {
@@ -1083,17 +1087,17 @@ static int DetectIsdataatTestParse16(void)
     }
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH] == NULL) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERYNAME_MATCH] == NULL) {
         printf("dns_query list empty: ");
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH]->type != DETECT_ISDATAAT) {
+    if (s->sm_lists_tail[DETECT_SM_LIST_DNSQUERYNAME_MATCH]->type != DETECT_ISDATAAT) {
         printf("last dns_query body sm not isdataat: ");
         goto end;
     }
 
-    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_DNSQUERY_MATCH]->ctx;
+    data = (DetectIsdataatData *)s->sm_lists_tail[DETECT_SM_LIST_DNSQUERYNAME_MATCH]->ctx;
     if ( !(data->flags & ISDATAAT_RELATIVE) ||
          (data->flags & ISDATAAT_RAWBYTES) ||
          !(data->flags & ISDATAAT_NEGATED) ) {
@@ -1113,7 +1117,8 @@ static int DetectIsdataatTestParse16(void)
  * \test DetectIsdataatTestPacket01 is a test to check matches of
  * isdataat, and isdataat relative
  */
-int DetectIsdataatTestPacket01 (void) {
+int DetectIsdataatTestPacket01 (void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *)"Hi all!";
     uint16_t buflen = strlen((char *)buf);
@@ -1154,7 +1159,8 @@ end:
  * isdataat, and isdataat relative works if the previous keyword is pcre
  * (bug 144)
  */
-int DetectIsdataatTestPacket02 (void) {
+int DetectIsdataatTestPacket02 (void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
                     "User-Agent: Wget/1.11.4"
@@ -1185,7 +1191,8 @@ end:
  * isdataat, and isdataat relative works if the previous keyword is byte_jump
  * (bug 146)
  */
-int DetectIsdataatTestPacket03 (void) {
+int DetectIsdataatTestPacket03 (void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
                     "User-Agent: Wget/1.11.4"
@@ -1215,7 +1222,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectIsdataat
  */
-void DetectIsdataatRegisterTests(void) {
+void DetectIsdataatRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectIsdataatTestParse01", DetectIsdataatTestParse01, 1);
     UtRegisterTest("DetectIsdataatTestParse02", DetectIsdataatTestParse02, 1);

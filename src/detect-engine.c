@@ -52,6 +52,7 @@
 #include "detect-engine-hmd.h"
 #include "detect-engine-hcd.h"
 #include "detect-engine-hrud.h"
+#include "detect-engine-hrl.h"
 #include "detect-engine-hsmd.h"
 #include "detect-engine-hscd.h"
 #include "detect-engine-hua.h"
@@ -59,6 +60,9 @@
 #include "detect-engine-hrhhd.h"
 #include "detect-engine-file.h"
 #include "detect-engine-dns.h"
+#include "detect-engine-modbus.h"
+#include "detect-engine-filedata-smtp.h"
+#include "detect-engine-template.h"
 
 #include "detect-engine.h"
 #include "detect-engine-state.h"
@@ -67,6 +71,8 @@
 #include "detect-content.h"
 #include "detect-uricontent.h"
 #include "detect-engine-threshold.h"
+
+#include "detect-engine-loader.h"
 
 #include "util-classification-config.h"
 #include "util-reference-config.h"
@@ -95,9 +101,18 @@
 
 static uint32_t detect_engine_ctx_id = 1;
 
-static TmEcode DetectEngineThreadCtxInitForLiveRuleSwap(ThreadVars *, void *, void **);
+static DetectEngineThreadCtx *DetectEngineThreadCtxInitForReload(
+        ThreadVars *tv, DetectEngineCtx *new_de_ctx, int mt);
 
 static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *);
+
+static DetectEngineMasterCtx g_master_de_ctx = { SCMUTEX_INITIALIZER, 0, NULL, NULL, TENANT_SELECTOR_UNKNOWN, NULL,};
+
+static uint32_t TenantIdHash(HashTable *h, void *data, uint16_t data_len);
+static char TenantIdCompare(void *d1, uint16_t d1_len, void *d2, uint16_t d2_len);
+static void TenantIdFree(void *d);
+static uint32_t DetectEngineTentantGetIdFromVlanId(const void *ctx, const Packet *p);
+static uint32_t DetectEngineTentantGetIdFromPcap(const void *ctx, const Packet *p);
 
 /* 2 - for each direction */
 DetectEngineAppInspectionEngine *app_inspection_engine[FLOW_PROTO_DEFAULT][ALPROTO_MAX][2];
@@ -140,7 +155,6 @@ void DetectEngineRegisterAppInspectionEngines(void)
         AppProto alproto;
         int32_t sm_list;
         uint32_t inspect_flags;
-        uint32_t match_flags;
         uint16_t dir;
         int (*Callback)(ThreadVars *tv,
                         DetectEngineCtx *de_ctx,
@@ -156,13 +170,17 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_UMATCH,
           DE_STATE_FLAG_URI_INSPECT,
-          DE_STATE_FLAG_URI_INSPECT,
           0,
           DetectEngineInspectPacketUris },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
+          DETECT_SM_LIST_HRLMATCH,
+          DE_STATE_FLAG_HRL_INSPECT,
+          0,
+          DetectEngineInspectHttpRequestLine },
+        { IPPROTO_TCP,
+          ALPROTO_HTTP,
           DETECT_SM_LIST_HCBDMATCH,
-          DE_STATE_FLAG_HCBD_INSPECT,
           DE_STATE_FLAG_HCBD_INSPECT,
           0,
           DetectEngineInspectHttpClientBody },
@@ -170,13 +188,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HHDMATCH,
           DE_STATE_FLAG_HHD_INSPECT,
-          DE_STATE_FLAG_HHD_INSPECT,
           0,
           DetectEngineInspectHttpHeader },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_HRHDMATCH,
-          DE_STATE_FLAG_HRHD_INSPECT,
           DE_STATE_FLAG_HRHD_INSPECT,
           0,
           DetectEngineInspectHttpRawHeader },
@@ -184,13 +200,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HMDMATCH,
           DE_STATE_FLAG_HMD_INSPECT,
-          DE_STATE_FLAG_HMD_INSPECT,
           0,
           DetectEngineInspectHttpMethod },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_HCDMATCH,
-          DE_STATE_FLAG_HCD_INSPECT,
           DE_STATE_FLAG_HCD_INSPECT,
           0,
           DetectEngineInspectHttpCookie },
@@ -198,13 +212,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HRUDMATCH,
           DE_STATE_FLAG_HRUD_INSPECT,
-          DE_STATE_FLAG_HRUD_INSPECT,
           0,
           DetectEngineInspectHttpRawUri },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_FILEMATCH,
-          DE_STATE_FLAG_FILE_TS_INSPECT,
           DE_STATE_FLAG_FILE_TS_INSPECT,
           0,
           DetectFileInspectHttp },
@@ -212,13 +224,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HUADMATCH,
           DE_STATE_FLAG_HUAD_INSPECT,
-          DE_STATE_FLAG_HUAD_INSPECT,
           0,
           DetectEngineInspectHttpUA },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_HHHDMATCH,
-          DE_STATE_FLAG_HHHD_INSPECT,
           DE_STATE_FLAG_HHHD_INSPECT,
           0,
           DetectEngineInspectHttpHH },
@@ -226,15 +236,13 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HRHHDMATCH,
           DE_STATE_FLAG_HRHHD_INSPECT,
-          DE_STATE_FLAG_HRHHD_INSPECT,
           0,
           DetectEngineInspectHttpHRH },
         /* DNS */
         { IPPROTO_TCP,
           ALPROTO_DNS,
-          DETECT_SM_LIST_DNSQUERY_MATCH,
-          DE_STATE_FLAG_DNSQUERY_INSPECT,
-          DE_STATE_FLAG_DNSQUERY_INSPECT,
+          DETECT_SM_LIST_DNSQUERYNAME_MATCH,
+          DE_STATE_FLAG_DNSQUERYNAME_INSPECT,
           0,
           DetectEngineInspectDnsQueryName },
         /* specifically for UDP, register again
@@ -242,18 +250,59 @@ void DetectEngineRegisterAppInspectionEngines(void)
          * in the detection engine */
         { IPPROTO_UDP,
           ALPROTO_DNS,
-          DETECT_SM_LIST_DNSQUERY_MATCH,
-          DE_STATE_FLAG_DNSQUERY_INSPECT,
-          DE_STATE_FLAG_DNSQUERY_INSPECT,
+          DETECT_SM_LIST_DNSQUERYNAME_MATCH,
+          DE_STATE_FLAG_DNSQUERYNAME_INSPECT,
           0,
           DetectEngineInspectDnsQueryName },
+        { IPPROTO_TCP,
+          ALPROTO_DNS,
+          DETECT_SM_LIST_DNSREQUEST_MATCH,
+          DE_STATE_FLAG_DNSREQUEST_INSPECT,
+          0,
+          DetectEngineInspectDnsRequest },
+        /* specifically for UDP, register again
+         * allows us to use the alproto w/o translation
+         * in the detection engine */
+        { IPPROTO_UDP,
+          ALPROTO_DNS,
+          DETECT_SM_LIST_DNSREQUEST_MATCH,
+          DE_STATE_FLAG_DNSREQUEST_INSPECT,
+          0,
+          DetectEngineInspectDnsRequest },
+        /* SMTP */
+        { IPPROTO_TCP,
+          ALPROTO_SMTP,
+          DETECT_SM_LIST_FILEMATCH,
+          DE_STATE_FLAG_FILE_TS_INSPECT,
+          0,
+          DetectFileInspectSmtp },
+        /* Modbus */
+        { IPPROTO_TCP,
+          ALPROTO_MODBUS,
+          DETECT_SM_LIST_MODBUS_MATCH,
+          DE_STATE_FLAG_MODBUS_INSPECT,
+          0,
+          DetectEngineInspectModbus },
+        /* file_data smtp */
+        { IPPROTO_TCP,
+          ALPROTO_SMTP,
+          DETECT_SM_LIST_FILEDATA,
+          DE_STATE_FLAG_FD_SMTP_INSPECT,
+          0,
+          DetectEngineInspectSMTPFiledata },
+        /* Template. */
+        { IPPROTO_TCP,
+          ALPROTO_TEMPLATE,
+          DETECT_SM_LIST_TEMPLATE_BUFFER_MATCH,
+          DE_STATE_FLAG_TEMPLATE_BUFFER_INSPECT,
+          0,
+          DetectEngineInspectTemplateBuffer },
     };
 
     struct tmp_t data_toclient[] = {
         { IPPROTO_TCP,
           ALPROTO_HTTP,
-          DETECT_SM_LIST_HSBDMATCH,
-          DE_STATE_FLAG_HSBD_INSPECT,
+          DETECT_SM_LIST_FILEDATA,
           DE_STATE_FLAG_HSBD_INSPECT,
           1,
           DetectEngineInspectHttpServerBody },
@@ -261,13 +310,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HHDMATCH,
           DE_STATE_FLAG_HHD_INSPECT,
-          DE_STATE_FLAG_HHD_INSPECT,
           1,
           DetectEngineInspectHttpHeader },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_HRHDMATCH,
-          DE_STATE_FLAG_HRHD_INSPECT,
           DE_STATE_FLAG_HRHD_INSPECT,
           1,
           DetectEngineInspectHttpRawHeader },
@@ -275,13 +322,11 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HCDMATCH,
           DE_STATE_FLAG_HCD_INSPECT,
-          DE_STATE_FLAG_HCD_INSPECT,
           1,
           DetectEngineInspectHttpCookie },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_FILEMATCH,
-          DE_STATE_FLAG_FILE_TC_INSPECT,
           DE_STATE_FLAG_FILE_TC_INSPECT,
           1,
           DetectFileInspectHttp },
@@ -289,16 +334,43 @@ void DetectEngineRegisterAppInspectionEngines(void)
           ALPROTO_HTTP,
           DETECT_SM_LIST_HSMDMATCH,
           DE_STATE_FLAG_HSMD_INSPECT,
-          DE_STATE_FLAG_HSMD_INSPECT,
           1,
           DetectEngineInspectHttpStatMsg },
         { IPPROTO_TCP,
           ALPROTO_HTTP,
           DETECT_SM_LIST_HSCDMATCH,
           DE_STATE_FLAG_HSCD_INSPECT,
-          DE_STATE_FLAG_HSCD_INSPECT,
           1,
-          DetectEngineInspectHttpStatCode }
+          DetectEngineInspectHttpStatCode },
+        /* Modbus */
+        { IPPROTO_TCP,
+          ALPROTO_MODBUS,
+          DETECT_SM_LIST_MODBUS_MATCH,
+          DE_STATE_FLAG_MODBUS_INSPECT,
+          0,
+          DetectEngineInspectModbus },
+        { IPPROTO_TCP,
+          ALPROTO_DNS,
+          DETECT_SM_LIST_DNSRESPONSE_MATCH,
+          DE_STATE_FLAG_DNSRESPONSE_INSPECT,
+          1,
+          DetectEngineInspectDnsResponse },
+        /* specifically for UDP, register again
+         * allows us to use the alproto w/o translation
+         * in the detection engine */
+        { IPPROTO_UDP,
+          ALPROTO_DNS,
+          DETECT_SM_LIST_DNSRESPONSE_MATCH,
+          DE_STATE_FLAG_DNSRESPONSE_INSPECT,
+          1,
+          DetectEngineInspectDnsResponse },
+        /* Template. */
+        { IPPROTO_TCP,
+          ALPROTO_TEMPLATE,
+          DETECT_SM_LIST_TEMPLATE_BUFFER_MATCH,
+          DE_STATE_FLAG_TEMPLATE_BUFFER_INSPECT,
+          1,
+          DetectEngineInspectTemplateBuffer },
     };
 
     size_t i;
@@ -308,7 +380,6 @@ void DetectEngineRegisterAppInspectionEngines(void)
                                                 data_toserver[i].dir,
                                                 data_toserver[i].sm_list,
                                                 data_toserver[i].inspect_flags,
-                                                data_toserver[i].match_flags,
                                                 data_toserver[i].Callback,
                                                 app_inspection_engine);
     }
@@ -319,7 +390,6 @@ void DetectEngineRegisterAppInspectionEngines(void)
                                                 data_toclient[i].dir,
                                                 data_toclient[i].sm_list,
                                                 data_toclient[i].inspect_flags,
-                                                data_toclient[i].match_flags,
                                                 data_toclient[i].Callback,
                                                 app_inspection_engine);
     }
@@ -340,14 +410,13 @@ static void AppendAppInspectionEngine(DetectEngineAppInspectionEngine *engine,
     while (tmp != NULL) {
         if (tmp->dir == engine->dir &&
             (tmp->sm_list == engine->sm_list ||
-             tmp->inspect_flags == engine->inspect_flags ||
-             tmp->match_flags == engine->match_flags)) {
+             tmp->inspect_flags == engine->inspect_flags
+            )) {
             SCLogError(SC_ERR_DETECT_PREPARE, "App Inspection Engine already "
                        "registered for this direction(%"PRIu16") ||"
                        "sm_list(%d) || "
-                       "[match(%"PRIu32")|inspect(%"PRIu32")]_flags",
-                       tmp->dir, tmp->sm_list, tmp->inspect_flags,
-                       tmp->match_flags);
+                       "[inspect(%"PRIu32")]_flags",
+                       tmp->dir, tmp->sm_list, tmp->inspect_flags);
             exit(EXIT_FAILURE);
         }
         insert = tmp;
@@ -366,7 +435,6 @@ void DetectEngineRegisterAppInspectionEngine(uint8_t ipproto,
                                              uint16_t dir,
                                              int32_t sm_list,
                                              uint32_t inspect_flags,
-                                             uint32_t match_flags,
                                              int (*Callback)(ThreadVars *tv,
                                                              DetectEngineCtx *de_ctx,
                                                              DetectEngineThreadCtx *det_ctx,
@@ -403,7 +471,6 @@ void DetectEngineRegisterAppInspectionEngine(uint8_t ipproto,
     new_engine->dir = dir;
     new_engine->sm_list = sm_list;
     new_engine->inspect_flags = inspect_flags;
-    new_engine->match_flags = match_flags;
     new_engine->Callback = Callback;
 
     AppendAppInspectionEngine(new_engine, list);
@@ -411,63 +478,91 @@ void DetectEngineRegisterAppInspectionEngine(uint8_t ipproto,
     return;
 }
 
-static void *DetectEngineLiveRuleSwap(void *arg)
+/* code to control the main thread to do a reload */
+
+enum DetectEngineSyncState {
+    IDLE,   /**< ready to start a reload */
+    RELOAD, /**< command main thread to do the reload */
+    DONE,   /**< main thread telling us reload is done */
+};
+
+
+typedef struct DetectEngineSyncer_ {
+    SCMutex m;
+    enum DetectEngineSyncState state;
+} DetectEngineSyncer;
+
+static DetectEngineSyncer detect_sync = { SCMUTEX_INITIALIZER, IDLE };
+
+/* tell main to start reloading */
+int DetectEngineReloadStart(void)
+{
+    int r = 0;
+    SCMutexLock(&detect_sync.m);
+    if (detect_sync.state == IDLE) {
+        detect_sync.state = RELOAD;
+    } else {
+        r = -1;
+    }
+    SCMutexUnlock(&detect_sync.m);
+    return r;
+}
+
+/* main thread checks this to see if it should start */
+int DetectEngineReloadIsStart(void)
+{
+    int r = 0;
+    SCMutexLock(&detect_sync.m);
+    if (detect_sync.state == RELOAD) {
+        r = 1;
+    }
+    SCMutexUnlock(&detect_sync.m);
+    return r;
+}
+
+/* main thread sets done when it's done */
+void DetectEngineReloadSetDone(void)
+{
+    SCMutexLock(&detect_sync.m);
+    detect_sync.state = DONE;
+    SCMutexUnlock(&detect_sync.m);
+}
+
+/* caller loops this until it returns 1 */
+int DetectEngineReloadIsDone(void)
+{
+    int r = 0;
+    SCMutexLock(&detect_sync.m);
+    if (detect_sync.state == DONE) {
+        r = 1;
+        detect_sync.state = IDLE;
+    }
+    SCMutexUnlock(&detect_sync.m);
+    return r;
+}
+
+/** \internal
+ *  \brief Update detect threads with new detect engine
+ *
+ *  Atomically update each detect thread with a new thread context
+ *  that is associated to the new detection engine(s).
+ *
+ *  If called in unix socket mode, it's possible that we don't have
+ *  detect threads yet.
+ *
+ *  \retval -1 error
+ *  \retval 0 no detection threads
+ *  \retval 1 successful reload
+ */
+static int DetectEngineReloadThreads(DetectEngineCtx *new_de_ctx)
 {
     SCEnter();
-
     int i = 0;
     int no_of_detect_tvs = 0;
-    DetectEngineCtx *old_de_ctx = NULL;
     ThreadVars *tv = NULL;
 
-    if (SCSetThreadName("LiveRuleSwap") < 0) {
-        SCLogWarning(SC_ERR_THREAD_INIT, "Unable to set thread name");
-    }
-
-    SCLogNotice("rule reload starting");
-
-    ThreadVars *tv_local = (ThreadVars *)arg;
-
-    /* block usr2.  usr2 to be handled by the main thread only */
-    UtilSignalBlock(SIGUSR2);
-
-    if (tv_local->thread_setup_flags != 0)
-        TmThreadSetupOptions(tv_local);
-
-    /* release TmThreadSpawn */
-    TmThreadsSetFlag(tv_local, THV_INIT_DONE);
-
-    ConfDeInit();
-    ConfInit();
-
-    /* re-load the yaml file */
-    if (conf_filename != NULL) {
-        if (ConfYamlLoadFile(conf_filename) != 0) {
-            /* Error already displayed. */
-            exit(EXIT_FAILURE);
-        }
-
-        ConfNode *file;
-        ConfNode *includes = ConfGetNode("include");
-        if (includes != NULL) {
-            TAILQ_FOREACH(file, &includes->head, next) {
-                char *ifile = ConfLoadCompleteIncludePath(file->val);
-                SCLogInfo("Live Rule Swap: Including: %s", ifile);
-
-                if (ConfYamlLoadFile(ifile) != 0) {
-                    /* Error already displayed. */
-                    exit(EXIT_FAILURE);
-                }
-            }
-        }
-    } /* if (conf_filename != NULL) */
-
-#if 0
-    ConfDump();
-#endif
-
+    /* count detect threads in use */
     SCMutexLock(&tv_root_lock);
-
     tv = tv_root[TVT_PPT];
     while (tv) {
         /* obtain the slots for this TV */
@@ -476,13 +571,9 @@ static void *DetectEngineLiveRuleSwap(void *arg)
             TmModule *tm = TmModuleGetById(slots->tm_id);
 
             if (suricata_ctl_flags != 0) {
-                TmThreadsSetFlag(tv_local, THV_CLOSED);
-
                 SCLogInfo("rule reload interupted by engine shutdown");
-
-                UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
                 SCMutexUnlock(&tv_root_lock);
-                pthread_exit(NULL);
+                return -1;
             }
 
             if (!(tm->flags & TM_FLAG_DETECT_TM)) {
@@ -495,14 +586,16 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
         tv = tv->next;
     }
+    SCMutexUnlock(&tv_root_lock);
 
+    /* can be zero in unix socket mode */
     if (no_of_detect_tvs == 0) {
-        TmThreadsSetFlag(tv_local, THV_CLOSED);
-        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-        SCLogInfo("===== Live rule swap FAILURE =====");
-        pthread_exit(NULL);
+        return 0;
     }
 
+    SCLogNotice("rule reload starting");
+
+    /* prepare swap structures */
     DetectEngineThreadCtx *old_det_ctx[no_of_detect_tvs];
     DetectEngineThreadCtx *new_det_ctx[no_of_detect_tvs];
     ThreadVars *detect_tvs[no_of_detect_tvs];
@@ -510,42 +603,10 @@ static void *DetectEngineLiveRuleSwap(void *arg)
     memset(new_det_ctx, 0x00, (no_of_detect_tvs * sizeof(DetectEngineThreadCtx *)));
     memset(detect_tvs, 0x00, (no_of_detect_tvs * sizeof(ThreadVars *)));
 
-    SCMutexUnlock(&tv_root_lock);
-
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        SCLogError(SC_ERR_LIVE_RULE_SWAP, "Allocation failure in live "
-                   "swap.  Let's get out of here.");
-        goto error;
-    }
-
-    SCClassConfLoadClassficationConfigFile(de_ctx);
-    SCRConfLoadReferenceConfigFile(de_ctx);
-
-    if (ActionInitConfig() < 0) {
-        exit(EXIT_FAILURE);
-    }
-
-    if (SigLoadSignatures(de_ctx, NULL, FALSE) < 0) {
-        SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
-        if (de_ctx->failure_fatal)
-            exit(EXIT_FAILURE);
-        DetectEngineCtxFree(de_ctx);
-        SCLogError(SC_ERR_LIVE_RULE_SWAP,  "Failure encountered while "
-                   "loading new ruleset with live swap.");
-        SCLogError(SC_ERR_LIVE_RULE_SWAP, "rule reload failed");
-        TmThreadsSetFlag(tv_local, THV_CLOSED);
-        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-        pthread_exit(NULL);
-    }
-
-    SCThresholdConfInitContext(de_ctx, NULL);
-
     /* start the process of swapping detect threads ctxs */
 
+    /* get reference to tv's and setup new_det_ctx array */
     SCMutexLock(&tv_root_lock);
-
-    /* all receive threads are part of packet processing threads */
     tv = tv_root[TVT_PPT];
     while (tv) {
         /* obtain the slots for this TV */
@@ -554,13 +615,8 @@ static void *DetectEngineLiveRuleSwap(void *arg)
             TmModule *tm = TmModuleGetById(slots->tm_id);
 
             if (suricata_ctl_flags != 0) {
-                TmThreadsSetFlag(tv_local, THV_CLOSED);
-
-                SCLogInfo("rule reload interupted by engine shutdown");
-
-                UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
                 SCMutexUnlock(&tv_root_lock);
-                pthread_exit(NULL);
+                goto error;
             }
 
             if (!(tm->flags & TM_FLAG_DETECT_TM)) {
@@ -570,36 +626,33 @@ static void *DetectEngineLiveRuleSwap(void *arg)
 
             old_det_ctx[i] = SC_ATOMIC_GET(slots->slot_data);
             detect_tvs[i] = tv;
-            TmEcode r = DetectEngineThreadCtxInitForLiveRuleSwap(tv, (void *)de_ctx,
-                                                                 (void **)&new_det_ctx[i]);
-            i++;
-            if (r == TM_ECODE_FAILED) {
+
+            new_det_ctx[i] = DetectEngineThreadCtxInitForReload(tv, new_de_ctx, 1);
+            if (new_det_ctx[i] == NULL) {
                 SCLogError(SC_ERR_LIVE_RULE_SWAP, "Detect engine thread init "
                            "failure in live rule swap.  Let's get out of here");
                 SCMutexUnlock(&tv_root_lock);
                 goto error;
             }
             SCLogDebug("live rule swap created new det_ctx - %p and de_ctx "
-                       "- %p\n", new_det_ctx, de_ctx);
+                       "- %p\n", new_det_ctx[i], new_de_ctx);
+            i++;
             break;
         }
 
         tv = tv->next;
     }
+    BUG_ON(i != no_of_detect_tvs);
 
+    /* atomicly replace the det_ctx data */
     i = 0;
     tv = tv_root[TVT_PPT];
     while (tv) {
+        /* find the correct slot */
         TmSlot *slots = tv->tm_slots;
         while (slots != NULL) {
             if (suricata_ctl_flags != 0) {
-                TmThreadsSetFlag(tv_local, THV_CLOSED);
-
-                SCLogInfo("rule reload interupted by engine shutdown");
-
-                UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-                SCMutexUnlock(&tv_root_lock);
-                pthread_exit(NULL);
+                return -1;
             }
 
             TmModule *tm = TmModuleGetById(slots->tm_id);
@@ -614,12 +667,16 @@ static void *DetectEngineLiveRuleSwap(void *arg)
         }
         tv = tv->next;
     }
-
     SCMutexUnlock(&tv_root_lock);
+
+    /* threads now all have new data, however they may not have started using
+     * it and may still use the old data */
 
     SCLogInfo("Live rule swap has swapped %d old det_ctx's with new ones, "
               "along with the new de_ctx", no_of_detect_tvs);
 
+    /* inject a fake packet if the detect thread isn't using the new ctx yet,
+     * this speeds up the process */
     for (i = 0; i < no_of_detect_tvs; i++) {
         int break_out = 0;
         int pseudo_pkt_inserted = 0;
@@ -638,7 +695,6 @@ static void *DetectEngineLiveRuleSwap(void *arg)
                         p->flags |= PKT_PSEUDO_STREAM_END;
                         PacketQueue *q = &trans_q[detect_tvs[i]->inq->id];
                         SCMutexLock(&q->mutex_q);
-
                         PacketEnqueue(q, p);
                         SCCondSignal(&q->cond_q);
                         SCMutexUnlock(&q->mutex_q);
@@ -657,14 +713,13 @@ static void *DetectEngineLiveRuleSwap(void *arg)
      * de_ctx, till all detect threads have stopped working and sitting
      * silently after setting RUNNING_DONE flag and while waiting for
      * THV_DEINIT flag */
-    if (i != no_of_detect_tvs) {
+    if (i != no_of_detect_tvs) { // not all threads we swapped
         ThreadVars *tv = tv_root[TVT_PPT];
         while (tv) {
             /* obtain the slots for this TV */
             TmSlot *slots = tv->tm_slots;
             while (slots != NULL) {
                 TmModule *tm = TmModuleGetById(slots->tm_id);
-
                 if (!(tm->flags & TM_FLAG_DETECT_TM)) {
                     slots = slots->slot_next;
                     continue;
@@ -682,92 +737,27 @@ static void *DetectEngineLiveRuleSwap(void *arg)
     }
 
     /* free all the ctxs */
-    old_de_ctx = old_det_ctx[0]->de_ctx;
     for (i = 0; i < no_of_detect_tvs; i++) {
         SCLogDebug("Freeing old_det_ctx - %p used by detect",
                    old_det_ctx[i]);
         DetectEngineThreadCtxDeinit(NULL, old_det_ctx[i]);
     }
-    DetectEngineCtxFree(old_de_ctx);
 
     SRepReloadComplete();
 
-    /* reset the handler */
-    UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-
-    TmThreadsSetFlag(tv_local, THV_CLOSED);
-
     SCLogNotice("rule reload complete");
-
-    pthread_exit(NULL);
+    return 1;
 
  error:
     for (i = 0; i < no_of_detect_tvs; i++) {
         if (new_det_ctx[i] != NULL)
             DetectEngineThreadCtxDeinit(NULL, new_det_ctx[i]);
     }
-    DetectEngineCtxFree(de_ctx);
-    TmThreadsSetFlag(tv_local, THV_CLOSED);
-    UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
-    SCLogInfo("===== Live rule swap FAILURE =====");
-    pthread_exit(NULL);
+    return -1;
 }
 
-void DetectEngineSpawnLiveRuleSwapMgmtThread(void)
+static DetectEngineCtx *DetectEngineCtxInitReal(int minimal, const char *prefix)
 {
-    SCEnter();
-
-    SCLogDebug("Spawning mgmt thread for live rule swap");
-
-    ThreadVars *tv = TmThreadCreateMgmtThread("DetectEngineLiveRuleSwap",
-                                              DetectEngineLiveRuleSwap, 0);
-    if (tv == NULL) {
-        SCLogError(SC_ERR_THREAD_CREATE, "Live rule swap thread spawn failed");
-        exit(EXIT_FAILURE);
-    }
-
-    TmThreadSetCPU(tv, MANAGEMENT_CPU_SET);
-
-    if (TmThreadSpawn(tv) != 0) {
-        SCLogError(SC_ERR_THREAD_SPAWN, "TmThreadSpawn failed for "
-                   "DetectEngineLiveRuleSwap");
-        exit(EXIT_FAILURE);
-    }
-
-    SCReturn;
-}
-
-DetectEngineCtx *DetectEngineGetGlobalDeCtx(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-
-    SCMutexLock(&tv_root_lock);
-
-    ThreadVars *tv = tv_root[TVT_PPT];
-    while (tv) {
-        /* obtain the slots for this TV */
-        TmSlot *slots = tv->tm_slots;
-        while (slots != NULL) {
-            TmModule *tm = TmModuleGetById(slots->tm_id);
-
-            if (tm->flags & TM_FLAG_DETECT_TM) {
-                DetectEngineThreadCtx *det_ctx = SC_ATOMIC_GET(slots->slot_data);
-                de_ctx = det_ctx->de_ctx;
-                SCMutexUnlock(&tv_root_lock);
-                return de_ctx;
-            }
-
-            slots = slots->slot_next;
-        }
-
-        tv = tv->next;
-    }
-
-    SCMutexUnlock(&tv_root_lock);
-    return NULL;
-}
-
-DetectEngineCtx *DetectEngineCtxInit(void) {
     DetectEngineCtx *de_ctx;
 
     ConfNode *seq_node = NULL;
@@ -780,6 +770,16 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
         goto error;
 
     memset(de_ctx,0,sizeof(DetectEngineCtx));
+
+    if (minimal) {
+        de_ctx->minimal = 1;
+        de_ctx->id = detect_engine_ctx_id++;
+        return de_ctx;
+    }
+
+    if (prefix != NULL) {
+        strlcpy(de_ctx->config_prefix, prefix, sizeof(de_ctx->config_prefix));
+    }
 
     if (ConfGetBool("engine.init-failure-fatal", (int *)&(de_ctx->failure_fatal)) != 1) {
         SCLogDebug("ConfGetBool could not load the value.");
@@ -837,8 +837,6 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
         goto error;
     }
 
-    de_ctx->id = detect_engine_ctx_id++;
-
     /* init iprep... ignore errors for now */
     (void)SRepInit(de_ctx);
 
@@ -846,12 +844,40 @@ DetectEngineCtx *DetectEngineCtxInit(void) {
     SCProfilingKeywordInitCounters(de_ctx);
 #endif
 
+    SCClassConfLoadClassficationConfigFile(de_ctx, NULL);
+    SCRConfLoadReferenceConfigFile(de_ctx, NULL);
+
+    if (ActionInitConfig() < 0) {
+        goto error;
+    }
+
+    de_ctx->id = detect_engine_ctx_id++;
     return de_ctx;
 error:
     return NULL;
+
 }
 
-static void DetectEngineCtxFreeThreadKeywordData(DetectEngineCtx *de_ctx) {
+DetectEngineCtx *DetectEngineCtxInitMinimal(void)
+{
+    return DetectEngineCtxInitReal(1, NULL);
+}
+
+DetectEngineCtx *DetectEngineCtxInit(void)
+{
+    return DetectEngineCtxInitReal(0, NULL);
+}
+
+DetectEngineCtx *DetectEngineCtxInitWithPrefix(const char *prefix)
+{
+    if (prefix == NULL || strlen(prefix) == 0)
+        return DetectEngineCtxInit();
+    else
+        return DetectEngineCtxInitReal(0, prefix);
+}
+
+static void DetectEngineCtxFreeThreadKeywordData(DetectEngineCtx *de_ctx)
+{
     DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
     while (item) {
         DetectEngineThreadKeywordCtxItem *next = item->next;
@@ -866,7 +892,8 @@ static void DetectEngineCtxFreeThreadKeywordData(DetectEngineCtx *de_ctx) {
  *
  * \param de_ctx DetectEngineCtx:: to be freed
  */
-void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
+void DetectEngineCtxFree(DetectEngineCtx *de_ctx)
+{
 
     if (de_ctx == NULL)
         return;
@@ -913,6 +940,20 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
     }
 
     DetectEngineCtxFreeThreadKeywordData(de_ctx);
+    SRepDestroy(de_ctx);
+
+    /* if we have a config prefix, remove the config from the tree */
+    if (strlen(de_ctx->config_prefix) > 0) {
+        /* remove config */
+        ConfNode *node = ConfGetNode(de_ctx->config_prefix);
+        if (node != NULL) {
+            ConfNodeRemove(node); /* frees node */
+        }
+#if 0
+        ConfDump();
+#endif
+    }
+
     SCFree(de_ctx);
     //DetectAddressGroupPrintMemory();
     //DetectSigGroupPrintMemory();
@@ -924,7 +965,8 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx) {
  *  \retval 0 if no config provided, 1 if config was provided
  *          and loaded successfuly
  */
-static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
+static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
+{
     uint8_t profile = ENGINE_PROFILE_UNKNOWN;
     char *de_ctx_profile = NULL;
 
@@ -1186,15 +1228,18 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx) {
  * getting & (re)setting the internal sig i
  */
 
-//inline uint32_t DetectEngineGetMaxSigId(DetectEngineCtx *de_ctx) {
+//inline uint32_t DetectEngineGetMaxSigId(DetectEngineCtx *de_ctx)
+//{
 //    return de_ctx->signum;
 //}
 
-void DetectEngineResetMaxSigId(DetectEngineCtx *de_ctx) {
+void DetectEngineResetMaxSigId(DetectEngineCtx *de_ctx)
+{
     de_ctx->signum = 0;
 }
 
-static int DetectEngineThreadCtxInitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+static int DetectEngineThreadCtxInitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx)
+{
     if (de_ctx->keyword_id > 0) {
         det_ctx->keyword_ctxs_array = SCMalloc(de_ctx->keyword_id * sizeof(void *));
         if (det_ctx->keyword_ctxs_array == NULL) {
@@ -1220,7 +1265,8 @@ static int DetectEngineThreadCtxInitKeywords(DetectEngineCtx *de_ctx, DetectEngi
     return TM_ECODE_OK;
 }
 
-static void DetectEngineThreadCtxDeinitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+static void DetectEngineThreadCtxDeinitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx)
+{
     if (de_ctx->keyword_id > 0) {
         DetectEngineThreadKeywordCtxItem *item = de_ctx->keyword_list;
         while (item) {
@@ -1235,10 +1281,119 @@ static void DetectEngineThreadCtxDeinitKeywords(DetectEngineCtx *de_ctx, DetectE
     }
 }
 
+/** NOTE: master MUST be locked before calling this */
+static TmEcode DetectEngineThreadCtxInitForMT(ThreadVars *tv, DetectEngineThreadCtx *det_ctx)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    DetectEngineTenantMapping *map_array = NULL;
+    uint32_t map_array_size = 0;
+    uint32_t map_cnt = 0;
+    int max_tenant_id = 0;
+    DetectEngineCtx *list = master->list;
+    HashTable *mt_det_ctxs_hash = NULL;
+
+    if (master->tenant_selector == TENANT_SELECTOR_UNKNOWN) {
+        SCLogError(SC_ERR_MT_NO_SELECTOR, "no tenant selector set: "
+                                          "set using multi-detect.selector");
+        return TM_ECODE_FAILED;
+    }
+
+    uint32_t tcnt = 0;
+    while (list) {
+        if (list->tenant_id > max_tenant_id)
+            max_tenant_id = list->tenant_id;
+
+        list = list->next;
+        tcnt++;
+    }
+
+    mt_det_ctxs_hash = HashTableInit(tcnt * 2, TenantIdHash, TenantIdCompare, TenantIdFree);
+    if (mt_det_ctxs_hash == NULL) {
+        goto error;
+    }
+
+    if (max_tenant_id == 0) {
+        SCLogInfo("no tenants left, or none registered yet");
+    } else {
+        max_tenant_id++;
+
+        DetectEngineTenantMapping *map = master->tenant_mapping_list;
+        while (map) {
+            map_cnt++;
+            map = map->next;
+        }
+
+        if (map_cnt > 0) {
+            map_array_size = map_cnt + 1;
+
+            map_array = SCCalloc(map_array_size, sizeof(*map_array));
+            if (map_array == NULL)
+                goto error;
+
+            /* fill the array */
+            map_cnt = 0;
+            map = master->tenant_mapping_list;
+            while (map) {
+                BUG_ON(map_cnt > map_array_size);
+                map_array[map_cnt].traffic_id = map->traffic_id;
+                map_array[map_cnt].tenant_id = map->tenant_id;
+                map_cnt++;
+                map = map->next;
+            }
+
+        }
+
+        /* set up hash for tenant lookup */
+        list = master->list;
+        while (list) {
+            SCLogInfo("tenant-id %u", list->tenant_id);
+            if (list->tenant_id != 0) {
+                DetectEngineThreadCtx *mt_det_ctx = DetectEngineThreadCtxInitForReload(tv, list, 0);
+                if (mt_det_ctx == NULL)
+                    goto error;
+                BUG_ON(HashTableAdd(mt_det_ctxs_hash, mt_det_ctx, 0) != 0);
+            }
+            list = list->next;
+        }
+    }
+
+    det_ctx->mt_det_ctxs_hash = mt_det_ctxs_hash;
+    mt_det_ctxs_hash = NULL;
+
+    det_ctx->mt_det_ctxs_cnt = max_tenant_id;
+
+    det_ctx->tenant_array = map_array;
+    det_ctx->tenant_array_size = map_array_size;
+
+    switch (master->tenant_selector) {
+        case TENANT_SELECTOR_UNKNOWN:
+            SCLogDebug("TENANT_SELECTOR_UNKNOWN");
+            break;
+        case TENANT_SELECTOR_VLAN:
+            det_ctx->TenantGetId = DetectEngineTentantGetIdFromVlanId;
+            SCLogDebug("TENANT_SELECTOR_VLAN");
+            break;
+        case TENANT_SELECTOR_DIRECT:
+            det_ctx->TenantGetId = DetectEngineTentantGetIdFromPcap;
+            SCLogDebug("TENANT_SELECTOR_DIRECT");
+            break;
+    }
+
+    return TM_ECODE_OK;
+error:
+    if (map_array != NULL)
+        SCFree(map_array);
+    if (mt_det_ctxs_hash != NULL)
+        HashTableFree(mt_det_ctxs_hash);
+
+    return TM_ECODE_FAILED;
+}
+
 /** \internal
  *  \brief Helper for DetectThread setup functions
  */
-static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx) {
+static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx)
+{
     int i;
 
     /** \todo we still depend on the global mpm_ctx here
@@ -1254,6 +1409,13 @@ static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *
     PmqSetup(&det_ctx->pmq, de_ctx->max_fp_id);
     for (i = 0; i < DETECT_SMSG_PMQ_NUM; i++) {
         PmqSetup(&det_ctx->smsg_pmq[i], de_ctx->max_fp_id);
+    }
+
+    /* sized to the max of our sgh settings. A max setting of 0 implies that all
+     * sgh's have: sgh->non_mpm_store_cnt == 0 */
+    if (de_ctx->non_mpm_store_cnt_max > 0) {
+        det_ctx->non_mpm_id_array =  SCCalloc(de_ctx->non_mpm_store_cnt_max, sizeof(SigIntId));
+        BUG_ON(det_ctx->non_mpm_id_array == NULL);
     }
 
     /* IP-ONLY */
@@ -1285,6 +1447,16 @@ static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *
         return TM_ECODE_FAILED;
     }
 
+    /* Allocate space for base64 decoded data. */
+    if (de_ctx->base64_decode_max_len) {
+        det_ctx->base64_decoded = SCMalloc(de_ctx->base64_decode_max_len);
+        if (det_ctx->base64_decoded == NULL) {
+            return TM_ECODE_FAILED;
+        }
+        det_ctx->base64_decoded_len_max = de_ctx->base64_decode_max_len;
+        det_ctx->base64_decoded_len = 0;
+    }
+
     DetectEngineThreadCtxInitKeywords(de_ctx, det_ctx);
 #ifdef PROFILING
     SCProfilingRuleThreadSetup(de_ctx->profile_ctx, det_ctx);
@@ -1314,82 +1486,124 @@ static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *
  */
 TmEcode DetectEngineThreadCtxInit(ThreadVars *tv, void *initdata, void **data)
 {
-    DetectEngineCtx *de_ctx = (DetectEngineCtx *)initdata;
-    if (de_ctx == NULL)
-        return TM_ECODE_FAILED;
-
     /* first register the counter. In delayed detect mode we exit right after if the
      * rules haven't been loaded yet. */
-    uint16_t counter_alerts = SCPerfTVRegisterCounter("detect.alert", tv,
-                                                      SC_PERF_TYPE_UINT64, "NULL");
-    if (de_ctx->delayed_detect == 1 && de_ctx->delayed_detect_initialized == 0) {
-        *data = NULL;
-        return TM_ECODE_OK;
-    }
-
+    uint16_t counter_alerts = StatsRegisterCounter("detect.alert", tv);
+#ifdef PROFILING
+    uint16_t counter_mpm_list = StatsRegisterAvgCounter("detect.mpm_list", tv);
+    uint16_t counter_nonmpm_list = StatsRegisterAvgCounter("detect.nonmpm_list", tv);
+    uint16_t counter_fnonmpm_list = StatsRegisterAvgCounter("detect.fnonmpm_list", tv);
+    uint16_t counter_match_list = StatsRegisterAvgCounter("detect.match_list", tv);
+#endif
     DetectEngineThreadCtx *det_ctx = SCMalloc(sizeof(DetectEngineThreadCtx));
     if (unlikely(det_ctx == NULL))
         return TM_ECODE_FAILED;
     memset(det_ctx, 0, sizeof(DetectEngineThreadCtx));
 
     det_ctx->tv = tv;
-    det_ctx->de_ctx = de_ctx;
-
-    if (ThreadCtxDoInit(de_ctx, det_ctx) != TM_ECODE_OK)
+    det_ctx->de_ctx = DetectEngineGetCurrent();
+    if (det_ctx->de_ctx == NULL) {
+#ifdef UNITTESTS
+        if (RunmodeIsUnittests()) {
+            det_ctx->de_ctx = (DetectEngineCtx *)initdata;
+        } else {
+            DetectEngineThreadCtxDeinit(tv, det_ctx);
+            return TM_ECODE_FAILED;
+        }
+#else
+        DetectEngineThreadCtxDeinit(tv, det_ctx);
         return TM_ECODE_FAILED;
+#endif
+    }
+
+    if (det_ctx->de_ctx->minimal == 0) {
+        if (ThreadCtxDoInit(det_ctx->de_ctx, det_ctx) != TM_ECODE_OK) {
+            DetectEngineThreadCtxDeinit(tv, det_ctx);
+            return TM_ECODE_FAILED;
+        }
+    }
 
     /** alert counter setup */
     det_ctx->counter_alerts = counter_alerts;
+#ifdef PROFILING
+    det_ctx->counter_mpm_list = counter_mpm_list;
+    det_ctx->counter_nonmpm_list = counter_nonmpm_list;
+    det_ctx->counter_fnonmpm_list = counter_fnonmpm_list;
+    det_ctx->counter_match_list = counter_match_list;
+#endif
 
     /* pass thread data back to caller */
     *data = (void *)det_ctx;
+
+    if (DetectEngineMultiTenantEnabled()) {
+        if (DetectEngineThreadCtxInitForMT(tv, det_ctx) != TM_ECODE_OK)
+            return TM_ECODE_FAILED;
+    }
 
     return TM_ECODE_OK;
 }
 
 /**
  * \internal
- * \brief This thread is an exact duplicate of DetectEngineThreadCtxInit(),
- *        except that the counters API 2 calls doesn't let us use the same
- *        init function.  Once we have the new counters API it should let
- *        us use the same init function.
+ * \brief initialize a det_ctx for reload cases
+ * \param new_de_ctx the new detection engine
+ * \param mt flag to indicate if MT should be set up for this det_ctx
+ *           this should only be done for the 'root' det_ctx
+ *
+ * \retval det_ctx detection engine thread ctx or NULL in case of error
  */
-static TmEcode DetectEngineThreadCtxInitForLiveRuleSwap(ThreadVars *tv, void *initdata, void **data)
+static DetectEngineThreadCtx *DetectEngineThreadCtxInitForReload(
+        ThreadVars *tv, DetectEngineCtx *new_de_ctx, int mt)
 {
-    *data = NULL;
-
-    DetectEngineCtx *de_ctx = (DetectEngineCtx *)initdata;
-    if (de_ctx == NULL)
-        return TM_ECODE_FAILED;
-
     DetectEngineThreadCtx *det_ctx = SCMalloc(sizeof(DetectEngineThreadCtx));
     if (unlikely(det_ctx == NULL))
-        return TM_ECODE_FAILED;
+        return NULL;
     memset(det_ctx, 0, sizeof(DetectEngineThreadCtx));
 
+    det_ctx->tenant_id = new_de_ctx->tenant_id;
     det_ctx->tv = tv;
-    det_ctx->de_ctx = de_ctx;
+    det_ctx->de_ctx = DetectEngineReference(new_de_ctx);
+    if (det_ctx->de_ctx == NULL) {
+        SCFree(det_ctx);
+        return NULL;
+    }
 
-    if (ThreadCtxDoInit(de_ctx, det_ctx) != TM_ECODE_OK)
-        return TM_ECODE_FAILED;
+    /* most of the init happens here */
+    if (ThreadCtxDoInit(det_ctx->de_ctx, det_ctx) != TM_ECODE_OK) {
+        DetectEngineDeReference(&det_ctx->de_ctx);
+        SCFree(det_ctx);
+        return NULL;
+    }
 
     /** alert counter setup */
-    det_ctx->counter_alerts = SCPerfTVRegisterCounter("detect.alert", tv,
-                                                      SC_PERF_TYPE_UINT64, "NULL");
-    /* no counter creation here */
+    det_ctx->counter_alerts = StatsRegisterCounter("detect.alert", tv);
+#ifdef PROFILING
+    uint16_t counter_mpm_list = StatsRegisterAvgCounter("detect.mpm_list", tv);
+    uint16_t counter_nonmpm_list = StatsRegisterAvgCounter("detect.nonmpm_list", tv);
+    uint16_t counter_fnonmpm_list = StatsRegisterAvgCounter("detect.fnonmpm_list", tv);
+    uint16_t counter_match_list = StatsRegisterAvgCounter("detect.match_list", tv);
+    det_ctx->counter_mpm_list = counter_mpm_list;
+    det_ctx->counter_nonmpm_list = counter_nonmpm_list;
+    det_ctx->counter_fnonmpm_list = counter_fnonmpm_list;
+    det_ctx->counter_match_list = counter_match_list;
+#endif
 
-    /* pass thread data back to caller */
-    *data = (void *)det_ctx;
+    if (mt && DetectEngineMultiTenantEnabled()) {
+        if (DetectEngineThreadCtxInitForMT(tv, det_ctx) != TM_ECODE_OK) {
+            DetectEngineDeReference(&det_ctx->de_ctx);
+            SCFree(det_ctx);
+            return NULL;
+        }
+    }
 
-    return TM_ECODE_OK;
+    return det_ctx;
 }
 
-TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
-    DetectEngineThreadCtx *det_ctx = (DetectEngineThreadCtx *)data;
-
-    if (det_ctx == NULL) {
-        SCLogWarning(SC_ERR_INVALID_ARGUMENTS, "argument \"data\" NULL");
-        return TM_ECODE_OK;
+void DetectEngineThreadCtxFree(DetectEngineThreadCtx *det_ctx)
+{
+    if (det_ctx->tenant_array != NULL) {
+        SCFree(det_ctx->tenant_array);
+        det_ctx->tenant_array = NULL;
     }
 
 #ifdef PROFILING
@@ -1400,15 +1614,20 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
     DetectEngineIPOnlyThreadDeinit(&det_ctx->io_ctx);
 
     /** \todo get rid of this static */
-    PatternMatchThreadDestroy(&det_ctx->mtc, det_ctx->de_ctx->mpm_matcher);
-    PatternMatchThreadDestroy(&det_ctx->mtcs, det_ctx->de_ctx->mpm_matcher);
-    PatternMatchThreadDestroy(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
+    if (det_ctx->de_ctx != NULL) {
+        PatternMatchThreadDestroy(&det_ctx->mtc, det_ctx->de_ctx->mpm_matcher);
+        PatternMatchThreadDestroy(&det_ctx->mtcs, det_ctx->de_ctx->mpm_matcher);
+        PatternMatchThreadDestroy(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
+    }
 
     PmqFree(&det_ctx->pmq);
     int i;
     for (i = 0; i < DETECT_SMSG_PMQ_NUM; i++) {
         PmqFree(&det_ctx->smsg_pmq[i]);
     }
+
+    if (det_ctx->non_mpm_id_array != NULL)
+        SCFree(det_ctx->non_mpm_id_array);
 
     if (det_ctx->de_state_sig_array != NULL)
         SCFree(det_ctx->de_state_sig_array);
@@ -1434,8 +1653,9 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
     if (det_ctx->hsbd != NULL) {
         SCLogDebug("det_ctx hsbd %u", det_ctx->hsbd_buffers_size);
         for (i = 0; i < det_ctx->hsbd_buffers_size; i++) {
-            if (det_ctx->hsbd[i].buffer != NULL)
-                SCFree(det_ctx->hsbd[i].buffer);
+            if (det_ctx->hsbd[i].buffer != NULL) {
+                HTPFree(det_ctx->hsbd[i].buffer, det_ctx->hsbd[i].buffer_size);
+            }
         }
         SCFree(det_ctx->hsbd);
     }
@@ -1451,13 +1671,43 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data) {
         SCFree(det_ctx->hcbd);
     }
 
-    DetectEngineThreadCtxDeinitKeywords(det_ctx->de_ctx, det_ctx);
+    /* Decoded base64 data. */
+    if (det_ctx->base64_decoded != NULL) {
+        SCFree(det_ctx->base64_decoded);
+    }
+
+    if (det_ctx->de_ctx != NULL) {
+        DetectEngineThreadCtxDeinitKeywords(det_ctx->de_ctx, det_ctx);
+#ifdef UNITTESTS
+        if (!RunmodeIsUnittests() || det_ctx->de_ctx->ref_cnt > 0)
+            DetectEngineDeReference(&det_ctx->de_ctx);
+#else
+        DetectEngineDeReference(&det_ctx->de_ctx);
+#endif
+    }
     SCFree(det_ctx);
+}
+
+TmEcode DetectEngineThreadCtxDeinit(ThreadVars *tv, void *data)
+{
+    DetectEngineThreadCtx *det_ctx = (DetectEngineThreadCtx *)data;
+
+    if (det_ctx == NULL) {
+        SCLogWarning(SC_ERR_INVALID_ARGUMENTS, "argument \"data\" NULL");
+        return TM_ECODE_OK;
+    }
+
+    if (det_ctx->mt_det_ctxs_hash != NULL) {
+        HashTableFree(det_ctx->mt_det_ctxs_hash);
+        det_ctx->mt_det_ctxs_hash = NULL;
+    }
+    DetectEngineThreadCtxFree(det_ctx);
 
     return TM_ECODE_OK;
 }
 
-void DetectEngineThreadCtxInfo(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
+void DetectEngineThreadCtxInfo(ThreadVars *t, DetectEngineThreadCtx *det_ctx)
+{
     /* XXX */
     PatternMatchThreadPrint(&det_ctx->mtc, det_ctx->de_ctx->mpm_matcher);
     PatternMatchThreadPrint(&det_ctx->mtcu, det_ctx->de_ctx->mpm_matcher);
@@ -1479,7 +1729,8 @@ void DetectEngineThreadCtxInfo(ThreadVars *t, DetectEngineThreadCtx *det_ctx) {
  *        recommended to store it in the keywords global ctx so that
  *        it's freed when the de_ctx is freed.
  */
-int DetectRegisterThreadCtxFuncs(DetectEngineCtx *de_ctx, const char *name, void *(*InitFunc)(void *), void *data, void (*FreeFunc)(void *), int mode) {
+int DetectRegisterThreadCtxFuncs(DetectEngineCtx *de_ctx, const char *name, void *(*InitFunc)(void *), void *data, void (*FreeFunc)(void *), int mode)
+{
     BUG_ON(de_ctx == NULL || InitFunc == NULL || FreeFunc == NULL || data == NULL);
 
     if (mode) {
@@ -1518,14 +1769,870 @@ int DetectRegisterThreadCtxFuncs(DetectEngineCtx *de_ctx, const char *name, void
  *
  *  \retval ctx or NULL on error
  */
-void *DetectThreadCtxGetKeywordThreadCtx(DetectEngineThreadCtx *det_ctx, int id) {
+void *DetectThreadCtxGetKeywordThreadCtx(DetectEngineThreadCtx *det_ctx, int id)
+{
     if (id < 0 || id > det_ctx->keyword_ctxs_size || det_ctx->keyword_ctxs_array == NULL)
         return NULL;
 
     return det_ctx->keyword_ctxs_array[id];
 }
 
-const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type) {
+/** \brief Check if detection is enabled
+ *  \retval bool true or false */
+int DetectEngineEnabled(void)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (master->list == NULL) {
+        SCMutexUnlock(&master->lock);
+        return 0;
+    }
+
+    SCMutexUnlock(&master->lock);
+    return 1;
+}
+
+DetectEngineCtx *DetectEngineGetCurrent(void)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (master->list == NULL) {
+        SCMutexUnlock(&master->lock);
+        return NULL;
+    }
+
+    master->list->ref_cnt++;
+    SCLogDebug("master->list %p ref_cnt %u", master->list, master->list->ref_cnt);
+    SCMutexUnlock(&master->lock);
+    return master->list;
+}
+
+DetectEngineCtx *DetectEngineReference(DetectEngineCtx *de_ctx)
+{
+    if (de_ctx == NULL)
+        return NULL;
+    de_ctx->ref_cnt++;
+    return de_ctx;
+}
+
+/** TODO locking? Not needed if this is a one time setting at startup */
+int DetectEngineMultiTenantEnabled(void)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    return (master->multi_tenant_enabled);
+}
+
+/** \internal
+ *  \brief load a tenant from a yaml file
+ *
+ *  \param tenant_id the tenant id by which the config is known
+ *  \param filename full path of a yaml file
+ *  \param loader_id id of loader thread or -1
+ *
+ *  \retval 0 ok
+ *  \retval -1 failed
+ */
+static int DetectEngineMultiTenantLoadTenant(uint32_t tenant_id, const char *filename, int loader_id)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    char prefix[64];
+
+    snprintf(prefix, sizeof(prefix), "multi-detect.%d", tenant_id);
+
+#ifdef OS_WIN32
+    struct _stat st;
+    if(_stat(filename, &st) != 0) {
+#else
+    struct stat st;
+    if(stat(filename, &st) != 0) {
+#endif /* OS_WIN32 */
+        SCLogError(SC_ERR_FOPEN, "failed to stat file %s", filename);
+        goto error;
+    }
+
+    de_ctx = DetectEngineGetByTenantId(tenant_id);
+    if (de_ctx != NULL) {
+        SCLogError(SC_ERR_MT_DUPLICATE_TENANT, "tenant %u already registered",
+                tenant_id);
+        DetectEngineDeReference(&de_ctx);
+        goto error;
+    }
+
+    ConfNode *node = ConfGetNode(prefix);
+    if (node == NULL) {
+        SCLogError(SC_ERR_CONF_YAML_ERROR, "failed to properly setup yaml %s", filename);
+        goto error;
+    }
+
+    de_ctx = DetectEngineCtxInitWithPrefix(prefix);
+    if (de_ctx == NULL) {
+        SCLogError(SC_ERR_INITIALIZATION, "initializing detection engine "
+                "context failed.");
+        goto error;
+    }
+    SCLogDebug("de_ctx %p with prefix %s", de_ctx, de_ctx->config_prefix);
+
+    de_ctx->tenant_id = tenant_id;
+    de_ctx->loader_id = loader_id;
+
+    if (SigLoadSignatures(de_ctx, NULL, 0) < 0) {
+        SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
+        goto error;
+    }
+
+    DetectEngineAddToMaster(de_ctx);
+
+    return 0;
+
+error:
+    if (de_ctx != NULL) {
+        DetectEngineCtxFree(de_ctx);
+    }
+    return -1;
+}
+
+static int DetectEngineMultiTenantReloadTenant(uint32_t tenant_id, const char *filename, int reload_cnt)
+{
+    DetectEngineCtx *old_de_ctx = DetectEngineGetByTenantId(tenant_id);
+    if (old_de_ctx == NULL) {
+        SCLogError(SC_ERR_INITIALIZATION, "tenant detect engine not found");
+        return -1;
+    }
+
+    char prefix[64];
+    snprintf(prefix, sizeof(prefix), "multi-detect.%d.reload.%d", tenant_id, reload_cnt);
+    reload_cnt++;
+    SCLogInfo("prefix %s", prefix);
+
+    if (ConfYamlLoadFileWithPrefix(filename, prefix) != 0) {
+        SCLogError(SC_ERR_INITIALIZATION,"failed to load yaml");
+        goto error;
+    }
+
+    ConfNode *node = ConfGetNode(prefix);
+    if (node == NULL) {
+        SCLogError(SC_ERR_CONF_YAML_ERROR, "failed to properly setup yaml %s", filename);
+        goto error;
+    }
+
+    DetectEngineCtx *new_de_ctx = DetectEngineCtxInitWithPrefix(prefix);
+    if (new_de_ctx == NULL) {
+        SCLogError(SC_ERR_INITIALIZATION, "initializing detection engine "
+                "context failed.");
+        goto error;
+    }
+    SCLogDebug("de_ctx %p with prefix %s", new_de_ctx, new_de_ctx->config_prefix);
+
+    new_de_ctx->tenant_id = tenant_id;
+    new_de_ctx->loader_id = old_de_ctx->loader_id;
+
+    if (SigLoadSignatures(new_de_ctx, NULL, 0) < 0) {
+        SCLogError(SC_ERR_NO_RULES_LOADED, "Loading signatures failed.");
+        goto error;
+    }
+
+    DetectEngineAddToMaster(new_de_ctx);
+
+    /* move to free list */
+    DetectEngineMoveToFreeList(old_de_ctx);
+    DetectEngineDeReference(&old_de_ctx);
+    return 0;
+
+error:
+    DetectEngineDeReference(&old_de_ctx);
+    return -1;
+}
+
+
+typedef struct TenantLoaderCtx_ {
+    uint32_t tenant_id;
+    int reload_cnt; /**< used by reload */
+    const char *yaml;
+} TenantLoaderCtx;
+
+static int DetectLoaderFuncLoadTenant(void *vctx, int loader_id)
+{
+    TenantLoaderCtx *ctx = (TenantLoaderCtx *)vctx;
+
+    SCLogDebug("loader %d", loader_id);
+    if (DetectEngineMultiTenantLoadTenant(ctx->tenant_id, ctx->yaml, loader_id) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int DetectLoaderSetupLoadTenant(uint32_t tenant_id, const char *yaml)
+{
+    TenantLoaderCtx *t = SCCalloc(1, sizeof(*t));
+    if (t == NULL)
+        return -ENOMEM;
+
+    t->tenant_id = tenant_id;
+    t->yaml = yaml;
+
+    return DetectLoaderQueueTask(-1, DetectLoaderFuncLoadTenant, t);
+}
+
+static int DetectLoaderFuncReloadTenant(void *vctx, int loader_id)
+{
+    TenantLoaderCtx *ctx = (TenantLoaderCtx *)vctx;
+
+    SCLogDebug("loader_id %d", loader_id);
+
+    if (DetectEngineMultiTenantReloadTenant(ctx->tenant_id, ctx->yaml, ctx->reload_cnt) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+int DetectLoaderSetupReloadTenant(uint32_t tenant_id, const char *yaml, int reload_cnt)
+{
+    DetectEngineCtx *old_de_ctx = DetectEngineGetByTenantId(tenant_id);
+    if (old_de_ctx == NULL)
+        return -ENOENT;
+    int loader_id = old_de_ctx->loader_id;
+    DetectEngineDeReference(&old_de_ctx);
+
+    TenantLoaderCtx *t = SCCalloc(1, sizeof(*t));
+    if (t == NULL)
+        return -ENOMEM;
+
+    t->tenant_id = tenant_id;
+    t->yaml = yaml;
+    t->reload_cnt = reload_cnt;
+
+    SCLogDebug("loader_id %d", loader_id);
+
+    return DetectLoaderQueueTask(loader_id, DetectLoaderFuncReloadTenant, t);
+}
+
+/** \brief Load a tenant and wait for loading to complete
+ */
+int DetectEngineLoadTenantBlocking(uint32_t tenant_id, const char *yaml)
+{
+    int r = DetectLoaderSetupLoadTenant(tenant_id, yaml);
+    if (r < 0)
+        return r;
+
+    if (DetectLoadersSync() != 0)
+        return -1;
+
+    return 0;
+}
+
+/** \brief Reload a tenant and wait for loading to complete
+ */
+int DetectEngineReloadTenantBlocking(uint32_t tenant_id, const char *yaml, int reload_cnt)
+{
+    int r = DetectLoaderSetupReloadTenant(tenant_id, yaml, reload_cnt);
+    if (r < 0)
+        return r;
+
+    if (DetectLoadersSync() != 0)
+        return -1;
+
+    return 0;
+}
+
+/**
+ *  \brief setup multi-detect / multi-tenancy
+ *
+ *  See if MT is enabled. If so, setup the selector, tenants and mappings.
+ *  Tenants and mappings are optional, and can also dynamically be added
+ *  and removed from the unix socket.
+ */
+int DetectEngineMultiTenantSetup(void)
+{
+    enum DetectEngineTenantSelectors tenant_selector = TENANT_SELECTOR_UNKNOWN;
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+
+    int unix_socket = 0;
+    (void)ConfGetBool("unix-command.enabled", &unix_socket);
+
+    int failure_fatal = 0;
+    (void)ConfGetBool("engine.init-failure-fatal", &failure_fatal);
+
+    int enabled = 0;
+    (void)ConfGetBool("multi-detect.enabled", &enabled);
+    if (enabled == 1) {
+        DetectLoadersInit();
+        TmModuleDetectLoaderRegister();
+        DetectLoaderThreadSpawn();
+        TmThreadContinueDetectLoaderThreads();
+
+        SCMutexLock(&master->lock);
+        master->multi_tenant_enabled = 1;
+
+        char *handler = NULL;
+        if (ConfGet("multi-detect.selector", &handler) == 1) {
+            SCLogInfo("multi-tenant selector type %s", handler);
+
+            if (strcmp(handler, "vlan") == 0) {
+                tenant_selector = master->tenant_selector = TENANT_SELECTOR_VLAN;
+
+                int vlanbool = 0;
+                if ((ConfGetBool("vlan.use-for-tracking", &vlanbool)) == 1 && vlanbool == 0) {
+                    SCLogError(SC_ERR_INVALID_VALUE, "vlan tracking is disabled, "
+                            "can't use multi-detect selector 'vlan'");
+                    SCMutexUnlock(&master->lock);
+                    goto error;
+                }
+
+            } else if (strcmp(handler, "direct") == 0) {
+                tenant_selector = master->tenant_selector = TENANT_SELECTOR_DIRECT;
+            } else {
+                SCLogError(SC_ERR_INVALID_VALUE, "unknown value %s "
+                                                 "multi-detect.selector", handler);
+                SCMutexUnlock(&master->lock);
+                goto error;
+            }
+        }
+        SCMutexUnlock(&master->lock);
+        SCLogInfo("multi-detect is enabled (multi tenancy). Selector: %s", handler);
+
+        /* traffic -- tenant mappings */
+        ConfNode *mappings_root_node = ConfGetNode("multi-detect.mappings");
+        ConfNode *mapping_node = NULL;
+
+        int mapping_cnt = 0;
+        if (mappings_root_node != NULL) {
+            TAILQ_FOREACH(mapping_node, &mappings_root_node->head, next) {
+                ConfNode *tenant_id_node = ConfNodeLookupChild(mapping_node, "tenant-id");
+                if (tenant_id_node == NULL)
+                    goto bad_mapping;
+                ConfNode *vlan_id_node = ConfNodeLookupChild(mapping_node, "vlan-id");
+                if (vlan_id_node == NULL)
+                    goto bad_mapping;
+
+                uint32_t tenant_id = 0;
+                if (ByteExtractStringUint32(&tenant_id, 10, strlen(tenant_id_node->val),
+                            tenant_id_node->val) == -1)
+                {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT, "tenant-id  "
+                            "of %s is invalid", tenant_id_node->val);
+                    goto bad_mapping;
+                }
+
+                uint16_t vlan_id = 0;
+                if (ByteExtractStringUint16(&vlan_id, 10, strlen(vlan_id_node->val),
+                            vlan_id_node->val) == -1)
+                {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT, "vlan-id  "
+                            "of %s is invalid", vlan_id_node->val);
+                    goto bad_mapping;
+                }
+                if (vlan_id == 0 || vlan_id >= 4095) {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT, "vlan-id  "
+                            "of %s is invalid. Valid range 1-4094.", vlan_id_node->val);
+                    goto bad_mapping;
+                }
+
+                if (DetectEngineTentantRegisterVlanId(tenant_id, (uint32_t)vlan_id) != 0) {
+                    goto error;
+                }
+                SCLogInfo("vlan %u connected to tenant-id %u", vlan_id, tenant_id);
+                mapping_cnt++;
+                continue;
+
+            bad_mapping:
+                if (failure_fatal)
+                    goto error;
+            }
+        }
+
+        if (tenant_selector == TENANT_SELECTOR_VLAN && mapping_cnt == 0) {
+            /* no mappings are valid when we're in unix socket mode,
+             * they can be added on the fly. Otherwise warn/error
+             * depending on failure_fatal */
+
+            if (unix_socket) {
+                SCLogNotice("no tenant traffic mappings defined, "
+                        "tenants won't be used until mappings are added");
+            } else {
+                if (failure_fatal) {
+                    SCLogError(SC_ERR_MT_NO_MAPPING, "no multi-detect mappings defined");
+                    goto error;
+                } else {
+                    SCLogWarning(SC_ERR_MT_NO_MAPPING, "no multi-detect mappings defined");
+                }
+            }
+        }
+
+        /* tenants */
+        ConfNode *tenants_root_node = ConfGetNode("multi-detect.tenants");
+        ConfNode *tenant_node = NULL;
+
+        if (tenants_root_node != NULL) {
+            TAILQ_FOREACH(tenant_node, &tenants_root_node->head, next) {
+                ConfNode *id_node = ConfNodeLookupChild(tenant_node, "id");
+                if (id_node == NULL) {
+                    goto bad_tenant;
+                }
+                ConfNode *yaml_node = ConfNodeLookupChild(tenant_node, "yaml");
+                if (yaml_node == NULL) {
+                    goto bad_tenant;
+                }
+
+                uint32_t tenant_id = 0;
+                if (ByteExtractStringUint32(&tenant_id, 10, strlen(id_node->val),
+                            id_node->val) == -1)
+                {
+                    SCLogError(SC_ERR_INVALID_ARGUMENT, "tenant_id  "
+                            "of %s is invalid", id_node->val);
+                    goto bad_tenant;
+                }
+                SCLogInfo("tenant id: %u, %s", tenant_id, yaml_node->val);
+
+                /* setup the yaml in this loop so that it's not done by the loader
+                 * threads. ConfYamlLoadFileWithPrefix is not thread safe. */
+                char prefix[64];
+                snprintf(prefix, sizeof(prefix), "multi-detect.%d", tenant_id);
+                if (ConfYamlLoadFileWithPrefix(yaml_node->val, prefix) != 0) {
+                    SCLogError(SC_ERR_CONF_YAML_ERROR, "failed to load yaml %s", yaml_node->val);
+                    goto bad_tenant;
+                }
+
+                int r = DetectLoaderSetupLoadTenant(tenant_id, yaml_node->val);
+                if (r < 0) {
+                    /* error logged already */
+                    goto bad_tenant;
+                }
+                continue;
+
+            bad_tenant:
+                if (failure_fatal)
+                    goto error;
+            }
+        }
+
+        /* wait for our loaders to complete their tasks */
+        if (DetectLoadersSync() != 0) {
+            goto error;
+        }
+    } else {
+        SCLogDebug("multi-detect not enabled (multi tenancy)");
+    }
+    return 0;
+error:
+    return -1;
+}
+
+static uint32_t DetectEngineTentantGetIdFromVlanId(const void *ctx, const Packet *p)
+{
+    const DetectEngineThreadCtx *det_ctx = ctx;
+    uint32_t x = 0;
+    uint32_t vlan_id = 0;
+
+    if (p->vlan_idx == 0)
+        return 0;
+
+    vlan_id = p->vlan_id[0];
+
+    if (det_ctx == NULL || det_ctx->tenant_array == NULL || det_ctx->tenant_array_size == 0)
+        return 0;
+
+    /* not very efficient, but for now we're targeting only limited amounts.
+     * Can use hash/tree approach later. */
+    for (x = 0; x < det_ctx->tenant_array_size; x++) {
+        if (det_ctx->tenant_array[x].traffic_id == vlan_id)
+            return det_ctx->tenant_array[x].tenant_id;
+    }
+
+    return 0;
+}
+
+static int DetectEngineTentantRegisterSelector(enum DetectEngineTenantSelectors selector,
+                                           uint32_t tenant_id, uint32_t traffic_id)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (!(master->tenant_selector == TENANT_SELECTOR_UNKNOWN || master->tenant_selector == selector)) {
+        SCLogInfo("conflicting selector already set");
+        SCMutexUnlock(&master->lock);
+        return -1;
+    }
+
+    DetectEngineTenantMapping *m = master->tenant_mapping_list;
+    while (m) {
+        if (m->traffic_id == traffic_id) {
+            SCLogInfo("traffic id already registered");
+            SCMutexUnlock(&master->lock);
+            return -1;
+        }
+        m = m->next;
+    }
+
+    DetectEngineTenantMapping *map = SCCalloc(1, sizeof(*map));
+    if (map == NULL) {
+        SCLogInfo("memory fail");
+        SCMutexUnlock(&master->lock);
+        return -1;
+    }
+    map->traffic_id = traffic_id;
+    map->tenant_id = tenant_id;
+
+    map->next = master->tenant_mapping_list;
+    master->tenant_mapping_list = map;
+
+    master->tenant_selector = selector;
+
+    SCLogDebug("tenant handler %u %u %u registered", selector, tenant_id, traffic_id);
+    SCMutexUnlock(&master->lock);
+    return 0;
+}
+
+static int DetectEngineTentantUnregisterSelector(enum DetectEngineTenantSelectors selector,
+                                           uint32_t tenant_id, uint32_t traffic_id)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (master->tenant_mapping_list == NULL) {
+        SCMutexUnlock(&master->lock);
+        return -1;
+    }
+
+    DetectEngineTenantMapping *prev = NULL;
+    DetectEngineTenantMapping *map = master->tenant_mapping_list;
+    while (map) {
+        if (map->traffic_id == traffic_id &&
+            map->tenant_id == tenant_id)
+        {
+            if (prev != NULL)
+                prev->next = map->next;
+            else
+                master->tenant_mapping_list = map->next;
+
+            map->next = NULL;
+            SCFree(map);
+            SCLogInfo("tenant handler %u %u %u unregistered", selector, tenant_id, traffic_id);
+            SCMutexUnlock(&master->lock);
+            return 0;
+        }
+        prev = map;
+        map = map->next;
+    }
+
+    SCMutexUnlock(&master->lock);
+    return -1;
+}
+
+int DetectEngineTentantRegisterVlanId(uint32_t tenant_id, uint16_t vlan_id)
+{
+    return DetectEngineTentantRegisterSelector(TENANT_SELECTOR_VLAN, tenant_id, (uint32_t)vlan_id);
+}
+
+int DetectEngineTentantUnregisterVlanId(uint32_t tenant_id, uint16_t vlan_id)
+{
+    return DetectEngineTentantUnregisterSelector(TENANT_SELECTOR_VLAN, tenant_id, (uint32_t)vlan_id);
+}
+
+int DetectEngineTentantRegisterPcapFile(uint32_t tenant_id)
+{
+    SCLogInfo("registering %u %d 0", TENANT_SELECTOR_DIRECT, tenant_id);
+    return DetectEngineTentantRegisterSelector(TENANT_SELECTOR_DIRECT, tenant_id, 0);
+}
+
+int DetectEngineTentantUnregisterPcapFile(uint32_t tenant_id)
+{
+    SCLogInfo("unregistering %u %d 0", TENANT_SELECTOR_DIRECT, tenant_id);
+    return DetectEngineTentantUnregisterSelector(TENANT_SELECTOR_DIRECT, tenant_id, 0);
+}
+
+static uint32_t DetectEngineTentantGetIdFromPcap(const void *ctx, const Packet *p)
+{
+    return p->pcap_v.tenant_id;
+}
+
+DetectEngineCtx *DetectEngineGetByTenantId(int tenant_id)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (master->list == NULL) {
+        SCMutexUnlock(&master->lock);
+        return NULL;
+    }
+
+    DetectEngineCtx *de_ctx = master->list;
+    while (de_ctx) {
+        if (de_ctx->tenant_id == tenant_id) {
+            de_ctx->ref_cnt++;
+            break;
+        }
+
+        de_ctx = de_ctx->next;
+    }
+
+    SCMutexUnlock(&master->lock);
+    return de_ctx;
+}
+
+void DetectEngineDeReference(DetectEngineCtx **de_ctx)
+{
+    BUG_ON((*de_ctx)->ref_cnt == 0);
+    (*de_ctx)->ref_cnt--;
+    *de_ctx = NULL;
+}
+
+static int DetectEngineAddToList(DetectEngineCtx *instance)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+
+    if (instance == NULL)
+        return -1;
+
+    if (master->list == NULL) {
+        master->list = instance;
+    } else {
+        instance->next = master->list;
+        master->list = instance;
+    }
+
+    return 0;
+}
+
+int DetectEngineAddToMaster(DetectEngineCtx *de_ctx)
+{
+    int r;
+
+    if (de_ctx == NULL)
+        return -1;
+
+    SCLogDebug("adding de_ctx %p to master", de_ctx);
+
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+    r = DetectEngineAddToList(de_ctx);
+    SCMutexUnlock(&master->lock);
+    return r;
+}
+
+int DetectEngineMoveToFreeList(DetectEngineCtx *de_ctx)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+
+    SCMutexLock(&master->lock);
+    DetectEngineCtx *instance = master->list;
+    if (instance == NULL) {
+        SCMutexUnlock(&master->lock);
+        return -1;
+    }
+
+    /* remove from active list */
+    if (instance == de_ctx) {
+        master->list = instance->next;
+    } else {
+        DetectEngineCtx *prev = instance;
+        instance = instance->next; /* already checked first element */
+
+        while (instance) {
+            DetectEngineCtx *next = instance->next;
+
+            if (instance == de_ctx) {
+                prev->next = instance->next;
+                break;
+            }
+
+            prev = instance;
+            instance = next;
+        }
+        if (instance == NULL) {
+            SCMutexUnlock(&master->lock);
+            return -1;
+        }
+    }
+
+    /* instance is now detached from list */
+    instance->next = NULL;
+
+    /* add to free list */
+    if (master->free_list == NULL) {
+        master->free_list = instance;
+    } else {
+        instance->next = master->free_list;
+        master->free_list = instance;
+    }
+    SCLogDebug("detect engine %p moved to free list (%u refs)", de_ctx, de_ctx->ref_cnt);
+
+    SCMutexUnlock(&master->lock);
+    return 0;
+}
+
+void DetectEnginePruneFreeList(void)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    DetectEngineCtx *prev = NULL;
+    DetectEngineCtx *instance = master->free_list;
+    while (instance) {
+        DetectEngineCtx *next = instance->next;
+
+        SCLogDebug("detect engine %p has %u ref(s)", instance, instance->ref_cnt);
+
+        if (instance->ref_cnt == 0) {
+            if (prev == NULL) {
+                master->free_list = next;
+            } else {
+                prev->next = next;
+            }
+
+            SCLogDebug("freeing detect engine %p", instance);
+            DetectEngineCtxFree(instance);
+            instance = NULL;
+        }
+
+        prev = instance;
+        instance = next;
+    }
+    SCMutexUnlock(&master->lock);
+}
+
+static int reloads = 0;
+
+/** \brief Reload the detection engine
+ *
+ *  \param filename YAML file to load for the detect config
+ *
+ *  \retval -1 error
+ *  \retval 0 ok
+ */
+int DetectEngineReload(const char *filename, SCInstance *suri)
+{
+    DetectEngineCtx *new_de_ctx = NULL;
+    DetectEngineCtx *old_de_ctx = NULL;
+
+    char prefix[128] = "";
+    if (filename != NULL) {
+        snprintf(prefix, sizeof(prefix), "detect-engine-reloads.%d", reloads++);
+        if (ConfYamlLoadFileWithPrefix(filename, prefix) != 0) {
+            SCLogError(SC_ERR_CONF_YAML_ERROR, "failed to load yaml %s", filename);
+            return -1;
+        }
+
+        ConfNode *node = ConfGetNode(prefix);
+        if (node == NULL) {
+            SCLogError(SC_ERR_CONF_YAML_ERROR, "failed to properly setup yaml %s", filename);
+            return -1;
+        }
+#if 0
+        ConfDump();
+#endif
+    }
+
+    /* get a reference to the current de_ctx */
+    old_de_ctx = DetectEngineGetCurrent();
+    if (old_de_ctx == NULL)
+        return -1;
+    SCLogDebug("get ref to old_de_ctx %p", old_de_ctx);
+
+    /* get new detection engine */
+    new_de_ctx = DetectEngineCtxInitWithPrefix(prefix);
+    if (new_de_ctx == NULL) {
+        SCLogError(SC_ERR_INITIALIZATION, "initializing detection engine "
+                "context failed.");
+        DetectEngineDeReference(&old_de_ctx);
+        return -1;
+    }
+    if (SigLoadSignatures(new_de_ctx,
+                          suri->sig_file, suri->sig_file_exclusive) != 0) {
+        DetectEngineCtxFree(new_de_ctx);
+        DetectEngineDeReference(&old_de_ctx);
+        return -1;
+    }
+    SCThresholdConfInitContext(new_de_ctx, NULL);
+    SCLogDebug("set up new_de_ctx %p", new_de_ctx);
+
+    /* add to master */
+    DetectEngineAddToMaster(new_de_ctx);
+
+    /* move to old free list */
+    DetectEngineMoveToFreeList(old_de_ctx);
+    DetectEngineDeReference(&old_de_ctx);
+
+    SCLogDebug("going to reload the threads to use new_de_ctx %p", new_de_ctx);
+    /* update the threads */
+    DetectEngineReloadThreads(new_de_ctx);
+    SCLogDebug("threads now run new_de_ctx %p", new_de_ctx);
+
+    /* walk free list, freeing the old_de_ctx */
+    DetectEnginePruneFreeList();
+
+    SCLogDebug("old_de_ctx should have been freed");
+    return 0;
+}
+
+static uint32_t TenantIdHash(HashTable *h, void *data, uint16_t data_len)
+{
+    DetectEngineThreadCtx *det_ctx = (DetectEngineThreadCtx *)data;
+    return det_ctx->tenant_id % h->array_size;
+}
+
+static char TenantIdCompare(void *d1, uint16_t d1_len, void *d2, uint16_t d2_len)
+{
+    DetectEngineThreadCtx *det1 = (DetectEngineThreadCtx *)d1;
+    DetectEngineThreadCtx *det2 = (DetectEngineThreadCtx *)d2;
+    return (det1->tenant_id == det2->tenant_id);
+}
+
+static void TenantIdFree(void *d)
+{
+    DetectEngineThreadCtxFree(d);
+}
+
+int DetectEngineMTApply(void)
+{
+    DetectEngineMasterCtx *master = &g_master_de_ctx;
+    SCMutexLock(&master->lock);
+
+    if (master->tenant_selector == TENANT_SELECTOR_UNKNOWN) {
+        SCLogInfo("error, no tenant selector");
+        SCMutexUnlock(&master->lock);
+        return -1;
+    }
+
+    DetectEngineCtx *minimal_de_ctx = NULL;
+    /* if we have no tenants, we need a minimal one */
+    if (master->list == NULL) {
+        minimal_de_ctx = master->list = DetectEngineCtxInitMinimal();
+        SCLogDebug("no tenants, using minimal %p", minimal_de_ctx);
+    } else if (master->list->next == NULL && master->list->tenant_id == 0) {
+        minimal_de_ctx = master->list;
+        SCLogDebug("no tenants, using original %p", minimal_de_ctx);
+
+    /* the default de_ctx should be in the list with tenant_id 0 */
+    } else {
+        DetectEngineCtx *list = master->list;
+        for ( ; list != NULL; list = list->next) {
+            SCLogInfo("list %p tenant %u", list, list->tenant_id);
+
+            if (list->tenant_id == 0) {
+                minimal_de_ctx = list;
+                break;
+            }
+        }
+    }
+
+    /* update the threads */
+    SCLogDebug("MT reload starting");
+    DetectEngineReloadThreads(minimal_de_ctx);
+    SCLogDebug("MT reload done");
+
+    SCMutexUnlock(&master->lock);
+
+    /* walk free list, freeing the old_de_ctx */
+    DetectEnginePruneFreeList();
+
+    SCLogDebug("old_de_ctx should have been freed");
+    return 0;
+}
+
+const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type)
+{
     switch (type) {
         case DETECT_SM_LIST_MATCH:
             return "packet";
@@ -1538,7 +2645,7 @@ const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type) {
             return "http raw uri";
         case DETECT_SM_LIST_HCBDMATCH:
             return "http client body";
-        case DETECT_SM_LIST_HSBDMATCH:
+        case DETECT_SM_LIST_FILEDATA:
             return "http server body";
         case DETECT_SM_LIST_HHDMATCH:
             return "http headers";
@@ -1558,6 +2665,8 @@ const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type) {
             return "http cookie";
         case DETECT_SM_LIST_HUADMATCH:
             return "http user-agent";
+        case DETECT_SM_LIST_HRLMATCH:
+            return "http request line";
         case DETECT_SM_LIST_APP_EVENT:
             return "app layer events";
 
@@ -1571,8 +2680,21 @@ const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type) {
         case DETECT_SM_LIST_FILEMATCH:
             return "file";
 
-        case DETECT_SM_LIST_DNSQUERY_MATCH:
-            return "dns query";
+        case DETECT_SM_LIST_DNSQUERYNAME_MATCH:
+            return "dns query name";
+        case DETECT_SM_LIST_DNSREQUEST_MATCH:
+            return "dns request";
+        case DETECT_SM_LIST_DNSRESPONSE_MATCH:
+            return "dns response";
+
+        case DETECT_SM_LIST_MODBUS_MATCH:
+            return "modbus";
+
+        case DETECT_SM_LIST_BASE64_DATA:
+            return "base64_data";
+
+        case DETECT_SM_LIST_TEMPLATE_BUFFER_MATCH:
+            return "template_buffer";
 
         case DETECT_SM_LIST_POSTMATCH:
             return "post-match";
@@ -1799,7 +2921,6 @@ int DetectEngineTest05(void)
                                             0 /* STREAM_TOSERVER */,
                                             DETECT_SM_LIST_UMATCH,
                                             DE_STATE_FLAG_URI_INSPECT,
-                                            DE_STATE_FLAG_URI_INSPECT,
                                             DummyTestAppInspectionEngine01,
                                             engine_list);
 
@@ -1820,7 +2941,6 @@ int DetectEngineTest05(void)
                     engine->dir != dir ||
                     engine->sm_list != DETECT_SM_LIST_UMATCH ||
                     engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
-                    engine->match_flags != DE_STATE_FLAG_URI_INSPECT ||
                     engine->Callback != DummyTestAppInspectionEngine01) {
                     printf("failed for http and dir(0-toserver)\n");
                     goto end;
@@ -1862,14 +2982,12 @@ int DetectEngineTest06(void)
                                             0 /* STREAM_TOSERVER */,
                                             DETECT_SM_LIST_UMATCH,
                                             DE_STATE_FLAG_URI_INSPECT,
-                                            DE_STATE_FLAG_URI_INSPECT,
                                             DummyTestAppInspectionEngine01,
                                             engine_list);
     DetectEngineRegisterAppInspectionEngine(IPPROTO_TCP,
                                             ALPROTO_HTTP,
                                             1 /* STREAM_TOCLIENT */,
                                             DETECT_SM_LIST_UMATCH,
-                                            DE_STATE_FLAG_URI_INSPECT,
                                             DE_STATE_FLAG_URI_INSPECT,
                                             DummyTestAppInspectionEngine02,
                                             engine_list);
@@ -1891,7 +3009,6 @@ int DetectEngineTest06(void)
                     engine->dir != dir ||
                     engine->sm_list != DETECT_SM_LIST_UMATCH ||
                     engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
-                    engine->match_flags != DE_STATE_FLAG_URI_INSPECT ||
                     engine->Callback != DummyTestAppInspectionEngine01) {
                     printf("failed for http and dir(0-toserver)\n");
                     goto end;
@@ -1910,7 +3027,6 @@ int DetectEngineTest06(void)
                     engine->dir != dir ||
                     engine->sm_list != DETECT_SM_LIST_UMATCH ||
                     engine->inspect_flags != DE_STATE_FLAG_URI_INSPECT ||
-                    engine->match_flags != DE_STATE_FLAG_URI_INSPECT ||
                     engine->Callback != DummyTestAppInspectionEngine02) {
                     printf("failed for http and dir(0-toclient)\n");
                     goto end;
@@ -1943,7 +3059,6 @@ int DetectEngineTest07(void)
     struct test_data_t {
         int32_t sm_list;
         uint32_t inspect_flags;
-        uint32_t match_flags;
         uint16_t dir;
         int (*Callback)(ThreadVars *tv,
                         DetectEngineCtx *de_ctx,
@@ -1957,66 +3072,53 @@ int DetectEngineTest07(void)
     struct test_data_t data[] = {
         { DETECT_SM_LIST_UMATCH,
           DE_STATE_FLAG_URI_INSPECT,
-          DE_STATE_FLAG_URI_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HCBDMATCH,
           DE_STATE_FLAG_HCBD_INSPECT,
-          DE_STATE_FLAG_HCBD_INSPECT,
           0,
           DummyTestAppInspectionEngine02 },
-        { DETECT_SM_LIST_HSBDMATCH,
-          DE_STATE_FLAG_HSBD_INSPECT,
+        { DETECT_SM_LIST_FILEDATA,
           DE_STATE_FLAG_HSBD_INSPECT,
           1,
           DummyTestAppInspectionEngine02 },
         { DETECT_SM_LIST_HHDMATCH,
           DE_STATE_FLAG_HHD_INSPECT,
-          DE_STATE_FLAG_HHD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HRHDMATCH,
-          DE_STATE_FLAG_HRHD_INSPECT,
           DE_STATE_FLAG_HRHD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HMDMATCH,
           DE_STATE_FLAG_HMD_INSPECT,
-          DE_STATE_FLAG_HMD_INSPECT,
           0,
           DummyTestAppInspectionEngine02 },
         { DETECT_SM_LIST_HCDMATCH,
-          DE_STATE_FLAG_HCD_INSPECT,
           DE_STATE_FLAG_HCD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HRUDMATCH,
           DE_STATE_FLAG_HRUD_INSPECT,
-          DE_STATE_FLAG_HRUD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_FILEMATCH,
           DE_STATE_FLAG_FILE_TS_INSPECT,
-          DE_STATE_FLAG_FILE_TS_INSPECT,
           0,
           DummyTestAppInspectionEngine02 },
         { DETECT_SM_LIST_FILEMATCH,
-          DE_STATE_FLAG_FILE_TC_INSPECT,
           DE_STATE_FLAG_FILE_TC_INSPECT,
           1,
           DummyTestAppInspectionEngine02 },
         { DETECT_SM_LIST_HSMDMATCH,
           DE_STATE_FLAG_HSMD_INSPECT,
-          DE_STATE_FLAG_HSMD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HSCDMATCH,
           DE_STATE_FLAG_HSCD_INSPECT,
-          DE_STATE_FLAG_HSCD_INSPECT,
           0,
           DummyTestAppInspectionEngine01 },
         { DETECT_SM_LIST_HUADMATCH,
-          DE_STATE_FLAG_HUAD_INSPECT,
           DE_STATE_FLAG_HUAD_INSPECT,
           0,
           DummyTestAppInspectionEngine02 },
@@ -2029,7 +3131,6 @@ int DetectEngineTest07(void)
                                                 data[i].dir /* STREAM_TOCLIENT */,
                                                 data[i].sm_list,
                                                 data[i].inspect_flags,
-                                                data[i].match_flags,
                                                 data[i].Callback,
                                                 engine_list);
     }
@@ -2055,7 +3156,6 @@ int DetectEngineTest07(void)
                         engine->dir != data[i].dir ||
                         engine->sm_list != data[i].sm_list ||
                         engine->inspect_flags != data[i].inspect_flags ||
-                        engine->match_flags != data[i].match_flags ||
                         engine->Callback != data[i].Callback) {
                         printf("failed for http\n");
                         goto end;

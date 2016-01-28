@@ -40,12 +40,13 @@
 #define ETHERNET_TYPE_8021Q           0x8100
 #define ETHERNET_TYPE_LOOP            0x9000
 #define ETHERNET_TYPE_8021QINQ        0x9100
+#define ETHERNET_TYPE_ERSPAN          0x88BE
 
 typedef struct EthernetHdr_ {
     uint8_t eth_dst[6];
     uint8_t eth_src[6];
     uint16_t eth_type;
-} EthernetHdr;
+} __attribute__((__packed__)) EthernetHdr;
 
 #endif /* __DECODE_ETHERNET_H__ */
 

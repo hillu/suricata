@@ -65,7 +65,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectFragBitsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+static int DetectFragBitsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectFragBitsSetup (DetectEngineCtx *, Signature *, char *);
 static void DetectFragBitsFree(void *);
 
@@ -73,7 +73,8 @@ static void DetectFragBitsFree(void *);
  * \brief Registration function for fragbits: keyword
  */
 
-void DetectFragBitsRegister (void) {
+void DetectFragBitsRegister (void)
+{
     sigmatch_table[DETECT_FRAGBITS].name = "fragbits";
     sigmatch_table[DETECT_FRAGBITS].desc = "check if the fragmentation and reserved bits are set in the IP header";
     sigmatch_table[DETECT_FRAGBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Fragbits";
@@ -118,11 +119,11 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectFragBitsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+static int DetectFragBitsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
     int ret = 0;
     uint16_t fragbits = 0;
-    DetectFragBitsData *de = (DetectFragBitsData *)m->ctx;
+    const DetectFragBitsData *de = (const DetectFragBitsData *)ctx;
 
     if (!de || !PKT_IS_IPV4(p) || !p || PKT_IS_PSEUDOPKT(p))
         return ret;
@@ -301,7 +302,7 @@ static int DetectFragBitsSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
         goto error;
 
     sm->type = DETECT_FRAGBITS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
@@ -320,7 +321,8 @@ error:
  *
  * \param de pointer to DetectFragBitsData
  */
-static void DetectFragBitsFree(void *de_ptr) {
+static void DetectFragBitsFree(void *de_ptr)
+{
     DetectFragBitsData *de = (DetectFragBitsData *)de_ptr;
     if(de) SCFree(de);
 }
@@ -336,7 +338,8 @@ static void DetectFragBitsFree(void *de_ptr) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int FragBitsTestParse01 (void) {
+static int FragBitsTestParse01 (void)
+{
     DetectFragBitsData *de = NULL;
     de = DetectFragBitsParse("M");
     if (de && (de->fragbits == FRAGBITS_HAVE_MF) ) {
@@ -353,7 +356,8 @@ static int FragBitsTestParse01 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int FragBitsTestParse02 (void) {
+static int FragBitsTestParse02 (void)
+{
     DetectFragBitsData *de = NULL;
     de = DetectFragBitsParse("G");
     if (de) {
@@ -370,7 +374,8 @@ static int FragBitsTestParse02 (void) {
  *  \retval 1 on success
  *  \retval 0 on failure
  */
-static int FragBitsTestParse03 (void) {
+static int FragBitsTestParse03 (void)
+{
     uint8_t raw_eth[] = {
         0x00 ,0x40 ,0x33 ,0xd9 ,0x7c ,0xfd ,0x00 ,0x00,
         0x39 ,0xcf ,0xd9 ,0xcd ,0x08 ,0x00 ,0x45 ,0x00,
@@ -441,9 +446,9 @@ static int FragBitsTestParse03 (void) {
         goto error;
 
     sm->type = DETECT_FRAGBITS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
-    ret = DetectFragBitsMatch(&tv,NULL,p,NULL,sm);
+    ret = DetectFragBitsMatch(&tv, NULL, p, NULL, sm->ctx);
 
     if(ret) {
         if (de) SCFree(de);
@@ -466,7 +471,8 @@ error:
  *  \retval 1 on success
  *  \retval 0 on failure
  */
-static int FragBitsTestParse04 (void) {
+static int FragBitsTestParse04 (void)
+{
     uint8_t raw_eth[] = {
         0x00 ,0x40 ,0x33 ,0xd9 ,0x7c ,0xfd ,0x00 ,0x00,
         0x39 ,0xcf ,0xd9 ,0xcd ,0x08 ,0x00 ,0x45 ,0x00,
@@ -538,9 +544,9 @@ static int FragBitsTestParse04 (void) {
         goto error;
 
     sm->type = DETECT_FRAGBITS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
-    ret = DetectFragBitsMatch(&tv,NULL,p,NULL,sm);
+    ret = DetectFragBitsMatch(&tv, NULL, p, NULL, sm->ctx);
 
     if(ret) {
         if (de) SCFree(de);
@@ -564,7 +570,8 @@ error:
 /**
  * \brief this function registers unit tests for FragBits
  */
-void FragBitsRegisterTests(void) {
+void FragBitsRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("FragBitsTestParse01", FragBitsTestParse01, 1);
     UtRegisterTest("FragBitsTestParse02", FragBitsTestParse02, 0);

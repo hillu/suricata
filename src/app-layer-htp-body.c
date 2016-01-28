@@ -83,7 +83,7 @@ int HtpBodyAppendChunk(HtpTxUserData *htud, HtpBody *body, uint8_t *data, uint32
         SCReturnInt(0);
     }
 
-    if (body->content_len_so_far == 0) {
+    if (body->first == NULL) {
         /* New chunk */
         bd = (HtpBodyChunk *)HTPMalloc(sizeof(HtpBodyChunk));
         if (bd == NULL)
@@ -92,6 +92,7 @@ int HtpBodyAppendChunk(HtpTxUserData *htud, HtpBody *body, uint8_t *data, uint32
         bd->len = len;
         bd->stream_offset = 0;
         bd->next = NULL;
+        bd->logged = 0;
 
         bd->data = HTPMalloc(len);
         if (bd->data == NULL) {
@@ -102,7 +103,6 @@ int HtpBodyAppendChunk(HtpTxUserData *htud, HtpBody *body, uint8_t *data, uint32
         body->first = body->last = bd;
 
         body->content_len_so_far = len;
-
     } else {
         bd = (HtpBodyChunk *)HTPMalloc(sizeof(HtpBodyChunk));
         if (bd == NULL)
@@ -111,6 +111,7 @@ int HtpBodyAppendChunk(HtpTxUserData *htud, HtpBody *body, uint8_t *data, uint32
         bd->len = len;
         bd->stream_offset = body->content_len_so_far;
         bd->next = NULL;
+        bd->logged = 0;
 
         bd->data = HTPMalloc(len);
         if (bd->data == NULL) {
@@ -118,15 +119,12 @@ int HtpBodyAppendChunk(HtpTxUserData *htud, HtpBody *body, uint8_t *data, uint32
         }
         memcpy(bd->data, data, len);
 
-        if (body->first == NULL) {
-            body->first = bd;
-        } else {
-            body->last->next = bd;
-        }
+        body->last->next = bd;
         body->last = bd;
 
         body->content_len_so_far += len;
     }
+    SCLogDebug("Body %p; data %p, len %"PRIu32, body, bd->data, (uint32_t)bd->len);
 
     SCReturnInt(0);
 
@@ -197,7 +195,9 @@ void HtpBodyFree(HtpBody *body)
 /**
  * \brief Free request body chunks that are already fully parsed.
  *
- * \param htud pointer to the HtpTxUserData holding the body
+ * \param state htp_state, with reference to our config
+ * \param body the body to prune
+ * \param direction STREAM_TOSERVER (request), STREAM_TOCLIENT (response)
  *
  * \retval none
  */
@@ -209,7 +209,7 @@ void HtpBodyPrune(HtpState *state, HtpBody *body, int direction)
         SCReturn;
     }
 
-    if (body->content_len_so_far == 0) {
+    if (body->body_parsed == 0) {
         SCReturn;
     }
 
@@ -246,7 +246,13 @@ void HtpBodyPrune(HtpState *state, HtpBody *body, int direction)
                 "body->body_parsed %"PRIu64, cur->stream_offset, cur->len,
                 cur->stream_offset + cur->len, body->body_parsed);
 
-        if (cur->stream_offset >= body->body_inspected) {
+        uint64_t left_edge = body->body_inspected;
+        if (left_edge <= min_size || left_edge <= window)
+            left_edge = 0;
+        if (left_edge)
+            left_edge -= window;
+
+        if (cur->stream_offset + cur->len > left_edge) {
             break;
         }
 

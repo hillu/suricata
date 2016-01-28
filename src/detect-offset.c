@@ -41,7 +41,8 @@
 
 static int DetectOffsetSetup(DetectEngineCtx *, Signature *, char *);
 
-void DetectOffsetRegister (void) {
+void DetectOffsetRegister (void)
+{
     sigmatch_table[DETECT_OFFSET].name = "offset";
     sigmatch_table[DETECT_OFFSET].desc = "designate from which byte in the payload will be checked to find a match";
     sigmatch_table[DETECT_OFFSET].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Offset";
@@ -78,7 +79,7 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],

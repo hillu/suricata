@@ -26,17 +26,23 @@
 #ifndef __REPUTATION_H__
 #define __REPUTATION_H__
 
-#include "detect.h"
 #include "host.h"
 
 #define SREP_MAX_CATS 60
+
+typedef struct SRepCIDRTree_ {
+    SCRadixTree *srepIPV4_tree[SREP_MAX_CATS];
+    SCRadixTree *srepIPV6_tree[SREP_MAX_CATS];
+} SRepCIDRTree;
+
 typedef struct SReputation_ {
     uint32_t version;
     uint8_t rep[SREP_MAX_CATS];
 } SReputation;
 
 uint8_t SRepCatGetByShortname(char *shortname);
-int SRepInit(DetectEngineCtx *de_ctx);
+int SRepInit(struct DetectEngineCtx_ *de_ctx);
+void SRepDestroy(struct DetectEngineCtx_ *de_ctx);
 void SRepReloadComplete(void);
 int SRepHostTimedOut(Host *);
 
@@ -76,6 +82,12 @@ typedef struct IPReputationCtx_ {
     SCMutex reputationIPV6_lock;
 }IPReputationCtx;
 
+uint8_t SRepCIDRGetIPRepSrc(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version);
+uint8_t SRepCIDRGetIPRepDst(SRepCIDRTree *cidr_ctx, Packet *p, uint8_t cat, uint32_t version);
+void SRepResetVersion();
+int SRepLoadCatFileFromFD(FILE *fp);
+int SRepLoadFileFromFD(SRepCIDRTree *cidr_ctx, FILE *fp);
+
 /** Reputation Data */
 //TODO: Add a timestamp here to know the last update of this reputation.
 typedef struct Reputation_ {
@@ -88,7 +100,7 @@ typedef struct Reputation_ {
 /* flags for transactions */
 #define TRANSACTION_FLAG_NEEDSYNC 0x01 /**< We will apply the transaction only if necesary */
 #define TRANSACTION_FLAG_INCS     0x02 /**< We will increment only if necesary */
-#define TRANSACTION_FLAG_DECS     0x03 /**< We will decrement only if necesary */
+#define TRANSACTION_FLAG_DECS     0x04 /**< We will decrement only if necesary */
 
 /* transaction for feedback */
 typedef struct ReputationTransaction_ {

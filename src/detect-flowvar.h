@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -37,7 +37,20 @@ void DetectFlowvarRegister (void);
 
 int DetectFlowvarPostMatchSetup(Signature *s, uint16_t idx);
 int DetectFlowvarStoreMatch(DetectEngineThreadCtx *, uint16_t, uint8_t *, uint16_t, int);
-void DetectFlowvarProcessList(DetectEngineThreadCtx *det_ctx, Flow *);
+
+/* For use only by DetectFlowvarProcessList() */
+void DetectFlowvarProcessListInternal(DetectFlowvarList *fs, Flow *f, const int flow_locked);
+static inline void DetectFlowvarProcessList(DetectEngineThreadCtx *det_ctx, Flow *f)
+{
+    DetectFlowvarList *fs = det_ctx->flowvarlist;
+    const int flow_locked = det_ctx->flow_locked;
+
+    SCLogDebug("det_ctx->flowvarlist %p", fs);
+
+    if (fs != NULL) {
+        det_ctx->flowvarlist = NULL;
+        DetectFlowvarProcessListInternal(fs, f, flow_locked);
+    }
+}
 
 #endif /* __DETECT_FLOWVAR_H__ */
-

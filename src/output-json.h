@@ -32,15 +32,14 @@ void TmModuleOutputJsonRegister (void);
 #include "util-buffer.h"
 #include "util-logopenfile.h"
 
+void CreateJSONFlowId(json_t *js, const Flow *f);
+void JsonTcpFlags(uint8_t flags, json_t *js);
 json_t *CreateJSONHeader(Packet *p, int direction_sensative, char *event_type);
+json_t *CreateJSONHeaderWithTxId(Packet *p, int direction_sensitive, char *event_type, uint32_t tx_id);
 TmEcode OutputJSON(json_t *js, void *data, uint64_t *count);
 int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer *buffer);
 OutputCtx *OutputJsonInitCtx(ConfNode *);
 
-enum JsonOutput { ALERT_FILE,
-                  ALERT_SYSLOG,
-                  ALERT_UNIX_DGRAM,
-                  ALERT_UNIX_STREAM };
 enum JsonFormat { COMPACT, INDENT };
 
 /*
@@ -48,10 +47,9 @@ enum JsonFormat { COMPACT, INDENT };
  */
 typedef struct OutputJsonCtx_ {
     LogFileCtx *file_ctx;
-    enum JsonOutput json_out;
+    enum LogFileType json_out;
     enum JsonFormat format;
 } OutputJsonCtx;
-
 
 typedef struct AlertJsonThread_ {
     /** LogFileCtx has the pointer to the file and a mutex to allow multithreading */

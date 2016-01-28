@@ -48,7 +48,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 int DetectRpcSetup (DetectEngineCtx *, Signature *, char *);
 void DetectRpcRegisterTests(void);
 void DetectRpcFree(void *);
@@ -56,7 +56,8 @@ void DetectRpcFree(void *);
 /**
  * \brief Registration function for rpc keyword
  */
-void DetectRpcRegister (void) {
+void DetectRpcRegister (void)
+{
     sigmatch_table[DETECT_RPC].name = "rpc";
     sigmatch_table[DETECT_RPC].desc = "match RPC procedure numbers and RPC version";
     sigmatch_table[DETECT_RPC].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#rpc";
@@ -106,10 +107,10 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
     /* PrintRawDataFp(stdout, p->payload, p->payload_len); */
-    DetectRpcData *rd = (DetectRpcData *)m->ctx;
+    const DetectRpcData *rd = (const DetectRpcData *)ctx;
     char *rpcmsg = (char *)p->payload;
 
     if (PKT_IS_TCP(p)) {
@@ -285,7 +286,7 @@ int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, char *rpcstr)
         goto error;
 
     sm->type = DETECT_RPC;
-    sm->ctx = (void *)rd;
+    sm->ctx = (SigMatchCtx *)rd;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
@@ -304,7 +305,8 @@ error:
  *
  * \param rd pointer to DetectRpcData
  */
-void DetectRpcFree(void *ptr) {
+void DetectRpcFree(void *ptr)
+{
     SCEnter();
 
     if (ptr == NULL) {
@@ -322,7 +324,8 @@ void DetectRpcFree(void *ptr) {
  * \test DetectRpcTestParse01 is a test to make sure that we return "something"
  *  when given valid rpc opt
  */
-int DetectRpcTestParse01 (void) {
+int DetectRpcTestParse01 (void)
+{
     int result = 0;
     DetectRpcData *rd = NULL;
     rd = DetectRpcParse("123,444,555");
@@ -337,7 +340,8 @@ int DetectRpcTestParse01 (void) {
 /**
  * \test DetectRpcTestParse02 is a test for setting the established rpc opt
  */
-int DetectRpcTestParse02 (void) {
+int DetectRpcTestParse02 (void)
+{
     int result = 0;
     DetectRpcData *rd = NULL;
     rd = DetectRpcParse("111,222,333");
@@ -361,7 +365,8 @@ int DetectRpcTestParse02 (void) {
  * \test DetectRpcTestParse03 is a test for checking the wildcards
  * and not specified fields
  */
-int DetectRpcTestParse03 (void) {
+int DetectRpcTestParse03 (void)
+{
     int result = 1;
     DetectRpcData *rd = NULL;
     rd = DetectRpcParse("111,*,333");
@@ -439,7 +444,8 @@ int DetectRpcTestParse03 (void) {
 /**
  * \test DetectRpcTestParse04 is a test for check the discarding of empty options
  */
-int DetectRpcTestParse04 (void) {
+int DetectRpcTestParse04 (void)
+{
     int result = 0;
     DetectRpcData *rd = NULL;
     rd = DetectRpcParse("");
@@ -456,7 +462,8 @@ int DetectRpcTestParse04 (void) {
 /**
  * \test DetectRpcTestParse05 is a test for check invalid values
  */
-int DetectRpcTestParse05 (void) {
+int DetectRpcTestParse05 (void)
+{
     int result = 0;
     DetectRpcData *rd = NULL;
     rd = DetectRpcParse("111,aaa,*");
@@ -473,7 +480,8 @@ int DetectRpcTestParse05 (void) {
 /**
  * \test DetectRpcTestParse05 is a test to check the match function
  */
-static int DetectRpcTestSig01(void) {
+static int DetectRpcTestSig01(void)
+{
     /* RPC Call */
     uint8_t buf[] = {
         /* XID */
@@ -588,7 +596,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectRpc
  */
-void DetectRpcRegisterTests(void) {
+void DetectRpcRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectRpcTestParse01", DetectRpcTestParse01, 1);
     UtRegisterTest("DetectRpcTestParse02", DetectRpcTestParse02, 1);

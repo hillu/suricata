@@ -48,7 +48,7 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
     uint16_t header_len = GRE_HDR_LEN;
     GRESreHdr *gsre = NULL;
 
-    SCPerfCounterIncr(dtv->counter_gre, tv->sc_perf_pca);
+    StatsIncr(tv, dtv->counter_gre);
 
     if(len < GRE_HDR_LEN)    {
         ENGINE_SET_INVALID_EVENT(p, GRE_PKT_TOO_SMALL);
@@ -201,7 +201,7 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             {
                 if (pq != NULL) {
                     Packet *tp = PacketTunnelPktSetup(tv, dtv, p, pkt + header_len,
-                            len - header_len, IPPROTO_IP, pq);
+                            len - header_len, DECODE_TUNNEL_IPV4, pq);
                     if (tp != NULL) {
                         PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         PacketEnqueue(pq,tp);
@@ -214,7 +214,7 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             {
                 if (pq != NULL) {
                     Packet *tp = PacketTunnelPktSetup(tv, dtv, p, pkt + header_len,
-                            len - header_len, PPP_OVER_GRE, pq);
+                            len - header_len, DECODE_TUNNEL_PPP, pq);
                     if (tp != NULL) {
                         PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         PacketEnqueue(pq,tp);
@@ -227,7 +227,7 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             {
                 if (pq != NULL) {
                     Packet *tp = PacketTunnelPktSetup(tv, dtv, p, pkt + header_len,
-                            len - header_len, IPPROTO_IPV6, pq);
+                            len - header_len, DECODE_TUNNEL_IPV6, pq);
                     if (tp != NULL) {
                         PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         PacketEnqueue(pq,tp);
@@ -240,7 +240,7 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
             {
                 if (pq != NULL) {
                     Packet *tp = PacketTunnelPktSetup(tv, dtv, p, pkt + header_len,
-                            len - header_len, VLAN_OVER_GRE, pq);
+                            len - header_len, DECODE_TUNNEL_VLAN, pq);
                     if (tp != NULL) {
                         PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
                         PacketEnqueue(pq,tp);
@@ -248,6 +248,19 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
                 }
                 break;
             }
+
+        case ETHERNET_TYPE_ERSPAN:
+        {
+            if (pq != NULL) {
+                Packet *tp = PacketTunnelPktSetup(tv, dtv, p, pkt + header_len,
+                        len - header_len, DECODE_TUNNEL_ERSPAN, pq);
+                if (tp != NULL) {
+                    PKT_SET_SRC(tp, PKT_SRC_DECODER_GRE);
+                    PacketEnqueue(pq,tp);
+                }
+            }
+            break;
+        }
 
         default:
             return TM_ECODE_OK;
@@ -261,7 +274,8 @@ int DecodeGRE(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
  * \test DecodeGRETest01 is a test for small gre packet
  */
 
-static int DecodeGREtest01 (void)   {
+static int DecodeGREtest01 (void)
+{
 
     uint8_t raw_gre[] = { 0x00 ,0x6e ,0x62 };
     Packet *p = PacketGetFromAlloc();
@@ -288,7 +302,8 @@ static int DecodeGREtest01 (void)   {
  * \test DecodeGRETest02 is a test for wrong gre version
  */
 
-static int DecodeGREtest02 (void)   {
+static int DecodeGREtest02 (void)
+{
     uint8_t raw_gre[] = {
         0x00, 0x6e, 0x62, 0xac, 0x40, 0x00, 0x40, 0x2f,
         0xc2, 0xc7, 0x0a, 0x00, 0x00, 0x64, 0x0a, 0x00,
@@ -329,7 +344,8 @@ static int DecodeGREtest02 (void)   {
  * \test DecodeGRETest03 is a test for valid gre packet
  */
 
-static int DecodeGREtest03 (void)   {
+static int DecodeGREtest03 (void)
+{
     uint8_t raw_gre[] = {
         0x00, 0x6e, 0x62, 0xac, 0x40, 0x00, 0x40, 0x2f,
         0xc2, 0xc7, 0x0a, 0x00, 0x00, 0x64, 0x0a, 0x00,
@@ -371,7 +387,8 @@ static int DecodeGREtest03 (void)   {
  * \brief this function registers unit tests for GRE decoder
  */
 
-void DecodeGRERegisterTests(void) {
+void DecodeGRERegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DecodeGREtest01", DecodeGREtest01, 1);
     UtRegisterTest("DecodeGREtest02", DecodeGREtest02, 1);

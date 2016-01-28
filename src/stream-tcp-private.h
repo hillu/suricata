@@ -62,10 +62,11 @@ typedef struct TcpSegment_ {
 } TcpSegment;
 
 typedef struct TcpStream_ {
-    uint16_t flags;                 /**< Flag specific to the stream e.g. Timestamp */
+    uint16_t flags:12;              /**< Flag specific to the stream e.g. Timestamp */
     /* coccinelle: TcpStream:flags:STREAMTCP_STREAM_FLAG_ */
-    uint8_t wscale;                 /**< wscale setting in this direction */
+    uint16_t wscale:4;              /**< wscale setting in this direction, 4 bits as max val is 15 */
     uint8_t os_policy;              /**< target based OS policy used for reassembly and handling packets*/
+    uint8_t tcp_flags;              /**< TCP flags seen */
 
     uint32_t isn;                   /**< initial sequence number */
     uint32_t next_seq;              /**< next expected sequence number */
@@ -141,6 +142,8 @@ enum
  *  normal packet we assume 3whs to be completed. Only used for SYN/ACK resend
  *  event. */
 #define STREAMTCP_FLAG_3WHS_CONFIRMED               0x1000
+/** App Layer tracking/reassembly is disabled */
+#define STREAMTCP_FLAG_APP_LAYER_DISABLED           0x2000
 
 /*
  * Per STREAM flags
@@ -154,8 +157,7 @@ enum
 #define STREAMTCP_STREAM_FLAG_KEEPALIVE         0x0004
 /** Stream has reached it's reassembly depth, all further packets are ignored */
 #define STREAMTCP_STREAM_FLAG_DEPTH_REACHED     0x0008
-/** Stream has sent a FIN/RST */
-#define STREAMTCP_STREAM_FLAG_CLOSE_INITIATED   0x0010
+// vacancy
 /** Stream supports TIMESTAMP -- used to set ssn STREAMTCP_FLAG_TIMESTAMP
  *  flag. */
 #define STREAMTCP_STREAM_FLAG_TIMESTAMP         0x0020
@@ -167,6 +169,9 @@ enum
 #define STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_SKIPPED 0x0100
 /** Raw reassembly disabled for new segments */
 #define STREAMTCP_STREAM_FLAG_NEW_RAW_DISABLED 0x0200
+// vacancy 2x
+/** NOTE: flags field is 12 bits */
+
 
 /*
  * Per SEGMENT flags
@@ -177,6 +182,9 @@ enum
 #define SEGMENTTCP_FLAG_RAW_PROCESSED       0x01
 /** App Layer reassembly code is done with this segment */
 #define SEGMENTTCP_FLAG_APPLAYER_PROCESSED  0x02
+/** Log API (streaming) has processed this segment */
+#define SEGMENTTCP_FLAG_LOGAPI_PROCESSED    0x04
+
 
 #define PAWS_24DAYS         2073600         /**< 24 days in seconds */
 
@@ -210,6 +218,8 @@ typedef struct TcpSession_ {
     uint8_t state;
     uint8_t queue_len;                      /**< length of queue list below */
     int8_t data_first_seen_dir;
+    /** track all the tcp flags we've seen */
+    uint8_t tcp_packet_flags;
     /* coccinelle: TcpSession:flags:STREAMTCP_FLAG */
     uint16_t flags;
     TcpStream server;
@@ -228,5 +238,9 @@ typedef struct TcpSession_ {
     ((stream)->flags & STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED)
 #define StreamTcpResetStreamFlagAppProtoDetectionCompleted(stream) \
     ((stream)->flags &= ~STREAMTCP_STREAM_FLAG_APPPROTO_DETECTION_COMPLETED);
+#define StreamTcpDisableAppLayerReassembly(ssn) do { \
+        SCLogDebug("setting STREAMTCP_FLAG_APP_LAYER_DISABLED on ssn %p", ssn); \
+        ((ssn)->flags |= STREAMTCP_FLAG_APP_LAYER_DISABLED); \
+    } while (0);
 
 #endif /* __STREAM_TCP_PRIVATE_H__ */

@@ -780,8 +780,7 @@ insert:
         if (tracker->af == AF_INET) {
             r = Defrag4Reassemble(tv, tracker, p);
             if (r != NULL && tv != NULL && dtv != NULL) {
-                SCPerfCounterIncr(dtv->counter_defrag_ipv4_reassembled,
-                    tv->sc_perf_pca);
+                StatsIncr(tv, dtv->counter_defrag_ipv4_reassembled);
                 if (pq && DecodeIPV4(tv, dtv, r, (void *)r->ip4h,
                                IPV4_GET_IPLEN(r), pq) != TM_ECODE_OK) {
                     TmqhOutputPacketpool(tv, r);
@@ -793,8 +792,7 @@ insert:
         else if (tracker->af == AF_INET6) {
             r = Defrag6Reassemble(tv, tracker, p);
             if (r != NULL && tv != NULL && dtv != NULL) {
-                SCPerfCounterIncr(dtv->counter_defrag_ipv6_reassembled,
-                        tv->sc_perf_pca);
+                StatsIncr(tv, dtv->counter_defrag_ipv6_reassembled);
                 if (pq && DecodeIPV6(tv, dtv, r, (uint8_t *)r->ip6h,
                                IPV6_GET_PLEN(r) + IPV6_HEADER_LEN,
                                pq) != TM_ECODE_OK) {
@@ -934,12 +932,10 @@ Defrag(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, PacketQueue *pq)
 
     if (tv != NULL && dtv != NULL) {
         if (af == AF_INET) {
-            SCPerfCounterIncr(dtv->counter_defrag_ipv4_fragments,
-                tv->sc_perf_pca);
+            StatsIncr(tv, dtv->counter_defrag_ipv4_fragments);
         }
         else if (af == AF_INET6) {
-            SCPerfCounterIncr(dtv->counter_defrag_ipv6_fragments,
-                tv->sc_perf_pca);
+            StatsIncr(tv, dtv->counter_defrag_ipv6_fragments);
         }
     }
 
@@ -977,7 +973,8 @@ DefragInit(void)
     DefragInitConfig(FALSE);
 }
 
-void DefragDestroy(void) {
+void DefragDestroy(void)
+{
     DefragHashShutdown();
     DefragContextDestroy(defrag_context);
     defrag_context = NULL;
@@ -1099,10 +1096,11 @@ IPV6BuildTestPacket(uint32_t id, uint16_t off, int mf, const char content,
     p->ip6h = (IPV6Hdr *)GET_PKT_DATA(p);
     IPV6_SET_RAW_VER(p->ip6h, 6);
     /* Fragmentation header. */
-    p->ip6eh.ip6fh = (IPV6FragHdr *)(GET_PKT_DATA(p) + sizeof(IPV6Hdr));
-    p->ip6eh.ip6fh->ip6fh_nxt = IPPROTO_ICMP;
-    p->ip6eh.ip6fh->ip6fh_ident = htonl(id);
-    p->ip6eh.ip6fh->ip6fh_offlg = htons((off << 3) | mf);
+    IPV6FragHdr *fh = (IPV6FragHdr *)(GET_PKT_DATA(p) + sizeof(IPV6Hdr));
+    fh->ip6fh_nxt = IPPROTO_ICMP;
+    fh->ip6fh_ident = htonl(id);
+    fh->ip6fh_offlg = htons((off << 3) | mf);
+    p->ip6eh.ip6fh = fh;
 
     pcontent = SCCalloc(1, content_len);
     if (unlikely(pcontent == NULL))
@@ -2249,7 +2247,8 @@ end:
  * fragments.
  */
 static int
-DefragVlanTest(void) {
+DefragVlanTest(void)
+{
     Packet *p1 = NULL, *p2 = NULL, *r = NULL;
     int ret = 0;
 
@@ -2294,7 +2293,8 @@ end:
  * Like DefragVlanTest, but for QinQ, testing the second level VLAN ID.
  */
 static int
-DefragVlanQinQTest(void) {
+DefragVlanQinQTest(void)
+{
     Packet *p1 = NULL, *p2 = NULL, *r = NULL;
     int ret = 0;
 

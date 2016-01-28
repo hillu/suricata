@@ -20,16 +20,10 @@
 #include "conf.h"
 #include "runmodes.h"
 #include "runmode-pcap-file.h"
-#include "log-httplog.h"
 #include "output.h"
-#include "detect-engine-mpm.h"
 
+#include "detect-engine.h"
 #include "source-pcap-file.h"
-
-#include "alert-fastlog.h"
-#include "alert-prelude.h"
-#include "alert-unified2-alert.h"
-#include "alert-debuglog.h"
 
 #include "util-debug.h"
 #include "util-time.h"
@@ -50,9 +44,6 @@ void RunModeFilePcapRegister(void)
     RunModeRegisterNewRunMode(RUNMODE_PCAP_FILE, "single",
                               "Single threaded pcap file mode",
                               RunModeFilePcapSingle);
-    RunModeRegisterNewRunMode(RUNMODE_PCAP_FILE, "auto",
-                              "Multi threaded pcap file mode",
-                              RunModeFilePcapAuto);
     default_mode = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_PCAP_FILE, "autofp",
                               "Multi threaded pcap file mode.  Packets from "
@@ -68,7 +59,7 @@ void RunModeFilePcapRegister(void)
 /**
  * \brief Single thread version of the Pcap file processing.
  */
-int RunModeFilePcapSingle(DetectEngineCtx *de_ctx)
+int RunModeFilePcapSingle(void)
 {
     char *file = NULL;
     if (ConfGet("pcap-file.file", &file) == 0) {
@@ -112,13 +103,13 @@ int RunModeFilePcapSingle(DetectEngineCtx *de_ctx)
     }
     TmSlotSetFuncAppend(tv, tm_module, NULL);
 
-    if (de_ctx) {
+    if (DetectEngineEnabled()) {
         tm_module = TmModuleGetByName("Detect");
         if (tm_module == NULL) {
             SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
             exit(EXIT_FAILURE);
         }
-        TmSlotSetFuncAppend(tv, tm_module, (void *)de_ctx);
+        TmSlotSetFuncAppend(tv, tm_module, NULL);
     }
 
     SetupOutputs(tv);
@@ -126,167 +117,6 @@ int RunModeFilePcapSingle(DetectEngineCtx *de_ctx)
     TmThreadSetCPU(tv, DETECT_CPU_SET);
 
     if (TmThreadSpawn(tv) != TM_ECODE_OK) {
-        SCLogError(SC_ERR_RUNMODE, "TmThreadSpawn failed");
-        exit(EXIT_FAILURE);
-    }
-
-    return 0;
-}
-
-/*
- * \brief RunModeFilePcapAuto set up the following thread packet handlers:
- *        - Receive thread (from pcap file)
- *        - Decode thread
- *        - Stream thread
- *        - Detect: If we have only 1 cpu, it will setup one Detect thread
- *                  If we have more than one, it will setup num_cpus - 1
- *                  starting from the second cpu available.
- *        - Outputs thread
- *        By default the threads will use the first cpu available
- *        except the Detection threads if we have more than one cpu.
- *
- * \param de_ctx Pointer to the Detection Engine.
- *
- * \retval 0 If all goes well. (If any problem is detected the engine will
- *           exit()).
- */
-int RunModeFilePcapAuto(DetectEngineCtx *de_ctx)
-{
-    SCEnter();
-    char tname[TM_THREAD_NAME_MAX];
-    uint16_t cpu = 0;
-    TmModule *tm_module;
-    RunModeInitialize();
-
-    if (de_ctx == NULL) {
-        SCLogError(SC_ERR_RUNMODE, "can't mix runmode 'auto' and disabled detect");
-        return -1;
-    }
-
-    /* Available cpus */
-    uint16_t ncpus = UtilCpuGetNumProcessorsOnline();
-
-    char *file = NULL;
-    if (ConfGet("pcap-file.file", &file) == 0) {
-        SCLogError(SC_ERR_RUNMODE, "Failed retrieving pcap-file from Conf");
-        exit(EXIT_FAILURE);
-    }
-    SCLogDebug("file %s", file);
-
-    TimeModeSetOffline();
-
-    /* create the threads */
-    ThreadVars *tv_receivepcap =
-        TmThreadCreatePacketHandler("ReceivePcapFile",
-                                    "packetpool", "packetpool",
-                                    "detect-queue1", "simple",
-                                    "pktacqloop");
-    if (tv_receivepcap == NULL) {
-        SCLogError(SC_ERR_FATAL, "threading setup failed");
-        exit(EXIT_FAILURE);
-    }
-    tm_module = TmModuleGetByName("ReceivePcapFile");
-    if (tm_module == NULL) {
-        SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName failed for ReceivePcap");
-        exit(EXIT_FAILURE);
-    }
-    TmSlotSetFuncAppend(tv_receivepcap, tm_module, file);
-
-    tm_module = TmModuleGetByName("DecodePcapFile");
-    if (tm_module == NULL) {
-        SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName DecodePcap failed");
-        exit(EXIT_FAILURE);
-    }
-    TmSlotSetFuncAppend(tv_receivepcap, tm_module, NULL);
-
-    tm_module = TmModuleGetByName("StreamTcp");
-    if (tm_module == NULL) {
-        SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName StreamTcp failed");
-        exit(EXIT_FAILURE);
-    }
-    TmSlotSetFuncAppend(tv_receivepcap, tm_module, (void *)de_ctx);
-
-    TmThreadSetCPU(tv_receivepcap, RECEIVE_CPU_SET);
-
-    if (TmThreadSpawn(tv_receivepcap) != TM_ECODE_OK) {
-        SCLogError(SC_ERR_RUNMODE, "TmThreadSpawn failed");
-        exit(EXIT_FAILURE);
-    }
-
-    /* start with cpu 1 so that if we're creating an odd number of detect
-     * threads we're not creating the most on CPU0. */
-    if (ncpus > 0)
-        cpu = 1;
-
-    /* always create at least one thread */
-    int thread_max = TmThreadGetNbThreads(DETECT_CPU_SET);
-    if (thread_max == 0)
-        thread_max = ncpus * threading_detect_ratio;
-    if (thread_max < 1)
-        thread_max = 1;
-
-    int thread;
-    for (thread = 0; thread < thread_max; thread++) {
-        snprintf(tname, sizeof(tname), "Detect%"PRIu16, thread+1);
-
-        char *thread_name = SCStrdup(tname);
-        if (unlikely(thread_name == NULL)) {
-            SCLogError(SC_ERR_RUNMODE, "failed to strdup thread name");
-            exit(EXIT_FAILURE);
-        }
-        SCLogDebug("Assigning %s affinity to cpu %u", thread_name, cpu);
-
-        ThreadVars *tv_detect_ncpu =
-            TmThreadCreatePacketHandler(thread_name,
-                                        "detect-queue1", "simple",
-                                        "alert-queue1", "simple",
-                                        "1slot");
-        if (tv_detect_ncpu == NULL) {
-            SCLogError(SC_ERR_RUNMODE, "TmThreadsCreate failed");
-            exit(EXIT_FAILURE);
-        }
-        tm_module = TmModuleGetByName("Detect");
-        if (tm_module == NULL) {
-            SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
-            exit(EXIT_FAILURE);
-        }
-        TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
-
-        char *thread_group_name = SCStrdup("Detect");
-        if (unlikely(thread_group_name == NULL)) {
-            SCLogError(SC_ERR_RUNMODE, "error allocating memory");
-            exit(EXIT_FAILURE);
-        }
-        tv_detect_ncpu->thread_group_name = thread_group_name;
-
-        TmThreadSetCPU(tv_detect_ncpu, DETECT_CPU_SET);
-
-        if (TmThreadSpawn(tv_detect_ncpu) != TM_ECODE_OK) {
-            SCLogError(SC_ERR_RUNMODE, "TmThreadSpawn failed");
-            exit(EXIT_FAILURE);
-        }
-
-        if ((cpu + 1) == ncpus)
-            cpu = 0;
-        else
-            cpu++;
-    }
-
-    ThreadVars *tv_outputs =
-        TmThreadCreatePacketHandler("Outputs",
-                                    "alert-queue1", "simple",
-                                    "packetpool", "packetpool",
-                                    "varslot");
-    if (tv_outputs == NULL) {
-        SCLogError(SC_ERR_RUNMODE, "TmThreadCreatePacketHandler for Outputs failed");
-        exit(EXIT_FAILURE);
-    }
-
-    SetupOutputs(tv_outputs);
-
-    TmThreadSetCPU(tv_outputs, OUTPUT_CPU_SET);
-
-    if (TmThreadSpawn(tv_outputs) != TM_ECODE_OK) {
         SCLogError(SC_ERR_RUNMODE, "TmThreadSpawn failed");
         exit(EXIT_FAILURE);
     }
@@ -306,12 +136,10 @@ int RunModeFilePcapAuto(DetectEngineCtx *de_ctx)
  *        By default the threads will use the first cpu available
  *        except the Detection threads if we have more than one cpu.
  *
- * \param de_ctx Pointer to the Detection Engine
- *
  * \retval 0 If all goes well. (If any problem is detected the engine will
  *           exit()).
  */
-int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx)
+int RunModeFilePcapAutoFp(void)
 {
     SCEnter();
     char tname[TM_THREAD_NAME_MAX];
@@ -321,6 +149,7 @@ int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx)
     int thread;
 
     RunModeInitialize();
+    RunmodeSetFlowStreamAsync();
 
     char *file = NULL;
     if (ConfGet("pcap-file.file", &file) == 0) {
@@ -388,8 +217,8 @@ int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx)
     }
 
     for (thread = 0; thread < thread_max; thread++) {
-        snprintf(tname, sizeof(tname), "Detect%"PRIu16, thread+1);
-        snprintf(qname, sizeof(qname), "pickup%"PRIu16, thread+1);
+        snprintf(tname, sizeof(tname), "Detect%d", thread+1);
+        snprintf(qname, sizeof(qname), "pickup%d", thread+1);
 
         SCLogDebug("tname %s, qname %s", tname, qname);
 
@@ -416,13 +245,13 @@ int RunModeFilePcapAutoFp(DetectEngineCtx *de_ctx)
         }
         TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, NULL);
 
-        if (de_ctx) {
+        if (DetectEngineEnabled()) {
             tm_module = TmModuleGetByName("Detect");
             if (tm_module == NULL) {
                 SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName Detect failed");
                 exit(EXIT_FAILURE);
             }
-            TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, (void *)de_ctx);
+            TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, NULL);
         }
 
         char *thread_group_name = SCStrdup("Detect");

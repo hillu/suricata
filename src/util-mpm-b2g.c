@@ -65,8 +65,10 @@ void B2gInitCtx (MpmCtx *);
 void B2gThreadInitCtx(MpmCtx *, MpmThreadCtx *, uint32_t);
 void B2gDestroyCtx(MpmCtx *);
 void B2gThreadDestroyCtx(MpmCtx *, MpmThreadCtx *);
-int B2gAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
-int B2gAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
+int B2gAddPatternCI(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
+                    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags);
+int B2gAddPatternCS(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
+                    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags);
 int B2gPreparePatterns(MpmCtx *mpm_ctx);
 uint32_t B2gSearchWrap(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
 uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
@@ -79,7 +81,8 @@ void B2gPrintInfo(MpmCtx *mpm_ctx);
 void B2gPrintSearchStats(MpmThreadCtx *mpm_thread_ctx);
 void B2gRegisterTests(void);
 
-void MpmB2gRegister (void) {
+void MpmB2gRegister (void)
+{
     mpm_table[MPM_B2G].name = "b2g";
     mpm_table[MPM_B2G].max_pattern_length = B2G_WORD_SIZE;
 
@@ -98,7 +101,8 @@ void MpmB2gRegister (void) {
 }
 
 #ifdef PRINTMATCH
-static void prt (uint8_t *buf, uint16_t buflen) {
+static void prt (uint8_t *buf, uint16_t buflen)
+{
     uint16_t i;
 
     for (i = 0; i < buflen; i++) {
@@ -109,7 +113,8 @@ static void prt (uint8_t *buf, uint16_t buflen) {
 }
 #endif
 
-void B2gPrintInfo(MpmCtx *mpm_ctx) {
+void B2gPrintInfo(MpmCtx *mpm_ctx)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 
     printf("MPM B2g Information:\n");
@@ -132,7 +137,8 @@ void B2gPrintInfo(MpmCtx *mpm_ctx) {
  *        and initialize the data
  * \initonly
  */
-static inline B2gPattern *B2gAllocPattern(MpmCtx *mpm_ctx) {
+static inline B2gPattern *B2gAllocPattern(MpmCtx *mpm_ctx)
+{
     B2gPattern *p = SCMalloc(sizeof(B2gPattern));
     if (unlikely(p == NULL))
         return NULL;
@@ -144,7 +150,8 @@ static inline B2gPattern *B2gAllocPattern(MpmCtx *mpm_ctx) {
 }
 
 static inline B2gPattern *
-B2gAllocHashItem(MpmCtx *mpm_ctx) {
+B2gAllocHashItem(MpmCtx *mpm_ctx)
+{
     B2gPattern *hi = SCMalloc(sizeof(B2gPattern));
     if (unlikely(hi == NULL))
         return NULL;
@@ -155,7 +162,8 @@ B2gAllocHashItem(MpmCtx *mpm_ctx) {
     return hi;
 }
 
-static void B2gHashFree(MpmCtx *mpm_ctx, B2gPattern *hi) {
+static void B2gHashFree(MpmCtx *mpm_ctx, B2gPattern *hi)
+{
     if (hi == NULL)
         return;
 
@@ -170,7 +178,8 @@ static void B2gHashFree(MpmCtx *mpm_ctx, B2gPattern *hi) {
 /*
  * INIT HASH START
  */
-static inline uint32_t B2gInitHash(B2gPattern *p) {
+static inline uint32_t B2gInitHash(B2gPattern *p)
+{
     uint32_t hash = p->len * p->original_pat[0];
     if (p->len > 1)
         hash += p->original_pat[1];
@@ -178,7 +187,8 @@ static inline uint32_t B2gInitHash(B2gPattern *p) {
     return (hash % INIT_HASH_SIZE);
 }
 
-static inline uint32_t B2gInitHashRaw(uint8_t *pat, uint16_t patlen) {
+static inline uint32_t B2gInitHashRaw(uint8_t *pat, uint16_t patlen)
+{
     uint32_t hash = patlen * pat[0];
     if (patlen > 1)
         hash += pat[1];
@@ -186,7 +196,8 @@ static inline uint32_t B2gInitHashRaw(uint8_t *pat, uint16_t patlen) {
     return (hash % INIT_HASH_SIZE);
 }
 
-static inline int B2gInitHashAdd(B2gCtx *ctx, B2gPattern *p) {
+static inline int B2gInitHashAdd(B2gCtx *ctx, B2gPattern *p)
+{
     uint32_t hash = B2gInitHash(p);
 
     //printf("B2gInitHashAdd: %" PRIu32 "\n", hash);
@@ -215,7 +226,8 @@ static inline int B2gInitHashAdd(B2gCtx *ctx, B2gPattern *p) {
 static inline int B2gCmpPattern(B2gPattern *p, uint8_t *pat, uint16_t patlen, char flags);
 
 static inline B2gPattern *B2gInitHashLookup(B2gCtx *ctx, uint8_t *pat, uint16_t patlen, char flags,
-                                            uint32_t pid) {
+                                            uint32_t pid)
+{
     uint32_t hash = B2gInitHashRaw(pat,patlen);
 
     //printf("B2gInitHashLookup: %" PRIu32 ", head %p\n", hash, ctx->init_hash[hash]);
@@ -234,7 +246,8 @@ static inline B2gPattern *B2gInitHashLookup(B2gCtx *ctx, uint8_t *pat, uint16_t 
     return NULL;
 }
 
-static inline int B2gCmpPattern(B2gPattern *p, uint8_t *pat, uint16_t patlen, char flags) {
+static inline int B2gCmpPattern(B2gPattern *p, uint8_t *pat, uint16_t patlen, char flags)
+{
     if (p->len != patlen)
         return 0;
 
@@ -251,7 +264,8 @@ static inline int B2gCmpPattern(B2gPattern *p, uint8_t *pat, uint16_t patlen, ch
  * INIT HASH END
  */
 
-void B2gFreePattern(MpmCtx *mpm_ctx, B2gPattern *p) {
+void B2gFreePattern(MpmCtx *mpm_ctx, B2gPattern *p)
+{
     if (p && p->cs && p->cs != p->ci) {
         SCFree(p->cs);
         mpm_ctx->memory_cnt--;
@@ -268,6 +282,12 @@ void B2gFreePattern(MpmCtx *mpm_ctx, B2gPattern *p) {
         SCFree(p->original_pat);
         mpm_ctx->memory_cnt--;
         mpm_ctx->memory_size -= p->len;
+    }
+
+    if (p && p->sids) {
+        SCFree(p->sids);
+        mpm_ctx->memory_cnt--;
+        mpm_ctx->memory_size -= p->sids_size * sizeof(SigIntId);
     }
 
     if (p) {
@@ -288,7 +308,8 @@ void B2gFreePattern(MpmCtx *mpm_ctx, B2gPattern *p) {
  *
  *  \initonly
  */
-static int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
+static int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 
     SCLogDebug("ctx %p len %"PRIu16" pid %" PRIu32, ctx, patlen, pid);
@@ -344,6 +365,13 @@ static int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_
             }
         }
 
+        p->sids_size = 1;
+        p->sids = SCMalloc(p->sids_size * sizeof(SigIntId));
+        BUG_ON(p->sids == NULL);
+        p->sids[0] = sid;
+        mpm_ctx->memory_cnt++;
+        mpm_ctx->memory_size += sizeof(SigIntId);
+
         //printf("B2gAddPattern: ci \""); prt(p->ci,p->len);
         //printf("\" cs \""); prt(p->cs,p->len);
         //printf("\"\n");
@@ -360,6 +388,27 @@ static int B2gAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_
         if (mpm_ctx->maxlen < patlen) mpm_ctx->maxlen = patlen;
         if (mpm_ctx->minlen == 0) mpm_ctx->minlen = patlen;
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
+    } else {
+        /* Multiple sids for the same pid, so keep an array of sids. */
+
+        /* TODO figure out how we can be called multiple times for the
+         * same CTX with the same sid */
+        int found = 0;
+        uint32_t x = 0;
+        for (x = 0; x < p->sids_size; x++) {
+            if (p->sids[x] == sid) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            SigIntId *sids = SCRealloc(p->sids, (sizeof(SigIntId) * (p->sids_size + 1)));
+            BUG_ON(sids == NULL);
+            p->sids = sids;
+            p->sids[p->sids_size] = sid;
+            p->sids_size++;
+            mpm_ctx->memory_size += sizeof(SigIntId);
+        }
     }
 
     return 0;
@@ -370,19 +419,20 @@ error:
 }
 
 int B2gAddPatternCI(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags)
+                    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags)
 {
     flags |= MPM_PATTERN_FLAG_NOCASE;
     return B2gAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
 }
 
 int B2gAddPatternCS(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags)
+                    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags)
 {
     return B2gAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
 }
 
-static inline uint32_t B2gBloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size) {
+static inline uint32_t B2gBloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size)
+{
      uint8_t *d = (uint8_t *)data;
      uint16_t i;
      uint32_t hash = (uint32_t)u8_tolower(*d);
@@ -397,7 +447,8 @@ static inline uint32_t B2gBloomHash(void *data, uint16_t datalen, uint8_t iter, 
      return hash;
 }
 
-static void B2gPrepareHash(MpmCtx *mpm_ctx) {
+static void B2gPrepareHash(MpmCtx *mpm_ctx)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
     uint16_t i;
     uint16_t idx = 0;
@@ -443,6 +494,8 @@ static void B2gPrepareHash(MpmCtx *mpm_ctx) {
                 hi->id = ctx->parray[i]->id;
                 hi->ci = ctx->parray[i]->ci;
                 hi->cs = ctx->parray[i]->cs;
+                hi->sids = ctx->parray[i]->sids;
+                hi->sids_size = ctx->parray[i]->sids_size;
 
             } else {
                 B2gPattern *hi = B2gAllocHashItem(mpm_ctx);
@@ -455,6 +508,8 @@ static void B2gPrepareHash(MpmCtx *mpm_ctx) {
                 hi->id = ctx->parray[i]->id;
                 hi->ci = ctx->parray[i]->ci;
                 hi->cs = ctx->parray[i]->cs;
+                hi->sids = ctx->parray[i]->sids;
+                hi->sids_size = ctx->parray[i]->sids_size;
 
                 /* Append this HashItem to the list */
                 B2gPattern *thi = &ctx->hash1[idx8];
@@ -503,6 +558,9 @@ static void B2gPrepareHash(MpmCtx *mpm_ctx) {
                 hi->id = ctx->parray[i]->id;
                 hi->ci = ctx->parray[i]->ci;
                 hi->cs = ctx->parray[i]->cs;
+                hi->sids = ctx->parray[i]->sids;
+                hi->sids_size = ctx->parray[i]->sids_size;
+
                 ctx->hash[idx] = hi;
             } else {
                 B2gPattern *hi = B2gAllocHashItem(mpm_ctx);
@@ -516,6 +574,9 @@ static void B2gPrepareHash(MpmCtx *mpm_ctx) {
                 hi->id = ctx->parray[i]->id;
                 hi->ci = ctx->parray[i]->ci;
                 hi->cs = ctx->parray[i]->cs;
+                hi->sids = ctx->parray[i]->sids;
+                hi->sids_size = ctx->parray[i]->sids_size;
+
                 if (ctx->parray[i]->len < ctx->pminlen[idx])
                     ctx->pminlen[idx] = ctx->parray[i]->len;
 
@@ -566,7 +627,8 @@ error:
     return;
 }
 
-int B2gBuildMatchArray(MpmCtx *mpm_ctx) {
+int B2gBuildMatchArray(MpmCtx *mpm_ctx)
+{
     SCEnter();
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 
@@ -599,7 +661,8 @@ int B2gBuildMatchArray(MpmCtx *mpm_ctx) {
     SCReturnInt(0);
 }
 
-int B2gPreparePatterns(MpmCtx *mpm_ctx) {
+int B2gPreparePatterns(MpmCtx *mpm_ctx)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 
     /* alloc the pattern array */
@@ -665,7 +728,8 @@ error:
     return -1;
 }
 
-void B2gPrintSearchStats(MpmThreadCtx *mpm_thread_ctx) {
+void B2gPrintSearchStats(MpmThreadCtx *mpm_thread_ctx)
+{
 #ifdef B2G_COUNTERS
     B2gThreadCtx *tctx = (B2gThreadCtx *)mpm_thread_ctx->ctx;
 
@@ -758,7 +822,8 @@ static void B2gGetConfig()
     }
 }
 
-void B2gInitCtx (MpmCtx *mpm_ctx) {
+void B2gInitCtx (MpmCtx *mpm_ctx)
+{
     SCLogDebug("mpm_ctx %p, ctx %p", mpm_ctx, mpm_ctx->ctx);
 
     if (mpm_ctx->ctx != NULL)
@@ -796,7 +861,8 @@ void B2gInitCtx (MpmCtx *mpm_ctx) {
     SCReturn;
 }
 
-void B2gDestroyCtx(MpmCtx *mpm_ctx) {
+void B2gDestroyCtx(MpmCtx *mpm_ctx)
+{
     SCLogDebug("mpm_ctx %p", mpm_ctx);
 
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
@@ -871,7 +937,8 @@ void B2gDestroyCtx(MpmCtx *mpm_ctx) {
     mpm_ctx->memory_size -= sizeof(B2gCtx);
 }
 
-void B2gThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t matchsize) {
+void B2gThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t matchsize)
+{
     memset(mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
 
     if (sizeof(B2gThreadCtx) > 0) { /* size can be null when optimized */
@@ -887,7 +954,8 @@ void B2gThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t ma
     }
 }
 
-void B2gThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx) {
+void B2gThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx)
+{
     B2gThreadCtx *ctx = (B2gThreadCtx *)mpm_thread_ctx->ctx;
 
     B2gPrintSearchStats(mpm_thread_ctx);
@@ -899,12 +967,14 @@ void B2gThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx) {
     }
 }
 
-uint32_t B2gSearchWrap(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t B2gSearchWrap(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
     return ctx ? ctx->Search(mpm_ctx, mpm_thread_ctx, pmq, buf, buflen) : 0;
 }
 
-uint32_t B2gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t B2gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 #ifdef B2G_COUNTERS
     B2gThreadCtx *tctx = (B2gThreadCtx *)mpm_thread_ctx->ctx;
@@ -923,6 +993,12 @@ uint32_t B2gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
 
     if (buflen < ctx->m)
         return 0;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (pos <= (uint32_t)(buflen - B2G_Q + 1)) {
         uint16_t h = B2G_HASH16(u8_tolower(buf[pos - 1]),u8_tolower(buf[pos]));
@@ -977,7 +1053,8 @@ uint32_t B2gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
 #endif
                                     COUNT(tctx->stat_loop_match++);
 
-                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id,
+                                                              bitarray, thi->sids, thi->sids_size);
                                 } else {
                                     COUNT(tctx->stat_loop_no_match++);
                                 }
@@ -989,7 +1066,8 @@ uint32_t B2gSearchBNDMq(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
 #endif
                                     COUNT(tctx->stat_loop_match++);
 
-                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                                    matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id,
+                                                              bitarray, thi->sids, thi->sids_size);
                                 } else {
                                     COUNT(tctx->stat_loop_no_match++);
                                 }
@@ -1021,7 +1099,8 @@ skip_loop:
     return matches;
 }
 
-uint32_t B2gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t B2gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
 #ifdef B2G_COUNTERS
     B2gThreadCtx *tctx = (B2gThreadCtx *)mpm_thread_ctx->ctx;
@@ -1035,6 +1114,12 @@ uint32_t B2gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
 
     if (buflen < ctx->m)
         return 0;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (pos <= (buflen - ctx->m)) {
         j = ctx->m - 1;
@@ -1085,7 +1170,8 @@ uint32_t B2gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
                     if (SCMemcmpLowercase(thi->ci, buf+pos, thi->len) == 0) {
                         COUNT(tctx->stat_loop_match++);
 
-                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id,
+                                                  bitarray, thi->sids, thi->sids_size);
                     } else {
                         COUNT(tctx->stat_loop_no_match++);
                     }
@@ -1093,7 +1179,8 @@ uint32_t B2gSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
                     if (SCMemcmp(thi->cs, buf+pos, thi->len) == 0) {
                         COUNT(tctx->stat_loop_match++);
 
-                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                        matches += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id,
+                                                              bitarray, thi->sids, thi->sids_size);
                     } else {
                         COUNT(tctx->stat_loop_no_match++);
                     }
@@ -1115,7 +1202,8 @@ skip_loop:
 }
 
 #ifdef B2G_SEARCH2
-uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
     uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
@@ -1128,6 +1216,12 @@ uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 
     //printf("BUF "); prt(buf,buflen); printf("\n");
 
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
+
     while (buf <= bufend) {
         uint8_t h8 = u8_tolower(*buf);
         hi = &ctx->hash1[h8];
@@ -1138,11 +1232,13 @@ uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 
                 if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (h8 == p->ci[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id,
+                                              bitarray, thi->sids, thi->sids_size);
                     }
                 } else {
                     if (*buf == p->cs[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id,
+                                              bitarray, thi->sids, thi->sids_size);
                     }
                 }
             }
@@ -1159,15 +1255,15 @@ uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
                 if (h8 == p->ci[0] && u8_tolower(*(buf+1)) == p->ci[1]) {
                     //printf("CI Exact match: "); prt(p->ci, p->len); printf(" in buf "); prt(buf, p->len);printf(" (B2gSearch1)\n");
 //                    for (em = p->em; em; em = em->next) {
-                        if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id))
-                            cnt++;
+                    if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size))
+                        cnt++;
 //                    }
                 }
             } else {
                 if (*buf == p->cs[0] && *(buf+1) == p->cs[1]) {
                     //printf("CS Exact match: "); prt(p->cs, p->len); printf(" in buf "); prt(buf, p->len);printf(" (B2gSearch1)\n");
 //                    for (em = p->em; em; em = em->next) {
-                        if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id))
+                        if (MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size))
                             cnt++;
 //                    }
                 }
@@ -1187,7 +1283,8 @@ uint32_t B2gSearch2(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 }
 #endif
 
-uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     SCEnter();
 
     B2gCtx *ctx = (B2gCtx *)mpm_ctx->ctx;
@@ -1202,6 +1299,12 @@ uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 
     //printf("BUF "); prt(buf,buflen); printf("\n");
 
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
+
     while (buf <= bufend) {
         uint8_t h = u8_tolower(*buf);
         hi = &ctx->hash1[h];
@@ -1213,11 +1316,11 @@ uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
 
                 if (thi->flags & MPM_PATTERN_FLAG_NOCASE) {
                     if (u8_tolower(*buf) == thi->ci[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id, bitarray, thi->sids, thi->sids_size);
                     }
                 } else {
                     if (*buf == thi->cs[0]) {
-                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id);
+                        cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, thi->id, bitarray, thi->sids, thi->sids_size);
                     }
                 }
             }
@@ -1245,7 +1348,8 @@ uint32_t B2gSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatche
  */
 
 #ifdef UNITTESTS
-static int B2gTestInit01 (void) {
+static int B2gTestInit01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1266,7 +1370,8 @@ static int B2gTestInit01 (void) {
 }
 
 #if 0
-static int B2gTestS0Init01 (void) {
+static int B2gTestS0Init01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     MpmInitCtx(&mpm_ctx, MPM_B2G);
@@ -1285,7 +1390,8 @@ static int B2gTestS0Init01 (void) {
     return result;
 }
 
-static int B2gTestS0Init02 (void) {
+static int B2gTestS0Init02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     MpmInitCtx(&mpm_ctx, MPM_B2G);
@@ -1305,7 +1411,8 @@ static int B2gTestS0Init02 (void) {
     return result;
 }
 
-static int B2gTestS0Init03 (void) {
+static int B2gTestS0Init03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     MpmInitCtx(&mpm_ctx, MPM_B2G);
@@ -1325,7 +1432,8 @@ static int B2gTestS0Init03 (void) {
     return result;
 }
 
-static int B2gTestS0Init04 (void) {
+static int B2gTestS0Init04 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     MpmInitCtx(&mpm_ctx, MPM_B2G);
@@ -1344,7 +1452,8 @@ static int B2gTestS0Init04 (void) {
     return result;
 }
 
-static int B2gTestS0Init05 (void) {
+static int B2gTestS0Init05 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     MpmInitCtx(&mpm_ctx, MPM_B2G);
@@ -1364,7 +1473,8 @@ static int B2gTestS0Init05 (void) {
 }
 #endif
 
-static int B2gTestSearch01 (void) {
+static int B2gTestSearch01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1389,7 +1499,8 @@ static int B2gTestSearch01 (void) {
     return result;
 }
 
-static int B2gTestSearch02 (void) {
+static int B2gTestSearch02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1414,7 +1525,8 @@ static int B2gTestSearch02 (void) {
     return result;
 }
 
-static int B2gTestSearch03 (void) {
+static int B2gTestSearch03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1442,7 +1554,8 @@ static int B2gTestSearch03 (void) {
 }
 
 /* test patterns longer than 'm'. M is 4 here. */
-static int B2gTestSearch04 (void) {
+static int B2gTestSearch04 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1470,7 +1583,8 @@ static int B2gTestSearch04 (void) {
 }
 
 /* case insensitive test patterns longer than 'm'. M is 4 here. */
-static int B2gTestSearch05 (void) {
+static int B2gTestSearch05 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1497,7 +1611,8 @@ static int B2gTestSearch05 (void) {
     return result;
 }
 
-static int B2gTestSearch05a (void) {
+static int B2gTestSearch05a (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1527,7 +1642,8 @@ static int B2gTestSearch05a (void) {
     return result;
 }
 
-static int B2gTestSearch06 (void) {
+static int B2gTestSearch06 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1552,7 +1668,8 @@ static int B2gTestSearch06 (void) {
     return result;
 }
 
-static int B2gTestSearch07 (void) {
+static int B2gTestSearch07 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1583,7 +1700,8 @@ static int B2gTestSearch07 (void) {
     return result;
 }
 
-static int B2gTestSearch08 (void) {
+static int B2gTestSearch08 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1608,7 +1726,8 @@ static int B2gTestSearch08 (void) {
     return result;
 }
 
-static int B2gTestSearch09 (void) {
+static int B2gTestSearch09 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1633,7 +1752,8 @@ static int B2gTestSearch09 (void) {
     return result;
 }
 
-static int B2gTestSearch10 (void) {
+static int B2gTestSearch10 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1663,7 +1783,8 @@ static int B2gTestSearch10 (void) {
     return result;
 }
 
-static int B2gTestSearch11 (void) {
+static int B2gTestSearch11 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1689,7 +1810,8 @@ static int B2gTestSearch11 (void) {
     return result;
 }
 
-static int B2gTestSearch12 (void) {
+static int B2gTestSearch12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1715,7 +1837,8 @@ static int B2gTestSearch12 (void) {
     return result;
 }
 
-static int B2gTestSearch13 (void) {
+static int B2gTestSearch13 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1740,7 +1863,8 @@ static int B2gTestSearch13 (void) {
     return result;
 }
 
-static int B2gTestSearch14 (void) {
+static int B2gTestSearch14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1765,7 +1889,8 @@ static int B2gTestSearch14 (void) {
     return result;
 }
 
-static int B2gTestSearch15 (void) {
+static int B2gTestSearch15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1790,7 +1915,8 @@ static int B2gTestSearch15 (void) {
     return result;
 }
 
-static int B2gTestSearch16 (void) {
+static int B2gTestSearch16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1815,7 +1941,8 @@ static int B2gTestSearch16 (void) {
     return result;
 }
 
-static int B2gTestSearch17 (void) {
+static int B2gTestSearch17 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1840,7 +1967,8 @@ static int B2gTestSearch17 (void) {
     return result;
 }
 
-static int B2gTestSearch18 (void) {
+static int B2gTestSearch18 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1865,7 +1993,8 @@ static int B2gTestSearch18 (void) {
     return result;
 }
 
-static int B2gTestSearch19 (void) {
+static int B2gTestSearch19 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1890,7 +2019,8 @@ static int B2gTestSearch19 (void) {
     return result;
 }
 
-static int B2gTestSearch20 (void) {
+static int B2gTestSearch20 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1917,7 +2047,8 @@ static int B2gTestSearch20 (void) {
     return result;
 }
 
-static int B2gTestSearch21 (void) {
+static int B2gTestSearch21 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1944,7 +2075,8 @@ static int B2gTestSearch21 (void) {
 #endif /* UNITTESTS */
 
 #if 0
-static int B2gTestSearchXX (void) {
+static int B2gTestSearchXX (void)
+{
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
     MpmThreadCtx mpm_thread_ctx;
@@ -2661,7 +2793,8 @@ static int B2gTestSearchXX (void) {
 }
 #endif
 
-void B2gRegisterTests(void) {
+void B2gRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("B2gTestInit01", B2gTestInit01, 1);
 /*

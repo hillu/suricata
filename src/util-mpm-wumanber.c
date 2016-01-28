@@ -63,8 +63,8 @@ void WmInitCtx (MpmCtx *mpm_ctx);
 void WmThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t);
 void WmDestroyCtx(MpmCtx *mpm_ctx);
 void WmThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx);
-int WmAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
-int WmAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, uint32_t, uint8_t);
+int WmAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, SigIntId, uint8_t);
+int WmAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t, uint32_t, SigIntId, uint8_t);
 int WmPreparePatterns(MpmCtx *mpm_ctx);
 uint32_t WmSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
 uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *, uint8_t *buf, uint16_t buflen);
@@ -89,7 +89,8 @@ static uint8_t lowercasetable[256];
 #define COUNT(counter)
 #endif /* WUMANBER_COUNTERS */
 
-void prt (uint8_t *buf, uint16_t buflen) {
+void prt (uint8_t *buf, uint16_t buflen)
+{
     uint16_t i;
 
     for (i = 0; i < buflen; i++) {
@@ -99,7 +100,8 @@ void prt (uint8_t *buf, uint16_t buflen) {
     //printf("\n");
 }
 
-void WmPrintInfo(MpmCtx *mpm_ctx) {
+void WmPrintInfo(MpmCtx *mpm_ctx)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 
     printf("MPM WuManber Information:\n");
@@ -134,7 +136,8 @@ void WmPrintInfo(MpmCtx *mpm_ctx) {
     printf("\n");
 }
 
-static inline WmPattern *WmAllocPattern(MpmCtx *mpm_ctx) {
+static inline WmPattern *WmAllocPattern(MpmCtx *mpm_ctx)
+{
     WmPattern *p = SCMalloc(sizeof(WmPattern));
     if (unlikely(p == NULL))
         return NULL;
@@ -146,7 +149,8 @@ static inline WmPattern *WmAllocPattern(MpmCtx *mpm_ctx) {
 }
 
 static inline WmHashItem *
-WmAllocHashItem(MpmCtx *mpm_ctx) {
+WmAllocHashItem(MpmCtx *mpm_ctx)
+{
     WmHashItem *hi = SCMalloc(sizeof(WmHashItem));
     if (unlikely(hi == NULL))
         return NULL;
@@ -157,7 +161,8 @@ WmAllocHashItem(MpmCtx *mpm_ctx) {
     return hi;
 }
 
-static void WmHashFree(MpmCtx *mpm_ctx, WmHashItem *hi) {
+static void WmHashFree(MpmCtx *mpm_ctx, WmHashItem *hi)
+{
     if (hi == NULL)
         return;
 
@@ -169,7 +174,8 @@ static void WmHashFree(MpmCtx *mpm_ctx, WmHashItem *hi) {
     SCFree(hi);
 }
 
-static inline void memcpy_tolower(uint8_t *d, uint8_t *s, uint16_t len) {
+static inline void memcpy_tolower(uint8_t *d, uint8_t *s, uint16_t len)
+{
     uint16_t i;
     for (i = 0; i < len; i++) {
         d[i] = wm_tolower(s[i]);
@@ -179,7 +185,8 @@ static inline void memcpy_tolower(uint8_t *d, uint8_t *s, uint16_t len) {
 /*
  * INIT HASH START
  */
-static inline uint32_t WmInitHash(WmPattern *p) {
+static inline uint32_t WmInitHash(WmPattern *p)
+{
     uint32_t hash = p->len * p->cs[0];
     if (p->len > 1)
         hash += p->cs[1];
@@ -187,7 +194,8 @@ static inline uint32_t WmInitHash(WmPattern *p) {
     return (hash % INIT_HASH_SIZE);
 }
 
-static inline uint32_t WmInitHashRaw(uint8_t *pat, uint16_t patlen) {
+static inline uint32_t WmInitHashRaw(uint8_t *pat, uint16_t patlen)
+{
     uint32_t hash = patlen * pat[0];
     if (patlen > 1)
         hash += pat[1];
@@ -195,7 +203,8 @@ static inline uint32_t WmInitHashRaw(uint8_t *pat, uint16_t patlen) {
     return (hash % INIT_HASH_SIZE);
 }
 
-static inline int WmInitHashAdd(WmCtx *ctx, WmPattern *p) {
+static inline int WmInitHashAdd(WmCtx *ctx, WmPattern *p)
+{
     uint32_t hash = WmInitHash(p);
 
     //printf("WmInitHashAdd: %" PRIu32 "\n", hash);
@@ -223,7 +232,8 @@ static inline int WmInitHashAdd(WmCtx *ctx, WmPattern *p) {
 
 static inline int WmCmpPattern(WmPattern *p, uint8_t *pat, uint16_t patlen, char flags);
 
-static inline WmPattern *WmInitHashLookup(WmCtx *ctx, uint8_t *pat, uint16_t patlen, char flags) {
+static inline WmPattern *WmInitHashLookup(WmCtx *ctx, uint8_t *pat, uint16_t patlen, char flags)
+{
     uint32_t hash = WmInitHashRaw(pat,patlen);
 
     //printf("WmInitHashLookup: %" PRIu32 ", head %p\n", hash, ctx->init_hash[hash]);
@@ -241,7 +251,8 @@ static inline WmPattern *WmInitHashLookup(WmCtx *ctx, uint8_t *pat, uint16_t pat
     return NULL;
 }
 
-static inline int WmCmpPattern(WmPattern *p, uint8_t *pat, uint16_t patlen, char flags) {
+static inline int WmCmpPattern(WmPattern *p, uint8_t *pat, uint16_t patlen, char flags)
+{
     if (p->len != patlen)
         return 0;
 
@@ -258,7 +269,8 @@ static inline int WmCmpPattern(WmPattern *p, uint8_t *pat, uint16_t patlen, char
  * INIT HASH END
  */
 
-void WmFreePattern(MpmCtx *mpm_ctx, WmPattern *p) {
+void WmFreePattern(MpmCtx *mpm_ctx, WmPattern *p)
+{
     if (p && p->cs && p->cs != p->ci) {
         SCFree(p->cs);
         mpm_ctx->memory_cnt--;
@@ -269,6 +281,12 @@ void WmFreePattern(MpmCtx *mpm_ctx, WmPattern *p) {
         SCFree(p->ci);
         mpm_ctx->memory_cnt--;
         mpm_ctx->memory_size -= p->len;
+    }
+
+    if (p && p->sids) {
+        SCFree(p->sids);
+        mpm_ctx->memory_cnt--;
+        mpm_ctx->memory_size -= p->sids_size * sizeof(uint32_t);
     }
 
     if (p) {
@@ -286,7 +304,8 @@ void WmFreePattern(MpmCtx *mpm_ctx, WmPattern *p) {
  * pid: pattern id
  * sid: signature id (internal id)
  */
-static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags) {
+static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 
 //    printf("WmAddPattern: ctx %p \"", mpm_ctx); prt(pat, patlen);
@@ -356,6 +375,33 @@ static int WmAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen, uint16_t
         if (mpm_ctx->maxlen < patlen) mpm_ctx->maxlen = patlen;
         if (mpm_ctx->minlen == 0) mpm_ctx->minlen = patlen;
         else if (mpm_ctx->minlen > patlen) mpm_ctx->minlen = patlen;
+
+        p->sids_size = 1;
+        p->sids = SCMalloc(p->sids_size * sizeof(SigIntId));
+        BUG_ON(p->sids == NULL);
+        p->sids[0] = sid;
+        mpm_ctx->memory_cnt++;
+        mpm_ctx->memory_size += sizeof(SigIntId);
+
+    } else {
+        /* TODO figure out how we can be called multiple times for the same CTX with the same sid */
+
+        int found = 0;
+        uint32_t x = 0;
+        for (x = 0; x < p->sids_size; x++) {
+            if (p->sids[x] == sid) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            SigIntId *sids = SCRealloc(p->sids, (sizeof(SigIntId) * (p->sids_size + 1)));
+            BUG_ON(sids == NULL);
+            p->sids = sids;
+            p->sids[p->sids_size] = sid;
+            p->sids_size++;
+            mpm_ctx->memory_size += sizeof(uint32_t);
+        }
     }
 
     return 0;
@@ -366,19 +412,20 @@ error:
 }
 
 int WmAddPatternCI(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags)
+    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags)
 {
     flags |= MPM_PATTERN_FLAG_NOCASE;
     return WmAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
 }
 
 int WmAddPatternCS(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
-    uint16_t offset, uint16_t depth, uint32_t pid, uint32_t sid, uint8_t flags)
+    uint16_t offset, uint16_t depth, uint32_t pid, SigIntId sid, uint8_t flags)
 {
     return WmAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
 }
 
-static uint32_t WmBloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size) {
+static uint32_t WmBloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size)
+{
      uint8_t *d = (uint8_t *)data;
      uint16_t i;
      uint32_t hash = (uint32_t)wm_tolower(*d);
@@ -392,7 +439,8 @@ static uint32_t WmBloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t
      return hash;
 }
 /*
-static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size) {
+static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size)
+{
      uint8_t *d = (uint8_t *)data;
      uint32_t i;
      uint32_t hash = 0;
@@ -408,7 +456,8 @@ static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t h
      return hash;
 }
 */
-static void WmSearchPrepareHash(MpmCtx *mpm_ctx) {
+static void WmSearchPrepareHash(MpmCtx *mpm_ctx)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
     uint16_t i;
     uint16_t idx = 0;
@@ -610,7 +659,8 @@ static void WmSearchPrepareShiftTable(MpmCtx *mpm_ctx)
     }
 }
 
-int WmPreparePatterns(MpmCtx *mpm_ctx) {
+int WmPreparePatterns(MpmCtx *mpm_ctx)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 
     /* alloc the pattern array */
@@ -687,7 +737,8 @@ error:
     return -1;
 }
 
-void WmPrintSearchStats(MpmThreadCtx *mpm_thread_ctx) {
+void WmPrintSearchStats(MpmThreadCtx *mpm_thread_ctx)
+{
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
 
@@ -700,7 +751,8 @@ void WmPrintSearchStats(MpmThreadCtx *mpm_thread_ctx) {
 }
 
 static inline int
-memcmp_lowercase(uint8_t *s1, uint8_t *s2, uint16_t n) {
+memcmp_lowercase(uint8_t *s1, uint8_t *s2, uint16_t n)
+{
     size_t i;
 
     /* check backwards because we already tested the first
@@ -714,13 +766,15 @@ memcmp_lowercase(uint8_t *s1, uint8_t *s2, uint16_t n) {
     return 0;
 }
 
-inline uint32_t WmSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+inline uint32_t WmSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
     return ctx->Search(mpm_ctx, mpm_thread_ctx, pmq, buf, buflen);
 }
 
 /* SCAN FUNCTIONS */
-uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
@@ -741,6 +795,12 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
     //printf("BUF(%" PRIu32 ") ", buflen); prt(buf,buflen); printf(" (sl %" PRIu32 ")\n", sl);
 
     buf+=(sl-1);
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (buf <= bufend) {
         h = HASH9(wm_tolower(*buf),(wm_tolower(*(buf-1))));
@@ -787,7 +847,7 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -799,7 +859,7 @@ uint32_t WmSearch2Hash9(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMa
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -820,7 +880,8 @@ skip_loop:
     return cnt;
 }
 
-uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
@@ -842,6 +903,12 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
 
     buf+=(sl-1);
     //buf++;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (buf <= bufend) {
         //h = (wm_tolower(*buf)<<8)+(wm_tolower(*(buf-1)));
@@ -889,7 +956,7 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -901,7 +968,7 @@ uint32_t WmSearch2Hash12(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
 
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
@@ -921,7 +988,8 @@ skip_loop:
     return cnt;
 }
 
-uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
@@ -943,6 +1011,12 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
 
     buf+=(sl-1);
     //buf++;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (buf <= bufend) {
         //h = (wm_tolower(*buf)<<8)+(wm_tolower(*(buf-1)));
@@ -989,7 +1063,7 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp_lowercase(p->ci, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -999,7 +1073,7 @@ uint32_t WmSearch2Hash14(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp(p->cs, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1018,7 +1092,8 @@ skip_loop:
     return cnt;
 }
 
-uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
@@ -1040,6 +1115,12 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
 
     buf+=(sl-1);
     //buf++;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (buf <= bufend) {
         //h = (wm_tolower(*buf)<<8)+(wm_tolower(*(buf-1)));
@@ -1087,7 +1168,7 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CI Exact match: "); prt(p->ci, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1098,7 +1179,7 @@ uint32_t WmSearch2Hash15(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                             //printf("CS Exact match: "); prt(p->cs, p->len); printf("\n");
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1117,7 +1198,8 @@ skip_loop:
     return cnt;
 }
 
-uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
 #ifdef WUMANBER_COUNTERS
     WmThreadCtx *tctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
@@ -1139,6 +1221,12 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
 
     buf+=(sl-1);
     //buf++;
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     while (buf <= bufend) {
         //h = (wm_tolower(*buf)<<8)+(wm_tolower(*(buf-1)));
@@ -1185,7 +1273,7 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp_lowercase(p->ci, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1195,7 +1283,7 @@ uint32_t WmSearch2Hash16(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternM
                         if (memcmp(p->cs, buf-sl+1, p->len) == 0) {
                             COUNT(tctx->stat_loop_match++);
 
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         } else {
                             COUNT(tctx->stat_loop_no_match++);
                         }
@@ -1214,7 +1302,8 @@ skip_loop:
     return cnt;
 }
 
-uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen) {
+uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
     uint8_t *bufmin = buf;
     uint8_t *bufend = buf + buflen - 1;
@@ -1226,6 +1315,12 @@ uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
         return 0;
 
     //printf("BUF "); prt(buf,buflen); printf("\n");
+
+    uint8_t *bitarray = NULL;
+    if (pmq) {
+        bitarray = alloca(pmq->pattern_id_bitarray_size);
+        memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+    }
 
     if (mpm_ctx->minlen == 1) {
         while (buf <= bufend) {
@@ -1241,11 +1336,11 @@ uint32_t WmSearch1(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, PatternMatcher
 
                     if (p->flags & MPM_PATTERN_FLAG_NOCASE) {
                         if (wm_tolower(*buf) == p->ci[0]) {
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         }
                     } else {
                         if (*buf == p->cs[0]) {
-                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id);
+                            cnt += MpmVerifyMatch(mpm_thread_ctx, pmq, p->id, bitarray, p->sids, p->sids_size);
                         }
                     }
                 }
@@ -1301,7 +1396,8 @@ void WmGetConfig()
     }
 }
 
-void WmInitCtx (MpmCtx *mpm_ctx) {
+void WmInitCtx (MpmCtx *mpm_ctx)
+{
     SCLogDebug("mpm_ctx %p", mpm_ctx);
 
     mpm_ctx->ctx = SCMalloc(sizeof(WmCtx));
@@ -1327,7 +1423,8 @@ void WmInitCtx (MpmCtx *mpm_ctx) {
 
 }
 
-void WmDestroyCtx(MpmCtx *mpm_ctx) {
+void WmDestroyCtx(MpmCtx *mpm_ctx)
+{
     WmCtx *ctx = (WmCtx *)mpm_ctx->ctx;
     if (ctx == NULL)
         return;
@@ -1400,7 +1497,8 @@ void WmDestroyCtx(MpmCtx *mpm_ctx) {
     mpm_ctx->memory_size -= sizeof(WmCtx);
 }
 
-void WmThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t matchsize) {
+void WmThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t matchsize)
+{
     memset(mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
 
 #ifdef WUMANBER_COUNTERS
@@ -1415,7 +1513,8 @@ void WmThreadInitCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx, uint32_t mat
 #endif
 }
 
-void WmThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx) {
+void WmThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx)
+{
     WmThreadCtx *ctx = (WmThreadCtx *)mpm_thread_ctx->ctx;
     if (ctx != NULL) { /* size can be 0 when optimized */
         mpm_thread_ctx->memory_cnt--;
@@ -1424,7 +1523,8 @@ void WmThreadDestroyCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx) {
     }
 }
 
-void MpmWuManberRegister (void) {
+void MpmWuManberRegister (void)
+{
     mpm_table[MPM_WUMANBER].name = "wumanber";
     mpm_table[MPM_WUMANBER].max_pattern_length = 0;
     mpm_table[MPM_WUMANBER].InitCtx = WmInitCtx;
@@ -1455,7 +1555,8 @@ void MpmWuManberRegister (void) {
  */
 
 #ifdef UNITTESTS
-int WmTestInitCtx01 (void) {
+int WmTestInitCtx01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1468,7 +1569,8 @@ int WmTestInitCtx01 (void) {
     return result;
 }
 
-int WmTestInitCtx02 (void) {
+int WmTestInitCtx02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1483,7 +1585,8 @@ int WmTestInitCtx02 (void) {
     return result;
 }
 
-int WmTestInitCtx03 (void) {
+int WmTestInitCtx03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1496,7 +1599,8 @@ int WmTestInitCtx03 (void) {
     return result;
 }
 
-int WmTestThreadInitCtx01 (void) {
+int WmTestThreadInitCtx01 (void)
+{
 #ifdef WUMANBER_COUNTERS
     int result = 0;
     MpmCtx mpm_ctx;
@@ -1519,7 +1623,8 @@ int WmTestThreadInitCtx01 (void) {
 #endif
 }
 
-int WmTestThreadInitCtx02 (void) {
+int WmTestThreadInitCtx02 (void)
+{
 #ifdef WUMANBER_COUNTERS
     int result = 0;
     MpmCtx mpm_ctx;
@@ -1542,7 +1647,8 @@ int WmTestThreadInitCtx02 (void) {
     return result;
 }
 
-int WmTestInitAddPattern01 (void) {
+int WmTestInitAddPattern01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1560,7 +1666,8 @@ int WmTestInitAddPattern01 (void) {
     return result;
 }
 
-int WmTestInitAddPattern02 (void) {
+int WmTestInitAddPattern02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1579,7 +1686,8 @@ int WmTestInitAddPattern02 (void) {
     return result;
 }
 
-int WmTestInitAddPattern03 (void) {
+int WmTestInitAddPattern03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1601,7 +1709,8 @@ int WmTestInitAddPattern03 (void) {
     return result;
 }
 
-int WmTestInitAddPattern04 (void) {
+int WmTestInitAddPattern04 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1623,7 +1732,8 @@ int WmTestInitAddPattern04 (void) {
     return result;
 }
 
-int WmTestInitAddPattern05 (void) {
+int WmTestInitAddPattern05 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1645,7 +1755,8 @@ int WmTestInitAddPattern05 (void) {
     return result;
 }
 
-int WmTestInitAddPattern06 (void) {
+int WmTestInitAddPattern06 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1667,7 +1778,8 @@ int WmTestInitAddPattern06 (void) {
     return result;
 }
 
-int WmTestPrepare01 (void) {
+int WmTestPrepare01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1684,7 +1796,8 @@ int WmTestPrepare01 (void) {
     return result;
 }
 
-int WmTestPrepare02 (void) {
+int WmTestPrepare02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1701,7 +1814,8 @@ int WmTestPrepare02 (void) {
     return result;
 }
 
-int WmTestPrepare03 (void) {
+int WmTestPrepare03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1720,7 +1834,8 @@ int WmTestPrepare03 (void) {
     return result;
 }
 
-int WmTestPrepare04 (void) {
+int WmTestPrepare04 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1737,7 +1852,8 @@ int WmTestPrepare04 (void) {
     return result;
 }
 
-int WmTestPrepare05 (void) {
+int WmTestPrepare05 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1754,7 +1870,8 @@ int WmTestPrepare05 (void) {
     return result;
 }
 
-int WmTestPrepare06 (void) {
+int WmTestPrepare06 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1773,7 +1890,8 @@ int WmTestPrepare06 (void) {
     return result;
 }
 
-int WmTestSearch01 (void) {
+int WmTestSearch01 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1799,7 +1917,8 @@ int WmTestSearch01 (void) {
     return result;
 }
 
-int WmTestSearch01Hash12 (void) {
+int WmTestSearch01Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1827,7 +1946,8 @@ int WmTestSearch01Hash12 (void) {
     return result;
 }
 
-int WmTestSearch01Hash14 (void) {
+int WmTestSearch01Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1855,7 +1975,8 @@ int WmTestSearch01Hash14 (void) {
     return result;
 }
 
-int WmTestSearch01Hash15 (void) {
+int WmTestSearch01Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1883,7 +2004,8 @@ int WmTestSearch01Hash15 (void) {
     return result;
 }
 
-int WmTestSearch01Hash16 (void) {
+int WmTestSearch01Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1911,7 +2033,8 @@ int WmTestSearch01Hash16 (void) {
     return result;
 }
 
-int WmTestSearch02 (void) {
+int WmTestSearch02 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1933,7 +2056,8 @@ int WmTestSearch02 (void) {
     return result;
 }
 
-int WmTestSearch03 (void) {
+int WmTestSearch03 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1956,7 +2080,8 @@ int WmTestSearch03 (void) {
     return result;
 }
 
-int WmTestSearch04 (void) {
+int WmTestSearch04 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -1978,7 +2103,8 @@ int WmTestSearch04 (void) {
     return result;
 }
 
-int WmTestSearch05 (void) {
+int WmTestSearch05 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2000,7 +2126,8 @@ int WmTestSearch05 (void) {
     return result;
 }
 
-int WmTestSearch06 (void) {
+int WmTestSearch06 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2022,7 +2149,8 @@ int WmTestSearch06 (void) {
     return result;
 }
 
-int WmTestSearch07 (void) {
+int WmTestSearch07 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2045,7 +2173,8 @@ int WmTestSearch07 (void) {
     return result;
 }
 
-int WmTestSearch08 (void) {
+int WmTestSearch08 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2068,7 +2197,8 @@ int WmTestSearch08 (void) {
     return result;
 }
 
-int WmTestSearch09 (void) {
+int WmTestSearch09 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2090,7 +2220,8 @@ int WmTestSearch09 (void) {
     return result;
 }
 
-int WmTestSearch10 (void) {
+int WmTestSearch10 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2113,7 +2244,8 @@ int WmTestSearch10 (void) {
     return result;
 }
 
-int WmTestSearch11 (void) {
+int WmTestSearch11 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2137,7 +2269,8 @@ int WmTestSearch11 (void) {
     return result;
 }
 
-int WmTestSearch12 (void) {
+int WmTestSearch12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2163,7 +2296,8 @@ int WmTestSearch12 (void) {
     return result;
 }
 
-int WmTestSearch13 (void) {
+int WmTestSearch13 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2189,7 +2323,8 @@ int WmTestSearch13 (void) {
     return result;
 }
 
-int WmTestSearch14 (void) {
+int WmTestSearch14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2215,7 +2350,8 @@ int WmTestSearch14 (void) {
 
 /** \todo VJ disabled because it tests the old match storage */
 #if 0
-int WmTestSearch15 (void) {
+int WmTestSearch15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2242,7 +2378,8 @@ int WmTestSearch15 (void) {
     return result;
 }
 
-int WmTestSearch16 (void) {
+int WmTestSearch16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2269,7 +2406,8 @@ int WmTestSearch16 (void) {
     return result;
 }
 
-int WmTestSearch17 (void) {
+int WmTestSearch17 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2294,7 +2432,8 @@ int WmTestSearch17 (void) {
     return result;
 }
 
-int WmTestSearch18Hash12 (void) {
+int WmTestSearch18Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2319,7 +2458,8 @@ int WmTestSearch18Hash12 (void) {
     return result;
 }
 
-int WmTestSearch18Hash14 (void) {
+int WmTestSearch18Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2344,7 +2484,8 @@ int WmTestSearch18Hash14 (void) {
     return result;
 }
 
-int WmTestSearch18Hash15 (void) {
+int WmTestSearch18Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2369,7 +2510,8 @@ int WmTestSearch18Hash15 (void) {
     return result;
 }
 
-int WmTestSearch18 (void) {
+int WmTestSearch18 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2395,7 +2537,8 @@ int WmTestSearch18 (void) {
     return result;
 }
 
-int WmTestSearch18Hash16 (void) {
+int WmTestSearch18Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2421,7 +2564,8 @@ int WmTestSearch18Hash16 (void) {
     return result;
 }
 
-int WmTestSearch19 (void) {
+int WmTestSearch19 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2446,7 +2590,8 @@ int WmTestSearch19 (void) {
     return result;
 }
 
-int WmTestSearch19Hash12 (void) {
+int WmTestSearch19Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2472,7 +2617,8 @@ int WmTestSearch19Hash12 (void) {
     return result;
 }
 
-int WmTestSearch19Hash14 (void) {
+int WmTestSearch19Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2498,7 +2644,8 @@ int WmTestSearch19Hash14 (void) {
     return result;
 }
 
-int WmTestSearch19Hash15 (void) {
+int WmTestSearch19Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2524,7 +2671,8 @@ int WmTestSearch19Hash15 (void) {
     return result;
 }
 
-int WmTestSearch19Hash16 (void) {
+int WmTestSearch19Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2550,7 +2698,8 @@ int WmTestSearch19Hash16 (void) {
     return result;
 }
 
-int WmTestSearch20 (void) {
+int WmTestSearch20 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2575,7 +2724,8 @@ int WmTestSearch20 (void) {
     return result;
 }
 
-int WmTestSearch20Hash12 (void) {
+int WmTestSearch20Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2600,7 +2750,8 @@ int WmTestSearch20Hash12 (void) {
     return result;
 }
 
-int WmTestSearch20Hash14 (void) {
+int WmTestSearch20Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2626,7 +2777,8 @@ int WmTestSearch20Hash14 (void) {
     return result;
 }
 
-int WmTestSearch20Hash15 (void) {
+int WmTestSearch20Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2652,7 +2804,8 @@ int WmTestSearch20Hash15 (void) {
     return result;
 }
 
-int WmTestSearch20Hash16 (void) {
+int WmTestSearch20Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2678,7 +2831,8 @@ int WmTestSearch20Hash16 (void) {
     return result;
 }
 
-int WmTestSearch21 (void) {
+int WmTestSearch21 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2703,7 +2857,8 @@ int WmTestSearch21 (void) {
     return result;
 }
 
-static int WmTestSearch21Hash12 (void) {
+static int WmTestSearch21Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2729,7 +2884,8 @@ static int WmTestSearch21Hash12 (void) {
     return result;
 }
 
-static int WmTestSearch21Hash14 (void) {
+static int WmTestSearch21Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2755,7 +2911,8 @@ static int WmTestSearch21Hash14 (void) {
     return result;
 }
 
-static int WmTestSearch21Hash15 (void) {
+static int WmTestSearch21Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2781,7 +2938,8 @@ static int WmTestSearch21Hash15 (void) {
     return result;
 }
 
-static int WmTestSearch21Hash16 (void) {
+static int WmTestSearch21Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2807,7 +2965,8 @@ static int WmTestSearch21Hash16 (void) {
     return result;
 }
 #endif
-static int WmTestSearch22Hash9 (void) {
+static int WmTestSearch22Hash9 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2840,7 +2999,8 @@ static int WmTestSearch22Hash9 (void) {
     return result;
 }
 
-static int WmTestSearch22Hash12 (void) {
+static int WmTestSearch22Hash12 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2873,7 +3033,8 @@ static int WmTestSearch22Hash12 (void) {
     return result;
 }
 
-static int WmTestSearch22Hash14 (void) {
+static int WmTestSearch22Hash14 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2906,7 +3067,8 @@ static int WmTestSearch22Hash14 (void) {
     return result;
 }
 
-static int WmTestSearch22Hash15 (void) {
+static int WmTestSearch22Hash15 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2939,7 +3101,8 @@ static int WmTestSearch22Hash15 (void) {
     return result;
 }
 
-static int WmTestSearch22Hash16 (void) {
+static int WmTestSearch22Hash16 (void)
+{
     int result = 0;
     MpmCtx mpm_ctx;
     memset(&mpm_ctx, 0x00, sizeof(MpmCtx));
@@ -2973,7 +3136,8 @@ static int WmTestSearch22Hash16 (void) {
 }
 #endif /* UNITTESTS */
 
-void WmRegisterTests(void) {
+void WmRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("WmTestInitCtx01", WmTestInitCtx01, 1);
     UtRegisterTest("WmTestInitCtx02", WmTestInitCtx02, 1);

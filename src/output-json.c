@@ -57,6 +57,7 @@
 #include "util-optimize.h"
 #include "util-buffer.h"
 #include "util-logopenfile.h"
+#include "util-device.h"
 
 
 #ifndef HAVE_LIBJANSSON
@@ -71,7 +72,8 @@ TmEcode OutputJsonThreadDeinit(ThreadVars *, void *);
 int OutputJsonOpenFileCtx(LogFileCtx *, char *);
 void OutputJsonRegisterTests(void);
 
-void TmModuleOutputJsonRegister (void) {
+void TmModuleOutputJsonRegister (void)
+{
     tmm_modules[TMM_OUTPUTJSON].name = "OutputJSON";
     tmm_modules[TMM_OUTPUTJSON].ThreadInit = OutputJsonThreadInit;
     tmm_modules[TMM_OUTPUTJSON].Func = OutputJson;
@@ -117,10 +119,6 @@ void OutputJsonRegisterTests (void)
 
 #define OUTPUT_BUFFER_SIZE 65535
 
-#ifndef OS_WIN32
-static int alert_syslog_level = DEFAULT_ALERT_SYSLOG_LEVEL;
-#endif /* OS_WIN32 */
-
 TmEcode OutputJson (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode OutputJsonThreadInit(ThreadVars *, void *, void **);
 TmEcode OutputJsonThreadDeinit(ThreadVars *, void *);
@@ -128,7 +126,8 @@ void OutputJsonExitPrintStats(ThreadVars *, void *);
 void OutputJsonRegisterTests(void);
 static void OutputJsonDeInitCtx(OutputCtx *);
 
-void TmModuleOutputJsonRegister (void) {
+void TmModuleOutputJsonRegister (void)
+{
     tmm_modules[TMM_OUTPUTJSON].name = MODULE_NAME;
     tmm_modules[TMM_OUTPUTJSON].ThreadInit = OutputJsonThreadInit;
     tmm_modules[TMM_OUTPUTJSON].Func = OutputJson;
@@ -143,9 +142,40 @@ void TmModuleOutputJsonRegister (void) {
 /* Default Sensor ID value */
 static int64_t sensor_id = -1; /* -1 = not defined */
 
-static enum JsonOutput json_out = ALERT_FILE;
+/** \brief jsonify tcp flags field
+ *  Only add 'true' fields in an attempt to keep things reasonably compact.
+ */
+void JsonTcpFlags(uint8_t flags, json_t *js)
+{
+    if (flags & TH_SYN)
+        json_object_set_new(js, "syn", json_true());
+    if (flags & TH_FIN)
+        json_object_set_new(js, "fin", json_true());
+    if (flags & TH_RST)
+        json_object_set_new(js, "rst", json_true());
+    if (flags & TH_PUSH)
+        json_object_set_new(js, "psh", json_true());
+    if (flags & TH_ACK)
+        json_object_set_new(js, "ack", json_true());
+    if (flags & TH_URG)
+        json_object_set_new(js, "urg", json_true());
+    if (flags & TH_ECN)
+        json_object_set_new(js, "ecn", json_true());
+    if (flags & TH_CWR)
+        json_object_set_new(js, "cwr", json_true());
+}
 
-static enum JsonFormat format = COMPACT;
+void CreateJSONFlowId(json_t *js, const Flow *f)
+{
+    if (f == NULL)
+        return;
+#if __WORDSIZE == 64
+    uint64_t addr = (uint64_t)f;
+#else
+    uint32_t addr = (uint32_t)f;
+#endif
+    json_object_set_new(js, "flow_id", json_integer(addr));
+}
 
 json_t *CreateJSONHeader(Packet *p, int direction_sensitive, char *event_type)
 {
@@ -205,9 +235,16 @@ json_t *CreateJSONHeader(Packet *p, int direction_sensitive, char *event_type)
     /* time & tx */
     json_object_set_new(js, "timestamp", json_string(timebuf));
 
+    CreateJSONFlowId(js, (const Flow *)p->flow);
+
     /* sensor id */
     if (sensor_id >= 0)
         json_object_set_new(js, "sensor_id", json_integer(sensor_id));
+
+    /* input interface */
+    if (p->livedev) {
+        json_object_set_new(js, "in_iface", json_string(p->livedev->dev));
+    }
 
     /* pcap_cnt */
     if (p->pcap_cnt != 0) {
@@ -286,28 +323,54 @@ json_t *CreateJSONHeader(Packet *p, int direction_sensitive, char *event_type)
     return js;
 }
 
-int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer *buffer) {
-    char *js_s = json_dumps(js,
-                            JSON_PRESERVE_ORDER|JSON_COMPACT|JSON_ENSURE_ASCII|
+json_t *CreateJSONHeaderWithTxId(Packet *p, int direction_sensitive, char *event_type, uint32_t tx_id)
+{
+    json_t *js = CreateJSONHeader(p, direction_sensitive, event_type);
+    if (unlikely(js == NULL))
+        return NULL;
+
+    /* tx id for correlation with other events */
+    json_object_set_new(js, "tx_id", json_integer(tx_id));
+
+    return js;
+}
+
+static int MemBufferCallback(const char *str, size_t size, void *data)
+{
+    MemBuffer *memb = data;
+#if 0 // can't expand, need a MemBuffer **
+    /* since we can have many threads, the buffer might not be big enough.
+     *              * Expand if necessary. */
+    if (MEMBUFFER_OFFSET(memb) + size > MEMBUFFER_SIZE(memb)) {
+        MemBufferExpand(&memb, OUTPUT_BUFFER_SIZE);
+    }
+#endif
+    MemBufferWriteRaw(memb, str, size);
+    return 0;
+}
+
+int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer *buffer)
+{
+    if (file_ctx->sensor_name) {
+        json_object_set_new(js, "host",
+                            json_string(file_ctx->sensor_name));
+    }
+
+    if (file_ctx->prefix)
+        MemBufferWriteRaw(buffer, file_ctx->prefix, file_ctx->prefix_len);
+
+    int r = json_dump_callback(js, MemBufferCallback, buffer,
+            JSON_PRESERVE_ORDER|JSON_COMPACT|JSON_ENSURE_ASCII|
 #ifdef JSON_ESCAPE_SLASH
                             JSON_ESCAPE_SLASH
 #else
                             0
 #endif
                             );
-    if (unlikely(js_s == NULL))
+    if (r != 0)
         return TM_ECODE_OK;
 
-    SCMutexLock(&file_ctx->fp_mutex);
-    if (json_out == ALERT_SYSLOG) {
-        syslog(alert_syslog_level, "%s", js_s);
-    } else if (json_out == ALERT_FILE || json_out == ALERT_UNIX_DGRAM || json_out == ALERT_UNIX_STREAM) {
-        MemBufferWriteString(buffer, "%s\n", js_s);
-        file_ctx->Write((const char *)MEMBUFFER_BUFFER(buffer),
-            MEMBUFFER_OFFSET(buffer), file_ctx);
-    }
-    SCMutexUnlock(&file_ctx->fp_mutex);
-    free(js_s);
+    LogFileWrite(file_ctx, buffer);
     return 0;
 }
 
@@ -345,7 +408,8 @@ TmEcode OutputJsonThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void OutputJsonExitPrintStats(ThreadVars *tv, void *data) {
+void OutputJsonExitPrintStats(ThreadVars *tv, void *data)
+{
     AlertJsonThread *aft = (AlertJsonThread *)data;
     if (aft == NULL) {
         return;
@@ -363,6 +427,9 @@ void OutputJsonExitPrintStats(ThreadVars *tv, void *data) {
 OutputCtx *OutputJsonInitCtx(ConfNode *conf)
 {
     OutputJsonCtx *json_ctx = SCCalloc(1, sizeof(OutputJsonCtx));;
+
+    const char *sensor_name = ConfNodeLookupChildValue(conf, "sensor-name");
+
     if (unlikely(json_ctx == NULL)) {
         SCLogDebug("AlertJsonInitCtx: Could not create new LogFileCtx");
         return NULL;
@@ -373,6 +440,17 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
         SCLogDebug("AlertJsonInitCtx: Could not create new LogFileCtx");
         SCFree(json_ctx);
         return NULL;
+    }
+
+    if (sensor_name) {
+        json_ctx->file_ctx->sensor_name = SCStrdup(sensor_name);
+        if (json_ctx->file_ctx->sensor_name  == NULL) {
+            LogFileFreeCtx(json_ctx->file_ctx);
+            SCFree(json_ctx);
+            return NULL;
+        }
+    } else {
+        json_ctx->file_ctx->sensor_name = NULL;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
@@ -386,16 +464,31 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
     output_ctx->DeInit = OutputJsonDeInitCtx;
 
     if (conf) {
-        const char *output_s = ConfNodeLookupChildValue(conf, "type");
+        const char *output_s = ConfNodeLookupChildValue(conf, "filetype");
+
+        // Backwards compatibility
+        if (output_s == NULL) {
+            output_s = ConfNodeLookupChildValue(conf, "type");
+        }
+
         if (output_s != NULL) {
-            if (strcmp(output_s, "file") == 0) {
-                json_ctx->json_out = ALERT_FILE;
+            if (strcmp(output_s, "file") == 0 ||
+                strcmp(output_s, "regular") == 0) {
+                json_ctx->json_out = LOGFILE_TYPE_FILE;
             } else if (strcmp(output_s, "syslog") == 0) {
-                json_ctx->json_out = ALERT_SYSLOG;
+                json_ctx->json_out = LOGFILE_TYPE_SYSLOG;
             } else if (strcmp(output_s, "unix_dgram") == 0) {
-                json_ctx->json_out = ALERT_UNIX_DGRAM;
+                json_ctx->json_out = LOGFILE_TYPE_UNIX_DGRAM;
             } else if (strcmp(output_s, "unix_stream") == 0) {
-                json_ctx->json_out = ALERT_UNIX_STREAM;
+                json_ctx->json_out = LOGFILE_TYPE_UNIX_STREAM;
+            } else if (strcmp(output_s, "redis") == 0) {
+#ifdef HAVE_LIBHIREDIS
+                json_ctx->json_out = LOGFILE_TYPE_REDIS;
+#else
+                SCLogError(SC_ERR_INVALID_ARGUMENT,
+                           "redis JSON output option is not compiled");
+                exit(EXIT_FAILURE);
+#endif
             } else {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
                            "Invalid JSON output option: %s", output_s);
@@ -403,8 +496,24 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
             }
         }
 
-        if (json_ctx->json_out == ALERT_FILE || json_ctx->json_out == ALERT_UNIX_DGRAM || json_ctx->json_out == ALERT_UNIX_STREAM) {
+        const char *prefix = ConfNodeLookupChildValue(conf, "prefix");
+        if (prefix != NULL)
+        {
+            SCLogInfo("Using prefix '%s' for JSON messages", prefix);
+            json_ctx->file_ctx->prefix = SCStrdup(prefix);
+            if (json_ctx->file_ctx->prefix == NULL)
+            {
+                SCLogError(SC_ERR_MEM_ALLOC,
+                    "Failed to allocate memory for eve-log.prefix setting.");
+                exit(EXIT_FAILURE);
+            }
+            json_ctx->file_ctx->prefix_len = strlen(prefix);
+        }
 
+        if (json_ctx->json_out == LOGFILE_TYPE_FILE ||
+            json_ctx->json_out == LOGFILE_TYPE_UNIX_DGRAM ||
+            json_ctx->json_out == LOGFILE_TYPE_UNIX_STREAM)
+        {
             if (SCConfLogOpenGeneric(conf, json_ctx->file_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
                 LogFileFreeCtx(json_ctx->file_ctx);
                 SCFree(json_ctx);
@@ -425,7 +534,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
                     exit(EXIT_FAILURE);
                 }
             }
-        } else if (json_out == ALERT_SYSLOG) {
+        } else if (json_ctx->json_out == LOGFILE_TYPE_SYSLOG) {
             const char *facility_s = ConfNodeLookupChildValue(conf, "facility");
             if (facility_s == NULL) {
                 facility_s = DEFAULT_ALERT_SYSLOG_FACILITY_STR;
@@ -443,7 +552,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
             if (level_s != NULL) {
                 int level = SCMapEnumNameToValue(level_s, SCSyslogGetLogLevelMap());
                 if (level != -1) {
-                    alert_syslog_level = level;
+                    json_ctx->file_ctx->syslog_setup.alert_syslog_level = level;
                 }
             }
 
@@ -454,6 +563,29 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
             openlog(ident, LOG_PID|LOG_NDELAY, facility);
 
         }
+#ifdef HAVE_LIBHIREDIS
+        else if (json_ctx->json_out == LOGFILE_TYPE_REDIS) {
+            ConfNode *redis_node = ConfNodeLookupChild(conf, "redis");
+            if (!json_ctx->file_ctx->sensor_name) {
+                char hostname[1024];
+                gethostname(hostname, 1023);
+                json_ctx->file_ctx->sensor_name = SCStrdup(hostname);
+            }
+            if (json_ctx->file_ctx->sensor_name  == NULL) {
+                LogFileFreeCtx(json_ctx->file_ctx);
+                SCFree(json_ctx);
+                SCFree(output_ctx);
+                return NULL;
+            }
+
+            if (SCConfLogOpenRedis(redis_node, json_ctx->file_ctx) < 0) {
+                LogFileFreeCtx(json_ctx->file_ctx);
+                SCFree(json_ctx);
+                SCFree(output_ctx);
+                return NULL;
+            }
+        }
+#endif
 
         const char *sensor_id_s = ConfNodeLookupChildValue(conf, "sensor-id");
         if (sensor_id_s != NULL) {
@@ -465,11 +597,10 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
             }
         }
 
-        format = json_ctx->format;
-        json_out = json_ctx->json_out;
+        json_ctx->file_ctx->type = json_ctx->json_out;
     }
 
-    SCLogInfo("returning output_ctx %p", output_ctx);
+    SCLogDebug("returning output_ctx %p", output_ctx);
     return output_ctx;
 }
 

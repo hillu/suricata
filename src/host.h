@@ -146,5 +146,12 @@ void HostMoveToSpare(Host *);
 uint32_t HostSpareQueueGetSize(void);
 void HostPrintStats (void);
 
+void HostRegisterUnittests(void);
+
+Host *HostAlloc();
+void HostFree();
+
+void HostUnlock(Host *h);
+
 #endif /* __HOST_H__ */
 

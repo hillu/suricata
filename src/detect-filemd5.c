@@ -56,7 +56,8 @@
 
 #ifndef HAVE_NSS
 
-static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, char *c) {
+static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, char *c)
+{
     SCLogError(SC_ERR_NO_MD5_SUPPORT, "no MD5 calculation support built in, needed for filemd5 keyword");
     return -1;
 }
@@ -64,7 +65,8 @@ static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, char *
 /**
  * \brief Registration function for keyword: filemd5
  */
-void DetectFileMd5Register(void) {
+void DetectFileMd5Register(void)
+{
     sigmatch_table[DETECT_FILEMD5].name = "filemd5";
     sigmatch_table[DETECT_FILEMD5].FileMatch = NULL;
     sigmatch_table[DETECT_FILEMD5].alproto = ALPROTO_HTTP;
@@ -88,7 +90,8 @@ static void DetectFileMd5Free(void *);
 /**
  * \brief Registration function for keyword: filemd5
  */
-void DetectFileMd5Register(void) {
+void DetectFileMd5Register(void)
+{
     sigmatch_table[DETECT_FILEMD5].name = "filemd5";
     sigmatch_table[DETECT_FILEMD5].desc = "match file MD5 against list of MD5 checksums";
     sigmatch_table[DETECT_FILEMD5].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filemd5";
@@ -102,7 +105,8 @@ void DetectFileMd5Register(void) {
     return;
 }
 
-static int Md5ReadString(uint8_t *md5, char *str, char *filename, int line_no) {
+static int Md5ReadString(uint8_t *md5, char *str, char *filename, int line_no)
+{
     if (strlen(str) != 32) {
         SCLogError(SC_ERR_INVALID_MD5, "%s:%d md5 string not 32 bytes",
                 filename, line_no);
@@ -128,7 +132,8 @@ static int Md5ReadString(uint8_t *md5, char *str, char *filename, int line_no) {
     return 1;
 }
 
-static int MD5LoadHash(ROHashTable *hash, char *string, char *filename, int line_no) {
+static int MD5LoadHash(ROHashTable *hash, char *string, char *filename, int line_no)
+{
     uint8_t md5[16];
 
     if (Md5ReadString(md5, string, filename, line_no) == 1) {
@@ -139,7 +144,8 @@ static int MD5LoadHash(ROHashTable *hash, char *string, char *filename, int line
     return 1;
 }
 
-static int MD5MatchLookupBuffer(ROHashTable *hash, uint8_t *buf, size_t buflen) {
+static int MD5MatchLookupBuffer(ROHashTable *hash, uint8_t *buf, size_t buflen)
+{
     void *ptr = ROHashLookup(hash, buf, (uint16_t)buflen);
     if (ptr == NULL)
         return 0;
@@ -205,7 +211,7 @@ static int DetectFileMd5Match (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval filemd5 pointer to DetectFileMd5Data on success
  * \retval NULL on failure
  */
-static DetectFileMd5Data *DetectFileMd5Parse (char *str)
+static DetectFileMd5Data *DetectFileMd5Parse (const DetectEngineCtx *de_ctx, char *str)
 {
     DetectFileMd5Data *filemd5 = NULL;
     FILE *fp = NULL;
@@ -229,7 +235,7 @@ static DetectFileMd5Data *DetectFileMd5Parse (char *str)
     }
 
     /* get full filename */
-    filename = DetectLoadCompleteSigPath(str);
+    filename = DetectLoadCompleteSigPath(de_ctx, str);
     if (filename == NULL) {
         goto error;
     }
@@ -303,7 +309,7 @@ static int DetectFileMd5Setup (DetectEngineCtx *de_ctx, Signature *s, char *str)
     DetectFileMd5Data *filemd5 = NULL;
     SigMatch *sm = NULL;
 
-    filemd5 = DetectFileMd5Parse(str);
+    filemd5 = DetectFileMd5Parse(de_ctx, str);
     if (filemd5 == NULL)
         goto error;
 
@@ -318,15 +324,14 @@ static int DetectFileMd5Setup (DetectEngineCtx *de_ctx, Signature *s, char *str)
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
-    AppLayerHtpNeedFileInspection();
-
-    /** \todo remove this once we support more than http */
-    s->alproto = ALPROTO_HTTP;
+    if (s->alproto == ALPROTO_HTTP) {
+        AppLayerHtpNeedFileInspection();
+    }
 
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_MD5);
     return 0;
@@ -344,7 +349,8 @@ error:
  *
  * \param filemd5 pointer to DetectFileMd5Data
  */
-static void DetectFileMd5Free(void *ptr) {
+static void DetectFileMd5Free(void *ptr)
+{
     if (ptr != NULL) {
         DetectFileMd5Data *filemd5 = (DetectFileMd5Data *)ptr;
         if (filemd5->hash != NULL)
@@ -354,7 +360,8 @@ static void DetectFileMd5Free(void *ptr) {
 }
 
 #ifdef UNITTESTS
-static int MD5MatchLookupString(ROHashTable *hash, char *string) {
+static int MD5MatchLookupString(ROHashTable *hash, char *string)
+{
     uint8_t md5[16];
     if (Md5ReadString(md5, string, "file", 88) == 1) {
         void *ptr = ROHashLookup(hash, &md5, (uint16_t)sizeof(md5));
@@ -366,7 +373,8 @@ static int MD5MatchLookupString(ROHashTable *hash, char *string) {
     return 0;
 }
 
-static int MD5MatchTest01(void) {
+static int MD5MatchTest01(void)
+{
     ROHashTable *hash = ROHashInit(4, 16);
     if (hash == NULL) {
         return 0;
@@ -409,7 +417,8 @@ static int MD5MatchTest01(void) {
 }
 #endif
 
-void DetectFileMd5RegisterTests(void) {
+void DetectFileMd5RegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("MD5MatchTest01", MD5MatchTest01, 1);
 #endif
