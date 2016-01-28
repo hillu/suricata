@@ -29,40 +29,43 @@
 
 #define COPY_TIMESTAMP(src,dst) ((dst)->tv_sec = (src)->tv_sec, (dst)->tv_usec = (src)->tv_usec)
 
-#ifdef DEBUG
 #define RESET_COUNTERS(f) do { \
         (f)->todstpktcnt = 0; \
         (f)->tosrcpktcnt = 0; \
-        (f)->bytecnt = 0; \
+        (f)->todstbytecnt = 0; \
+        (f)->tosrcbytecnt = 0; \
     } while (0)
-#else
-#define RESET_COUNTERS(f)
-#endif
 
 #define FLOW_INITIALIZE(f) do { \
         (f)->sp = 0; \
         (f)->dp = 0; \
         (f)->proto = 0; \
+        SC_ATOMIC_INIT((f)->flow_state); \
         SC_ATOMIC_INIT((f)->use_cnt); \
+        (f)->tenant_id = 0; \
         (f)->probing_parser_toserver_alproto_masks = 0; \
         (f)->probing_parser_toclient_alproto_masks = 0; \
         (f)->flags = 0; \
-        (f)->lastts_sec = 0; \
+        (f)->lastts.tv_sec = 0; \
+        (f)->lastts.tv_usec = 0; \
         FLOWLOCK_INIT((f)); \
         (f)->protoctx = NULL; \
+        (f)->flow_end_flags = 0; \
         (f)->alproto = 0; \
         (f)->alproto_ts = 0; \
         (f)->alproto_tc = 0; \
         (f)->data_al_so_far[0] = 0; \
         (f)->data_al_so_far[1] = 0; \
         (f)->de_ctx_id = 0; \
+        (f)->thread_id = 0; \
+        (f)->detect_alversion[0] = 0; \
+        (f)->detect_alversion[1] = 0; \
         (f)->alparser = NULL; \
         (f)->alstate = NULL; \
         (f)->de_state = NULL; \
         (f)->sgh_toserver = NULL; \
         (f)->sgh_toclient = NULL; \
         (f)->flowvar = NULL; \
-        SCMutexInit(&(f)->de_state_m, NULL); \
         (f)->hnext = NULL; \
         (f)->hprev = NULL; \
         (f)->lnext = NULL; \
@@ -82,12 +85,16 @@
         (f)->sp = 0; \
         (f)->dp = 0; \
         (f)->proto = 0; \
+        SC_ATOMIC_RESET((f)->flow_state); \
         SC_ATOMIC_RESET((f)->use_cnt); \
+        (f)->tenant_id = 0; \
         (f)->probing_parser_toserver_alproto_masks = 0; \
         (f)->probing_parser_toclient_alproto_masks = 0; \
         (f)->flags = 0; \
-        (f)->lastts_sec = 0; \
+        (f)->lastts.tv_sec = 0; \
+        (f)->lastts.tv_usec = 0; \
         (f)->protoctx = NULL; \
+        (f)->flow_end_flags = 0; \
         (f)->alparser = NULL; \
         (f)->alstate = NULL; \
         (f)->alproto = 0; \
@@ -96,10 +103,11 @@
         (f)->data_al_so_far[0] = 0; \
         (f)->data_al_so_far[1] = 0; \
         (f)->de_ctx_id = 0; \
+        (f)->thread_id = 0; \
+        (f)->detect_alversion[0] = 0; \
+        (f)->detect_alversion[1] = 0; \
         if ((f)->de_state != NULL) { \
-            SCMutexLock(&(f)->de_state_m); \
             DetectEngineStateReset((f)->de_state, (STREAM_TOSERVER | STREAM_TOCLIENT)); \
-            SCMutexUnlock(&(f)->de_state_m); \
         } \
         (f)->sgh_toserver = NULL; \
         (f)->sgh_toclient = NULL; \
@@ -113,16 +121,14 @@
 
 #define FLOW_DESTROY(f) do { \
         FlowCleanupAppLayer((f)); \
+        SC_ATOMIC_DESTROY((f)->flow_state); \
         SC_ATOMIC_DESTROY((f)->use_cnt); \
         \
         FLOWLOCK_DESTROY((f)); \
         if ((f)->de_state != NULL) { \
-            SCMutexLock(&(f)->de_state_m); \
-            DetectEngineStateFree((f)->de_state); \
-            SCMutexUnlock(&(f)->de_state_m); \
+            DetectEngineStateFlowFree((f)->de_state); \
         } \
         GenericVarFree((f)->flowvar); \
-        SCMutexDestroy(&(f)->de_state_m); \
         SC_ATOMIC_DESTROY((f)->autofp_tmqh_flow_qid);   \
     } while(0)
 

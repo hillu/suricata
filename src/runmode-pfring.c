@@ -21,14 +21,7 @@
 #include "runmodes.h"
 #include "runmode-pfring.h"
 #include "source-pfring.h"
-#include "log-httplog.h"
 #include "output.h"
-#include "source-pfring.h"
-
-#include "alert-fastlog.h"
-#include "alert-prelude.h"
-#include "alert-unified2-alert.h"
-#include "alert-debuglog.h"
 
 #include "util-debug.h"
 #include "util-time.h"
@@ -54,9 +47,6 @@ const char *RunModeIdsPfringGetDefaultMode(void)
 
 void RunModeIdsPfringRegister(void)
 {
-    RunModeRegisterNewRunMode(RUNMODE_PFRING, "auto",
-                              "Multi threaded pfring mode",
-                              RunModeIdsPfringAuto);
     default_mode_autofp = "autofp";
     RunModeRegisterNewRunMode(RUNMODE_PFRING, "autofp",
                               "Multi threaded pfring mode.  Packets from "
@@ -79,11 +69,9 @@ void PfringDerefConfig(void *conf)
 {
     PfringIfaceConfig *pfp = (PfringIfaceConfig *)conf;
     if (SC_ATOMIC_SUB(pfp->ref, 1) == 0) {
-#ifdef HAVE_PFRING_SET_BPF_FILTER
         if (pfp->bpf_filter) {
             SCFree(pfp->bpf_filter);
         }
-#endif
         SCFree(pfp);
     }
 }
@@ -106,7 +94,7 @@ void *OldParsePfringConfig(const char *iface)
     char *threadsstr = NULL;
     PfringIfaceConfig *pfconf = SCMalloc(sizeof(*pfconf));
     char *tmpclusterid;
-#ifdef HAVE_PFRING_CLUSTER_TYPE
+#ifdef HAVE_PFRING
     char *tmpctype = NULL;
     cluster_type default_ctype = CLUSTER_ROUND_ROBIN;
 #endif
@@ -121,9 +109,10 @@ void *OldParsePfringConfig(const char *iface)
     }
 
     strlcpy(pfconf->iface, iface, sizeof(pfconf->iface));
+    pfconf->flags = 0;
     pfconf->threads = 1;
     pfconf->cluster_id = 1;
-#ifdef HAVE_PFRING_CLUSTER_TYPE
+#ifdef HAVE_PFRING
     pfconf->ctype = default_ctype;
 #endif
     pfconf->DerefFunc = PfringDerefConfig;
@@ -146,16 +135,28 @@ void *OldParsePfringConfig(const char *iface)
     SC_ATOMIC_RESET(pfconf->ref);
     (void) SC_ATOMIC_ADD(pfconf->ref, pfconf->threads);
 
-    if (ConfGet("pfring.cluster-id", &tmpclusterid) != 1) {
+    if (strncmp(pfconf->iface, "zc", 2) == 0) {
+        SCLogInfo("ZC interface detected, not setting cluster-id");
+    }
+    else if ((pfconf->threads == 1) && (strncmp(pfconf->iface, "dna", 3) == 0)) {
+        SCLogInfo("DNA interface detected, not setting cluster-id");
+    } else if (ConfGet("pfring.cluster-id", &tmpclusterid) != 1) {
         SCLogError(SC_ERR_INVALID_ARGUMENT,"Could not get cluster-id from config");
     } else {
         pfconf->cluster_id = (uint16_t)atoi(tmpclusterid);
+        pfconf->flags |= PFRING_CONF_FLAGS_CLUSTER;
         SCLogDebug("Going to use cluster-id %" PRId32, pfconf->cluster_id);
     }
 
-#ifdef HAVE_PFRING_CLUSTER_TYPE
-    if (ConfGet("pfring.cluster-type", &tmpctype) != 1) {
-        SCLogError(SC_ERR_GET_CLUSTER_TYPE_FAILED,"Could not get cluster-type fron config");
+#ifdef HAVE_PFRING
+    if (strncmp(pfconf->iface, "zc", 2) == 0) {
+        SCLogInfo("ZC interface detected, not setting cluster type for PF_RING (iface %s)",
+                pfconf->iface);
+    } else if ((pfconf->threads == 1) && (strncmp(pfconf->iface, "dna", 3) == 0)) {
+        SCLogInfo("DNA interface detected, not setting cluster type for PF_RING (iface %s)",
+                pfconf->iface);
+    } else if (ConfGet("pfring.cluster-type", &tmpctype) != 1) {
+        SCLogError(SC_ERR_GET_CLUSTER_TYPE_FAILED,"Could not get cluster-type from config");
     } else if (strcmp(tmpctype, "cluster_round_robin") == 0) {
         SCLogInfo("Using round-robin cluster mode for PF_RING (iface %s)",
                 pfconf->iface);
@@ -169,7 +170,7 @@ void *OldParsePfringConfig(const char *iface)
         SCFree(pfconf);
         return NULL;
     }
-#endif
+#endif /* HAVE_PFRING */
 
     return pfconf;
 }
@@ -196,13 +197,11 @@ void *ParsePfringConfig(const char *iface)
     PfringIfaceConfig *pfconf = SCMalloc(sizeof(*pfconf));
     char *tmpclusterid;
     char *tmpctype = NULL;
-#ifdef HAVE_PFRING_CLUSTER_TYPE
+#ifdef HAVE_PFRING
     cluster_type default_ctype = CLUSTER_ROUND_ROBIN;
     int getctype = 0;
 #endif
-#ifdef HAVE_PFRING_SET_BPF_FILTER
     char *bpf_filter = NULL;
-#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
     if (unlikely(pfconf == NULL)) {
         return NULL;
@@ -217,7 +216,7 @@ void *ParsePfringConfig(const char *iface)
     strlcpy(pfconf->iface, iface, sizeof(pfconf->iface));
     pfconf->threads = 1;
     pfconf->cluster_id = 1;
-#ifdef HAVE_PFRING_CLUSTER_TYPE
+#ifdef HAVE_PFRING
     pfconf->ctype = (cluster_type)default_ctype;
 #endif
     pfconf->DerefFunc = PfringDerefConfig;
@@ -236,8 +235,6 @@ void *ParsePfringConfig(const char *iface)
     if_default = ConfNodeLookupKeyValue(pf_ring_node, "interface", "default");
 
     if (if_root == NULL && if_default == NULL) {
-        /* Switch to old mode */
-        if_root = pf_ring_node;
         SCLogInfo("Unable to find pfring config for "
                   "interface %s, using default value or 1.0 "
                   "configuration system. ",
@@ -268,18 +265,27 @@ void *ParsePfringConfig(const char *iface)
     /* command line value has precedence */
     if (ConfGet("pfring.cluster-id", &tmpclusterid) == 1) {
         pfconf->cluster_id = (uint16_t)atoi(tmpclusterid);
+        pfconf->flags |= PFRING_CONF_FLAGS_CLUSTER;
         SCLogDebug("Going to use command-line provided cluster-id %" PRId32,
                    pfconf->cluster_id);
     } else {
-        if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-id", &tmpclusterid) != 1) {
+
+        if (strncmp(pfconf->iface, "zc", 2) == 0) {
+            SCLogInfo("ZC interface detected, not setting cluster-id for PF_RING (iface %s)",
+                    pfconf->iface);
+        } else if ((pfconf->threads == 1) && (strncmp(pfconf->iface, "dna", 3) == 0)) {
+            SCLogInfo("DNA interface detected, not setting cluster-id for PF_RING (iface %s)",
+                    pfconf->iface);
+        } else if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-id", &tmpclusterid) != 1) {
             SCLogError(SC_ERR_INVALID_ARGUMENT,
                        "Could not get cluster-id from config");
         } else {
             pfconf->cluster_id = (uint16_t)atoi(tmpclusterid);
+            pfconf->flags |= PFRING_CONF_FLAGS_CLUSTER;
             SCLogDebug("Going to use cluster-id %" PRId32, pfconf->cluster_id);
         }
     }
-#ifdef HAVE_PFRING_SET_BPF_FILTER
+
     /*load pfring bpf filter*/
     /* command line value has precedence */
     if (ConfGet("bpf-filter", &bpf_filter) == 1) {
@@ -307,16 +313,21 @@ void *ParsePfringConfig(const char *iface)
             }
         }
     }
-#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
-#ifdef HAVE_PFRING_CLUSTER_TYPE
+#ifdef HAVE_PFRING
     if (ConfGet("pfring.cluster-type", &tmpctype) == 1) {
         SCLogDebug("Going to use command-line provided cluster-type");
         getctype = 1;
     } else {
-        if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-type", &tmpctype) != 1) {
+        if (strncmp(pfconf->iface, "zc", 2) == 0) {
+            SCLogInfo("ZC interface detected, not setting cluster type for PF_RING (iface %s)",
+                    pfconf->iface);
+        } else if ((pfconf->threads == 1) && (strncmp(pfconf->iface, "dna", 3) == 0)) {
+            SCLogInfo("DNA interface detected, not setting cluster type for PF_RING (iface %s)",
+                    pfconf->iface);
+        } else if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-type", &tmpctype) != 1) {
             SCLogError(SC_ERR_GET_CLUSTER_TYPE_FAILED,
-                       "Could not get cluster-type fron config");
+                       "Could not get cluster-type from config");
         } else {
             getctype = 1;
         }
@@ -339,9 +350,7 @@ void *ParsePfringConfig(const char *iface)
             return NULL;
         }
     }
-
-#endif /* HAVE_PFRING_CLUSTER_TYPE */
-
+#endif /* HAVE_PFRING */
     if (ConfGetChildValueWithDefault(if_root, if_default, "checksum-checks", &tmpctype) == 1) {
         if (strcmp(tmpctype, "auto") == 0) {
             pfconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
@@ -404,56 +413,7 @@ static int GetDevAndParser(char **live_dev, ConfigIfaceParserFunc *parser)
 }
 #endif
 
-/**
- * \brief RunModeIdsPfringAuto set up the following thread packet handlers:
- *        - Receive thread (from pfring)
- *        - Decode thread
- *        - Stream thread
- *        - Detect: If we have only 1 cpu, it will setup one Detect thread
- *                  If we have more than one, it will setup num_cpus - 1
- *                  starting from the second cpu available.
- *        - Respond/Reject thread
- *        - Outputs thread
- *        By default the threads will use the first cpu available
- *        except the Detection threads if we have more than one cpu.
- *
- * \param de_ctx Pointer to the Detection Engine.
- *
- * \retval 0 If all goes well. (If any problem is detected the engine will
- *           exit()).
- */
-int RunModeIdsPfringAuto(DetectEngineCtx *de_ctx)
-{
-    SCEnter();
-/* We include only if pfring is enabled */
-#ifdef HAVE_PFRING
-    int ret;
-    char *live_dev = NULL;
-    ConfigIfaceParserFunc tparser;
-
-    RunModeInitialize();
-
-    TimeModeSetLive();
-
-    ret = GetDevAndParser(&live_dev, &tparser);
-    if (ret != 0) {
-        SCLogError(SC_ERR_MISSING_CONFIG_PARAM,
-                "Unable to get parser and interface params");
-        exit(EXIT_FAILURE);
-    }
-
-    ret = RunModeSetLiveCaptureAuto(de_ctx, tparser, PfringConfigGeThreadsCount,
-                                    "ReceivePfring", "DecodePfring",
-                                    "RxPFR", live_dev);
-    if (ret != 0) {
-        SCLogError(SC_ERR_RUNMODE, "Runmode start failed");
-        exit(EXIT_FAILURE);
-    }
-#endif /* HAVE_PFRING */
-    return 0;
-}
-
-int RunModeIdsPfringAutoFp(DetectEngineCtx *de_ctx)
+int RunModeIdsPfringAutoFp(void)
 {
     SCEnter();
 
@@ -474,8 +434,7 @@ int RunModeIdsPfringAutoFp(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureAutoFp(de_ctx,
-                              tparser,
+    ret = RunModeSetLiveCaptureAutoFp(tparser,
                               PfringConfigGeThreadsCount,
                               "ReceivePfring",
                               "DecodePfring", "RxPFR",
@@ -491,7 +450,7 @@ int RunModeIdsPfringAutoFp(DetectEngineCtx *de_ctx)
     return 0;
 }
 
-int RunModeIdsPfringSingle(DetectEngineCtx *de_ctx)
+int RunModeIdsPfringSingle(void)
 {
     SCEnter();
 
@@ -512,8 +471,7 @@ int RunModeIdsPfringSingle(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureSingle(de_ctx,
-                              tparser,
+    ret = RunModeSetLiveCaptureSingle(tparser,
                               PfringConfigGeThreadsCount,
                               "ReceivePfring",
                               "DecodePfring", "RxPFR",
@@ -529,7 +487,7 @@ int RunModeIdsPfringSingle(DetectEngineCtx *de_ctx)
     return 0;
 }
 
-int RunModeIdsPfringWorkers(DetectEngineCtx *de_ctx)
+int RunModeIdsPfringWorkers(void)
 {
     SCEnter();
 
@@ -550,8 +508,7 @@ int RunModeIdsPfringWorkers(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureWorkers(de_ctx,
-                              tparser,
+    ret = RunModeSetLiveCaptureWorkers(tparser,
                               PfringConfigGeThreadsCount,
                               "ReceivePfring",
                               "DecodePfring", "RxPFR",

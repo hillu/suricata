@@ -26,13 +26,18 @@
 
 #include "detect-engine-tag.h"
 #include "detect-engine-threshold.h"
+
+#include "host-bit.h"
+
 #include "reputation.h"
 
-uint32_t HostGetSpareCount(void) {
+uint32_t HostGetSpareCount(void)
+{
     return HostSpareQueueGetSize();
 }
 
-uint32_t HostGetActiveCount(void) {
+uint32_t HostGetActiveCount(void)
+{
     return SC_ATOMIC_GET(host_counter);
 }
 
@@ -45,9 +50,11 @@ uint32_t HostGetActiveCount(void) {
  *  \retval 0 not timed out just yet
  *  \retval 1 fully timed out, lets kill it
  */
-static int HostHostTimedOut(Host *h, struct timeval *ts) {
+static int HostHostTimedOut(Host *h, struct timeval *ts)
+{
     int tags = 0;
     int thresholds = 0;
+    int vars = 0;
 
     /** never prune a host that is used by a packet
      *  we are currently processing in one of the threads */
@@ -68,8 +75,11 @@ static int HostHostTimedOut(Host *h, struct timeval *ts) {
     if (ThresholdHostHasThreshold(h) && ThresholdTimeoutCheck(h, ts) == 0) {
         thresholds = 1;
     }
+    if (HostHasHostBits(h) && HostBitsTimedoutCheck(h, ts) == 0) {
+        vars = 1;
+    }
 
-    if (tags || thresholds)
+    if (tags || thresholds || vars)
         return 0;
 
     SCLogDebug("host %p timed out", h);
@@ -142,7 +152,8 @@ static uint32_t HostHashRowTimeout(HostHashRow *hb, Host *h, struct timeval *ts)
  *
  *  \retval cnt number of timed out host
  */
-uint32_t HostTimeoutHash(struct timeval *ts) {
+uint32_t HostTimeoutHash(struct timeval *ts)
+{
     uint32_t idx = 0;
     uint32_t cnt = 0;
 

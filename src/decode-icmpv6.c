@@ -168,7 +168,7 @@ int DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
                   uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
     int full_hdr = 0;
-    SCPerfCounterIncr(dtv->counter_icmpv6, tv->sc_perf_pca);
+    StatsIncr(tv, dtv->counter_icmpv6);
 
     if (len < ICMPV6_HEADER_LEN) {
         SCLogDebug("ICMPV6_PKT_TOO_SMALL");
@@ -298,17 +298,26 @@ int DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
             if (p->icmpv6h->code != 0) {
                 ENGINE_SET_EVENT(p, ICMPV6_UNKNOWN_CODE);
             }
+            if (IPV6_GET_HLIM(p) != 1) {
+                ENGINE_SET_EVENT(p, ICMPV6_MLD_MESSAGE_WITH_INVALID_HL);
+            }
             break;
         case MLD_LISTENER_REPORT:
             SCLogDebug("MLD_LISTENER_REPORT");
             if (p->icmpv6h->code != 0) {
                 ENGINE_SET_EVENT(p, ICMPV6_UNKNOWN_CODE);
             }
+            if (IPV6_GET_HLIM(p) != 1) {
+                ENGINE_SET_EVENT(p, ICMPV6_MLD_MESSAGE_WITH_INVALID_HL);
+            }
             break;
         case MLD_LISTENER_REDUCTION:
             SCLogDebug("MLD_LISTENER_REDUCTION");
             if (p->icmpv6h->code != 0) {
                 ENGINE_SET_EVENT(p, ICMPV6_UNKNOWN_CODE);
+            }
+            if (IPV6_GET_HLIM(p) != 1) {
+                ENGINE_SET_EVENT(p, ICMPV6_MLD_MESSAGE_WITH_INVALID_HL);
             }
             break;
         default:
@@ -337,14 +346,15 @@ int DecodeICMPV6(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
 #endif
 
     /* Flow is an integral part of us */
-    FlowHandlePacket(tv, p);
+    FlowHandlePacket(tv, dtv, p);
 
     return TM_ECODE_OK;
 }
 
 #ifdef UNITTESTS
 
-static int ICMPV6CalculateValidChecksumtest01(void) {
+static int ICMPV6CalculateValidChecksumtest01(void)
+{
     uint16_t csum = 0;
 
     uint8_t raw_ipv6[] = {
@@ -371,7 +381,8 @@ static int ICMPV6CalculateValidChecksumtest01(void) {
                                             (uint16_t *)(raw_ipv6 + 54), 68));
 }
 
-static int ICMPV6CalculateInvalidChecksumtest02(void) {
+static int ICMPV6CalculateInvalidChecksumtest02(void)
+{
     uint16_t csum = 0;
 
     uint8_t raw_ipv6[] = {

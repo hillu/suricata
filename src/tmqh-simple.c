@@ -35,7 +35,8 @@ Packet *TmqhInputSimple(ThreadVars *t);
 void TmqhOutputSimple(ThreadVars *t, Packet *p);
 void TmqhInputSimpleShutdownHandler(ThreadVars *);
 
-void TmqhSimpleRegister (void) {
+void TmqhSimpleRegister (void)
+{
     tmqh_table[TMQH_SIMPLE].name = "simple";
     tmqh_table[TMQH_SIMPLE].InHandler = TmqhInputSimple;
     tmqh_table[TMQH_SIMPLE].InShutdownHandler = TmqhInputSimpleShutdownHandler;
@@ -46,7 +47,7 @@ Packet *TmqhInputSimple(ThreadVars *t)
 {
     PacketQueue *q = &trans_q[t->inq->id];
 
-    SCPerfSyncCountersIfSignalled(t);
+    StatsSyncCountersIfSignalled(t);
 
     SCMutexLock(&q->mutex_q);
 
@@ -66,7 +67,8 @@ Packet *TmqhInputSimple(ThreadVars *t)
     }
 }
 
-void TmqhInputSimpleShutdownHandler(ThreadVars *tv) {
+void TmqhInputSimpleShutdownHandler(ThreadVars *tv)
+{
     int i;
 
     if (tv == NULL || tv->inq == NULL) {

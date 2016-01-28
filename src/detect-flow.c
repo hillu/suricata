@@ -48,7 +48,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectFlowMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectFlowMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectFlowSetup (DetectEngineCtx *, Signature *, char *);
 void DetectFlowRegisterTests(void);
 void DetectFlowFree(void *);
@@ -56,7 +56,8 @@ void DetectFlowFree(void *);
 /**
  * \brief Registration function for flow: keyword
  */
-void DetectFlowRegister (void) {
+void DetectFlowRegister (void)
+{
     sigmatch_table[DETECT_FLOW].name = "flow";
     sigmatch_table[DETECT_FLOW].desc = "match on direction and state of the flow";
     sigmatch_table[DETECT_FLOW].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#Flow";
@@ -106,7 +107,7 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
 
@@ -120,30 +121,28 @@ int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, S
 
     if (p->flowflags & FLOW_PKT_ESTABLISHED) {
         SCLogDebug("FLOW_PKT_ESTABLISHED");
-    } else if (p->flowflags & FLOW_PKT_STATELESS) {
-        SCLogDebug("FLOW_PKT_STATELESS");
     }
 
     uint8_t cnt = 0;
-    DetectFlowData *fd = (DetectFlowData *)m->ctx;
+    const DetectFlowData *fd = (const DetectFlowData *)ctx;
 
-    if ((fd->flags & FLOW_PKT_TOSERVER) && (p->flowflags & FLOW_PKT_TOSERVER)) {
+    if ((fd->flags & DETECT_FLOW_FLAG_TOSERVER) && (p->flowflags & FLOW_PKT_TOSERVER)) {
         cnt++;
-    } else if ((fd->flags & FLOW_PKT_TOCLIENT) && (p->flowflags & FLOW_PKT_TOCLIENT)) {
+    } else if ((fd->flags & DETECT_FLOW_FLAG_TOCLIENT) && (p->flowflags & FLOW_PKT_TOCLIENT)) {
         cnt++;
     }
 
-    if ((fd->flags & FLOW_PKT_ESTABLISHED) && (p->flowflags & FLOW_PKT_ESTABLISHED)) {
+    if ((fd->flags & DETECT_FLOW_FLAG_ESTABLISHED) && (p->flowflags & FLOW_PKT_ESTABLISHED)) {
         cnt++;
-    } else if (fd->flags & FLOW_PKT_STATELESS) {
+    } else if (fd->flags & DETECT_FLOW_FLAG_STATELESS) {
         cnt++;
     }
 
     if (det_ctx->flags & DETECT_ENGINE_THREAD_CTX_STREAM_CONTENT_MATCH) {
-        if (fd->flags & FLOW_PKT_ONLYSTREAM)
+        if (fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM)
             cnt++;
     } else {
-        if (fd->flags & FLOW_PKT_NOSTREAM)
+        if (fd->flags & DETECT_FLOW_FLAG_NOSTREAM)
             cnt++;
     }
 
@@ -213,59 +212,59 @@ DetectFlowData *DetectFlowParse (char *flowstr)
         if (args[i]) {
             /* inspect our options and set the flags */
             if (strcasecmp(args[i], "established") == 0) {
-                if (fd->flags & FLOW_PKT_ESTABLISHED) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "FLOW_PKT_ESTABLISHED flag is already set");
+                if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "DETECT_FLOW_FLAG_ESTABLISHED flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_STATELESS) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "FLOW_PKT_STATELESS already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_STATELESS) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "DETECT_FLOW_FLAG_STATELESS already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_ESTABLISHED;
+                fd->flags |= DETECT_FLOW_FLAG_ESTABLISHED;
             } else if (strcasecmp(args[i], "stateless") == 0) {
-                if (fd->flags & FLOW_PKT_STATELESS) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "FLOW_PKT_STATELESS flag is already set");
+                if (fd->flags & DETECT_FLOW_FLAG_STATELESS) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "DETECT_FLOW_FLAG_STATELESS flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_ESTABLISHED) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set FLOW_PKT_STATELESS, FLOW_PKT_ESTABLISHED already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set DETECT_FLOW_FLAG_STATELESS, DETECT_FLOW_FLAG_ESTABLISHED already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_STATELESS;
+                fd->flags |= DETECT_FLOW_FLAG_STATELESS;
             } else if (strcasecmp(args[i], "to_client") == 0 || strcasecmp(args[i], "from_server") == 0) {
-                if (fd->flags & FLOW_PKT_TOCLIENT) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set FLOW_PKT_TOCLIENT flag is already set");
+                if (fd->flags & DETECT_FLOW_FLAG_TOCLIENT) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set DETECT_FLOW_FLAG_TOCLIENT flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_TOSERVER) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set to_client, FLOW_PKT_TOSERVER already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_TOSERVER) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set to_client, DETECT_FLOW_FLAG_TOSERVER already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_TOCLIENT;
+                fd->flags |= DETECT_FLOW_FLAG_TOCLIENT;
             } else if (strcasecmp(args[i], "to_server") == 0 || strcasecmp(args[i], "from_client") == 0){
-                if (fd->flags & FLOW_PKT_TOSERVER) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set FLOW_PKT_TOSERVER flag is already set");
+                if (fd->flags & DETECT_FLOW_FLAG_TOSERVER) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set DETECT_FLOW_FLAG_TOSERVER flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_TOCLIENT) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set to_server, FLOW_PKT_TO_CLIENT flag already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_TOCLIENT) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set to_server, DETECT_FLOW_FLAG_TO_CLIENT flag already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_TOSERVER;
+                fd->flags |= DETECT_FLOW_FLAG_TOSERVER;
             } else if (strcasecmp(args[i], "only_stream") == 0) {
-                if (fd->flags & FLOW_PKT_ONLYSTREAM) {
+                if (fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM) {
                     SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set only_stream flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_NOSTREAM) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set only_stream flag, FLOW_PKT_NOSTREAM already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_NOSTREAM) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set only_stream flag, DETECT_FLOW_FLAG_NOSTREAM already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_ONLYSTREAM;
+                fd->flags |= DETECT_FLOW_FLAG_ONLYSTREAM;
             } else if (strcasecmp(args[i], "no_stream") == 0) {
-                if (fd->flags & FLOW_PKT_NOSTREAM) {
+                if (fd->flags & DETECT_FLOW_FLAG_NOSTREAM) {
                     SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set no_stream flag is already set");
                     goto error;
-                } else if (fd->flags & FLOW_PKT_ONLYSTREAM) {
-                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set no_stream flag, FLOW_PKT_ONLYSTREAM already set");
+                } else if (fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM) {
+                    SCLogError(SC_ERR_FLAGS_MODIFIER, "cannot set no_stream flag, DETECT_FLOW_FLAG_ONLYSTREAM already set");
                     goto error;
                 }
-                fd->flags |= FLOW_PKT_NOSTREAM;
+                fd->flags |= DETECT_FLOW_FLAG_NOSTREAM;
             } else {
                 SCLogError(SC_ERR_INVALID_VALUE, "invalid flow option \"%s\"", args[i]);
                 goto error;
@@ -316,23 +315,23 @@ int DetectFlowSetup (DetectEngineCtx *de_ctx, Signature *s, char *flowstr)
         goto error;
 
     sm->type = DETECT_FLOW;
-    sm->ctx = (void *)fd;
+    sm->ctx = (SigMatchCtx *)fd;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
     /* set the signature direction flags */
-    if (fd->flags & FLOW_PKT_TOSERVER) {
+    if (fd->flags & DETECT_FLOW_FLAG_TOSERVER) {
         s->flags |= SIG_FLAG_TOSERVER;
-    } else if (fd->flags & FLOW_PKT_TOCLIENT) {
+    } else if (fd->flags & DETECT_FLOW_FLAG_TOCLIENT) {
         s->flags |= SIG_FLAG_TOCLIENT;
     } else {
         s->flags |= SIG_FLAG_TOSERVER;
         s->flags |= SIG_FLAG_TOCLIENT;
     }
-    if (fd->flags & FLOW_PKT_ONLYSTREAM) {
+    if (fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM) {
         s->flags |= SIG_FLAG_REQUIRE_STREAM;
     }
-    if (fd->flags & FLOW_PKT_NOSTREAM) {
+    if (fd->flags & DETECT_FLOW_FLAG_NOSTREAM) {
         s->flags |= SIG_FLAG_REQUIRE_PACKET;
     } else {
         s->init_flags |= SIG_FLAG_INIT_FLOW;
@@ -354,7 +353,8 @@ error:
  *
  * \param fd pointer to DetectFlowData
  */
-void DetectFlowFree(void *ptr) {
+void DetectFlowFree(void *ptr)
+{
     DetectFlowData *fd = (DetectFlowData *)ptr;
     SCFree(fd);
 }
@@ -365,7 +365,8 @@ void DetectFlowFree(void *ptr) {
  * \test DetectFlowTestParse01 is a test to make sure that we return "something"
  *  when given valid flow opt
  */
-int DetectFlowTestParse01 (void) {
+int DetectFlowTestParse01 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established");
@@ -380,15 +381,16 @@ int DetectFlowTestParse01 (void) {
 /**
  * \test DetectFlowTestParse02 is a test for setting the established flow opt
  */
-int DetectFlowTestParse02 (void) {
+int DetectFlowTestParse02 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_ESTABLISHED && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_ESTABLISHED && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -399,15 +401,16 @@ int DetectFlowTestParse02 (void) {
 /**
  * \test DetectFlowTestParse03 is a test for setting the stateless flow opt
  */
-int DetectFlowTestParse03 (void) {
+int DetectFlowTestParse03 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("stateless");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_STATELESS && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_STATELESS && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -418,15 +421,16 @@ int DetectFlowTestParse03 (void) {
 /**
  * \test DetectFlowTestParse04 is a test for setting the to_client flow opt
  */
-int DetectFlowTestParse04 (void) {
+int DetectFlowTestParse04 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOCLIENT && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOCLIENT, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOCLIENT, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -437,15 +441,16 @@ int DetectFlowTestParse04 (void) {
 /**
  * \test DetectFlowTestParse05 is a test for setting the to_server flow opt
  */
-int DetectFlowTestParse05 (void) {
+int DetectFlowTestParse05 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_server");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOSERVER && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOSERVER && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOSERVER, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOSERVER, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -456,15 +461,16 @@ int DetectFlowTestParse05 (void) {
 /**
  * \test DetectFlowTestParse06 is a test for setting the from_server flow opt
  */
-int DetectFlowTestParse06 (void) {
+int DetectFlowTestParse06 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOCLIENT && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOCLIENT, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOCLIENT, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -475,15 +481,16 @@ int DetectFlowTestParse06 (void) {
 /**
  * \test DetectFlowTestParse07 is a test for setting the from_client flow opt
  */
-int DetectFlowTestParse07 (void) {
+int DetectFlowTestParse07 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_client");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOSERVER && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOSERVER && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOSERVER, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOSERVER, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -494,15 +501,16 @@ int DetectFlowTestParse07 (void) {
 /**
  * \test DetectFlowTestParse08 is a test for setting the established,to_client flow opts
  */
-int DetectFlowTestParse08 (void) {
+int DetectFlowTestParse08 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established,to_client");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2) {
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -513,15 +521,16 @@ int DetectFlowTestParse08 (void) {
 /**
  * \test DetectFlowTestParse09 is a test for setting the to_client,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse09 (void) {
+int DetectFlowTestParse09 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,stateless");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2) {
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2) {
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -532,15 +541,16 @@ int DetectFlowTestParse09 (void) {
 /**
  * \test DetectFlowTestParse10 is a test for setting the from_server,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse10 (void) {
+int DetectFlowTestParse10 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,stateless");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS  && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2){
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS  && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2){
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -551,15 +561,16 @@ int DetectFlowTestParse10 (void) {
 /**
  * \test DetectFlowTestParse11 is a test for setting the from_server,stateless flow opts with spaces all around
  */
-int DetectFlowTestParse11 (void) {
+int DetectFlowTestParse11 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse(" from_server , stateless ");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS  && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2){
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS  && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2){
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -571,7 +582,8 @@ int DetectFlowTestParse11 (void) {
  * \test DetectFlowTestParseNocase01 is a test to make sure that we return "something"
  *  when given valid flow opt
  */
-int DetectFlowTestParseNocase01 (void) {
+int DetectFlowTestParseNocase01 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED");
@@ -586,15 +598,16 @@ int DetectFlowTestParseNocase01 (void) {
 /**
  * \test DetectFlowTestParseNocase02 is a test for setting the established flow opt
  */
-int DetectFlowTestParseNocase02 (void) {
+int DetectFlowTestParseNocase02 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_ESTABLISHED && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_ESTABLISHED && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -605,15 +618,16 @@ int DetectFlowTestParseNocase02 (void) {
 /**
  * \test DetectFlowTestParseNocase03 is a test for setting the stateless flow opt
  */
-int DetectFlowTestParseNocase03 (void) {
+int DetectFlowTestParseNocase03 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("STATELESS");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_STATELESS && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_STATELESS && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -624,15 +638,16 @@ int DetectFlowTestParseNocase03 (void) {
 /**
  * \test DetectFlowTestParseNocase04 is a test for setting the to_client flow opt
  */
-int DetectFlowTestParseNocase04 (void) {
+int DetectFlowTestParseNocase04 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_CLIENT");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOCLIENT && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOCLIENT, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOCLIENT, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -643,15 +658,16 @@ int DetectFlowTestParseNocase04 (void) {
 /**
  * \test DetectFlowTestParseNocase05 is a test for setting the to_server flow opt
  */
-int DetectFlowTestParseNocase05 (void) {
+int DetectFlowTestParseNocase05 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_SERVER");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOSERVER && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOSERVER && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOSERVER, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOSERVER, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -662,15 +678,16 @@ int DetectFlowTestParseNocase05 (void) {
 /**
  * \test DetectFlowTestParseNocase06 is a test for setting the from_server flow opt
  */
-int DetectFlowTestParseNocase06 (void) {
+int DetectFlowTestParseNocase06 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOCLIENT && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOCLIENT, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOCLIENT, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -681,15 +698,16 @@ int DetectFlowTestParseNocase06 (void) {
 /**
  * \test DetectFlowTestParseNocase07 is a test for setting the from_client flow opt
  */
-int DetectFlowTestParseNocase07 (void) {
+int DetectFlowTestParseNocase07 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_CLIENT");
     if (fd != NULL) {
-        if (fd->flags == FLOW_PKT_TOSERVER && fd->match_cnt == 1) {
+        if (fd->flags == DETECT_FLOW_FLAG_TOSERVER && fd->match_cnt == 1) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_TOSERVER, 1, fd->flags, fd->match_cnt);
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_TOSERVER, 1, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -700,15 +718,16 @@ int DetectFlowTestParseNocase07 (void) {
 /**
  * \test DetectFlowTestParseNocase08 is a test for setting the established,to_client flow opts
  */
-int DetectFlowTestParseNocase08 (void) {
+int DetectFlowTestParseNocase08 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED,TO_CLIENT");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2) {
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -719,15 +738,16 @@ int DetectFlowTestParseNocase08 (void) {
 /**
  * \test DetectFlowTestParseNocase09 is a test for setting the to_client,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase09 (void) {
+int DetectFlowTestParseNocase09 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_CLIENT,STATELESS");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2) {
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2) {
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -738,15 +758,16 @@ int DetectFlowTestParseNocase09 (void) {
 /**
  * \test DetectFlowTestParseNocase10 is a test for setting the from_server,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase10 (void) {
+int DetectFlowTestParseNocase10 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,STATELESS");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS  && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2){
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS  && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2){
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -757,15 +778,16 @@ int DetectFlowTestParseNocase10 (void) {
 /**
  * \test DetectFlowTestParseNocase11 is a test for setting the from_server,stateless flow opts with spaces all around
  */
-int DetectFlowTestParseNocase11 (void) {
+int DetectFlowTestParseNocase11 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse(" FROM_SERVER , STATELESS ");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_STATELESS  && fd->flags & FLOW_PKT_TOCLIENT && fd->match_cnt == 2){
+        if (fd->flags & DETECT_FLOW_FLAG_STATELESS  && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->match_cnt == 2){
             result = 1;
         } else {
-            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_STATELESS + FLOW_PKT_TOCLIENT, 2, fd->flags, fd->match_cnt);
+            printf("expected: 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_STATELESS + DETECT_FLOW_FLAG_TOCLIENT, 2, fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
     }
@@ -777,7 +799,8 @@ int DetectFlowTestParseNocase11 (void) {
 /**
  * \test DetectFlowTestParse12 is a test for setting an invalid seperator :
  */
-int DetectFlowTestParse12 (void) {
+int DetectFlowTestParse12 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server:stateless");
@@ -793,7 +816,8 @@ int DetectFlowTestParse12 (void) {
 /**
  * \test DetectFlowTestParse13 is a test for an invalid option
  */
-int DetectFlowTestParse13 (void) {
+int DetectFlowTestParse13 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("invalidoptiontest");
@@ -808,7 +832,8 @@ int DetectFlowTestParse13 (void) {
 /**
  * \test DetectFlowTestParse14 is a test for a empty option
  */
-int DetectFlowTestParse14 (void) {
+int DetectFlowTestParse14 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("");
@@ -824,7 +849,8 @@ int DetectFlowTestParse14 (void) {
 /**
  * \test DetectFlowTestParse15 is a test for an invalid combo of options established,stateless
  */
-int DetectFlowTestParse15 (void) {
+int DetectFlowTestParse15 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established,stateless");
@@ -840,7 +866,8 @@ int DetectFlowTestParse15 (void) {
 /**
  * \test DetectFlowTestParse16 is a test for an invalid combo of options to_client,to_server
  */
-int DetectFlowTestParse16 (void) {
+int DetectFlowTestParse16 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,to_server");
@@ -857,7 +884,8 @@ int DetectFlowTestParse16 (void) {
  * \test DetectFlowTestParse16 is a test for an invalid combo of options to_client,from_server
  * flowbit flags are the same
  */
-int DetectFlowTestParse17 (void) {
+int DetectFlowTestParse17 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,from_server");
@@ -873,15 +901,16 @@ int DetectFlowTestParse17 (void) {
 /**
  * \test DetectFlowTestParse18 is a test for setting the from_server,stateless,only_stream flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse18 (void) {
+int DetectFlowTestParse18 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,only_stream");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->flags & FLOW_PKT_ONLYSTREAM && fd->match_cnt == 3) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM && fd->match_cnt == 3) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT + FLOW_PKT_ONLYSTREAM, 3,
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT + DETECT_FLOW_FLAG_ONLYSTREAM, 3,
                     fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
@@ -893,15 +922,16 @@ int DetectFlowTestParse18 (void) {
 /**
  * \test DetectFlowTestParseNocase18 is a test for setting the from_server,stateless,only_stream flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase18 (void) {
+int DetectFlowTestParseNocase18 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,ESTABLISHED,ONLY_STREAM");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->flags & FLOW_PKT_ONLYSTREAM && fd->match_cnt == 3) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->flags & DETECT_FLOW_FLAG_ONLYSTREAM && fd->match_cnt == 3) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT + FLOW_PKT_ONLYSTREAM, 3,
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT + DETECT_FLOW_FLAG_ONLYSTREAM, 3,
                     fd->flags, fd->match_cnt);
         }
         DetectFlowFree(fd);
@@ -914,7 +944,8 @@ int DetectFlowTestParseNocase18 (void) {
 /**
  * \test DetectFlowTestParse19 is a test for one to many options passed to DetectFlowParse
  */
-int DetectFlowTestParse19 (void) {
+int DetectFlowTestParse19 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,only_stream,a");
@@ -930,15 +961,16 @@ int DetectFlowTestParse19 (void) {
 /**
  * \test DetectFlowTestParse20 is a test for setting from_server, established, no_stream
  */
-int DetectFlowTestParse20 (void) {
+int DetectFlowTestParse20 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,no_stream");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->flags & FLOW_PKT_NOSTREAM && fd->match_cnt == 3) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->flags & DETECT_FLOW_FLAG_NOSTREAM && fd->match_cnt == 3) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT + FLOW_PKT_NOSTREAM, 3,
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT + DETECT_FLOW_FLAG_NOSTREAM, 3,
                     fd->flags, fd->match_cnt);
         }
 
@@ -951,15 +983,16 @@ int DetectFlowTestParse20 (void) {
 /**
  * \test DetectFlowTestParse20 is a test for setting from_server, established, no_stream
  */
-int DetectFlowTestParseNocase20 (void) {
+int DetectFlowTestParseNocase20 (void)
+{
     int result = 0;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,ESTABLISHED,NO_STREAM");
     if (fd != NULL) {
-        if (fd->flags & FLOW_PKT_ESTABLISHED && fd->flags & FLOW_PKT_TOCLIENT && fd->flags & FLOW_PKT_NOSTREAM && fd->match_cnt == 3) {
+        if (fd->flags & DETECT_FLOW_FLAG_ESTABLISHED && fd->flags & DETECT_FLOW_FLAG_TOCLIENT && fd->flags & DETECT_FLOW_FLAG_NOSTREAM && fd->match_cnt == 3) {
             result = 1;
         } else {
-            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", FLOW_PKT_ESTABLISHED + FLOW_PKT_TOCLIENT + FLOW_PKT_NOSTREAM, 3,
+            printf("expected 0x%02X cnt %" PRId32 " got 0x%02X cnt %" PRId32 ": ", DETECT_FLOW_FLAG_ESTABLISHED + DETECT_FLOW_FLAG_TOCLIENT + DETECT_FLOW_FLAG_NOSTREAM, 3,
                     fd->flags, fd->match_cnt);
         }
 
@@ -972,7 +1005,8 @@ int DetectFlowTestParseNocase20 (void) {
 /**
  * \test DetectFlowTestParse21 is a test for an invalid opt between to valid opts
  */
-int DetectFlowTestParse21 (void) {
+int DetectFlowTestParse21 (void)
+{
     int result = 1;
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,a,no_stream");
@@ -1050,7 +1084,8 @@ static int DetectFlowSigTest01(void)
 /**
  * \brief this function registers unit tests for DetectFlow
  */
-void DetectFlowRegisterTests(void) {
+void DetectFlowRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectFlowTestParse01", DetectFlowTestParse01, 1);
     UtRegisterTest("DetectFlowTestParse02", DetectFlowTestParse02, 1);

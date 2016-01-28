@@ -70,6 +70,7 @@ struct DetectEngineEvents_ {
     { "icmpv6.pkt_too_small", ICMPV6_PKT_TOO_SMALL,},
     { "icmpv6.ipv6_unknown_version", ICMPV6_IPV6_UNKNOWN_VER,},
     { "icmpv6.ipv6_trunc_pkt", ICMPV6_IPV6_TRUNC_PKT,},
+    { "icmpv6.mld_message_with_invalid_hl", ICMPV6_MLD_MESSAGE_WITH_INVALID_HL,},
 
     /* IPV6 EVENTS */
     { "ipv6.pkt_too_small", IPV6_PKT_TOO_SMALL, },
@@ -235,6 +236,17 @@ struct DetectEngineEvents_ {
     /* IPv6 in IPv6 events */
     { "ipv6.ipv6_in_ipv6_too_small", IPV6_IN_IPV6_PKT_TOO_SMALL, },
     { "ipv6.ipv6_in_ipv6_wrong_version", IPV6_IN_IPV6_WRONG_IP_VER, },
+
+    /* MPLS events */
+    { "mpls.bad_label_router_alert", MPLS_BAD_LABEL_ROUTER_ALERT, },
+    { "mpls.bad_label_implicit_null", MPLS_BAD_LABEL_IMPLICIT_NULL, },
+    { "mpls.bad_label_reserved", MPLS_BAD_LABEL_RESERVED, },
+    { "mpls.unknown_payload_type", MPLS_UNKNOWN_PAYLOAD_TYPE, },
+
+    /* ERSPAN events */
+    { "erspan.header_too_small", ERSPAN_HEADER_TOO_SMALL, },
+    { "erspan.unsupported_version", ERSPAN_UNSUPPORTED_VERSION, },
+    { "erspan.too_many_vlan_layers", ERSPAN_TOO_MANY_VLAN_LAYERS, },
 
     { NULL, 0 },
 };

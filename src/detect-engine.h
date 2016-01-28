@@ -35,7 +35,6 @@ typedef struct DetectEngineAppInspectionEngine_ {
 
     int32_t sm_list;
     uint32_t inspect_flags;
-    uint32_t match_flags;
 
     /* \retval 0 No match.  Don't discontinue matching yet.  We need more data.
      *         1 Match.
@@ -55,9 +54,9 @@ extern DetectEngineAppInspectionEngine *app_inspection_engine[FLOW_PROTO_DEFAULT
 
 /* prototypes */
 void DetectEngineRegisterAppInspectionEngines(void);
-void DetectEngineSpawnLiveRuleSwapMgmtThread(void);
+DetectEngineCtx *DetectEngineCtxInitWithPrefix(const char *prefix);
 DetectEngineCtx *DetectEngineCtxInit(void);
-DetectEngineCtx *DetectEngineGetGlobalDeCtx(void);
+DetectEngineCtx *DetectEngineCtxInitMinimal(void);
 void DetectEngineCtxFree(DetectEngineCtx *);
 
 TmEcode DetectEngineThreadCtxInit(ThreadVars *, void *, void **);
@@ -68,6 +67,32 @@ TmEcode DetectEngineThreadCtxDeinit(ThreadVars *, void *);
 void DetectEngineResetMaxSigId(DetectEngineCtx *);
 void DetectEngineRegisterTests(void);
 const char *DetectSigmatchListEnumToString(enum DetectSigmatchListEnum type);
+
+int DetectEngineAddToMaster(DetectEngineCtx *de_ctx);
+DetectEngineCtx *DetectEngineGetCurrent(void);
+DetectEngineCtx *DetectEngineGetByTenantId(int tenant_id);
+void DetectEnginePruneFreeList(void);
+int DetectEngineMoveToFreeList(DetectEngineCtx *de_ctx);
+DetectEngineCtx *DetectEngineReference(DetectEngineCtx *);
+void DetectEngineDeReference(DetectEngineCtx **de_ctx);
+int DetectEngineReload(const char *filename, SCInstance *suri);
+int DetectEngineEnabled(void);
+int DetectEngineMTApply(void);
+int DetectEngineMultiTenantEnabled(void);
+int DetectEngineMultiTenantSetup(void);
+
+int DetectEngineReloadStart(void);
+int DetectEngineReloadIsStart(void);
+void DetectEngineReloadSetDone(void);
+int DetectEngineReloadIsDone(void);
+
+int DetectEngineLoadTenantBlocking(uint32_t tenant_id, const char *yaml);
+int DetectEngineReloadTenantBlocking(uint32_t tenant_id, const char *yaml, int reload_cnt);
+
+int DetectEngineTentantRegisterVlanId(uint32_t tenant_id, uint16_t vlan_id);
+int DetectEngineTentantUnregisterVlanId(uint32_t tenant_id, uint16_t vlan_id);
+int DetectEngineTentantRegisterPcapFile(uint32_t tenant_id);
+int DetectEngineTentantUnregisterPcapFile(uint32_t tenant_id);
 
 /**
  * \brief Registers an app inspection engine.
@@ -86,7 +111,6 @@ void DetectEngineRegisterAppInspectionEngine(uint8_t ipproto,
                                              uint16_t direction,
                                              int32_t sm_list,
                                              uint32_t inspect_flags,
-                                             uint32_t match_flags,
                                              int (*Callback)(ThreadVars *tv,
                                                              DetectEngineCtx *de_ctx,
                                                              DetectEngineThreadCtx *det_ctx,

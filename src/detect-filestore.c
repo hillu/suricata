@@ -67,7 +67,8 @@ static void DetectFilestoreFree(void *);
 /**
  * \brief Registration function for keyword: filestore
  */
-void DetectFilestoreRegister(void) {
+void DetectFilestoreRegister(void)
+{
     sigmatch_table[DETECT_FILESTORE].name = "filestore";
     sigmatch_table[DETECT_FILESTORE].desc = "stores files to disk if the rule matched";
     sigmatch_table[DETECT_FILESTORE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filestore";
@@ -200,7 +201,8 @@ static int FilestorePostMatchWithOptions(Packet *p, Flow *f, DetectFilestoreData
  *  When we are sure all parts of the signature matched, we run this function
  *  to finalize the filestore.
  */
-int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s) {
+int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s)
+{
     uint8_t flags = 0;
 
     SCEnter();
@@ -222,7 +224,8 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
     else
         flags |= STREAM_TOSERVER;
 
-    FLOWLOCK_WRLOCK(p->flow);
+    if (det_ctx->flow_locked == 0)
+        FLOWLOCK_WRLOCK(p->flow);
 
     FileContainer *ffc = AppLayerParserGetFiles(p->flow->proto, p->flow->alproto,
                                                 p->flow->alstate, flags);
@@ -234,7 +237,7 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
             FileStoreFileById(ffc, det_ctx->filestore[u].file_id);
         }
     } else {
-        DetectFilestoreData *filestore = s->filestore_sm->ctx;
+        DetectFilestoreData *filestore = (DetectFilestoreData *)s->filestore_sm->ctx;
         uint16_t u;
 
         for (u = 0; u < det_ctx->filestore_cnt; u++) {
@@ -243,7 +246,9 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
         }
     }
 
-    FLOWLOCK_UNLOCK(p->flow);
+    if (det_ctx->flow_locked == 0)
+        FLOWLOCK_UNLOCK(p->flow);
+
     SCReturnInt(0);
 }
 
@@ -404,22 +409,22 @@ static int DetectFilestoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *st
                 fd->scope = FILESTORE_SCOPE_DEFAULT;
         }
 
-        sm->ctx = fd;
+        sm->ctx = (SigMatchCtx*)fd;
     } else {
-        sm->ctx = NULL;
+        sm->ctx = (SigMatchCtx*)NULL;
     }
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
-    s->filestore_sm = sm;
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
-    AppLayerHtpNeedFileInspection();
+    if (s->alproto == ALPROTO_HTTP) {
+        AppLayerHtpNeedFileInspection();
+    }
 
-    s->alproto = ALPROTO_HTTP;
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
+    s->filestore_sm = sm;
 
     s->flags |= SIG_FLAG_FILESTORE;
     return 0;
@@ -430,7 +435,8 @@ error:
     return -1;
 }
 
-static void DetectFilestoreFree(void *ptr) {
+static void DetectFilestoreFree(void *ptr)
+{
     if (ptr != NULL) {
         SCFree(ptr);
     }

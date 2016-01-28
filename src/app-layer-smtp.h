@@ -25,6 +25,8 @@
 #define __APP_LAYER_SMTP_H__
 
 #include "decode-events.h"
+#include "util-decode-mime.h"
+#include "queue.h"
 
 enum {
     SMTP_DECODER_EVENT_INVALID_REPLY,
@@ -36,9 +38,63 @@ enum {
     SMTP_DECODER_EVENT_NO_SERVER_WELCOME_MESSAGE,
     SMTP_DECODER_EVENT_TLS_REJECTED,
     SMTP_DECODER_EVENT_DATA_COMMAND_REJECTED,
+
+    /* MIME Events */
+    SMTP_DECODER_EVENT_MIME_PARSE_FAILED,
+    SMTP_DECODER_EVENT_MIME_MALFORMED_MSG,
+    SMTP_DECODER_EVENT_MIME_INVALID_BASE64,
+    SMTP_DECODER_EVENT_MIME_INVALID_QP,
+    SMTP_DECODER_EVENT_MIME_LONG_LINE,
+    SMTP_DECODER_EVENT_MIME_LONG_ENC_LINE,
+    SMTP_DECODER_EVENT_MIME_LONG_HEADER_NAME,
+    SMTP_DECODER_EVENT_MIME_LONG_HEADER_VALUE,
+    SMTP_DECODER_EVENT_MIME_BOUNDARY_TOO_LONG,
 };
 
+typedef struct SMTPString_ {
+    uint8_t *str;
+    uint16_t len;
+
+    TAILQ_ENTRY(SMTPString_) next;
+} SMTPString;
+
+typedef struct SMTPTransaction_ {
+    /** id of this tx, starting at 0 */
+    uint64_t tx_id;
+    int done;
+    /** the first message contained in the session */
+    MimeDecEntity *msg_head;
+    /** the last message contained in the session */
+    MimeDecEntity *msg_tail;
+    /** the mime decoding parser state */
+    MimeDecParseState *mime_state;
+
+    AppLayerDecoderEvents *decoder_events;          /**< per tx events */
+    DetectEngineState *de_state;
+
+    /* MAIL FROM parameters */
+    uint8_t *mail_from;
+    uint16_t mail_from_len;
+
+    TAILQ_HEAD(, SMTPString_) rcpt_to_list;  /**< rcpt to string list */
+
+    TAILQ_ENTRY(SMTPTransaction_) next;
+} SMTPTransaction;
+
+typedef struct SMTPConfig {
+
+    int decode_mime;
+    MimeDecConfig mime_config;
+    uint32_t content_limit;
+    uint32_t content_inspect_min_size;
+    uint32_t content_inspect_window;
+} SMTPConfig;
+
 typedef struct SMTPState_ {
+    SMTPTransaction *curr_tx;
+    TAILQ_HEAD(, SMTPTransaction_) tx_list;  /**< transaction list */
+    uint64_t tx_cnt;
+
     /* current input that is being parsed */
     uint8_t *input;
     int32_t input_len;
@@ -89,8 +145,20 @@ typedef struct SMTPState_ {
      *  handler */
     uint16_t cmds_idx;
 
+    /* SMTP Mime decoding and file extraction */
+    /** the list of files sent to the server */
+    FileContainer *files_ts;
+
+    /* HELO of HELO message content */
+    uint8_t *helo;
+    uint16_t helo_len;
 } SMTPState;
 
+/* Create SMTP config structure */
+extern SMTPConfig smtp_config;
+
+int SMTPProcessDataChunk(const uint8_t *chunk, uint32_t len, MimeDecParseState *state);
+void *SMTPStateAlloc(void);
 void RegisterSMTPParsers(void);
 void SMTPParserRegisterTests(void);
 

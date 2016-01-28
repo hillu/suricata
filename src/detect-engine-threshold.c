@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2015 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -68,11 +68,13 @@
 
 static int threshold_id = -1; /**< host storage id for thresholds */
 
-int ThresholdHostStorageId(void) {
+int ThresholdHostStorageId(void)
+{
     return threshold_id;
 }
 
-void ThresholdInit(void) {
+void ThresholdInit(void)
+{
     threshold_id = HostStorageRegister("threshold", sizeof(void *), NULL, ThresholdListFree);
     if (threshold_id == -1) {
         SCLogError(SC_ERR_HOST_INIT, "Can't initiate host storage for thresholding");
@@ -80,7 +82,8 @@ void ThresholdInit(void) {
     }
 }
 
-int ThresholdHostHasThreshold(Host *host) {
+int ThresholdHostHasThreshold(Host *host)
+{
     return HostGetStorageById(host, threshold_id) ? 1 : 0;
 }
 
@@ -175,7 +178,8 @@ int ThresholdTimeoutCheck(Host *host, struct timeval *tv)
     return retval;
 }
 
-static inline DetectThresholdEntry *DetectThresholdEntryAlloc(DetectThresholdData *td, Packet *p, uint32_t sid, uint32_t gid) {
+static inline DetectThresholdEntry *DetectThresholdEntryAlloc(DetectThresholdData *td, Packet *p, uint32_t sid, uint32_t gid)
+{
     SCEnter();
 
     DetectThresholdEntry *ste = SCMalloc(sizeof(DetectThresholdEntry));
@@ -205,12 +209,48 @@ static DetectThresholdEntry *ThresholdHostLookupEntry(Host *h, uint32_t sid, uin
     return e;
 }
 
+int ThresholdHandlePacketSuppress(Packet *p, DetectThresholdData *td, uint32_t sid, uint32_t gid)
+{
+    int ret = 0;
+    DetectAddress *m = NULL;
+    switch (td->track) {
+        case TRACK_DST:
+            m = DetectAddressLookupInHead(&td->addrs, &p->dst);
+            SCLogDebug("TRACK_DST");
+            break;
+        case TRACK_SRC:
+            m = DetectAddressLookupInHead(&td->addrs, &p->src);
+            SCLogDebug("TRACK_SRC");
+            break;
+        /* suppress if either src or dst is a match on the suppress
+         * address list */
+        case TRACK_EITHER:
+            m = DetectAddressLookupInHead(&td->addrs, &p->src);
+            if (m == NULL) {
+                m = DetectAddressLookupInHead(&td->addrs, &p->dst);
+            }
+            break;
+        case TRACK_RULE:
+        default:
+            SCLogError(SC_ERR_INVALID_VALUE,
+                    "track mode %d is not supported", td->track);
+            break;
+    }
+    if (m == NULL)
+        ret = 1;
+    else
+        ret = 2; /* suppressed but still need actions */
+
+    return ret;
+}
+
 /**
  *  \retval 2 silent match (no alert but apply actions)
  *  \retval 1 normal match
  *  \retval 0 no match
  */
-int ThresholdHandlePacketHost(Host *h, Packet *p, DetectThresholdData *td, uint32_t sid, uint32_t gid) {
+int ThresholdHandlePacketHost(Host *h, Packet *p, DetectThresholdData *td, uint32_t sid, uint32_t gid)
+{
     int ret = 0;
 
     DetectThresholdEntry *lookup_tsh = ThresholdHostLookupEntry(h, sid, gid);
@@ -458,28 +498,7 @@ int ThresholdHandlePacketHost(Host *h, Packet *p, DetectThresholdData *td, uint3
             }
             break;
         }
-        case TYPE_SUPPRESS:
-        {
-            int res = 0;
-            switch (td->track) {
-                case TRACK_DST:
-                    res = DetectAddressMatch(td->addr, &p->dst);
-                    break;
-                case TRACK_SRC:
-                    res = DetectAddressMatch(td->addr, &p->src);
-                    break;
-                case TRACK_RULE:
-                default:
-                    SCLogError(SC_ERR_INVALID_VALUE,
-                               "track mode %d is not supported", td->track);
-                    break;
-            }
-            if (res == 0)
-                ret = 1;
-            else
-                ret = 2; /* suppressed but still need actions */
-            break;
-        }
+        /* case TYPE_SUPPRESS: is not handled here */
         default:
             SCLogError(SC_ERR_INVALID_VALUE, "type %d is not supported", td->type);
     }
@@ -487,7 +506,8 @@ int ThresholdHandlePacketHost(Host *h, Packet *p, DetectThresholdData *td, uint3
     return ret;
 }
 
-static int ThresholdHandlePacketRule(DetectEngineCtx *de_ctx, Packet *p, DetectThresholdData *td, Signature *s) {
+static int ThresholdHandlePacketRule(DetectEngineCtx *de_ctx, Packet *p, DetectThresholdData *td, Signature *s)
+{
     int ret = 0;
 
     if (td->type != TYPE_RATE)
@@ -594,7 +614,9 @@ int PacketAlertThreshold(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
         SCReturnInt(0);
     }
 
-    if (td->track == TRACK_SRC) {
+    if (td->type == TYPE_SUPPRESS) {
+        ret = ThresholdHandlePacketSuppress(p,td,s->id,s->gid);
+    } else if (td->track == TRACK_SRC) {
         Host *src = HostGetHostFromHash(&p->src);
         if (src) {
             ret = ThresholdHandlePacketHost(src,p,td,s->id,s->gid);
@@ -649,7 +671,8 @@ void ThresholdContextDestroy(DetectEngineCtx *de_ctx)
  *
  * \param td pointer to DetectTagDataEntryList
  */
-void ThresholdListFree(void *ptr) {
+void ThresholdListFree(void *ptr)
+{
     if (ptr != NULL) {
         DetectThresholdEntry *entry = ptr;
 

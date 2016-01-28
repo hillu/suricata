@@ -30,7 +30,8 @@
 #include "threads.h"
 #include "util-logopenfile.h"
 
-void TmModuleDebugList(void) {
+void TmModuleDebugList(void)
+{
     TmModule *t;
     uint16_t i;
 
@@ -47,7 +48,8 @@ void TmModuleDebugList(void) {
 /** \brief get a tm module ptr by name
  *  \param name name string
  *  \retval ptr to the module or NULL */
-TmModule *TmModuleGetByName(const char *name) {
+TmModule *TmModuleGetByName(const char *name)
+{
     TmModule *t;
     uint16_t i;
 
@@ -67,7 +69,8 @@ TmModule *TmModuleGetByName(const char *name) {
 /** \brief get the id of a module from it's name
  *  \param name registered name of the module
  *  \retval id the id or -1 in case of error */
-int TmModuleGetIdByName(const char *name) {
+int TmModuleGetIdByName(const char *name)
+{
     TmModule *tm = TmModuleGetByName(name);
     if (tm == NULL)
         return -1;;
@@ -120,7 +123,8 @@ int TmModuleGetIDForTM(TmModule *tm)
 }
 
 
-void TmModuleRunInit(void) {
+void TmModuleRunInit(void)
+{
     TmModule *t;
     uint16_t i;
 
@@ -137,7 +141,8 @@ void TmModuleRunInit(void) {
     }
 }
 
-void TmModuleRunDeInit(void) {
+void TmModuleRunDeInit(void)
+{
     TmModule *t;
     uint16_t i;
 
@@ -155,7 +160,8 @@ void TmModuleRunDeInit(void) {
 }
 
 /** \brief register all unittests for the tm modules */
-void TmModuleRegisterTests(void) {
+void TmModuleRegisterTests(void)
+{
 #ifdef UNITTESTS
     TmModule *t;
     uint16_t i;
@@ -223,6 +229,7 @@ const char * TmModuleTmmIdToString(TmmId id)
         CASE_CODE (TMM_LOGTLSLOG);
         CASE_CODE (TMM_LOGTLSLOG4);
         CASE_CODE (TMM_LOGTLSLOG6);
+        CASE_CODE (TMM_LOGTCPDATALOG);
         CASE_CODE (TMM_PCAPLOG);
         CASE_CODE (TMM_FILELOG);
         CASE_CODE (TMM_FILESTORE);
@@ -243,16 +250,32 @@ const char * TmModuleTmmIdToString(TmmId id)
         CASE_CODE (TMM_DECODEAFP);
         CASE_CODE (TMM_PACKETLOGGER);
         CASE_CODE (TMM_TXLOGGER);
+        CASE_CODE (TMM_STATSLOGGER);
         CASE_CODE (TMM_FILELOGGER);
         CASE_CODE (TMM_FILEDATALOGGER);
+        CASE_CODE (TMM_STREAMINGLOGGER);
         CASE_CODE (TMM_JSONALERTLOG);
         CASE_CODE (TMM_JSONDROPLOG);
         CASE_CODE (TMM_JSONDNSLOG);
         CASE_CODE (TMM_JSONHTTPLOG);
         CASE_CODE (TMM_JSONFILELOG);
+        CASE_CODE (TMM_JSONFLOWLOG);
+        CASE_CODE (TMM_JSONNETFLOWLOG);
+        CASE_CODE (TMM_JSONSMTPLOG);
         CASE_CODE (TMM_JSONSSHLOG);
+        CASE_CODE (TMM_JSONSTATSLOG);
         CASE_CODE (TMM_JSONTLSLOG);
         CASE_CODE (TMM_OUTPUTJSON);
+        CASE_CODE (TMM_FLOWMANAGER);
+        CASE_CODE (TMM_FLOWRECYCLER);
+        CASE_CODE (TMM_UNIXMANAGER);
+        CASE_CODE (TMM_DETECTLOADER);
+        CASE_CODE (TMM_LUALOG);
+        CASE_CODE (TMM_LOGSTATSLOG);
+        CASE_CODE (TMM_JSONTEMPLATELOG);
+        CASE_CODE (TMM_RECEIVENETMAP);
+        CASE_CODE (TMM_DECODENETMAP);
+        CASE_CODE (TMM_TLSSTORE);
 
         CASE_CODE (TMM_SIZE);
     }

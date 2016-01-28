@@ -35,6 +35,7 @@ enum {
     RUNMODE_ERF_FILE,
     RUNMODE_DAG,
     RUNMODE_AFP_DEV,
+    RUNMODE_NETMAP,
     RUNMODE_TILERA_MPIPE,
     RUNMODE_UNITTEST,
     RUNMODE_NAPATECH,
@@ -63,10 +64,10 @@ char *RunmodeGetActive(void);
 const char *RunModeGetMainMode(void);
 
 void RunModeListRunmodes(void);
-void RunModeDispatch(int, const char *, DetectEngineCtx *);
+void RunModeDispatch(int, const char *);
 void RunModeRegisterRunModes(void);
 void RunModeRegisterNewRunMode(int, const char *, const char *,
-                               int (*RunModeFunc)(DetectEngineCtx *));
+                               int (*RunModeFunc)(void));
 void RunModeInitialize(void);
 void RunModeInitializeOutputs(void);
 void SetupOutputs(ThreadVars *);
@@ -89,6 +90,7 @@ int RunModeOutputFiledataEnabled(void);
 #include "runmode-af-packet.h"
 #include "runmode-nflog.h"
 #include "runmode-unix-socket.h"
+#include "runmode-netmap.h"
 
 int threading_set_cpu_affinity;
 extern float threading_detect_ratio;

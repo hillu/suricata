@@ -115,7 +115,7 @@ static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, F
 {
     SCEnter();
 
-    DetectFilesizeData *fsd = m->ctx;
+    DetectFilesizeData *fsd = (DetectFilesizeData *)m->ctx;
     int ret = 0;
     SCLogDebug("file size %"PRIu64", check %"PRIu64, file->size, fsd->size1);
 
@@ -306,19 +306,18 @@ static int DetectFilesizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *str
         goto error;
 
     sm->type = DETECT_FILESIZE;
-    sm->ctx = (void *)fsd;
+    sm->ctx = (SigMatchCtx *)fsd;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
+    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
         SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
         goto error;
     }
 
-    AppLayerHtpNeedFileInspection();
-
-    /** \todo remove this once we support more than http */
-    s->alproto = ALPROTO_HTTP;
+    if (s->alproto == ALPROTO_HTTP) {
+        AppLayerHtpNeedFileInspection();
+    }
 
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_SIZE);
     SCReturnInt(0);
@@ -483,7 +482,8 @@ end:
  *       context and setting up the signature itself.
  */
 
-static int DetectFilesizeSetpTest01(void) {
+static int DetectFilesizeSetpTest01(void)
+{
 
     DetectFilesizeData *fsd = NULL;
     uint8_t res = 0;

@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "2.0.11"
+#define PROG_VER "3.0"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -146,7 +146,6 @@ typedef struct SCInstance_ {
     uint32_t groupid;
 #endif /* OS_WIN32 */
     int delayed_detect;
-    int rule_reload;
     int disabled_detect;
     int daemon;
     int offline;

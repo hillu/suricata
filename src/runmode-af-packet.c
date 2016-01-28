@@ -52,23 +52,21 @@
 #include "util-affinity.h"
 #include "util-device.h"
 #include "util-runmodes.h"
+#include "util-ioctl.h"
 
 #include "source-af-packet.h"
 
 extern int max_pending_packets;
 
-static const char *default_mode_autofp = NULL;
+static const char *default_mode_workers = NULL;
 
 const char *RunModeAFPGetDefaultMode(void)
 {
-    return default_mode_autofp;
+    return default_mode_workers;
 }
 
 void RunModeIdsAFPRegister(void)
 {
-    RunModeRegisterNewRunMode(RUNMODE_AFP_DEV, "auto",
-                              "Multi threaded af-packet mode",
-                              RunModeIdsAFPAuto);
     RunModeRegisterNewRunMode(RUNMODE_AFP_DEV, "single",
                               "Single threaded af-packet mode",
                               RunModeIdsAFPSingle);
@@ -76,7 +74,7 @@ void RunModeIdsAFPRegister(void)
                               "Workers af-packet mode, each thread does all"
                               " tasks from acquisition to logging",
                               RunModeIdsAFPWorkers);
-    default_mode_autofp = "autofp";
+    default_mode_workers = "workers";
     RunModeRegisterNewRunMode(RUNMODE_AFP_DEV, "autofp",
                               "Multi socket AF_PACKET mode.  Packets from "
                               "each flow are assigned to a single detect "
@@ -93,6 +91,10 @@ void AFPDerefConfig(void *conf)
         SCFree(pfp);
     }
 }
+
+/* if cluster id is not set, assign it automagically, uniq value per
+ * interface. */
+static int cluster_id_auto = 1;
 
 /**
  * \brief extract information from config file
@@ -176,13 +178,32 @@ void *ParseAFPConfig(const char *iface)
     }
 
     if (ConfGetChildValueWithDefault(if_root, if_default, "threads", &threadsstr) != 1) {
-        aconf->threads = 1;
+        aconf->threads = 0;
     } else {
         if (threadsstr != NULL) {
-            aconf->threads = (uint8_t)atoi(threadsstr);
+            if (strcmp(threadsstr, "auto") == 0) {
+                aconf->threads = 0;
+            } else {
+                aconf->threads = (uint8_t)atoi(threadsstr);
+            }
         }
     }
     if (aconf->threads == 0) {
+        int rss_queues;
+        aconf->threads = (int)UtilCpuGetNumProcessorsOnline();
+        /* Get the number of RSS queues and take the min */
+        rss_queues = GetIfaceRSSQueuesNum(iface);
+        if (rss_queues > 0) {
+            if (rss_queues < aconf->threads) {
+                aconf->threads = rss_queues;
+                SCLogInfo("More cores than RSS queues, using %d threads for interface %s",
+                          aconf->threads, iface);
+            }
+        }
+        if (aconf->threads)
+            SCLogInfo("Using %d AF_PACKET threads for interface %s", aconf->threads, iface);
+    }
+    if (aconf->threads <= 0) {
         aconf->threads = 1;
     }
 
@@ -235,14 +256,15 @@ void *ParseAFPConfig(const char *iface)
     (void) SC_ATOMIC_ADD(aconf->ref, aconf->threads);
 
     if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-id", &tmpclusterid) != 1) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT,"Could not get cluster-id from config");
+        aconf->cluster_id = (uint16_t)(cluster_id_auto++);
     } else {
         aconf->cluster_id = (uint16_t)atoi(tmpclusterid);
         SCLogDebug("Going to use cluster-id %" PRId32, aconf->cluster_id);
     }
 
     if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-type", &tmpctype) != 1) {
-        SCLogError(SC_ERR_GET_CLUSTER_TYPE_FAILED,"Could not get cluster-type from config");
+        /* default to our safest choice: flow hashing + defrag enabled */
+        aconf->cluster_type = PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG;
     } else if (strcmp(tmpctype, "cluster_round_robin") == 0) {
         SCLogInfo("Using round-robin cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
@@ -265,10 +287,31 @@ void *ParseAFPConfig(const char *iface)
         SCLogInfo("Using cpu cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_CPU;
+    } else if (strcmp(tmpctype, "cluster_qm") == 0) {
+        SCLogInfo("Using queue based cluster mode for AF_PACKET (iface %s)",
+                aconf->iface);
+        aconf->cluster_type = PACKET_FANOUT_QM;
+    } else if (strcmp(tmpctype, "cluster_random") == 0) {
+        SCLogInfo("Using random based cluster mode for AF_PACKET (iface %s)",
+                aconf->iface);
+        aconf->cluster_type = PACKET_FANOUT_RND;
+    } else if (strcmp(tmpctype, "cluster_rollover") == 0) {
+        SCLogInfo("Using rollover based cluster mode for AF_PACKET (iface %s)",
+                aconf->iface);
+        aconf->cluster_type = PACKET_FANOUT_ROLLOVER;
+
     } else {
         SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
         SCFree(aconf);
         return NULL;
+    }
+
+    int conf_val = 0;
+    ConfGetChildValueBoolWithDefault(if_root, if_default, "rollover", &conf_val);
+    if (conf_val) {
+        SCLogInfo("Using rollover kernel functionality for AF_PACKET (iface %s)",
+                aconf->iface);
+        aconf->cluster_type |= PACKET_FANOUT_FLAG_ROLLOVER;
     }
 
     /*load af_packet bpf filter*/
@@ -322,6 +365,27 @@ void *ParseAFPConfig(const char *iface)
         } else {
             SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid value for checksum-checks for %s", aconf->iface);
         }
+    }
+
+    if (GetIfaceOffloading(iface) == 1) {
+        SCLogWarning(SC_ERR_AFP_CREATE,
+                "Using AF_PACKET with GRO or LRO activated can lead to capture problems");
+    }
+
+    char *active_runmode = RunmodeGetActive();
+    if (active_runmode && !strcmp("workers", active_runmode)) {
+        aconf->flags |= AFP_ZERO_COPY;
+        SCLogInfo("%s: enabling zero copy mode", iface);
+    } else {
+        /* If we are using copy mode we need a lock */
+        aconf->flags |= AFP_SOCK_PROTECT;
+    }
+
+    /* If we are in RING mode, then we can use ZERO copy
+     * by using the data release mechanism */
+    if (aconf->flags & AFP_RING_MODE) {
+        aconf->flags |= AFP_ZERO_COPY;
+        SCLogInfo("%s: enabling zero copy mode by using data release call", iface);
     }
 
     return aconf;
@@ -411,66 +475,7 @@ int AFPRunModeIsIPS()
     return has_ips;
 }
 
-/**
- * \brief RunModeIdsAFPAuto set up the following thread packet handlers:
- *        - Receive thread (from live iface)
- *        - Decode thread
- *        - Stream thread
- *        - Detect: If we have only 1 cpu, it will setup one Detect thread
- *                  If we have more than one, it will setup num_cpus - 1
- *                  starting from the second cpu available.
- *        - Respond/Reject thread
- *        - Outputs thread
- *        By default the threads will use the first cpu available
- *        except the Detection threads if we have more than one cpu.
- *
- * \param de_ctx Pointer to the Detection Engine.
- *
- * \retval 0 If all goes well. (If any problem is detected the engine will
- *           exit()).
- */
-int RunModeIdsAFPAuto(DetectEngineCtx *de_ctx)
-{
-    SCEnter();
-
-#ifdef HAVE_AF_PACKET
-    int ret;
-    char *live_dev = NULL;
-
-    RunModeInitialize();
-
-    TimeModeSetLive();
-
-    (void)ConfGet("af-packet.live-interface", &live_dev);
-
-    if (AFPPeersListInit() != TM_ECODE_OK) {
-        SCLogError(SC_ERR_RUNMODE, "Unable to init peers list.");
-        exit(EXIT_FAILURE);
-    }
-
-    ret = RunModeSetLiveCaptureAuto(de_ctx,
-                                    ParseAFPConfig,
-                                    AFPConfigGeThreadsCount,
-                                    "ReceiveAFP",
-                                    "DecodeAFP", "RecvAFP",
-                                    live_dev);
-    if (ret != 0) {
-        SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");
-        exit(EXIT_FAILURE);
-    }
-
-    /* In IPS mode each threads must have a peer */
-    if (AFPPeersListCheck() != TM_ECODE_OK) {
-        SCLogError(SC_ERR_RUNMODE, "Some IPS capture threads did not peer.");
-        exit(EXIT_FAILURE);
-    }
-
-    SCLogInfo("RunModeIdsAFPAuto initialised");
-#endif
-    SCReturnInt(0);
-}
-
-int RunModeIdsAFPAutoFp(DetectEngineCtx *de_ctx)
+int RunModeIdsAFPAutoFp(void)
 {
     SCEnter();
 
@@ -492,8 +497,7 @@ int RunModeIdsAFPAutoFp(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureAutoFp(de_ctx,
-                              ParseAFPConfig,
+    ret = RunModeSetLiveCaptureAutoFp(ParseAFPConfig,
                               AFPConfigGeThreadsCount,
                               "ReceiveAFP",
                               "DecodeAFP", "RxAFP",
@@ -509,7 +513,7 @@ int RunModeIdsAFPAutoFp(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    SCLogInfo("RunModeIdsAFPAutoFp initialised");
+    SCLogDebug("RunModeIdsAFPAutoFp initialised");
 #endif /* HAVE_AF_PACKET */
 
     SCReturnInt(0);
@@ -518,14 +522,12 @@ int RunModeIdsAFPAutoFp(DetectEngineCtx *de_ctx)
 /**
  * \brief Single thread version of the AF_PACKET processing.
  */
-int RunModeIdsAFPSingle(DetectEngineCtx *de_ctx)
+int RunModeIdsAFPSingle(void)
 {
+    SCEnter();
 #ifdef HAVE_AF_PACKET
     int ret;
     char *live_dev = NULL;
-#endif
-    SCEnter();
-#ifdef HAVE_AF_PACKET
 
     RunModeInitialize();
     TimeModeSetLive();
@@ -537,8 +539,7 @@ int RunModeIdsAFPSingle(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureSingle(de_ctx,
-                                    ParseAFPConfig,
+    ret = RunModeSetLiveCaptureSingle(ParseAFPConfig,
                                     AFPConfigGeThreadsCount,
                                     "ReceiveAFP",
                                     "DecodeAFP", "AFPacket",
@@ -554,7 +555,7 @@ int RunModeIdsAFPSingle(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    SCLogInfo("RunModeIdsAFPSingle initialised");
+    SCLogDebug("RunModeIdsAFPSingle initialised");
 
 #endif /* HAVE_AF_PACKET */
     SCReturnInt(0);
@@ -566,14 +567,12 @@ int RunModeIdsAFPSingle(DetectEngineCtx *de_ctx)
  * Start N threads with each thread doing all the work.
  *
  */
-int RunModeIdsAFPWorkers(DetectEngineCtx *de_ctx)
+int RunModeIdsAFPWorkers(void)
 {
+    SCEnter();
 #ifdef HAVE_AF_PACKET
     int ret;
     char *live_dev = NULL;
-#endif
-    SCEnter();
-#ifdef HAVE_AF_PACKET
 
     RunModeInitialize();
     TimeModeSetLive();
@@ -585,8 +584,7 @@ int RunModeIdsAFPWorkers(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    ret = RunModeSetLiveCaptureWorkers(de_ctx,
-                                    ParseAFPConfig,
+    ret = RunModeSetLiveCaptureWorkers(ParseAFPConfig,
                                     AFPConfigGeThreadsCount,
                                     "ReceiveAFP",
                                     "DecodeAFP", "AFPacket",
@@ -602,7 +600,7 @@ int RunModeIdsAFPWorkers(DetectEngineCtx *de_ctx)
         exit(EXIT_FAILURE);
     }
 
-    SCLogInfo("RunModeIdsAFPWorkers initialised");
+    SCLogDebug("RunModeIdsAFPWorkers initialised");
 
 #endif /* HAVE_AF_PACKET */
     SCReturnInt(0);

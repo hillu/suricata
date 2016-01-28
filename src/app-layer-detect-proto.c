@@ -190,9 +190,9 @@ static AppProto AppLayerProtoDetectPMMatchSignature(const AppLayerProtoDetectPMS
                s->cd->offset, s->cd->depth);
 
     if (s->cd->flags & DETECT_CONTENT_NOCASE)
-        found = BoyerMooreNocase(s->cd->content, s->cd->content_len, sbuf, sbuflen, s->cd->bm_ctx->bmGs, s->cd->bm_ctx->bmBc);
+        found = BoyerMooreNocase(s->cd->content, s->cd->content_len, sbuf, sbuflen, s->cd->bm_ctx);
     else
-        found = BoyerMoore(s->cd->content, s->cd->content_len, sbuf, sbuflen, s->cd->bm_ctx->bmGs, s->cd->bm_ctx->bmBc);
+        found = BoyerMoore(s->cd->content, s->cd->content_len, sbuf, sbuflen, s->cd->bm_ctx);
     if (found != NULL)
         proto = s->alproto;
 
@@ -645,7 +645,7 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
         else if (pp->ipproto == IPPROTO_UDP)
             printf("IPProto: UDP\n");
         else
-            printf("IPProto: %"PRIu16"\n", pp->ipproto);
+            printf("IPProto: %"PRIu8"\n", pp->ipproto);
 
         pp_port = pp->port;
         for ( ; pp_port != NULL; pp_port = pp_port->next) {
@@ -685,6 +685,10 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
                         printf("            alproto: ALPROTO_IRC\n");
                     else if (pp_pe->alproto == ALPROTO_DNS)
                         printf("            alproto: ALPROTO_DNS\n");
+                    else if (pp_pe->alproto == ALPROTO_MODBUS)
+                        printf("            alproto: ALPROTO_MODBUS\n");
+                    else if (pp_pe->alproto == ALPROTO_TEMPLATE)
+                        printf("            alproto: ALPROTO_TEMPLATE\n");
                     else
                         printf("impossible\n");
 
@@ -734,6 +738,10 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
                     printf("            alproto: ALPROTO_IRC\n");
                 else if (pp_pe->alproto == ALPROTO_DNS)
                     printf("            alproto: ALPROTO_DNS\n");
+                else if (pp_pe->alproto == ALPROTO_MODBUS)
+                    printf("            alproto: ALPROTO_MODBUS\n");
+                else if (pp_pe->alproto == ALPROTO_TEMPLATE)
+                    printf("            alproto: ALPROTO_TEMPLATE\n");
                 else
                     printf("impossible\n");
 
@@ -930,7 +938,7 @@ static void AppLayerProtoDetectInsertNewProbingParser(AppLayerProtoDetectProbing
     while (curr_pe != NULL) {
         if (curr_pe->alproto == alproto) {
             SCLogError(SC_ERR_ALPARSER, "Duplicate pp registered - "
-                       "ipproto - %"PRIu16" Port - %"PRIu16" "
+                       "ipproto - %"PRIu8" Port - %"PRIu16" "
                        "App Protocol - NULL, App Protocol(ID) - "
                        "%"PRIu16" min_depth - %"PRIu16" "
                        "max_dept - %"PRIu16".",
@@ -1253,8 +1261,10 @@ static int AppLayerProtoDetectPMRegisterPattern(uint8_t ipproto, AppProto alprot
         goto error;
     cd->depth = depth;
     cd->offset = offset;
-    if (!is_cs)
+    if (!is_cs) {
+        BoyerMooreCtxToNocase(cd->bm_ctx, cd->content, cd->content_len);
         cd->flags |= DETECT_CONTENT_NOCASE;
+    }
     if (depth < cd->content_len)
         goto error;
 
@@ -1385,7 +1395,7 @@ void AppLayerProtoDetectPPRegister(uint8_t ipproto,
     SCEnter();
 
     DetectPort *head = NULL;
-    DetectPortParse(&head, portstr);
+    DetectPortParse(NULL,&head, portstr);
     DetectPort *temp_dp = head;
     while (temp_dp != NULL) {
         uint32_t port = temp_dp->port;
@@ -1624,16 +1634,19 @@ int AppLayerProtoDetectConfProtoDetectionEnabled(const char *ipproto,
         }
     }
 
-    if (strcasecmp(node->val, "yes") == 0) {
-        goto enabled;
-    } else if (strcasecmp(node->val, "no") == 0) {
-        goto disabled;
-    } else if (strcasecmp(node->val, "detection-only") == 0) {
-        goto enabled;
-    } else {
-        SCLogError(SC_ERR_FATAL, "Invalid value found for %s.", param);
-        exit(EXIT_FAILURE);
+    if (node->val) {
+        if (ConfValIsTrue(node->val)) {
+            goto enabled;
+        } else if (ConfValIsFalse(node->val)) {
+            goto disabled;
+        } else if (strcasecmp(node->val, "detection-only") == 0) {
+            goto enabled;
+        }
     }
+
+    /* Invalid or null value. */
+    SCLogError(SC_ERR_FATAL, "Invalid value found for %s.", param);
+    exit(EXIT_FAILURE);
 
  disabled:
     enabled = 0;

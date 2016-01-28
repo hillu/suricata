@@ -25,7 +25,7 @@
 #ifndef __APP_LAYER_PROTOS_H__
 #define __APP_LAYER_PROTOS_H__
 
-enum {
+enum AppProtoEnum {
     ALPROTO_UNKNOWN = 0,
     ALPROTO_HTTP,
     ALPROTO_FTP,
@@ -41,6 +41,8 @@ enum {
     ALPROTO_IRC,
 
     ALPROTO_DNS,
+    ALPROTO_MODBUS,
+    ALPROTO_TEMPLATE,
 
     /* used by the probing parser when alproto detection fails
      * permanently for that particular stream */
@@ -52,6 +54,7 @@ enum {
     ALPROTO_MAX,
 };
 
+/* not using the enum as that is a unsigned int, so 4 bytes */
 typedef uint16_t AppProto;
 
 /**

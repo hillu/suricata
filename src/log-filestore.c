@@ -53,6 +53,8 @@
 #include "util-logopenfile.h"
 
 #include "app-layer-htp.h"
+#include "app-layer-smtp.h"
+#include "util-decode-mime.h"
 #include "util-memcmp.h"
 #include "stream-tcp-reassemble.h"
 
@@ -66,7 +68,8 @@ typedef struct LogFilestoreLogThread_ {
     uint32_t file_cnt;
 } LogFilestoreLogThread;
 
-static void LogFilestoreMetaGetUri(FILE *fp, const Packet *p, const File *ff) {
+static void LogFilestoreMetaGetUri(FILE *fp, const Packet *p, const File *ff)
+{
     HtpState *htp_state = (HtpState *)p->flow->alstate;
     if (htp_state != NULL) {
         htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, ff->txid);
@@ -83,7 +86,8 @@ static void LogFilestoreMetaGetUri(FILE *fp, const Packet *p, const File *ff) {
     fprintf(fp, "<unknown>");
 }
 
-static void LogFilestoreMetaGetHost(FILE *fp, const Packet *p, const File *ff) {
+static void LogFilestoreMetaGetHost(FILE *fp, const Packet *p, const File *ff)
+{
     HtpState *htp_state = (HtpState *)p->flow->alstate;
     if (htp_state != NULL) {
         htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, ff->txid);
@@ -97,7 +101,8 @@ static void LogFilestoreMetaGetHost(FILE *fp, const Packet *p, const File *ff) {
     fprintf(fp, "<unknown>");
 }
 
-static void LogFilestoreMetaGetReferer(FILE *fp, const Packet *p, const File *ff) {
+static void LogFilestoreMetaGetReferer(FILE *fp, const Packet *p, const File *ff)
+{
     HtpState *htp_state = (HtpState *)p->flow->alstate;
     if (htp_state != NULL) {
         htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, ff->txid);
@@ -116,7 +121,8 @@ static void LogFilestoreMetaGetReferer(FILE *fp, const Packet *p, const File *ff
     fprintf(fp, "<unknown>");
 }
 
-static void LogFilestoreMetaGetUserAgent(FILE *fp, const Packet *p, const File *ff) {
+static void LogFilestoreMetaGetUserAgent(FILE *fp, const Packet *p, const File *ff)
+{
     HtpState *htp_state = (HtpState *)p->flow->alstate;
     if (htp_state != NULL) {
         htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, ff->txid);
@@ -135,7 +141,32 @@ static void LogFilestoreMetaGetUserAgent(FILE *fp, const Packet *p, const File *
     fprintf(fp, "<unknown>");
 }
 
-static void LogFilestoreLogCreateMetaFile(const Packet *p, const File *ff, const char *filename, int ipver) {
+static void LogFilestoreMetaGetSmtp(FILE *fp, const Packet *p, const File *ff)
+{
+    SMTPState *state = (SMTPState *) p->flow->alstate;
+    if (state != NULL) {
+        SMTPTransaction *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_SMTP, state, ff->txid);
+        if (tx == NULL || tx->msg_tail == NULL)
+            return;
+
+        /* Message Id */
+        if (tx->msg_tail->msg_id != NULL) {
+            fprintf(fp, "MESSAGE-ID:        ");
+            PrintRawUriFp(fp, (uint8_t *) tx->msg_tail->msg_id, tx->msg_tail->msg_id_len);
+            fprintf(fp, "\n");
+        }
+
+        /* Sender */
+        MimeDecField *field = MimeDecFindField(tx->msg_tail, "from");
+        if (field != NULL) {
+            fprintf(fp, "SENDER:            ");
+            PrintRawUriFp(fp, (uint8_t *) field->value, field->value_len);
+            fprintf(fp, "\n");
+        }
+    }
+}
+
+static void LogFilestoreLogCreateMetaFile(const Packet *p, const File *ff, char *filename, int ipver) {
     char metafilename[PATH_MAX] = "";
     snprintf(metafilename, sizeof(metafilename), "%s.meta", filename);
     FILE *fp = fopen(metafilename, "w+");
@@ -175,18 +206,29 @@ static void LogFilestoreLogCreateMetaFile(const Packet *p, const File *ff, const
             fprintf(fp, "SRC PORT:          %" PRIu16 "\n", sp);
             fprintf(fp, "DST PORT:          %" PRIu16 "\n", dp);
         }
-        fprintf(fp, "HTTP URI:          ");
-        LogFilestoreMetaGetUri(fp, p, ff);
-        fprintf(fp, "\n");
-        fprintf(fp, "HTTP HOST:         ");
-        LogFilestoreMetaGetHost(fp, p, ff);
-        fprintf(fp, "\n");
-        fprintf(fp, "HTTP REFERER:      ");
-        LogFilestoreMetaGetReferer(fp, p, ff);
-        fprintf(fp, "\n");
-        fprintf(fp, "HTTP USER AGENT:   ");
-        LogFilestoreMetaGetUserAgent(fp, p, ff);
-        fprintf(fp, "\n");
+
+        fprintf(fp, "APP PROTO:         %s\n",
+                AppProtoToString(p->flow->alproto));
+
+        /* Only applicable to HTTP traffic */
+        if (p->flow->alproto == ALPROTO_HTTP) {
+            fprintf(fp, "HTTP URI:          ");
+            LogFilestoreMetaGetUri(fp, p, ff);
+            fprintf(fp, "\n");
+            fprintf(fp, "HTTP HOST:         ");
+            LogFilestoreMetaGetHost(fp, p, ff);
+            fprintf(fp, "\n");
+            fprintf(fp, "HTTP REFERER:      ");
+            LogFilestoreMetaGetReferer(fp, p, ff);
+            fprintf(fp, "\n");
+            fprintf(fp, "HTTP USER AGENT:   ");
+            LogFilestoreMetaGetUserAgent(fp, p, ff);
+            fprintf(fp, "\n");
+        } else if (p->flow->alproto == ALPROTO_SMTP) {
+            /* Only applicable to SMTP */
+            LogFilestoreMetaGetSmtp(fp, p, ff);
+        }
+
         fprintf(fp, "FILENAME:          ");
         PrintRawUriFp(fp, ff->name, ff->name_len);
         fprintf(fp, "\n");
@@ -195,7 +237,8 @@ static void LogFilestoreLogCreateMetaFile(const Packet *p, const File *ff, const
     }
 }
 
-static void LogFilestoreLogCloseMetaFile(const File *ff) {
+static void LogFilestoreLogCloseMetaFile(const File *ff)
+{
     char filename[PATH_MAX] = "";
     snprintf(filename, sizeof(filename), "%s/file.%u",
             g_logfile_base_dir, ff->file_id);
@@ -353,7 +396,8 @@ static TmEcode LogFilestoreLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-static void LogFilestoreLogExitPrintStats(ThreadVars *tv, void *data) {
+static void LogFilestoreLogExitPrintStats(ThreadVars *tv, void *data)
+{
     LogFilestoreLogThread *aft = (LogFilestoreLogThread *)data;
     if (aft == NULL) {
         return;
@@ -373,7 +417,7 @@ static void LogFilestoreLogDeInitCtx(OutputCtx *output_ctx)
 {
     LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
     LogFileFreeCtx(logfile_ctx);
-    free(output_ctx);
+    SCFree(output_ctx);
 
 }
 
@@ -434,7 +478,8 @@ static OutputCtx *LogFilestoreLogInitCtx(ConfNode *conf)
     SCReturnPtr(output_ctx, "OutputCtx");
 }
 
-void TmModuleLogFilestoreRegister (void) {
+void TmModuleLogFilestoreRegister (void)
+{
     tmm_modules[TMM_FILESTORE].name = MODULE_NAME;
     tmm_modules[TMM_FILESTORE].ThreadInit = LogFilestoreLogThreadInit;
     tmm_modules[TMM_FILESTORE].Func = NULL;

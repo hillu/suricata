@@ -9,7 +9,6 @@ bin_PROGRAMS = suricata
 suricata_SOURCES = \
 alert-debuglog.c alert-debuglog.h \
 alert-fastlog.c alert-fastlog.h \
-alert-pcapinfo.c alert-pcapinfo.h \
 alert-prelude.c alert-prelude.h \
 alert-syslog.c alert-syslog.h \
 alert-unified2-alert.c alert-unified2-alert.h \
@@ -27,11 +26,14 @@ app-layer-htp.c app-layer-htp.h \
 app-layer-htp-file.c app-layer-htp-file.h \
 app-layer-htp-libhtp.c app-layer-htp-libhtp.h \
 app-layer-htp-mem.c app-layer-htp-mem.h \
+app-layer-htp-xff.c app-layer-htp-xff.h \
+app-layer-modbus.c app-layer-modbus.h \
 app-layer-parser.c app-layer-parser.h \
 app-layer-protos.c app-layer-protos.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smtp.c app-layer-smtp.h \
+app-layer-template.c app-layer-template.h \
 app-layer-ssh.c app-layer-ssh.h \
 app-layer-ssl.c app-layer-ssl.h \
 app-layer-tls-handshake.c app-layer-tls-handshake.h \
@@ -40,6 +42,7 @@ conf-yaml-loader.c conf-yaml-loader.h \
 counters.c counters.h \
 data-queue.c data-queue.h \
 decode.c decode.h \
+decode-erspan.c decode-erspan.h \
 decode-ethernet.c decode-ethernet.h \
 decode-events.c decode-events.h \
 decode-gre.c decode-gre.h \
@@ -57,6 +60,8 @@ decode-tcp.c decode-tcp.h \
 decode-teredo.c decode-teredo.h \
 decode-udp.c decode-udp.h \
 decode-vlan.c decode-vlan.h \
+decode-mpls.c decode-mpls.h \
+decode-template.c decode-template.h \
 defrag-config.c defrag-config.h \
 defrag.c defrag.h \
 defrag-hash.c defrag-hash.h \
@@ -66,11 +71,12 @@ detect-ack.c detect-ack.h \
 detect-app-layer-event.c detect-app-layer-event.h \
 detect-app-layer-protocol.c detect-app-layer-protocol.h \
 detect-asn1.c detect-asn1.h \
+detect-base64-data.c detect-base64-data.h \
+detect-base64-decode.c detect-base64-decode.h \
 detect-byte-extract.c detect-byte-extract.h \
 detect-bytejump.c detect-bytejump.h \
 detect-bytetest.c detect-bytetest.h \
 detect.c detect.h \
-detect-simd.c \
 detect-classtype.c detect-classtype.h \
 detect-content.c detect-content.h \
 detect-csum.c detect-csum.h \
@@ -92,8 +98,10 @@ detect-engine.c detect-engine.h \
 detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-dns.c detect-engine-dns.h \
+detect-engine-modbus.c detect-engine-modbus.h \
 detect-engine-event.c detect-engine-event.h \
 detect-engine-file.c detect-engine-file.h \
+detect-engine-filedata-smtp.c detect-engine-filedata-smtp.h \
 detect-engine-hcbd.c detect-engine-hcbd.h \
 detect-engine-hcd.c detect-engine-hcd.h \
 detect-engine-hhd.c detect-engine-hhd.h \
@@ -102,11 +110,13 @@ detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hrhd.c detect-engine-hrhd.h \
 detect-engine-hrhhd.c detect-engine-hrhhd.h \
 detect-engine-hrud.c detect-engine-hrud.h \
+detect-engine-hrl.c detect-engine-hrl.h \
 detect-engine-hsbd.c detect-engine-hsbd.h \
 detect-engine-hscd.c detect-engine-hscd.h \
 detect-engine-hsmd.c detect-engine-hsmd.h \
 detect-engine-hua.c detect-engine-hua.h \
 detect-engine-iponly.c detect-engine-iponly.h \
+detect-engine-loader.c detect-engine-loader.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-port.c detect-engine-port.h \
@@ -115,6 +125,7 @@ detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine-state.c detect-engine-state.h \
 detect-engine-tag.c detect-engine-tag.h \
+detect-engine-template.c detect-engine-template.h \
 detect-engine-threshold.c detect-engine-threshold.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-fast-pattern.c detect-fast-pattern.h \
@@ -135,6 +146,7 @@ detect-fragoffset.c detect-fragoffset.h \
 detect-ftpbounce.c detect-ftpbounce.h \
 detect-geoip.c detect-geoip.h \
 detect-gid.c detect-gid.h \
+detect-hostbits.c detect-hostbits.h \
 detect-http-client-body.c detect-http-client-body.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-header.c detect-http-header.h \
@@ -158,8 +170,8 @@ detect-iprep.c detect-iprep.h \
 detect-isdataat.c detect-isdataat.h \
 detect-itype.c detect-itype.h \
 detect-l3proto.c detect-l3proto.h \
-detect-luajit.c detect-luajit.h \
-detect-luajit-extensions.c detect-luajit-extensions.h \
+detect-lua.c detect-lua.h \
+detect-lua-extensions.c detect-lua-extensions.h \
 detect-mark.c detect-mark.h \
 detect-metadata.c detect-metadata.h \
 detect-msg.c detect-msg.h \
@@ -185,6 +197,8 @@ detect-ssl-state.c detect-ssl-state.h \
 detect-ssl-version.c detect-ssl-version.h \
 detect-stream_size.c detect-stream_size.h \
 detect-tag.c detect-tag.h \
+detect-template.c detect-template.h \
+detect-template-buffer.c detect-template-buffer.h \
 detect-threshold.c detect-threshold.h \
 detect-tls.c detect-tls.h \
 detect-tls-version.c detect-tls-version.h \
@@ -194,6 +208,8 @@ detect-uricontent.c detect-uricontent.h \
 detect-urilen.c detect-urilen.h \
 detect-window.c detect-window.h \
 detect-within.c detect-within.h \
+detect-modbus.c detect-modbus.h \
+detect-xbits.c detect-xbits.h \
 flow-bit.c flow-bit.h \
 flow.c flow.h \
 flow-hash.c flow-hash.h \
@@ -204,27 +220,46 @@ flow-timeout.c flow-timeout.h \
 flow-util.c flow-util.h \
 flow-var.c flow-var.h \
 host.c host.h \
+host-bit.c host-bit.h \
 host-queue.c host-queue.h \
 host-storage.c host-storage.h \
 host-timeout.c host-timeout.h \
+ippair.c ippair.h \
+ippair-bit.c ippair-bit.h \
+ippair-queue.c ippair-queue.h \
+ippair-storage.c ippair-storage.h \
+ippair-timeout.c ippair-timeout.h \
 log-dnslog.c log-dnslog.h \
 log-droplog.c log-droplog.h \
 log-file.c log-file.h \
 log-filestore.c log-filestore.h \
 log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
+log-stats.c log-stats.h \
+log-tcp-data.c log-tcp-data.h \
 log-tlslog.c log-tlslog.h \
+log-tlsstore.c log-tlsstore.h \
 output.c output.h \
 output-file.c output-file.h \
 output-filedata.c output-filedata.h \
+output-flow.c output-flow.h \
 output-json-alert.c output-json-alert.h \
 output-json-dns.c output-json-dns.h \
 output-json-drop.c output-json-drop.h \
+output-json-email-common.c output-json-email-common.h \
 output-json-file.c output-json-file.h \
+output-json-flow.c output-json-flow.h \
+output-json-netflow.c output-json-netflow.h \
 output-json-http.c output-json-http.h \
+output-json-smtp.c output-json-smtp.h \
 output-json-ssh.c output-json-ssh.h \
+output-json-stats.c output-json-stats.h \
 output-json-tls.c output-json-tls.h \
+output-json-template.c output-json-template.h \
+output-lua.c output-lua.h \
 output-packet.c output-packet.h \
+output-stats.c output-stats.h \
+output-streaming.c output-streaming.h \
 output-tx.c output-tx.h \
 output-json.c output-json.h \
 packet-queue.c packet-queue.h \
@@ -237,6 +272,7 @@ runmode-erf-dag.c runmode-erf-dag.h \
 runmode-erf-file.c runmode-erf-file.h \
 runmode-ipfw.c runmode-ipfw.h \
 runmode-napatech.c runmode-napatech.h \
+runmode-netmap.c runmode-netmap.h \
 runmode-nfq.c runmode-nfq.h \
 runmode-nflog.c runmode-nflog.h \
 runmode-pcap.c runmode-pcap.h \
@@ -252,6 +288,7 @@ source-erf-file.c source-erf-file.h \
 source-ipfw.c source-ipfw.h \
 source-mpipe.c source-mpipe.h \
 source-napatech.c source-napatech.h \
+source-netmap.c source-netmap.h \
 source-nfq.c source-nfq.h \
 source-nflog.c source-nflog.h \
 source-pcap.c source-pcap.h \
@@ -278,6 +315,7 @@ tm-threads.c tm-threads.h tm-threads-common.h \
 unix-manager.c unix-manager.h \
 util-action.c util-action.h \
 util-atomic.c util-atomic.h \
+util-base64.c util-base64.h \
 util-bloomfilter-counting.c util-bloomfilter-counting.h \
 util-bloomfilter.c util-bloomfilter.h \
 util-buffer.c util-buffer.h \
@@ -299,6 +337,7 @@ util-debug-filters.c util-debug-filters.h \
 util-decode-asn1.c util-decode-asn1.h \
 util-decode-der.c util-decode-der.h \
 util-decode-der-get.c util-decode-der-get.h \
+util-decode-mime.c util-decode-mime.h \
 util-device.c util-device.h \
 util-enum.c util-enum.h \
 util-error.c util-error.h \
@@ -314,6 +353,12 @@ util-ioctl.h util-ioctl.c \
 util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
 util-logopenfile-tile.h util-logopenfile-tile.c \
+util-lua.c util-lua.h \
+util-lua-common.c util-lua-common.h \
+util-lua-dns.c util-lua-dns.h \
+util-lua-http.c util-lua-http.h \
+util-lua-tls.c util-lua-tls.h \
+util-lua-ssh.c util-lua-ssh.h \
 util-magic.c util-magic.h \
 util-memcmp.c util-memcmp.h \
 util-memcpy.h \
@@ -325,9 +370,7 @@ util-mpm-ac.c util-mpm-ac.h \
 util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
 util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
-util-mpm-b2gc.c util-mpm-b2gc.h \
 util-mpm-b2g.c util-mpm-b2g.h \
-util-mpm-b2gm.c util-mpm-b2gm.h \
 util-mpm-b3g.c util-mpm-b3g.h \
 util-mpm.c util-mpm.h \
 util-mpm-wumanber.c util-mpm-wumanber.h \
@@ -439,9 +482,14 @@ cuda-ptxdump.h: $(PTXS)
 CLEANFILES = $(PTXS) cuda-ptxdump.h
 endif
 
+# default CFLAGS
+AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS} ${SECCFLAGS} ${PCAP_CFLAGS} -Wall -Wno-unused-parameter -std=gnu99 -DLOCAL_STATE_DIR=\"$(localstatedir)\"
+# different flags for different cases
+if DEBUG
+AM_CFLAGS += -ggdb -O0
+endif
 
-#suricata_CFLAGS = -Wall -fno-strict-aliasing 
-AM_CFLAGS = -DLOCAL_STATE_DIR=\"$(localstatedir)\"
+AM_LDFLAGS = ${SECLDFLAGS}
 
 if BUILD_UNITTESTS
 check-am:

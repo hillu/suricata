@@ -78,7 +78,8 @@ enum {
 };
 
 /* \brief hexdump function from libdnet, used for debugging only */
-void hexdump(/*Flow *f,*/ const void *buf, size_t len) {
+void hexdump(/*Flow *f,*/ const void *buf, size_t len)
+{
     /* dumps len bytes of *buf to stdout. Looks like:
      * [0000] 75 6E 6B 6E 6F 77 6E 20
      *                  30 FF 00 00 00 00 39 00 unknown 0.....9.
@@ -140,7 +141,8 @@ void hexdump(/*Flow *f,*/ const void *buf, size_t len) {
  * \brief printUUID function used to print UUID, Major and Minor Version Number
  * and if it was Accepted or Rejected in the BIND_ACK.
  */
-void printUUID(char *type, DCERPCUuidEntry *uuid) {
+void printUUID(char *type, DCERPCUuidEntry *uuid)
+{
     uint8_t i = 0;
     if (uuid == NULL) {
         return;
@@ -158,7 +160,8 @@ void printUUID(char *type, DCERPCUuidEntry *uuid) {
  * \brief DCERPCParseSecondaryAddr reads secondaryaddrlen bytes from the BIND_ACK
  * DCERPC call.
  */
-static uint32_t DCERPCParseSecondaryAddr(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseSecondaryAddr(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
     while (dcerpc->dcerpcbindbindack.secondaryaddrlenleft-- && input_len--) {
@@ -169,7 +172,8 @@ static uint32_t DCERPCParseSecondaryAddr(DCERPC *dcerpc, uint8_t *input, uint32_
     SCReturnUInt((uint32_t)(p - input));
 }
 
-static uint32_t PaddingParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t PaddingParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
     while (dcerpc->padleft-- && input_len--) {
@@ -180,7 +184,8 @@ static uint32_t PaddingParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len
     SCReturnUInt((uint32_t)(p - input));
 }
 
-static uint32_t DCERPCGetCTXItems(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCGetCTXItems(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
     if (input_len) {
@@ -225,7 +230,8 @@ static uint32_t DCERPCGetCTXItems(DCERPC *dcerpc, uint8_t *input, uint32_t input
  * each UUID is added to a TAILQ.
  */
 
-static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
 
@@ -656,7 +662,8 @@ static uint32_t DCERPCParseBINDCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t 
  * the BIND_ACK call. The result (Accepted or Rejected) is added to the
  * correct UUID from the BIND call.
  */
-static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
     DCERPCUuidEntry *uuid_entry;
@@ -865,7 +872,8 @@ static uint32_t DCERPCParseBINDACKCTXItem(DCERPC *dcerpc, uint8_t *input, uint32
     SCReturnUInt((uint32_t)(p - input));
 }
 
-static uint32_t DCERPCParseBIND(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseBIND(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     DCERPCUuidEntry *item;
     uint8_t *p = input;
@@ -987,7 +995,8 @@ static uint32_t DCERPCParseBIND(DCERPC *dcerpc, uint8_t *input, uint32_t input_l
     SCReturnUInt((uint32_t)(p - input));
 }
 
-static uint32_t DCERPCParseBINDACK(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseBINDACK(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
 
@@ -1079,7 +1088,8 @@ static uint32_t DCERPCParseBINDACK(DCERPC *dcerpc, uint8_t *input, uint32_t inpu
     SCReturnUInt((uint32_t)(p - input));
 }
 
-static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static uint32_t DCERPCParseREQUEST(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
 
@@ -1269,7 +1279,8 @@ static uint32_t StubDataParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_le
  * \retval -1 if DCERPC Header does not validate
  * \retval Number of bytes processed
  */
-static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
     uint8_t *p = input;
 
@@ -1418,7 +1429,8 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
     SCReturnInt((p - input));
 }
 
-static inline void DCERPCResetParsingState(DCERPC *dcerpc) {
+static inline void DCERPCResetParsingState(DCERPC *dcerpc)
+{
     dcerpc->bytesprocessed = 0;
     dcerpc->pdu_fragged = 0;
     dcerpc->dcerpcbindbindack.ctxbytesprocessed = 0;
@@ -1426,7 +1438,8 @@ static inline void DCERPCResetParsingState(DCERPC *dcerpc) {
     return;
 }
 
-static inline void DCERPCResetStub(DCERPC *dcerpc) {
+static inline void DCERPCResetStub(DCERPC *dcerpc)
+{
     if (dcerpc->dcerpchdr.type == REQUEST)
         dcerpc->dcerpcrequest.stub_data_buffer_len = 0;
     else if (dcerpc->dcerpchdr.type == RESPONSE)
@@ -1436,7 +1449,8 @@ static inline void DCERPCResetStub(DCERPC *dcerpc) {
 }
 
 static inline int DCERPCThrowOutExtraData(DCERPC *dcerpc, uint8_t *input,
-                                           uint16_t input_len) {
+                                           uint16_t input_len)
+{
     int parsed = 0;
     /* the function always assumes that
      * dcerpc->bytesprocessed < dcerpc->dcerpchdr.frag_length */
@@ -1459,7 +1473,8 @@ static inline int DCERPCThrowOutExtraData(DCERPC *dcerpc, uint8_t *input,
  *         a condition where it has receives a segment with 2 pdus, while the
  *         first pdu in the segment is corrupt.
  */
-int32_t DCERPCParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
+int32_t DCERPCParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
+{
     SCEnter();
 
     uint32_t retval = 0;
@@ -1889,11 +1904,18 @@ int32_t DCERPCParser(DCERPC *dcerpc, uint8_t *input, uint32_t input_len) {
 static int DCERPCParse(Flow *f, void *dcerpc_state,
                        AppLayerParserState *pstate,
                        uint8_t *input, uint32_t input_len,
-                       void *local_data, int dir) {
+                       void *local_data, int dir)
+{
     SCEnter();
 
     int32_t retval = 0;
     DCERPCState *sstate = (DCERPCState *) dcerpc_state;
+
+    if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
+        SCReturnInt(1);
+    } else if (input == NULL || input_len == 0) {
+        SCReturnInt(-1);
+    }
 
     if (sstate->dcerpc.bytesprocessed != 0 && sstate->data_needed_for_dir != dir) {
         SCReturnInt(-1);
@@ -1930,7 +1952,8 @@ static int DCERPCParseResponse(Flow *f, void *dcerpc_state,
                        local_data, 1);
 }
 
-static void *DCERPCStateAlloc(void) {
+static void *DCERPCStateAlloc(void)
+{
     SCEnter();
 
     DCERPCState *s = SCMalloc(sizeof(DCERPCState));
@@ -1944,7 +1967,8 @@ static void *DCERPCStateAlloc(void) {
     SCReturnPtr((void *)s, "void");
 }
 
-static void DCERPCStateFree(void *s) {
+static void DCERPCStateFree(void *s)
+{
     DCERPCState *sstate = (DCERPCState *) s;
 
     DCERPCUuidEntry *item;
@@ -1991,7 +2015,8 @@ static int DCERPCRegisterPatternsForProtocolDetection(void)
     return 0;
 }
 
-void RegisterDCERPCParsers(void) {
+void RegisterDCERPCParsers(void)
+{
     char *proto_name = "dcerpc";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
@@ -2030,7 +2055,8 @@ void RegisterDCERPCParsers(void) {
 
 /* set this to 1 to see problem */
 
-int DCERPCParserTest01(void) {
+int DCERPCParserTest01(void)
+{
     int result = 1;
     Flow f;
     uint8_t dcerpcbind[] = {
@@ -2483,7 +2509,8 @@ end:
 
 /** \test DCERPC Request decoding and opnum parsing.
 */
-int DCERPCParserTest02(void) {
+int DCERPCParserTest02(void)
+{
     int result = 1;
     Flow f;
     uint8_t dcerpcrequest[] = {
@@ -2682,7 +2709,8 @@ end:
 
 /** \test Test endianness handling
 */
-int DCERPCParserTest03(void) {
+int DCERPCParserTest03(void)
+{
     int result = 1;
     Flow f;
     uint8_t dcerpcrequest[] = {
@@ -2875,7 +2903,8 @@ end:
 /**
  * \todo Needs to be rewritten
  */
-int DCERPCParserTest04(void) {
+int DCERPCParserTest04(void)
+{
     /* AWS - Disabled this test since clamav FPs on the payloads used.
      * We will have to rewrite this test with new payloads.  Will be done
      * as a part of dcerpc update/fixes */
@@ -4234,7 +4263,8 @@ end:
 /**
  * \test General test.
  */
-int DCERPCParserTest05(void) {
+int DCERPCParserTest05(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4335,7 +4365,8 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed)
  */
-int DCERPCParserTest06(void) {
+int DCERPCParserTest06(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4500,7 +4531,8 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest07(void) {
+int DCERPCParserTest07(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4601,7 +4633,8 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest08(void) {
+int DCERPCParserTest08(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4660,7 +4693,8 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest09(void) {
+int DCERPCParserTest09(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4719,7 +4753,8 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest10(void) {
+int DCERPCParserTest10(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4818,7 +4853,8 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest11(void) {
+int DCERPCParserTest11(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -4922,7 +4958,8 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest12(void) {
+int DCERPCParserTest12(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -5003,7 +5040,8 @@ end:
  * \test Check if the parser accepts bind pdus that have context ids starting
  *       from a non-zero value.
  */
-int DCERPCParserTest13(void) {
+int DCERPCParserTest13(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -5087,7 +5125,8 @@ end:
 /**
  * \test Check for another endless loop with bind pdus.
  */
-int DCERPCParserTest14(void) {
+int DCERPCParserTest14(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -5152,7 +5191,8 @@ end:
 /**
  * \test Check for another endless loop for bind_ack pdus.
  */
-int DCERPCParserTest15(void) {
+int DCERPCParserTest15(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -5213,7 +5253,8 @@ end:
 /**
  * \test Check for correct internal ids for bind_acks.
  */
-int DCERPCParserTest16(void) {
+int DCERPCParserTest16(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -5811,7 +5852,8 @@ end:
 /**
  * \test Check for correct internal ids for bind_acks + alter_contexts
  */
-int DCERPCParserTest17(void) {
+int DCERPCParserTest17(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -6003,7 +6045,8 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest18(void) {
+int DCERPCParserTest18(void)
+{
     int result = 1;
     Flow f;
     int r = 0;
@@ -6340,7 +6383,8 @@ end:
 
 #endif /* UNITTESTS */
 
-void DCERPCParserRegisterTests(void) {
+void DCERPCParserRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DCERPCParserTest01", DCERPCParserTest01, 1);
     UtRegisterTest("DCERPCParserTest02", DCERPCParserTest02, 1);

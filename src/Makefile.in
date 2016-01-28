@@ -80,6 +80,8 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 bin_PROGRAMS = suricata$(EXEEXT)
+# different flags for different cases
+@DEBUG_TRUE@am__append_1 = -ggdb -O0
 subdir = src
 DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/Makefile.am \
 	$(top_srcdir)/depcomp $(noinst_HEADERS)
@@ -97,22 +99,23 @@ CONFIG_CLEAN_VPATH_FILES =
 am__installdirs = "$(DESTDIR)$(bindir)"
 PROGRAMS = $(bin_PROGRAMS)
 am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
-	alert-pcapinfo.$(OBJEXT) alert-prelude.$(OBJEXT) \
-	alert-syslog.$(OBJEXT) alert-unified2-alert.$(OBJEXT) \
-	app-layer.$(OBJEXT) app-layer-dcerpc.$(OBJEXT) \
-	app-layer-dcerpc-udp.$(OBJEXT) \
+	alert-prelude.$(OBJEXT) alert-syslog.$(OBJEXT) \
+	alert-unified2-alert.$(OBJEXT) app-layer.$(OBJEXT) \
+	app-layer-dcerpc.$(OBJEXT) app-layer-dcerpc-udp.$(OBJEXT) \
 	app-layer-detect-proto.$(OBJEXT) \
 	app-layer-dns-common.$(OBJEXT) app-layer-dns-tcp.$(OBJEXT) \
 	app-layer-dns-udp.$(OBJEXT) app-layer-events.$(OBJEXT) \
 	app-layer-ftp.$(OBJEXT) app-layer-htp-body.$(OBJEXT) \
 	app-layer-htp.$(OBJEXT) app-layer-htp-file.$(OBJEXT) \
 	app-layer-htp-libhtp.$(OBJEXT) app-layer-htp-mem.$(OBJEXT) \
+	app-layer-htp-xff.$(OBJEXT) app-layer-modbus.$(OBJEXT) \
 	app-layer-parser.$(OBJEXT) app-layer-protos.$(OBJEXT) \
 	app-layer-smb2.$(OBJEXT) app-layer-smb.$(OBJEXT) \
-	app-layer-smtp.$(OBJEXT) app-layer-ssh.$(OBJEXT) \
-	app-layer-ssl.$(OBJEXT) app-layer-tls-handshake.$(OBJEXT) \
-	conf.$(OBJEXT) conf-yaml-loader.$(OBJEXT) counters.$(OBJEXT) \
-	data-queue.$(OBJEXT) decode.$(OBJEXT) \
+	app-layer-smtp.$(OBJEXT) app-layer-template.$(OBJEXT) \
+	app-layer-ssh.$(OBJEXT) app-layer-ssl.$(OBJEXT) \
+	app-layer-tls-handshake.$(OBJEXT) conf.$(OBJEXT) \
+	conf-yaml-loader.$(OBJEXT) counters.$(OBJEXT) \
+	data-queue.$(OBJEXT) decode.$(OBJEXT) decode-erspan.$(OBJEXT) \
 	decode-ethernet.$(OBJEXT) decode-events.$(OBJEXT) \
 	decode-gre.$(OBJEXT) decode-icmpv4.$(OBJEXT) \
 	decode-icmpv6.$(OBJEXT) decode-ipv4.$(OBJEXT) \
@@ -121,48 +124,53 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	decode-raw.$(OBJEXT) decode-sctp.$(OBJEXT) \
 	decode-sll.$(OBJEXT) decode-tcp.$(OBJEXT) \
 	decode-teredo.$(OBJEXT) decode-udp.$(OBJEXT) \
-	decode-vlan.$(OBJEXT) defrag-config.$(OBJEXT) defrag.$(OBJEXT) \
-	defrag-hash.$(OBJEXT) defrag-queue.$(OBJEXT) \
+	decode-vlan.$(OBJEXT) decode-mpls.$(OBJEXT) \
+	decode-template.$(OBJEXT) defrag-config.$(OBJEXT) \
+	defrag.$(OBJEXT) defrag-hash.$(OBJEXT) defrag-queue.$(OBJEXT) \
 	defrag-timeout.$(OBJEXT) detect-ack.$(OBJEXT) \
 	detect-app-layer-event.$(OBJEXT) \
 	detect-app-layer-protocol.$(OBJEXT) detect-asn1.$(OBJEXT) \
+	detect-base64-data.$(OBJEXT) detect-base64-decode.$(OBJEXT) \
 	detect-byte-extract.$(OBJEXT) detect-bytejump.$(OBJEXT) \
 	detect-bytetest.$(OBJEXT) detect.$(OBJEXT) \
-	detect-simd.$(OBJEXT) detect-classtype.$(OBJEXT) \
-	detect-content.$(OBJEXT) detect-csum.$(OBJEXT) \
-	detect-dce-iface.$(OBJEXT) detect-dce-opnum.$(OBJEXT) \
-	detect-dce-stub-data.$(OBJEXT) detect-depth.$(OBJEXT) \
-	detect-detection-filter.$(OBJEXT) detect-distance.$(OBJEXT) \
-	detect-dns-query.$(OBJEXT) detect-dsize.$(OBJEXT) \
-	detect-engine-address.$(OBJEXT) \
+	detect-classtype.$(OBJEXT) detect-content.$(OBJEXT) \
+	detect-csum.$(OBJEXT) detect-dce-iface.$(OBJEXT) \
+	detect-dce-opnum.$(OBJEXT) detect-dce-stub-data.$(OBJEXT) \
+	detect-depth.$(OBJEXT) detect-detection-filter.$(OBJEXT) \
+	detect-distance.$(OBJEXT) detect-dns-query.$(OBJEXT) \
+	detect-dsize.$(OBJEXT) detect-engine-address.$(OBJEXT) \
 	detect-engine-address-ipv4.$(OBJEXT) \
 	detect-engine-address-ipv6.$(OBJEXT) \
 	detect-engine-alert.$(OBJEXT) detect-engine-analyzer.$(OBJEXT) \
 	detect-engine-apt-event.$(OBJEXT) detect-engine.$(OBJEXT) \
 	detect-engine-content-inspection.$(OBJEXT) \
 	detect-engine-dcepayload.$(OBJEXT) detect-engine-dns.$(OBJEXT) \
-	detect-engine-event.$(OBJEXT) detect-engine-file.$(OBJEXT) \
+	detect-engine-modbus.$(OBJEXT) detect-engine-event.$(OBJEXT) \
+	detect-engine-file.$(OBJEXT) \
+	detect-engine-filedata-smtp.$(OBJEXT) \
 	detect-engine-hcbd.$(OBJEXT) detect-engine-hcd.$(OBJEXT) \
 	detect-engine-hhd.$(OBJEXT) detect-engine-hhhd.$(OBJEXT) \
 	detect-engine-hmd.$(OBJEXT) detect-engine-hrhd.$(OBJEXT) \
 	detect-engine-hrhhd.$(OBJEXT) detect-engine-hrud.$(OBJEXT) \
-	detect-engine-hsbd.$(OBJEXT) detect-engine-hscd.$(OBJEXT) \
-	detect-engine-hsmd.$(OBJEXT) detect-engine-hua.$(OBJEXT) \
-	detect-engine-iponly.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
+	detect-engine-hrl.$(OBJEXT) detect-engine-hsbd.$(OBJEXT) \
+	detect-engine-hscd.$(OBJEXT) detect-engine-hsmd.$(OBJEXT) \
+	detect-engine-hua.$(OBJEXT) detect-engine-iponly.$(OBJEXT) \
+	detect-engine-loader.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
 	detect-engine-payload.$(OBJEXT) detect-engine-port.$(OBJEXT) \
 	detect-engine-proto.$(OBJEXT) detect-engine-siggroup.$(OBJEXT) \
 	detect-engine-sigorder.$(OBJEXT) detect-engine-state.$(OBJEXT) \
-	detect-engine-tag.$(OBJEXT) detect-engine-threshold.$(OBJEXT) \
-	detect-engine-uri.$(OBJEXT) detect-fast-pattern.$(OBJEXT) \
-	detect-file-data.$(OBJEXT) detect-fileext.$(OBJEXT) \
-	detect-filemagic.$(OBJEXT) detect-filemd5.$(OBJEXT) \
-	detect-filename.$(OBJEXT) detect-filesize.$(OBJEXT) \
-	detect-filestore.$(OBJEXT) detect-flags.$(OBJEXT) \
-	detect-flowbits.$(OBJEXT) detect-flow.$(OBJEXT) \
-	detect-flowint.$(OBJEXT) detect-flowvar.$(OBJEXT) \
-	detect-fragbits.$(OBJEXT) detect-fragoffset.$(OBJEXT) \
-	detect-ftpbounce.$(OBJEXT) detect-geoip.$(OBJEXT) \
-	detect-gid.$(OBJEXT) detect-http-client-body.$(OBJEXT) \
+	detect-engine-tag.$(OBJEXT) detect-engine-template.$(OBJEXT) \
+	detect-engine-threshold.$(OBJEXT) detect-engine-uri.$(OBJEXT) \
+	detect-fast-pattern.$(OBJEXT) detect-file-data.$(OBJEXT) \
+	detect-fileext.$(OBJEXT) detect-filemagic.$(OBJEXT) \
+	detect-filemd5.$(OBJEXT) detect-filename.$(OBJEXT) \
+	detect-filesize.$(OBJEXT) detect-filestore.$(OBJEXT) \
+	detect-flags.$(OBJEXT) detect-flowbits.$(OBJEXT) \
+	detect-flow.$(OBJEXT) detect-flowint.$(OBJEXT) \
+	detect-flowvar.$(OBJEXT) detect-fragbits.$(OBJEXT) \
+	detect-fragoffset.$(OBJEXT) detect-ftpbounce.$(OBJEXT) \
+	detect-geoip.$(OBJEXT) detect-gid.$(OBJEXT) \
+	detect-hostbits.$(OBJEXT) detect-http-client-body.$(OBJEXT) \
 	detect-http-cookie.$(OBJEXT) detect-http-header.$(OBJEXT) \
 	detect-http-hh.$(OBJEXT) detect-http-hrh.$(OBJEXT) \
 	detect-http-method.$(OBJEXT) detect-http-raw-header.$(OBJEXT) \
@@ -175,7 +183,7 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-ipopts.$(OBJEXT) detect-ipproto.$(OBJEXT) \
 	detect-iprep.$(OBJEXT) detect-isdataat.$(OBJEXT) \
 	detect-itype.$(OBJEXT) detect-l3proto.$(OBJEXT) \
-	detect-luajit.$(OBJEXT) detect-luajit-extensions.$(OBJEXT) \
+	detect-lua.$(OBJEXT) detect-lua-extensions.$(OBJEXT) \
 	detect-mark.$(OBJEXT) detect-metadata.$(OBJEXT) \
 	detect-msg.$(OBJEXT) detect-noalert.$(OBJEXT) \
 	detect-nocase.$(OBJEXT) detect-offset.$(OBJEXT) \
@@ -189,37 +197,48 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-ssh-software-version.$(OBJEXT) \
 	detect-ssl-state.$(OBJEXT) detect-ssl-version.$(OBJEXT) \
 	detect-stream_size.$(OBJEXT) detect-tag.$(OBJEXT) \
+	detect-template.$(OBJEXT) detect-template-buffer.$(OBJEXT) \
 	detect-threshold.$(OBJEXT) detect-tls.$(OBJEXT) \
 	detect-tls-version.$(OBJEXT) detect-tos.$(OBJEXT) \
 	detect-ttl.$(OBJEXT) detect-uricontent.$(OBJEXT) \
 	detect-urilen.$(OBJEXT) detect-window.$(OBJEXT) \
-	detect-within.$(OBJEXT) flow-bit.$(OBJEXT) flow.$(OBJEXT) \
+	detect-within.$(OBJEXT) detect-modbus.$(OBJEXT) \
+	detect-xbits.$(OBJEXT) flow-bit.$(OBJEXT) flow.$(OBJEXT) \
 	flow-hash.$(OBJEXT) flow-manager.$(OBJEXT) \
 	flow-queue.$(OBJEXT) flow-storage.$(OBJEXT) \
 	flow-timeout.$(OBJEXT) flow-util.$(OBJEXT) flow-var.$(OBJEXT) \
-	host.$(OBJEXT) host-queue.$(OBJEXT) host-storage.$(OBJEXT) \
-	host-timeout.$(OBJEXT) log-dnslog.$(OBJEXT) \
-	log-droplog.$(OBJEXT) log-file.$(OBJEXT) \
+	host.$(OBJEXT) host-bit.$(OBJEXT) host-queue.$(OBJEXT) \
+	host-storage.$(OBJEXT) host-timeout.$(OBJEXT) ippair.$(OBJEXT) \
+	ippair-bit.$(OBJEXT) ippair-queue.$(OBJEXT) \
+	ippair-storage.$(OBJEXT) ippair-timeout.$(OBJEXT) \
+	log-dnslog.$(OBJEXT) log-droplog.$(OBJEXT) log-file.$(OBJEXT) \
 	log-filestore.$(OBJEXT) log-httplog.$(OBJEXT) \
-	log-pcap.$(OBJEXT) log-tlslog.$(OBJEXT) output.$(OBJEXT) \
+	log-pcap.$(OBJEXT) log-stats.$(OBJEXT) log-tcp-data.$(OBJEXT) \
+	log-tlslog.$(OBJEXT) log-tlsstore.$(OBJEXT) output.$(OBJEXT) \
 	output-file.$(OBJEXT) output-filedata.$(OBJEXT) \
-	output-json-alert.$(OBJEXT) output-json-dns.$(OBJEXT) \
-	output-json-drop.$(OBJEXT) output-json-file.$(OBJEXT) \
-	output-json-http.$(OBJEXT) output-json-ssh.$(OBJEXT) \
-	output-json-tls.$(OBJEXT) output-packet.$(OBJEXT) \
+	output-flow.$(OBJEXT) output-json-alert.$(OBJEXT) \
+	output-json-dns.$(OBJEXT) output-json-drop.$(OBJEXT) \
+	output-json-email-common.$(OBJEXT) output-json-file.$(OBJEXT) \
+	output-json-flow.$(OBJEXT) output-json-netflow.$(OBJEXT) \
+	output-json-http.$(OBJEXT) output-json-smtp.$(OBJEXT) \
+	output-json-ssh.$(OBJEXT) output-json-stats.$(OBJEXT) \
+	output-json-tls.$(OBJEXT) output-json-template.$(OBJEXT) \
+	output-lua.$(OBJEXT) output-packet.$(OBJEXT) \
+	output-stats.$(OBJEXT) output-streaming.$(OBJEXT) \
 	output-tx.$(OBJEXT) output-json.$(OBJEXT) \
 	packet-queue.$(OBJEXT) pkt-var.$(OBJEXT) reputation.$(OBJEXT) \
 	respond-reject.$(OBJEXT) respond-reject-libnet11.$(OBJEXT) \
 	runmode-af-packet.$(OBJEXT) runmode-erf-dag.$(OBJEXT) \
 	runmode-erf-file.$(OBJEXT) runmode-ipfw.$(OBJEXT) \
-	runmode-napatech.$(OBJEXT) runmode-nfq.$(OBJEXT) \
-	runmode-nflog.$(OBJEXT) runmode-pcap.$(OBJEXT) \
-	runmode-pcap-file.$(OBJEXT) runmode-pfring.$(OBJEXT) \
-	runmode-unittests.$(OBJEXT) runmode-unix-socket.$(OBJEXT) \
-	runmode-tile.$(OBJEXT) runmodes.$(OBJEXT) \
-	source-af-packet.$(OBJEXT) source-erf-dag.$(OBJEXT) \
-	source-erf-file.$(OBJEXT) source-ipfw.$(OBJEXT) \
-	source-mpipe.$(OBJEXT) source-napatech.$(OBJEXT) \
+	runmode-napatech.$(OBJEXT) runmode-netmap.$(OBJEXT) \
+	runmode-nfq.$(OBJEXT) runmode-nflog.$(OBJEXT) \
+	runmode-pcap.$(OBJEXT) runmode-pcap-file.$(OBJEXT) \
+	runmode-pfring.$(OBJEXT) runmode-unittests.$(OBJEXT) \
+	runmode-unix-socket.$(OBJEXT) runmode-tile.$(OBJEXT) \
+	runmodes.$(OBJEXT) source-af-packet.$(OBJEXT) \
+	source-erf-dag.$(OBJEXT) source-erf-file.$(OBJEXT) \
+	source-ipfw.$(OBJEXT) source-mpipe.$(OBJEXT) \
+	source-napatech.$(OBJEXT) source-netmap.$(OBJEXT) \
 	source-nfq.$(OBJEXT) source-nflog.$(OBJEXT) \
 	source-pcap.$(OBJEXT) source-pcap-file.$(OBJEXT) \
 	source-pfring.$(OBJEXT) stream.$(OBJEXT) stream-tcp.$(OBJEXT) \
@@ -231,32 +250,36 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	tmqh-simple.$(OBJEXT) tm-queuehandlers.$(OBJEXT) \
 	tm-queues.$(OBJEXT) tm-threads.$(OBJEXT) \
 	unix-manager.$(OBJEXT) util-action.$(OBJEXT) \
-	util-atomic.$(OBJEXT) util-bloomfilter-counting.$(OBJEXT) \
-	util-bloomfilter.$(OBJEXT) util-buffer.$(OBJEXT) \
-	util-byte.$(OBJEXT) util-checksum.$(OBJEXT) \
-	util-cidr.$(OBJEXT) util-classification-config.$(OBJEXT) \
-	util-conf.$(OBJEXT) util-coredump-config.$(OBJEXT) \
-	util-cpu.$(OBJEXT) util-crypt.$(OBJEXT) util-cuda.$(OBJEXT) \
+	util-atomic.$(OBJEXT) util-base64.$(OBJEXT) \
+	util-bloomfilter-counting.$(OBJEXT) util-bloomfilter.$(OBJEXT) \
+	util-buffer.$(OBJEXT) util-byte.$(OBJEXT) \
+	util-checksum.$(OBJEXT) util-cidr.$(OBJEXT) \
+	util-classification-config.$(OBJEXT) util-conf.$(OBJEXT) \
+	util-coredump-config.$(OBJEXT) util-cpu.$(OBJEXT) \
+	util-crypt.$(OBJEXT) util-cuda.$(OBJEXT) \
 	util-cuda-buffer.$(OBJEXT) util-cuda-handlers.$(OBJEXT) \
 	util-cuda-vars.$(OBJEXT) util-daemon.$(OBJEXT) \
 	util-debug.$(OBJEXT) util-debug-filters.$(OBJEXT) \
 	util-decode-asn1.$(OBJEXT) util-decode-der.$(OBJEXT) \
-	util-decode-der-get.$(OBJEXT) util-device.$(OBJEXT) \
-	util-enum.$(OBJEXT) util-error.$(OBJEXT) util-file.$(OBJEXT) \
-	util-fix_checksum.$(OBJEXT) util-fmemopen.$(OBJEXT) \
-	util-hash.$(OBJEXT) util-hashlist.$(OBJEXT) \
-	util-hash-lookup3.$(OBJEXT) util-host-os-info.$(OBJEXT) \
-	util-host-info.$(OBJEXT) util-ioctl.$(OBJEXT) \
-	util-ip.$(OBJEXT) util-logopenfile.$(OBJEXT) \
-	util-logopenfile-tile.$(OBJEXT) util-magic.$(OBJEXT) \
-	util-memcmp.$(OBJEXT) util-memrchr.$(OBJEXT) \
-	util-misc.$(OBJEXT) util-mpm-ac-bs.$(OBJEXT) \
-	util-mpm-ac.$(OBJEXT) util-mpm-ac-gfbs.$(OBJEXT) \
-	util-mpm-ac-tile.$(OBJEXT) util-mpm-ac-tile-small.$(OBJEXT) \
-	util-mpm-b2gc.$(OBJEXT) util-mpm-b2g.$(OBJEXT) \
-	util-mpm-b2gm.$(OBJEXT) util-mpm-b3g.$(OBJEXT) \
-	util-mpm.$(OBJEXT) util-mpm-wumanber.$(OBJEXT) \
-	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-decode-der-get.$(OBJEXT) util-decode-mime.$(OBJEXT) \
+	util-device.$(OBJEXT) util-enum.$(OBJEXT) util-error.$(OBJEXT) \
+	util-file.$(OBJEXT) util-fix_checksum.$(OBJEXT) \
+	util-fmemopen.$(OBJEXT) util-hash.$(OBJEXT) \
+	util-hashlist.$(OBJEXT) util-hash-lookup3.$(OBJEXT) \
+	util-host-os-info.$(OBJEXT) util-host-info.$(OBJEXT) \
+	util-ioctl.$(OBJEXT) util-ip.$(OBJEXT) \
+	util-logopenfile.$(OBJEXT) util-logopenfile-tile.$(OBJEXT) \
+	util-lua.$(OBJEXT) util-lua-common.$(OBJEXT) \
+	util-lua-dns.$(OBJEXT) util-lua-http.$(OBJEXT) \
+	util-lua-tls.$(OBJEXT) util-lua-ssh.$(OBJEXT) \
+	util-magic.$(OBJEXT) util-memcmp.$(OBJEXT) \
+	util-memrchr.$(OBJEXT) util-misc.$(OBJEXT) \
+	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
+	util-mpm-ac-gfbs.$(OBJEXT) util-mpm-ac-tile.$(OBJEXT) \
+	util-mpm-ac-tile-small.$(OBJEXT) util-mpm-b2g.$(OBJEXT) \
+	util-mpm-b3g.$(OBJEXT) util-mpm.$(OBJEXT) \
+	util-mpm-wumanber.$(OBJEXT) util-path.$(OBJEXT) \
+	util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
 	util-pool-thread.$(OBJEXT) util-print.$(OBJEXT) \
 	util-privs.$(OBJEXT) util-profiling.$(OBJEXT) \
 	util-profiling-locks.$(OBJEXT) util-profiling-rules.$(OBJEXT) \
@@ -357,6 +380,10 @@ AWK = @AWK@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
+CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
+CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
+CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
 CPP = @CPP@
 CPPFLAGS = @CPPFLAGS@
 CYGPATH_W = @CYGPATH_W@
@@ -371,6 +398,7 @@ ECHO_T = @ECHO_T@
 EGREP = @EGREP@
 EXEEXT = @EXEEXT@
 FGREP = @FGREP@
+GCC_CFLAGS = @GCC_CFLAGS@
 GREP = @GREP@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
@@ -418,6 +446,7 @@ NMEDIT = @NMEDIT@
 NVCC = @NVCC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
+OPTIMIZATION_CFLAGS = @OPTIMIZATION_CFLAGS@
 OTOOL = @OTOOL@
 OTOOL64 = @OTOOL64@
 PACKAGE = @PACKAGE@
@@ -428,6 +457,7 @@ PACKAGE_TARNAME = @PACKAGE_TARNAME@
 PACKAGE_URL = @PACKAGE_URL@
 PACKAGE_VERSION = @PACKAGE_VERSION@
 PATH_SEPARATOR = @PATH_SEPARATOR@
+PCAP_CFLAGS = @PCAP_CFLAGS@
 PKG_CONFIG = @PKG_CONFIG@
 PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
 PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
@@ -437,6 +467,8 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+SECCFLAGS = @SECCFLAGS@
+SECLDFLAGS = @SECLDFLAGS@
 SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
@@ -485,6 +517,8 @@ infodir = @infodir@
 install_sh = @install_sh@
 libdir = @libdir@
 libexecdir = @libexecdir@
+libhtp_CFLAGS = @libhtp_CFLAGS@
+libhtp_LIBS = @libhtp_LIBS@
 libnspr_CFLAGS = @libnspr_CFLAGS@
 libnspr_LIBS = @libnspr_LIBS@
 libnss_CFLAGS = @libnss_CFLAGS@
@@ -521,7 +555,6 @@ noinst_HEADERS = action-globals.h \
 suricata_SOURCES = \
 alert-debuglog.c alert-debuglog.h \
 alert-fastlog.c alert-fastlog.h \
-alert-pcapinfo.c alert-pcapinfo.h \
 alert-prelude.c alert-prelude.h \
 alert-syslog.c alert-syslog.h \
 alert-unified2-alert.c alert-unified2-alert.h \
@@ -539,11 +572,14 @@ app-layer-htp.c app-layer-htp.h \
 app-layer-htp-file.c app-layer-htp-file.h \
 app-layer-htp-libhtp.c app-layer-htp-libhtp.h \
 app-layer-htp-mem.c app-layer-htp-mem.h \
+app-layer-htp-xff.c app-layer-htp-xff.h \
+app-layer-modbus.c app-layer-modbus.h \
 app-layer-parser.c app-layer-parser.h \
 app-layer-protos.c app-layer-protos.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smtp.c app-layer-smtp.h \
+app-layer-template.c app-layer-template.h \
 app-layer-ssh.c app-layer-ssh.h \
 app-layer-ssl.c app-layer-ssl.h \
 app-layer-tls-handshake.c app-layer-tls-handshake.h \
@@ -552,6 +588,7 @@ conf-yaml-loader.c conf-yaml-loader.h \
 counters.c counters.h \
 data-queue.c data-queue.h \
 decode.c decode.h \
+decode-erspan.c decode-erspan.h \
 decode-ethernet.c decode-ethernet.h \
 decode-events.c decode-events.h \
 decode-gre.c decode-gre.h \
@@ -569,6 +606,8 @@ decode-tcp.c decode-tcp.h \
 decode-teredo.c decode-teredo.h \
 decode-udp.c decode-udp.h \
 decode-vlan.c decode-vlan.h \
+decode-mpls.c decode-mpls.h \
+decode-template.c decode-template.h \
 defrag-config.c defrag-config.h \
 defrag.c defrag.h \
 defrag-hash.c defrag-hash.h \
@@ -578,11 +617,12 @@ detect-ack.c detect-ack.h \
 detect-app-layer-event.c detect-app-layer-event.h \
 detect-app-layer-protocol.c detect-app-layer-protocol.h \
 detect-asn1.c detect-asn1.h \
+detect-base64-data.c detect-base64-data.h \
+detect-base64-decode.c detect-base64-decode.h \
 detect-byte-extract.c detect-byte-extract.h \
 detect-bytejump.c detect-bytejump.h \
 detect-bytetest.c detect-bytetest.h \
 detect.c detect.h \
-detect-simd.c \
 detect-classtype.c detect-classtype.h \
 detect-content.c detect-content.h \
 detect-csum.c detect-csum.h \
@@ -604,8 +644,10 @@ detect-engine.c detect-engine.h \
 detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-dns.c detect-engine-dns.h \
+detect-engine-modbus.c detect-engine-modbus.h \
 detect-engine-event.c detect-engine-event.h \
 detect-engine-file.c detect-engine-file.h \
+detect-engine-filedata-smtp.c detect-engine-filedata-smtp.h \
 detect-engine-hcbd.c detect-engine-hcbd.h \
 detect-engine-hcd.c detect-engine-hcd.h \
 detect-engine-hhd.c detect-engine-hhd.h \
@@ -614,11 +656,13 @@ detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hrhd.c detect-engine-hrhd.h \
 detect-engine-hrhhd.c detect-engine-hrhhd.h \
 detect-engine-hrud.c detect-engine-hrud.h \
+detect-engine-hrl.c detect-engine-hrl.h \
 detect-engine-hsbd.c detect-engine-hsbd.h \
 detect-engine-hscd.c detect-engine-hscd.h \
 detect-engine-hsmd.c detect-engine-hsmd.h \
 detect-engine-hua.c detect-engine-hua.h \
 detect-engine-iponly.c detect-engine-iponly.h \
+detect-engine-loader.c detect-engine-loader.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-port.c detect-engine-port.h \
@@ -627,6 +671,7 @@ detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine-state.c detect-engine-state.h \
 detect-engine-tag.c detect-engine-tag.h \
+detect-engine-template.c detect-engine-template.h \
 detect-engine-threshold.c detect-engine-threshold.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-fast-pattern.c detect-fast-pattern.h \
@@ -647,6 +692,7 @@ detect-fragoffset.c detect-fragoffset.h \
 detect-ftpbounce.c detect-ftpbounce.h \
 detect-geoip.c detect-geoip.h \
 detect-gid.c detect-gid.h \
+detect-hostbits.c detect-hostbits.h \
 detect-http-client-body.c detect-http-client-body.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-header.c detect-http-header.h \
@@ -670,8 +716,8 @@ detect-iprep.c detect-iprep.h \
 detect-isdataat.c detect-isdataat.h \
 detect-itype.c detect-itype.h \
 detect-l3proto.c detect-l3proto.h \
-detect-luajit.c detect-luajit.h \
-detect-luajit-extensions.c detect-luajit-extensions.h \
+detect-lua.c detect-lua.h \
+detect-lua-extensions.c detect-lua-extensions.h \
 detect-mark.c detect-mark.h \
 detect-metadata.c detect-metadata.h \
 detect-msg.c detect-msg.h \
@@ -697,6 +743,8 @@ detect-ssl-state.c detect-ssl-state.h \
 detect-ssl-version.c detect-ssl-version.h \
 detect-stream_size.c detect-stream_size.h \
 detect-tag.c detect-tag.h \
+detect-template.c detect-template.h \
+detect-template-buffer.c detect-template-buffer.h \
 detect-threshold.c detect-threshold.h \
 detect-tls.c detect-tls.h \
 detect-tls-version.c detect-tls-version.h \
@@ -706,6 +754,8 @@ detect-uricontent.c detect-uricontent.h \
 detect-urilen.c detect-urilen.h \
 detect-window.c detect-window.h \
 detect-within.c detect-within.h \
+detect-modbus.c detect-modbus.h \
+detect-xbits.c detect-xbits.h \
 flow-bit.c flow-bit.h \
 flow.c flow.h \
 flow-hash.c flow-hash.h \
@@ -716,27 +766,46 @@ flow-timeout.c flow-timeout.h \
 flow-util.c flow-util.h \
 flow-var.c flow-var.h \
 host.c host.h \
+host-bit.c host-bit.h \
 host-queue.c host-queue.h \
 host-storage.c host-storage.h \
 host-timeout.c host-timeout.h \
+ippair.c ippair.h \
+ippair-bit.c ippair-bit.h \
+ippair-queue.c ippair-queue.h \
+ippair-storage.c ippair-storage.h \
+ippair-timeout.c ippair-timeout.h \
 log-dnslog.c log-dnslog.h \
 log-droplog.c log-droplog.h \
 log-file.c log-file.h \
 log-filestore.c log-filestore.h \
 log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
+log-stats.c log-stats.h \
+log-tcp-data.c log-tcp-data.h \
 log-tlslog.c log-tlslog.h \
+log-tlsstore.c log-tlsstore.h \
 output.c output.h \
 output-file.c output-file.h \
 output-filedata.c output-filedata.h \
+output-flow.c output-flow.h \
 output-json-alert.c output-json-alert.h \
 output-json-dns.c output-json-dns.h \
 output-json-drop.c output-json-drop.h \
+output-json-email-common.c output-json-email-common.h \
 output-json-file.c output-json-file.h \
+output-json-flow.c output-json-flow.h \
+output-json-netflow.c output-json-netflow.h \
 output-json-http.c output-json-http.h \
+output-json-smtp.c output-json-smtp.h \
 output-json-ssh.c output-json-ssh.h \
+output-json-stats.c output-json-stats.h \
 output-json-tls.c output-json-tls.h \
+output-json-template.c output-json-template.h \
+output-lua.c output-lua.h \
 output-packet.c output-packet.h \
+output-stats.c output-stats.h \
+output-streaming.c output-streaming.h \
 output-tx.c output-tx.h \
 output-json.c output-json.h \
 packet-queue.c packet-queue.h \
@@ -749,6 +818,7 @@ runmode-erf-dag.c runmode-erf-dag.h \
 runmode-erf-file.c runmode-erf-file.h \
 runmode-ipfw.c runmode-ipfw.h \
 runmode-napatech.c runmode-napatech.h \
+runmode-netmap.c runmode-netmap.h \
 runmode-nfq.c runmode-nfq.h \
 runmode-nflog.c runmode-nflog.h \
 runmode-pcap.c runmode-pcap.h \
@@ -764,6 +834,7 @@ source-erf-file.c source-erf-file.h \
 source-ipfw.c source-ipfw.h \
 source-mpipe.c source-mpipe.h \
 source-napatech.c source-napatech.h \
+source-netmap.c source-netmap.h \
 source-nfq.c source-nfq.h \
 source-nflog.c source-nflog.h \
 source-pcap.c source-pcap.h \
@@ -790,6 +861,7 @@ tm-threads.c tm-threads.h tm-threads-common.h \
 unix-manager.c unix-manager.h \
 util-action.c util-action.h \
 util-atomic.c util-atomic.h \
+util-base64.c util-base64.h \
 util-bloomfilter-counting.c util-bloomfilter-counting.h \
 util-bloomfilter.c util-bloomfilter.h \
 util-buffer.c util-buffer.h \
@@ -811,6 +883,7 @@ util-debug-filters.c util-debug-filters.h \
 util-decode-asn1.c util-decode-asn1.h \
 util-decode-der.c util-decode-der.h \
 util-decode-der-get.c util-decode-der-get.h \
+util-decode-mime.c util-decode-mime.h \
 util-device.c util-device.h \
 util-enum.c util-enum.h \
 util-error.c util-error.h \
@@ -826,6 +899,12 @@ util-ioctl.h util-ioctl.c \
 util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
 util-logopenfile-tile.h util-logopenfile-tile.c \
+util-lua.c util-lua.h \
+util-lua-common.c util-lua-common.h \
+util-lua-dns.c util-lua-dns.h \
+util-lua-http.c util-lua-http.h \
+util-lua-tls.c util-lua-tls.h \
+util-lua-ssh.c util-lua-ssh.h \
 util-magic.c util-magic.h \
 util-memcmp.c util-memcmp.h \
 util-memcpy.h \
@@ -837,9 +916,7 @@ util-mpm-ac.c util-mpm-ac.h \
 util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
 util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
-util-mpm-b2gc.c util-mpm-b2gc.h \
 util-mpm-b2g.c util-mpm-b2g.h \
-util-mpm-b2gm.c util-mpm-b2gm.h \
 util-mpm-b3g.c util-mpm-b3g.h \
 util-mpm.c util-mpm.h \
 util-mpm-wumanber.c util-mpm-wumanber.h \
@@ -919,8 +996,12 @@ suricata_LDADD = $(HTP_LDADD)
 @BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_35)
 @BUILD_CUDA_TRUE@CLEANFILES = $(PTXS) cuda-ptxdump.h
 
-#suricata_CFLAGS = -Wall -fno-strict-aliasing 
-AM_CFLAGS = -DLOCAL_STATE_DIR=\"$(localstatedir)\"
+# default CFLAGS
+AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS} \
+	${SECCFLAGS} ${PCAP_CFLAGS} -Wall -Wno-unused-parameter \
+	-std=gnu99 -DLOCAL_STATE_DIR=\"$(localstatedir)\" \
+	$(am__append_1)
+AM_LDFLAGS = ${SECLDFLAGS}
 all: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
@@ -1018,7 +1099,6 @@ distclean-compile:
 
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-debuglog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-fastlog.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-pcapinfo.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-prelude.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-syslog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/alert-unified2-alert.Po@am__quote@
@@ -1034,7 +1114,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp-libhtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp-mem.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp-xff.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-modbus.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-parser.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-protos.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smb.Po@am__quote@
@@ -1042,12 +1124,14 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-smtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ssh.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ssl.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-tls-handshake.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf-yaml-loader.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/counters.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/data-queue.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-erspan.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ethernet.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-events.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-gre.Po@am__quote@
@@ -1055,6 +1139,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-icmpv6.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ipv4.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ipv6.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-mpls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-null.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ppp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-pppoe.Po@am__quote@
@@ -1062,6 +1147,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-sctp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-sll.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-tcp.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-teredo.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-udp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-vlan.Po@am__quote@
@@ -1075,6 +1161,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-app-layer-event.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-app-layer-protocol.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-asn1.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-base64-data.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-base64-decode.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-byte-extract.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytejump.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytetest.Po@am__quote@
@@ -1100,6 +1188,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-dns.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-event.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-file.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-filedata-smtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hcbd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hcd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hhd.Po@am__quote@
@@ -1107,12 +1196,15 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hmd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhhd.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrud.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hsbd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hscd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hsmd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hua.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-iponly.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-loader.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-modbus.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-mpm.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-payload.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-port.Po@am__quote@
@@ -1121,6 +1213,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-sigorder.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-state.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-tag.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-threshold.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-uri.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine.Po@am__quote@
@@ -1142,6 +1235,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ftpbounce.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-geoip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-gid.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-hostbits.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-client-body.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-cookie.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-header.Po@am__quote@
@@ -1165,10 +1259,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-isdataat.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-itype.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-l3proto.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-luajit-extensions.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-luajit.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-lua-extensions.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-lua.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-mark.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-metadata.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-modbus.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-msg.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-noalert.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-nocase.Po@am__quote@
@@ -1186,13 +1281,14 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-sameip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-seq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-sid.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-simd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssh-proto-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssh-software-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssl-state.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-ssl-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-stream_size.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tag.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-template-buffer.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-threshold.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls.Po@am__quote@
@@ -1202,6 +1298,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-urilen.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-window.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-within.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-xbits.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flow-bit.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flow-hash.Po@am__quote@
@@ -1212,28 +1309,47 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flow-util.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flow-var.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/flow.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/host-bit.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/host-queue.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/host-storage.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/host-timeout.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/host.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ippair-bit.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ippair-queue.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ippair-storage.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ippair-timeout.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/ippair.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-dnslog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-droplog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-filestore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-httplog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-pcap.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-stats.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-tcp-data.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-tlslog.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/log-tlsstore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-filedata.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-flow.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-alert.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-dns.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-drop.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-email-common.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-file.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-flow.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-http.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-netflow.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-smtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-ssh.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-stats.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-lua.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-packet.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-stats.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-streaming.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-tx.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/packet-queue.Po@am__quote@
@@ -1246,6 +1362,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-erf-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-ipfw.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-napatech.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-netmap.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-nflog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-nfq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/runmode-pcap-file.Po@am__quote@
@@ -1261,6 +1378,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-ipfw.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-mpipe.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-napatech.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-netmap.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-nflog.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-nfq.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/source-pcap-file.Po@am__quote@
@@ -1287,6 +1405,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-action.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-affinity.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-atomic.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-base64.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-bloomfilter-counting.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-bloomfilter.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-buffer.Po@am__quote@
@@ -1308,6 +1427,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-asn1.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-der-get.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-der.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-mime.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-device.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-enum.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-error.Po@am__quote@
@@ -1323,6 +1443,12 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-ip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-logopenfile-tile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-logopenfile.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-common.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-dns.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-http.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-ssh.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-tls.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-magic.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-memcmp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-memrchr.Po@am__quote@
@@ -1333,8 +1459,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-ac-tile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-ac.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b2g.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b2gc.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b2gm.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b3g.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-wumanber.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm.Po@am__quote@

@@ -70,7 +70,9 @@ typedef struct LogDnsLogThread_ {
     MemBuffer *buffer;
 } LogDnsLogThread;
 
-static void LogQuery(LogDnsLogThread *aft, json_t *js, DNSTransaction *tx, DNSQueryEntry *entry) {
+static void LogQuery(LogDnsLogThread *aft, json_t *js, DNSTransaction *tx,
+        uint64_t tx_id, DNSQueryEntry *entry)
+{
     MemBuffer *buffer = (MemBuffer *)aft->buffer;
 
     SCLogDebug("got a DNS request and now logging !!");
@@ -102,13 +104,17 @@ static void LogQuery(LogDnsLogThread *aft, json_t *js, DNSTransaction *tx, DNSQu
     DNSCreateTypeString(entry->type, record, sizeof(record));
     json_object_set_new(djs, "rrtype", json_string(record));
 
+    /* tx id (tx counter) */
+    json_object_set_new(djs, "tx_id", json_integer(tx_id));
+
     /* dns */
     json_object_set_new(js, "dns", djs);
     OutputJSONBuffer(js, aft->dnslog_ctx->file_ctx, buffer);
     json_object_del(js, "dns");
 }
 
-static void OutputAnswer(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, DNSAnswerEntry *entry) {
+static void OutputAnswer(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, DNSAnswerEntry *entry)
+{
     MemBuffer *buffer = (MemBuffer *)aft->buffer;
     json_t *js = json_object();
     if (js == NULL)
@@ -120,6 +126,12 @@ static void OutputAnswer(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, 
     /* id */
     json_object_set_new(js, "id", json_integer(tx->tx_id));
 
+    /* rcode */
+    char rcode[16] = "";
+    DNSCreateRcodeString(tx->rcode, rcode, sizeof(rcode));
+    json_object_set_new(js, "rcode", json_string(rcode));
+
+    /* we are logging an answer RR */
     if (entry != NULL) {
         /* query */
         if (entry->fqdn_len > 0) {
@@ -151,7 +163,8 @@ static void OutputAnswer(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, 
             json_object_set_new(js, "rdata", json_string(a));
         } else if (entry->data_len == 0) {
             json_object_set_new(js, "rdata", json_string(""));
-        } else if (entry->type == DNS_RECORD_TYPE_TXT) {
+        } else if (entry->type == DNS_RECORD_TYPE_TXT || entry->type == DNS_RECORD_TYPE_CNAME ||
+                    entry->type == DNS_RECORD_TYPE_MX || entry->type == DNS_RECORD_TYPE_PTR) {
             if (entry->data_len != 0) {
                 char buffer[256] = "";
                 uint16_t copy_len = entry->data_len < (sizeof(buffer) - 1) ?
@@ -174,12 +187,55 @@ static void OutputAnswer(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, 
     return;
 }
 
-static void LogAnswers(LogDnsLogThread *aft, json_t *js, DNSTransaction *tx) {
+static void OutputFailure(LogDnsLogThread *aft, json_t *djs, DNSTransaction *tx, DNSQueryEntry *entry)
+{
+    MemBuffer *buffer = (MemBuffer *)aft->buffer;
+    json_t *js = json_object();
+    if (js == NULL)
+        return;
+
+    /* type */
+    json_object_set_new(js, "type", json_string("answer"));
+
+    /* id */
+    json_object_set_new(js, "id", json_integer(tx->tx_id));
+
+    /* rcode */
+    char rcode[16] = "";
+    DNSCreateRcodeString(tx->rcode, rcode, sizeof(rcode));
+    json_object_set_new(js, "rcode", json_string(rcode));
+
+    /* no answer RRs, use query for rname */
+    char *c;
+    c = BytesToString((uint8_t *)((uint8_t *)entry + sizeof(DNSQueryEntry)), entry->len);
+    if (c != NULL) {
+        json_object_set_new(js, "rrname", json_string(c));
+        SCFree(c);
+    }
+
+    /* reset */
+    MemBufferReset(buffer);
+    json_object_set_new(djs, "dns", js);
+    OutputJSONBuffer(djs, aft->dnslog_ctx->file_ctx, buffer);
+    json_object_del(djs, "dns");
+
+    return;
+}
+
+static void LogAnswers(LogDnsLogThread *aft, json_t *js, DNSTransaction *tx, uint64_t tx_id)
+{
 
     SCLogDebug("got a DNS response and now logging !!");
 
-    if (tx->no_such_name) {
-        OutputAnswer(aft, js, tx, NULL);
+    /* rcode != noerror */
+    if (tx->rcode) {
+        /* Most DNS servers do not support multiple queries because
+         * the rcode in response is not per-query.  Multiple queries
+         * are likely to lead to FORMERR, so log this. */
+        DNSQueryEntry *query = NULL;
+        TAILQ_FOREACH(query, &tx->query_list, next) {
+            OutputFailure(aft, js, tx, query);
+        }
     }
 
     DNSAnswerEntry *entry = NULL;
@@ -208,7 +264,7 @@ static int JsonDnsLogger(ThreadVars *tv, void *thread_data, const Packet *p, Flo
         if (unlikely(js == NULL))
             return TM_ECODE_OK;
 
-        LogQuery(td, js, tx, query);
+        LogQuery(td, js, tx, tx_id, query);
 
         json_decref(js);
     }
@@ -217,7 +273,7 @@ static int JsonDnsLogger(ThreadVars *tv, void *thread_data, const Packet *p, Flo
     if (unlikely(js == NULL))
         return TM_ECODE_OK;
 
-    LogAnswers(td, js, tx);
+    LogAnswers(td, js, tx, tx_id);
 
     json_decref(js);
 
@@ -360,7 +416,8 @@ static OutputCtx *JsonDnsLogInitCtx(ConfNode *conf)
 
 
 #define MODULE_NAME "JsonDnsLog"
-void TmModuleJsonDnsLogRegister (void) {
+void TmModuleJsonDnsLogRegister (void)
+{
     tmm_modules[TMM_JSONDNSLOG].name = MODULE_NAME;
     tmm_modules[TMM_JSONDNSLOG].ThreadInit = LogDnsLogThreadInit;
     tmm_modules[TMM_JSONDNSLOG].ThreadDeinit = LogDnsLogThreadDeinit;

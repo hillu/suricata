@@ -50,6 +50,8 @@
 #include "detect-engine-hrhhd.h"
 #include "detect-engine-state.h"
 #include "detect-engine-tag.h"
+#include "detect-engine-modbus.h"
+#include "detect-engine-filedata-smtp.h"
 #include "detect-fast-pattern.h"
 #include "flow.h"
 #include "flow-timeout.h"
@@ -59,6 +61,9 @@
 #include "pkt-var.h"
 
 #include "host.h"
+#include "host-bit.h"
+#include "ippair.h"
+#include "ippair-bit.h"
 #include "unix-manager.h"
 
 #include "app-layer-detect-proto.h"
@@ -118,7 +123,16 @@
 void RegisterAllModules();
 void TmqhSetup (void);
 
-int RunUnittests(int list_unittests, char *regex_arg)
+/**
+ * Run or list unittests
+ *
+ * \param list_unittests If set to 1, list unittests. Run them if set to 0.
+ * \param regex_arg A regular expression to select unittests to run
+ *
+ * This function is terminal and will call exit after being called.
+ */
+
+void RunUnittests(int list_unittests, char *regex_arg)
 {
 #ifdef UNITTESTS
     /* Initializations for global vars, queues, etc (memsets, mutex init..) */
@@ -155,10 +169,14 @@ int RunUnittests(int list_unittests, char *regex_arg)
     SCProtoNameInit();
 
     TagInitCtx();
+    SCReferenceConfInit();
+    SCClassConfInit();
 
     RegisterAllModules();
 
     DetectEngineRegisterAppInspectionEngines();
+
+    HostBitInitCtx();
 
     StorageFinalize();
    /* test and initialize the unittesting subsystem */
@@ -183,19 +201,11 @@ int RunUnittests(int list_unittests, char *regex_arg)
     ByteRegisterTests();
     MpmRegisterTests();
     FlowBitRegisterTests();
-    SCPerfRegisterTests();
+    HostBitRegisterTests();
+    IPPairBitRegisterTests();
+    StatsRegisterTests();
     DecodePPPRegisterTests();
     DecodeVLANRegisterTests();
-    HTPParserRegisterTests();
-/* we are disabling the ssh parser temporarily, since we are moving away
- * from some of the archaic features we use in the app layer.  We will
- * reintroduce this parser.  Also do note that keywords that rely on
- * the ssh parser would now be disabled */
-#if 0
-    SSHParserRegisterTests();
-#endif
-    SMBParserRegisterTests();
-    FTPParserRegisterTests();
     DecodeRawRegisterTests();
     DecodePPPOERegisterTests();
     DecodeICMPV4RegisterTests();
@@ -206,11 +216,14 @@ int RunUnittests(int list_unittests, char *regex_arg)
     DecodeUDPV4RegisterTests();
     DecodeGRERegisterTests();
     DecodeAsn1RegisterTests();
+    DecodeMPLSRegisterTests();
     AppLayerProtoDetectUnittestsRegister();
     ConfRegisterTests();
     ConfYamlRegisterTests();
     TmqhFlowRegisterTests();
     FlowRegisterTests();
+    HostRegisterUnittests();
+    IPPairRegisterUnittests();
     SCSigRegisterSignatureOrderingTests();
     SCRadixRegisterTests();
     DefragRegisterTests();
@@ -248,9 +261,10 @@ int RunUnittests(int list_unittests, char *regex_arg)
     DetectEngineHttpUARegisterTests();
     DetectEngineHttpHHRegisterTests();
     DetectEngineHttpHRHRegisterTests();
+    DetectEngineInspectModbusRegisterTests();
     DetectEngineRegisterTests();
+    DetectEngineSMTPFiledataRegisterTests();
     SCLogRegisterTests();
-    SMTPParserRegisterTests();
     MagicRegisterTests();
     UtilMiscRegisterTests();
     DetectAddressTests();
@@ -262,10 +276,17 @@ int RunUnittests(int list_unittests, char *regex_arg)
     CudaBufferRegisterUnittests();
 #endif
     AppLayerUnittestsRegister();
+    MimeDecRegisterTests();
     if (list_unittests) {
         UtListTests(regex_arg);
     } else {
+        /* global packet pool */
+        extern intmax_t max_pending_packets;
+        max_pending_packets = 128;
+        PacketPoolInit();
+
         uint32_t failed = UtRunTests(regex_arg);
+        PacketPoolDestroy();
         UtCleanup();
 #ifdef __SC_CUDA_SUPPORT__
         if (PatternMatchDefaultMatcher() == MPM_AC_CUDA)

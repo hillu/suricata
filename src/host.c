@@ -29,6 +29,7 @@
 #include "util-debug.h"
 #include "host.h"
 #include "host-storage.h"
+#include "host-bit.h"
 
 #include "util-random.h"
 #include "util-misc.h"
@@ -47,29 +48,33 @@ static Host *HostGetUsedHost(void);
 /** queue with spare hosts */
 static HostQueue host_spare_q;
 
-uint32_t HostSpareQueueGetSize(void) {
+/** size of the host object. Maybe updated in HostInitConfig to include
+ *  the storage APIs additions. */
+static uint16_t g_host_size = sizeof(Host);
+
+uint32_t HostSpareQueueGetSize(void)
+{
     return HostQueueLen(&host_spare_q);
 }
 
-void HostMoveToSpare(Host *h) {
+void HostMoveToSpare(Host *h)
+{
     HostEnqueue(&host_spare_q, h);
     (void) SC_ATOMIC_SUB(host_counter, 1);
 }
 
-Host *HostAlloc(void) {
-    size_t size = sizeof(Host) + HostStorageSize();
-
-    if (!(HOST_CHECK_MEMCAP(size))) {
+Host *HostAlloc(void)
+{
+    if (!(HOST_CHECK_MEMCAP(g_host_size))) {
         return NULL;
     }
+    (void) SC_ATOMIC_ADD(host_memuse, g_host_size);
 
-    (void) SC_ATOMIC_ADD(host_memuse, size);
-
-    Host *h = SCMalloc(size);
+    Host *h = SCMalloc(g_host_size);
     if (unlikely(h == NULL))
         goto error;
 
-    memset(h, 0x00, size);
+    memset(h, 0x00, g_host_size);
 
     SCMutexInit(&h->m, NULL);
     SC_ATOMIC_INIT(h->use_cnt);
@@ -79,18 +84,20 @@ error:
     return NULL;
 }
 
-void HostFree(Host *h) {
+void HostFree(Host *h)
+{
     if (h != NULL) {
         HostClearMemory(h);
 
         SC_ATOMIC_DESTROY(h->use_cnt);
         SCMutexDestroy(&h->m);
         SCFree(h);
-        (void) SC_ATOMIC_SUB(host_memuse, (sizeof(Host) + HostStorageSize()));
+        (void) SC_ATOMIC_SUB(host_memuse, g_host_size);
     }
 }
 
-Host *HostNew(Address *a) {
+Host *HostNew(Address *a)
+{
     Host *h = HostAlloc();
     if (h == NULL)
         goto error;
@@ -104,7 +111,8 @@ error:
     return NULL;
 }
 
-void HostClearMemory(Host *h) {
+void HostClearMemory(Host *h)
+{
     if (h->iprep != NULL) {
         SCFree(h->iprep);
         h->iprep = NULL;
@@ -123,6 +131,8 @@ void HostClearMemory(Host *h) {
 void HostInitConfig(char quiet)
 {
     SCLogDebug("initializing host engine...");
+    if (HostStorageSize() > 0)
+        g_host_size = sizeof(Host) + HostStorageSize();
 
     memset(&host_config,  0, sizeof(host_config));
     //SC_ATOMIC_INIT(flow_flags);
@@ -207,11 +217,11 @@ void HostInitConfig(char quiet)
 
     /* pre allocate hosts */
     for (i = 0; i < host_config.prealloc; i++) {
-        if (!(HOST_CHECK_MEMCAP(sizeof(Host)))) {
+        if (!(HOST_CHECK_MEMCAP(g_host_size))) {
             SCLogError(SC_ERR_HOST_INIT, "preallocating hosts failed: "
                     "max host memcap reached. Memcap %"PRIu64", "
                     "Memuse %"PRIu64".", host_config.memcap,
-                    ((uint64_t)SC_ATOMIC_GET(host_memuse) + (uint64_t)sizeof(Host)));
+                    ((uint64_t)SC_ATOMIC_GET(host_memuse) + g_host_size));
             exit(EXIT_FAILURE);
         }
 
@@ -224,8 +234,8 @@ void HostInitConfig(char quiet)
     }
 
     if (quiet == FALSE) {
-        SCLogInfo("preallocated %" PRIu32 " hosts of size %" PRIuMAX "",
-                host_spare_q.len, (uintmax_t)sizeof(Host));
+        SCLogInfo("preallocated %" PRIu32 " hosts of size %" PRIu16 "",
+                host_spare_q.len, g_host_size);
         SCLogInfo("host memory usage: %llu bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(host_memuse), host_config.memcap);
     }
@@ -337,7 +347,8 @@ void HostCleanup(void)
  *  hash_rand -- set at init time
  *  source address
  */
-uint32_t HostGetKey(Address *a) {
+uint32_t HostGetKey(Address *a)
+{
     uint32_t key;
 
     if (a->family == AF_INET) {
@@ -357,7 +368,8 @@ uint32_t HostGetKey(Address *a) {
 #define CMP_HOST(h,a) \
     (CMP_ADDR(&(h)->a, (a)))
 
-static inline int HostCompare(Host *h, Address *a) {
+static inline int HostCompare(Host *h, Address *a)
+{
     return CMP_HOST(h, a);
 }
 
@@ -369,14 +381,15 @@ static inline int HostCompare(Host *h, Address *a) {
  *
  *  \retval h *LOCKED* host on succes, NULL on error.
  */
-static Host *HostGetNew(Address *a) {
+static Host *HostGetNew(Address *a)
+{
     Host *h = NULL;
 
     /* get a host from the spare queue */
     h = HostDequeue(&host_spare_q);
     if (h == NULL) {
         /* If we reached the max memcap, we get a used host */
-        if (!(HOST_CHECK_MEMCAP(sizeof(Host)))) {
+        if (!(HOST_CHECK_MEMCAP(g_host_size))) {
             /* declare state of emergency */
             //if (!(SC_ATOMIC_GET(host_flags) & HOST_EMERGENCY)) {
             //    SC_ATOMIC_OR(host_flags, HOST_EMERGENCY);
@@ -413,19 +426,28 @@ static Host *HostGetNew(Address *a) {
     return h;
 }
 
-void HostInit(Host *h, Address *a) {
+void HostInit(Host *h, Address *a)
+{
     COPY_ADDRESS(a, &h->a);
     (void) HostIncrUsecnt(h);
 }
 
-void HostRelease(Host *h) {
+void HostRelease(Host *h)
+{
     (void) HostDecrUsecnt(h);
     SCMutexUnlock(&h->m);
 }
 
-void HostLock(Host *h) {
+void HostLock(Host *h)
+{
     SCMutexLock(&h->m);
 }
+
+void HostUnlock(Host *h)
+{
+    SCMutexUnlock(&h->m);
+}
+
 
 /* HostGetHostFromHash
  *
@@ -608,7 +630,8 @@ Host *HostLookupHostFromHash (Address *a)
  *
  *  \retval h host or NULL
  */
-static Host *HostGetUsedHost(void) {
+static Host *HostGetUsedHost(void)
+{
     uint32_t idx = SC_ATOMIC_GET(host_prune_idx) % host_config.hash_size;
     uint32_t cnt = host_config.hash_size;
 
@@ -665,7 +688,8 @@ static Host *HostGetUsedHost(void) {
     return NULL;
 }
 
-void HostRegisterUnittests(void) {
+void HostRegisterUnittests(void)
+{
     RegisterHostStorageTests();
 }
 

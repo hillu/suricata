@@ -247,13 +247,12 @@ static int LogDropLogNetFilter (ThreadVars *tv, const Packet *p, void *data)
             }
             break;
         case IPPROTO_ICMP:
-        case IPPROTO_ICMPV6:
             if (PKT_IS_ICMPV4(p)) {
-                fprintf(dlt->file_ctx->fp, " TYPE=%"PRIu8" CODE=%"PRIu8
+                fprintf(dlt->file_ctx->fp, " TYPE=%"PRIu8" CODE=%"PRIu8""
                         " ID=%"PRIu16" SEQ=%"PRIu16"", ICMPV4_GET_TYPE(p),
                         ICMPV4_GET_CODE(p), ICMPV4_GET_ID(p), ICMPV4_GET_SEQ(p));
             } else if (PKT_IS_ICMPV6(p)) {
-                fprintf(dlt->file_ctx->fp, " TYPE=%"PRIu8" CODE=%"PRIu8
+                fprintf(dlt->file_ctx->fp, " TYPE=%"PRIu8" CODE=%"PRIu8""
                         " ID=%"PRIu16" SEQ=%"PRIu16"", ICMPV6_GET_TYPE(p),
                         ICMPV6_GET_CODE(p), ICMPV6_GET_ID(p), ICMPV6_GET_SEQ(p));
             }
@@ -281,7 +280,8 @@ static int LogDropLogNetFilter (ThreadVars *tv, const Packet *p, void *data)
  *
  * \retval bool TRUE or FALSE
  */
-static int LogDropCondition(ThreadVars *tv, const Packet *p) {
+static int LogDropCondition(ThreadVars *tv, const Packet *p)
+{
     if (!EngineModeIsIPS()) {
         SCLogDebug("engine is not running in inline mode, so returning");
         return FALSE;
@@ -318,7 +318,8 @@ static int LogDropCondition(ThreadVars *tv, const Packet *p) {
  *
  * \retval 0 on succes
  */
-static int LogDropLogger(ThreadVars *tv, void *thread_data, const Packet *p) {
+static int LogDropLogger(ThreadVars *tv, void *thread_data, const Packet *p)
+{
 
     int r = LogDropLogNetFilter(tv, p, thread_data);
     if (r < 0)
@@ -337,7 +338,8 @@ static int LogDropLogger(ThreadVars *tv, void *thread_data, const Packet *p) {
     return 0;
 }
 
-static void LogDropLogExitPrintStats(ThreadVars *tv, void *data) {
+static void LogDropLogExitPrintStats(ThreadVars *tv, void *data)
+{
     LogDropLogThread *dlt = (LogDropLogThread *)data;
     if (dlt == NULL) {
         return;
@@ -384,14 +386,11 @@ int LogDropLogTest01()
 
     de_ctx->flags |= DE_QUIET;
 
-    SCClassConfGenerateValidDummyClassConfigFD01();
-    SCClassConfLoadClassficationConfigFile(de_ctx);
-    SCClassConfDeleteDummyClassificationConfigFD();
+    FILE *fd = SCClassConfGenerateValidDummyClassConfigFD01();
+    SCClassConfLoadClassficationConfigFile(de_ctx, fd);
 
     de_ctx->sig_list = SigInit(de_ctx, "drop tcp any any -> any any "
             "(msg:\"LogDropLog test\"; content:\"GET\"; Classtype:unknown; sid:1;)");
-
-    result = (de_ctx->sig_list != NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -399,8 +398,6 @@ int LogDropLogTest01()
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     if (p->alerts.cnt == 1 && (PACKET_TEST_ACTION(p, ACTION_DROP)))
         result = (strcmp(p->alerts.alerts[0].s->class_msg, "Unknown are we") == 0);
-    else
-        result = 0;
 
     if (LogDropCondition(NULL, p) == TRUE)
         LogDropLogger(NULL, &dlt, p);
@@ -453,14 +450,11 @@ int LogDropLogTest02()
 
     de_ctx->flags |= DE_QUIET;
 
-    SCClassConfGenerateValidDummyClassConfigFD01();
-    SCClassConfLoadClassficationConfigFile(de_ctx);
-    SCClassConfDeleteDummyClassificationConfigFD();
+    FILE *fd = SCClassConfGenerateValidDummyClassConfigFD01();
+    SCClassConfLoadClassficationConfigFile(de_ctx, fd);
 
     de_ctx->sig_list = SigInit(de_ctx, "alert udp any any -> any any "
             "(msg:\"LogDropLog test\"; content:\"GET\"; Classtype:unknown; sid:1;)");
-
-    result = (de_ctx->sig_list != NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -468,8 +462,6 @@ int LogDropLogTest02()
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     if (p->alerts.cnt == 1 && p->alerts.alerts[0].action != ACTION_DROP)
         result = (strcmp(p->alerts.alerts[0].s->class_msg, "Unknown are we") == 0);
-    else
-        result = 0;
 
     if (LogDropCondition(NULL, p) == TRUE)
         LogDropLogger(NULL, &dlt, p);
@@ -501,7 +493,8 @@ static void LogDropLogRegisterTests(void)
 #endif
 
 /** \brief function to register the drop log module */
-void TmModuleLogDropLogRegister (void) {
+void TmModuleLogDropLogRegister (void)
+{
 
     tmm_modules[TMM_LOGDROPLOG].name = MODULE_NAME;
     tmm_modules[TMM_LOGDROPLOG].ThreadInit = LogDropLogThreadInit;

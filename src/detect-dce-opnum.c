@@ -142,6 +142,10 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
     char *comma_token = NULL;
     char *hyphen_token = NULL;
 
+    if (arg == NULL) {
+        goto error;
+    }
+
     ret = pcre_exec(parse_regex, parse_regex_study, arg, strlen(arg), 0, 0, ov,
                     MAX_SUBSTRINGS);
     if (ret < 2) {
@@ -178,6 +182,13 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
         dor = DetectDceOpnumAllocDetectDceOpnumRange();
         if (dor == NULL)
             goto error;
+        if (prev_dor == NULL) {
+            prev_dor = dor;
+            dod->range = dor;
+        } else {
+            prev_dor->next = dor;
+            prev_dor = dor;
+        }
 
         if ((hyphen_token = index(dup_str_temp, '-')) != NULL) {
             hyphen_token[0] = '\0';
@@ -195,20 +206,17 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
         if (dor->range1 > DCE_OPNUM_RANGE_MAX)
             goto error;
 
-        if (prev_dor == NULL) {
-            prev_dor = dor;
-            dod->range = dor;
-        } else {
-            prev_dor->next = dor;
-            prev_dor = dor;
-        }
-
         dup_str_temp = dup_str;
     }
 
     dor = DetectDceOpnumAllocDetectDceOpnumRange();
     if (dor == NULL)
         goto error;
+    if (prev_dor == NULL) {
+        dod->range = dor;
+    } else {
+        prev_dor->next = dor;
+    }
 
     if ( (hyphen_token = index(dup_str, '-')) != NULL) {
         hyphen_token[0] = '\0';
@@ -225,12 +233,6 @@ static inline DetectDceOpnumData *DetectDceOpnumArgParse(const char *arg)
     dor->range1 = atoi(dup_str);
     if (dor->range1 > DCE_OPNUM_RANGE_MAX)
         goto error;
-
-    if (prev_dor == NULL) {
-        dod->range = dor;
-    } else {
-        prev_dor->next = dor;
-    }
 
     if (dup_str_head != NULL)
         SCFree(dup_str_head);
@@ -305,6 +307,12 @@ static int DetectDceOpnumSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
 {
     DetectDceOpnumData *dod = NULL;
     SigMatch *sm = NULL;
+
+    if (arg == NULL) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Error parsing dce_opnum option in "
+                   "signature, option needs a value");
+        goto error;
+    }
 
     dod = DetectDceOpnumArgParse(arg);
     if (dod == NULL) {
@@ -399,7 +407,7 @@ static int DetectDceOpnumTestParse02(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
@@ -428,7 +436,7 @@ static int DetectDceOpnumTestParse03(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
@@ -457,7 +465,7 @@ static int DetectDceOpnumTestParse04(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
@@ -523,7 +531,7 @@ static int DetectDceOpnumTestParse05(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
@@ -589,7 +597,7 @@ static int DetectDceOpnumTestParse06(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;
@@ -637,7 +645,7 @@ static int DetectDceOpnumTestParse07(void)
 
     if (s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL) {
         temp = s->sm_lists[DETECT_SM_LIST_AMATCH];
-        dod = temp->ctx;
+        dod = (DetectDceOpnumData *)temp->ctx;
         if (dod == NULL)
             goto end;
         dor = dod->range;

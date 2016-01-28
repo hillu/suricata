@@ -72,7 +72,7 @@ static int DecodeUDPPacket(ThreadVars *t, Packet *p, uint8_t *pkt, uint16_t len)
 
 int DecodeUDP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
-    SCPerfCounterIncr(dtv->counter_udp, tv->sc_perf_pca);
+    StatsIncr(tv, dtv->counter_udp);
 
     if (unlikely(DecodeUDPPacket(tv, p,pkt,len) < 0)) {
         p->udph = NULL;
@@ -85,12 +85,12 @@ int DecodeUDP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
     if (unlikely(DecodeTeredo(tv, dtv, p, p->payload, p->payload_len, pq) == TM_ECODE_OK)) {
         /* Here we have a Teredo packet and don't need to handle app
          * layer */
-        FlowHandlePacket(tv, p);
+        FlowHandlePacket(tv, dtv, p);
         return TM_ECODE_OK;
     }
 
     /* Flow is an integral part of us */
-    FlowHandlePacket(tv, p);
+    FlowHandlePacket(tv, dtv, p);
 
     /* handle the app layer part of the UDP packet payload */
     if (unlikely(p->flow != NULL)) {

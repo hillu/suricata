@@ -46,7 +46,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIpOptsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectIpOptsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectIpOptsSetup (DetectEngineCtx *, Signature *, char *);
 void IpOptsRegisterTests(void);
 void DetectIpOptsFree(void *);
@@ -54,7 +54,8 @@ void DetectIpOptsFree(void *);
 /**
  * \brief Registration function for ipopts: keyword
  */
-void DetectIpOptsRegister (void) {
+void DetectIpOptsRegister (void)
+{
     sigmatch_table[DETECT_IPOPTS].name = "ipopts";
     sigmatch_table[DETECT_IPOPTS].desc = "check if a specific IP option is set";
     sigmatch_table[DETECT_IPOPTS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Ipopts";
@@ -100,11 +101,11 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectIpOptsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectIpOptsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
     int ret = 0;
     int ipopt = 0;
-    DetectIpOptsData *de = (DetectIpOptsData *)m->ctx;
+    const DetectIpOptsData *de = (const DetectIpOptsData *)ctx;
 
     if (!de || !PKT_IS_IPV4(p) || PKT_IS_PSEUDOPKT(p))
         return ret;
@@ -200,7 +201,7 @@ static int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawst
         goto error;
 
     sm->type = DETECT_IPOPTS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
@@ -219,7 +220,8 @@ error:
  *
  * \param de pointer to DetectIpOptsData
  */
-void DetectIpOptsFree(void *de_ptr) {
+void DetectIpOptsFree(void *de_ptr)
+{
     DetectIpOptsData *de = (DetectIpOptsData *)de_ptr;
     if(de) SCFree(de);
 }
@@ -235,7 +237,8 @@ void DetectIpOptsFree(void *de_ptr) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse01 (void) {
+int IpOptsTestParse01 (void)
+{
     DetectIpOptsData *de = NULL;
     de = DetectIpOptsParse("lsrr");
     if (de) {
@@ -252,7 +255,8 @@ int IpOptsTestParse01 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse02 (void) {
+int IpOptsTestParse02 (void)
+{
     DetectIpOptsData *de = NULL;
     de = DetectIpOptsParse("invalidopt");
     if (de) {
@@ -269,7 +273,8 @@ int IpOptsTestParse02 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse03 (void) {
+int IpOptsTestParse03 (void)
+{
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (unlikely(p == NULL))
         return 0;
@@ -298,9 +303,9 @@ int IpOptsTestParse03 (void) {
         goto error;
 
     sm->type = DETECT_IPOPTS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
-    ret = DetectIpOptsMatch(&tv,NULL,p,NULL,sm);
+    ret = DetectIpOptsMatch(&tv, NULL, p, NULL, sm->ctx);
 
     if(ret) {
         SCFree(p);
@@ -320,7 +325,8 @@ error:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse04 (void) {
+int IpOptsTestParse04 (void)
+{
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (unlikely(p == NULL))
         return 0;
@@ -349,9 +355,9 @@ int IpOptsTestParse04 (void) {
         goto error;
 
     sm->type = DETECT_IPOPTS;
-    sm->ctx = (void *)de;
+    sm->ctx = (SigMatchCtx *)de;
 
-    ret = DetectIpOptsMatch(&tv,NULL,p,NULL,sm);
+    ret = DetectIpOptsMatch(&tv, NULL, p, NULL, sm->ctx);
 
     if(ret) {
         SCFree(p);
@@ -369,7 +375,8 @@ error:
 /**
  * \brief this function registers unit tests for IpOpts
  */
-void IpOptsRegisterTests(void) {
+void IpOptsRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("IpOptsTestParse01", IpOptsTestParse01, 1);
     UtRegisterTest("IpOptsTestParse02", IpOptsTestParse02, 0);

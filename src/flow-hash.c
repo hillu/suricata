@@ -35,6 +35,7 @@
 #include "flow-util.h"
 #include "flow-private.h"
 #include "flow-manager.h"
+#include "flow-storage.h"
 #include "app-layer-parser.h"
 
 #include "util-time.h"
@@ -42,12 +43,17 @@
 
 #include "util-hash-lookup3.h"
 
+#include "conf.h"
+#include "output.h"
+#include "output-flow.h"
+
 #define FLOW_DEFAULT_FLOW_PRUNE 5
 
 SC_ATOMIC_EXTERN(unsigned int, flow_prune_idx);
 SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
-static Flow *FlowGetUsedFlow(void);
+static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv);
+static int handle_tcp_reuse = 1;
 
 #ifdef FLOW_DEBUG_STATS
 #define FLOW_DEBUG_STATS_PROTO_ALL      0
@@ -143,6 +149,11 @@ void FlowHashDebugDeinit(void)
 #define FlowHashCountIncr
 
 #endif /* FLOW_DEBUG_STATS */
+
+void FlowDisableTcpReuseHandling(void)
+{
+    handle_tcp_reuse = 0;
+}
 
 /** \brief compare two raw ipv6 addrs
  *
@@ -386,10 +397,33 @@ static inline int FlowCompareICMPv4(Flow *f, const Packet *p)
     return 0;
 }
 
+int TcpSessionPacketSsnReuse(const Packet *p, const Flow *f, void *tcp_ssn);
+
 static inline int FlowCompare(Flow *f, const Packet *p)
 {
     if (p->proto == IPPROTO_ICMP) {
         return FlowCompareICMPv4(f, p);
+    } else if (p->proto == IPPROTO_TCP) {
+        if (CMP_FLOW(f, p) == 0)
+            return 0;
+
+        /* if this session is 'reused', we don't return it anymore,
+         * so return false on the compare */
+        if (f->flags & FLOW_TCP_REUSED)
+            return 0;
+
+        if (handle_tcp_reuse == 1) {
+            /* lets see if we need to consider the existing session reuse */
+            if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx) == 1)) {
+                /* okay, we need to setup a new flow for this packet.
+                 * Flag the flow that it's been replaced by a new one */
+                f->flags |= FLOW_TCP_REUSED;
+                SCLogDebug("flow obsolete: TCP reuse will use a new flow "
+                        "starting with packet %"PRIu64, p->pcap_cnt);
+                return 0;
+            }
+        }
+        return 1;
     } else {
         return CMP_FLOW(f, p);
     }
@@ -422,9 +456,12 @@ static inline int FlowCreateCheck(const Packet *p)
  *  Get a new flow. We're checking memcap first and will try to make room
  *  if the memcap is reached.
  *
+ *  \param tv thread vars
+ *  \param dtv decode thread vars (for flow log api thread data)
+ *
  *  \retval f *LOCKED* flow on succes, NULL on error.
  */
-static Flow *FlowGetNew(const Packet *p)
+static Flow *FlowGetNew(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p)
 {
     Flow *f = NULL;
 
@@ -436,7 +473,7 @@ static Flow *FlowGetNew(const Packet *p)
     f = FlowDequeue(&flow_spare_q);
     if (f == NULL) {
         /* If we reached the max memcap, we get a used flow */
-        if (!(FLOW_CHECK_MEMCAP(sizeof(Flow)))) {
+        if (!(FLOW_CHECK_MEMCAP(sizeof(Flow) + FlowStorageSize()))) {
             /* declare state of emergency */
             if (!(SC_ATOMIC_GET(flow_flags) & FLOW_EMERGENCY)) {
                 SC_ATOMIC_OR(flow_flags, FLOW_EMERGENCY);
@@ -447,8 +484,13 @@ static Flow *FlowGetNew(const Packet *p)
                 FlowWakeupFlowManagerThread();
             }
 
-            f = FlowGetUsedFlow();
+            f = FlowGetUsedFlow(tv, dtv);
             if (f == NULL) {
+                /* max memcap reached, so increments the counter */
+                if (tv != NULL && dtv != NULL) {
+                    StatsIncr(tv, dtv->counter_flow_memcap);
+                }
+
                 /* very rare, but we can fail. Just giving up */
                 return NULL;
             }
@@ -458,6 +500,9 @@ static Flow *FlowGetNew(const Packet *p)
             /* now see if we can alloc a new flow */
             f = FlowAlloc();
             if (f == NULL) {
+                if (tv != NULL && dtv != NULL) {
+                    StatsIncr(tv, dtv->counter_flow_memcap);
+                }
                 return NULL;
             }
 
@@ -473,7 +518,122 @@ static Flow *FlowGetNew(const Packet *p)
     return f;
 }
 
-/* FlowGetFlowFromHash
+Flow *FlowGetFlowFromHashByPacket(const Packet *p)
+{
+    Flow *f = NULL;
+
+    /* get the key to our bucket */
+    uint32_t key = FlowGetKey(p);
+    /* get our hash bucket and lock it */
+    FlowBucket *fb = &flow_hash[key];
+    FBLOCK_LOCK(fb);
+
+    SCLogDebug("fb %p fb->head %p", fb, fb->head);
+
+    f = FlowGetNew(NULL, NULL, p);
+    if (f != NULL) {
+        /* flow is locked */
+        if (fb->head == NULL) {
+            fb->head = f;
+            fb->tail = f;
+        } else {
+            f->hprev = fb->tail;
+            fb->tail->hnext = f;
+            fb->tail = f;
+        }
+
+        /* got one, now lock, initialize and return */
+        FlowInit(f, p);
+        f->fb = fb;
+        /* update the last seen timestamp of this flow */
+        COPY_TIMESTAMP(&p->ts,&f->lastts);
+
+    }
+    FBLOCK_UNLOCK(fb);
+    return f;
+}
+
+/** \brief Lookup flow based on packet
+ *
+ *  Find the flow belonging to this packet. If not found, no new flow
+ *  is set up.
+ *
+ *  \param p packet to lookup the flow for
+ *
+ *  \retval f flow or NULL if not found
+ */
+Flow *FlowLookupFlowFromHash(const Packet *p)
+{
+    Flow *f = NULL;
+
+    /* get the key to our bucket */
+    uint32_t key = FlowGetKey(p);
+    /* get our hash bucket and lock it */
+    FlowBucket *fb = &flow_hash[key];
+    FBLOCK_LOCK(fb);
+
+    SCLogDebug("fb %p fb->head %p", fb, fb->head);
+
+    /* see if the bucket already has a flow */
+    if (fb->head == NULL) {
+        FBLOCK_UNLOCK(fb);
+        return NULL;
+    }
+
+    /* ok, we have a flow in the bucket. Let's find out if it is our flow */
+    f = fb->head;
+
+    /* see if this is the flow we are looking for */
+    if (FlowCompare(f, p) == 0) {
+        while (f) {
+            FlowHashCountIncr;
+
+            f = f->hnext;
+
+            if (f == NULL) {
+                FBLOCK_UNLOCK(fb);
+                return NULL;
+            }
+
+            if (FlowCompare(f, p) != 0) {
+                /* we found our flow, lets put it on top of the
+                 * hash list -- this rewards active flows */
+                if (f->hnext) {
+                    f->hnext->hprev = f->hprev;
+                }
+                if (f->hprev) {
+                    f->hprev->hnext = f->hnext;
+                }
+                if (f == fb->tail) {
+                    fb->tail = f->hprev;
+                }
+
+                f->hnext = fb->head;
+                f->hprev = NULL;
+                fb->head->hprev = f;
+                fb->head = f;
+
+                /* found our flow, lock & return */
+                FLOWLOCK_WRLOCK(f);
+                /* update the last seen timestamp of this flow */
+                COPY_TIMESTAMP(&p->ts,&f->lastts);
+
+                FBLOCK_UNLOCK(fb);
+                return f;
+            }
+        }
+    }
+
+    /* lock & return */
+    FLOWLOCK_WRLOCK(f);
+    /* update the last seen timestamp of this flow */
+    COPY_TIMESTAMP(&p->ts,&f->lastts);
+
+    FBLOCK_UNLOCK(fb);
+    return f;
+}
+
+/** \brief Get Flow for packet
  *
  * Hash retrieval function for flows. Looks up the hash bucket containing the
  * flow pointer. Then compares the packet with the found flow to see if it is
@@ -485,9 +645,12 @@ static Flow *FlowGetNew(const Packet *p)
  *
  * The p->flow pointer is updated to point to the flow.
  *
- * returns a *LOCKED* flow or NULL
+ *  \param tv thread vars
+ *  \param dtv decode thread vars (for flow log api thread data)
+ *
+ *  \retval f *LOCKED* flow or NULL
  */
-Flow *FlowGetFlowFromHash(const Packet *p)
+Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p)
 {
     Flow *f = NULL;
     FlowHashCountInit;
@@ -504,7 +667,7 @@ Flow *FlowGetFlowFromHash(const Packet *p)
 
     /* see if the bucket already has a flow */
     if (fb->head == NULL) {
-        f = FlowGetNew(p);
+        f = FlowGetNew(tv, dtv, p);
         if (f == NULL) {
             FBLOCK_UNLOCK(fb);
             FlowHashCountUpdate;
@@ -518,6 +681,9 @@ Flow *FlowGetFlowFromHash(const Packet *p)
         /* got one, now lock, initialize and return */
         FlowInit(f, p);
         f->fb = fb;
+
+        /* update the last seen timestamp of this flow */
+        COPY_TIMESTAMP(&p->ts,&f->lastts);
 
         FBLOCK_UNLOCK(fb);
         FlowHashCountUpdate;
@@ -538,7 +704,7 @@ Flow *FlowGetFlowFromHash(const Packet *p)
             f = f->hnext;
 
             if (f == NULL) {
-                f = pf->hnext = FlowGetNew(p);
+                f = pf->hnext = FlowGetNew(tv, dtv, p);
                 if (f == NULL) {
                     FBLOCK_UNLOCK(fb);
                     FlowHashCountUpdate;
@@ -553,6 +719,9 @@ Flow *FlowGetFlowFromHash(const Packet *p)
                 /* initialize and return */
                 FlowInit(f, p);
                 f->fb = fb;
+
+                /* update the last seen timestamp of this flow */
+                COPY_TIMESTAMP(&p->ts,&f->lastts);
 
                 FBLOCK_UNLOCK(fb);
                 FlowHashCountUpdate;
@@ -579,6 +748,9 @@ Flow *FlowGetFlowFromHash(const Packet *p)
 
                 /* found our flow, lock & return */
                 FLOWLOCK_WRLOCK(f);
+                /* update the last seen timestamp of this flow */
+                COPY_TIMESTAMP(&p->ts,&f->lastts);
+
                 FBLOCK_UNLOCK(fb);
                 FlowHashCountUpdate;
                 return f;
@@ -588,6 +760,9 @@ Flow *FlowGetFlowFromHash(const Packet *p)
 
     /* lock & return */
     FLOWLOCK_WRLOCK(f);
+    /* update the last seen timestamp of this flow */
+    COPY_TIMESTAMP(&p->ts,&f->lastts);
+
     FBLOCK_UNLOCK(fb);
     FlowHashCountUpdate;
     return f;
@@ -603,9 +778,12 @@ Flow *FlowGetFlowFromHash(const Packet *p)
  *  top each time since that would clear the top of the hash leading to longer
  *  and longer search times under high pressure (observed).
  *
+ *  \param tv thread vars
+ *  \param dtv decode thread vars (for flow log api thread data)
+ *
  *  \retval f flow or NULL
  */
-static Flow *FlowGetUsedFlow(void)
+static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv)
 {
     uint32_t idx = SC_ATOMIC_GET(flow_prune_idx) % flow_config.hash_size;
     uint32_t cnt = flow_config.hash_size;
@@ -652,6 +830,23 @@ static Flow *FlowGetUsedFlow(void)
         f->hprev = NULL;
         f->fb = NULL;
         FBLOCK_UNLOCK(fb);
+
+        int state = SC_ATOMIC_GET(f->flow_state);
+        if (state == FLOW_STATE_NEW)
+            f->flow_end_flags |= FLOW_END_FLAG_STATE_NEW;
+        else if (state == FLOW_STATE_ESTABLISHED)
+            f->flow_end_flags |= FLOW_END_FLAG_STATE_ESTABLISHED;
+        else if (state == FLOW_STATE_CLOSED)
+            f->flow_end_flags |= FLOW_END_FLAG_STATE_CLOSED;
+
+        f->flow_end_flags |= FLOW_END_FLAG_FORCED;
+
+        if (SC_ATOMIC_GET(flow_flags) & FLOW_EMERGENCY)
+            f->flow_end_flags |= FLOW_END_FLAG_EMERGENCY;
+
+        /* invoke flow log api */
+        if (dtv && dtv->output_flow_thread_data)
+            (void)OutputFlowLog(tv, dtv->output_flow_thread_data, f);
 
         FlowClearMemory(f, f->protomap);
 

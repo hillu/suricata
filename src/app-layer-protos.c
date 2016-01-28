@@ -30,8 +30,9 @@
 const char *AppProtoToString(AppProto alproto)
 {
     const char *proto_name = NULL;
+    enum AppProtoEnum proto = alproto;
 
-    switch (alproto) {
+    switch (proto) {
         case ALPROTO_HTTP:
             proto_name = "http";
             break;
@@ -70,6 +71,12 @@ const char *AppProtoToString(AppProto alproto)
             break;
         case ALPROTO_DNS:
             proto_name = "dns";
+            break;
+        case ALPROTO_MODBUS:
+            proto_name = "modbus";
+            break;
+        case ALPROTO_TEMPLATE:
+            proto_name = "template";
             break;
         case ALPROTO_FAILED:
 #ifdef UNITTESTS

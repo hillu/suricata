@@ -74,9 +74,9 @@ void SCACInitThreadCtx(MpmCtx *, MpmThreadCtx *, uint32_t);
 void SCACDestroyCtx(MpmCtx *);
 void SCACDestroyThreadCtx(MpmCtx *, MpmThreadCtx *);
 int SCACAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
-                     uint32_t, uint32_t, uint8_t);
+                     uint32_t, SigIntId, uint8_t);
 int SCACAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
-                     uint32_t, uint32_t, uint8_t);
+                     uint32_t, SigIntId, uint8_t);
 int SCACPreparePatterns(MpmCtx *mpm_ctx);
 uint32_t SCACSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                     PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen);
@@ -218,6 +218,10 @@ static inline void SCACFreePattern(MpmCtx *mpm_ctx, SCACPattern *p)
         mpm_ctx->memory_size -= p->len;
     }
 
+    if (p != NULL && p->sids != NULL) {
+        SCFree(p->sids);
+    }
+
     if (p != NULL) {
         SCFree(p);
         mpm_ctx->memory_cnt--;
@@ -278,7 +282,7 @@ static inline int SCACInitHashAdd(SCACCtx *ctx, SCACPattern *p)
  */
 static int SCACAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
                           uint16_t offset, uint16_t depth, uint32_t pid,
-                          uint32_t sid, uint8_t flags)
+                          SigIntId sid, uint8_t flags)
 {
     SCACCtx *ctx = (SCACCtx *)mpm_ctx->ctx;
 
@@ -357,6 +361,34 @@ static int SCACAddPattern(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
         /* we need the max pat id */
         if (pid > ctx->max_pat_id)
             ctx->max_pat_id = pid;
+
+        p->sids_size = 1;
+        p->sids = SCMalloc(p->sids_size * sizeof(SigIntId));
+        BUG_ON(p->sids == NULL);
+        p->sids[0] = sid;
+        //SCLogInfo("MPM added %u:%u", pid, sid);
+    } else {
+        /* TODO figure out how we can be called multiple times for the same CTX with the same sid */
+
+        int found = 0;
+        uint32_t x = 0;
+        for (x = 0; x < p->sids_size; x++) {
+            if (p->sids[x] == sid) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            SigIntId *sids = SCRealloc(p->sids, (sizeof(SigIntId) * (p->sids_size + 1)));
+            BUG_ON(sids == NULL);
+            p->sids = sids;
+            p->sids[p->sids_size] = sid;
+            p->sids_size++;
+            //SCLogInfo("p->sids_size %u", p->sids_size);
+            //SCLogInfo("MPM added %u:%u (append)", pid, sid);
+        } else {
+            //SCLogInfo("rule %u already part of pid %u", sid, pid);
+        }
     }
 
     return 0;
@@ -374,15 +406,13 @@ error:
  *
  * \retval The state id, of the newly created state.
  */
-static inline int SCACInitNewState(MpmCtx *mpm_ctx)
+static inline int SCACReallocState(SCACCtx *ctx, uint32_t cnt)
 {
     void *ptmp;
-    SCACCtx *ctx = (SCACCtx *)mpm_ctx->ctx;
-    int ascii_code = 0;
     int size = 0;
 
     /* reallocate space in the goto table to include a new state */
-    size = (ctx->state_count + 1) * ctx->single_state_size;
+    size = cnt * ctx->single_state_size;
     ptmp = SCRealloc(ctx->goto_table, size);
     if (ptmp == NULL) {
         SCFree(ctx->goto_table);
@@ -392,13 +422,12 @@ static inline int SCACInitNewState(MpmCtx *mpm_ctx)
     }
     ctx->goto_table = ptmp;
 
-    /* set all transitions for the newly assigned state as FAIL transitions */
-    for (ascii_code = 0; ascii_code < 256; ascii_code++) {
-        ctx->goto_table[ctx->state_count][ascii_code] = SC_AC_FAIL;
-    }
-
     /* reallocate space in the output table for the new state */
-    size = (ctx->state_count + 1) * sizeof(SCACOutputTable);
+    int oldsize = ctx->state_count * sizeof(SCACOutputTable);
+    size = cnt * sizeof(SCACOutputTable);
+    SCLogDebug("oldsize %d size %d cnt %u ctx->state_count %u",
+            oldsize, size, cnt, ctx->state_count);
+
     ptmp = SCRealloc(ctx->output_table, size);
     if (ptmp == NULL) {
         SCFree(ctx->output_table);
@@ -408,7 +437,7 @@ static inline int SCACInitNewState(MpmCtx *mpm_ctx)
     }
     ctx->output_table = ptmp;
 
-    memset(ctx->output_table + ctx->state_count, 0, sizeof(SCACOutputTable));
+    memset(((uint8_t *)ctx->output_table + oldsize), 0, (size - oldsize));
 
     /* \todo using it temporarily now during dev, since I have restricted
      *       state var in SCACCtx->state_table to uint16_t. */
@@ -416,6 +445,63 @@ static inline int SCACInitNewState(MpmCtx *mpm_ctx)
     //    printf("state count exceeded\n");
     //    exit(EXIT_FAILURE);
     //}
+
+    return 0;//ctx->state_count++;
+}
+
+/** \internal
+ *  \brief Shrink state after setup is done
+ *
+ *  Shrinks only the output table, goto table is freed after calling this
+ */
+static void SCACShrinkState(SCACCtx *ctx)
+{
+    /* reallocate space in the output table for the new state */
+#ifdef DEBUG
+    int oldsize = ctx->allocated_state_count * sizeof(SCACOutputTable);
+#endif
+    int newsize = ctx->state_count * sizeof(SCACOutputTable);
+
+    SCLogDebug("oldsize %d newsize %d ctx->allocated_state_count %u "
+               "ctx->state_count %u: shrink by %d bytes", oldsize,
+               newsize, ctx->allocated_state_count, ctx->state_count,
+               oldsize - newsize);
+
+    void *ptmp = SCRealloc(ctx->output_table, newsize);
+    if (ptmp == NULL) {
+        SCFree(ctx->output_table);
+        ctx->output_table = NULL;
+        SCLogError(SC_ERR_MEM_ALLOC, "Error allocating memory");
+        exit(EXIT_FAILURE);
+    }
+    ctx->output_table = ptmp;
+}
+
+static inline int SCACInitNewState(MpmCtx *mpm_ctx)
+{
+    SCACCtx *ctx = (SCACCtx *)mpm_ctx->ctx;;
+
+    /* Exponentially increase the allocated space when needed. */
+    if (ctx->allocated_state_count < ctx->state_count + 1) {
+        if (ctx->allocated_state_count == 0)
+            ctx->allocated_state_count = 256;
+        else
+            ctx->allocated_state_count *= 2;
+
+        SCACReallocState(ctx, ctx->allocated_state_count);
+
+    }
+#if 0
+    if (ctx->allocated_state_count > 260) {
+        SCACOutputTable *output_state = &ctx->output_table[260];
+        SCLogInfo("output_state %p %p %u", output_state, output_state->pids, output_state->no_of_entries);
+    }
+#endif
+    int ascii_code = 0;
+    /* set all transitions for the newly assigned state as FAIL transitions */
+    for (ascii_code = 0; ascii_code < 256; ascii_code++) {
+        ctx->goto_table[ctx->state_count][ascii_code] = SC_AC_FAIL;
+    }
 
     return ctx->state_count++;
 }
@@ -925,6 +1011,9 @@ static inline void SCACPrepareStateTable(MpmCtx *mpm_ctx)
     /* club nocase entries */
     SCACInsertCaseSensitiveEntriesForPatterns(mpm_ctx);
 
+    /* shrink the memory */
+    SCACShrinkState(ctx);
+
 #if 0
     SCACPrintDeltaTable(mpm_ctx);
 #endif
@@ -999,6 +1088,14 @@ int SCACPreparePatterns(MpmCtx *mpm_ctx)
                    ctx->parray[i]->original_pat, ctx->parray[i]->len);
             ctx->pid_pat_list[ctx->parray[i]->id].patlen = ctx->parray[i]->len;
         }
+
+        /* ACPatternList now owns this memory */
+        //SCLogInfo("ctx->parray[i]->sids_size %u", ctx->parray[i]->sids_size);
+        ctx->pid_pat_list[ctx->parray[i]->id].sids_size = ctx->parray[i]->sids_size;
+        ctx->pid_pat_list[ctx->parray[i]->id].sids = ctx->parray[i]->sids;
+
+        ctx->parray[i]->sids_size = 0;
+        ctx->parray[i]->sids = NULL;
     }
 
     /* prepare the state table required by AC */
@@ -1180,6 +1277,8 @@ void SCACDestroyCtx(MpmCtx *mpm_ctx)
         for (i = 0; i < (ctx->max_pat_id + 1); i++) {
             if (ctx->pid_pat_list[i].cs != NULL)
                 SCFree(ctx->pid_pat_list[i].cs);
+            if (ctx->pid_pat_list[i].sids != NULL)
+                SCFree(ctx->pid_pat_list[i].sids);
         }
         SCFree(ctx->pid_pat_list);
     }
@@ -1215,6 +1314,9 @@ uint32_t SCACSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
     /* \todo Change it for stateful MPM.  Supply the state using mpm_thread_ctx */
     SCACPatternList *pid_pat_list = ctx->pid_pat_list;
 
+    uint8_t bitarray[pmq->pattern_id_bitarray_size];
+    memset(bitarray, 0, pmq->pattern_id_bitarray_size);
+
     if (ctx->state_count < 32767) {
         register SC_AC_STATE_TYPE_U16 state = 0;
         SC_AC_STATE_TYPE_U16 (*state_table_u16)[256] = ctx->state_table_u16;
@@ -1226,25 +1328,30 @@ uint32_t SCACSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
-                        if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
-                                     buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
-                                     pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
+                        uint32_t lower_pid = pids[k] & 0x0000FFFF;
+                        if (SCMemcmp(pid_pat_list[lower_pid].cs,
+                                     buf + i - pid_pat_list[lower_pid].patlen + 1,
+                                     pid_pat_list[lower_pid].patlen) != 0) {
                             /* inside loop */
                             continue;
                         }
-                        if (pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] & (1 << ((pids[k] & 0x0000FFFF) % 8))) {
+                        if (bitarray[(lower_pid) / 8] & (1 << ((lower_pid) % 8))) {
                             ;
                         } else {
-                            pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] |= (1 << ((pids[k] & 0x0000FFFF) % 8));
-                            pmq->pattern_id_array[pmq->pattern_id_array_cnt++] = pids[k] & 0x0000FFFF;
+                            pmq->pattern_id_bitarray[(lower_pid) / 8] |= (1 << ((lower_pid) % 8));
+                            bitarray[(lower_pid) / 8] |= (1 << ((lower_pid) % 8));
+                            MpmAddPid(pmq, lower_pid);
+                            MpmAddSids(pmq, pid_pat_list[lower_pid].sids, pid_pat_list[lower_pid].sids_size);
                         }
                         matches++;
                     } else {
-                        if (pmq->pattern_id_bitarray[pids[k] / 8] & (1 << (pids[k] % 8))) {
+                        if (bitarray[pids[k] / 8] & (1 << (pids[k] % 8))) {
                             ;
                         } else {
-                            pmq->pattern_id_bitarray[pids[k] / 8] |= (1 << (pids[k] % 8));
-                            pmq->pattern_id_array[pmq->pattern_id_array_cnt++] = pids[k];
+                            pmq->pattern_id_bitarray[(pids[k]) / 8] |= (1 << ((pids[k]) % 8));
+                            bitarray[pids[k] / 8] |= (1 << (pids[k] % 8));
+                            MpmAddPid(pmq, pids[k]);
+                            MpmAddSids(pmq, pid_pat_list[pids[k]].sids, pid_pat_list[pids[k]].sids_size);
                         }
                         matches++;
                     }
@@ -1265,25 +1372,30 @@ uint32_t SCACSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
                 uint32_t k;
                 for (k = 0; k < no_of_entries; k++) {
                     if (pids[k] & 0xFFFF0000) {
-                        if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
-                                     buf + i - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
-                                     pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
+                        uint32_t lower_pid = pids[k] & 0x0000FFFF;
+                        if (SCMemcmp(pid_pat_list[lower_pid].cs,
+                                     buf + i - pid_pat_list[lower_pid].patlen + 1,
+                                     pid_pat_list[lower_pid].patlen) != 0) {
                             /* inside loop */
                             continue;
                         }
-                        if (pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] & (1 << ((pids[k] & 0x0000FFFF) % 8))) {
+                        if (bitarray[(lower_pid) / 8] & (1 << ((lower_pid) % 8))) {
                             ;
                         } else {
-                            pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] |= (1 << ((pids[k] & 0x0000FFFF) % 8));
-                            pmq->pattern_id_array[pmq->pattern_id_array_cnt++] = pids[k] & 0x0000FFFF;
+                            pmq->pattern_id_bitarray[(lower_pid) / 8] |= (1 << ((lower_pid) % 8));
+                            bitarray[(lower_pid) / 8] |= (1 << ((lower_pid) % 8));
+                            MpmAddPid(pmq, lower_pid);
+                            MpmAddSids(pmq, pid_pat_list[lower_pid].sids, pid_pat_list[lower_pid].sids_size);
                         }
                         matches++;
                     } else {
-                        if (pmq->pattern_id_bitarray[pids[k] / 8] & (1 << (pids[k] % 8))) {
+                        if (bitarray[pids[k] / 8] & (1 << (pids[k] % 8))) {
                             ;
                         } else {
-                            pmq->pattern_id_bitarray[pids[k] / 8] |= (1 << (pids[k] % 8));
-                            pmq->pattern_id_array[pmq->pattern_id_array_cnt++] = pids[k];
+                            pmq->pattern_id_bitarray[(pids[k]) / 8] |= (1 << ((pids[k]) % 8));
+                            bitarray[pids[k] / 8] |= (1 << (pids[k] % 8));
+                            MpmAddPid(pmq, pids[k]);
+                            MpmAddSids(pmq, pid_pat_list[pids[k]].sids, pid_pat_list[pids[k]].sids_size);
                         }
                         matches++;
                     }
@@ -1316,7 +1428,7 @@ uint32_t SCACSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
  */
 int SCACAddPatternCI(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
                      uint16_t offset, uint16_t depth, uint32_t pid,
-                     uint32_t sid, uint8_t flags)
+                     SigIntId sid, uint8_t flags)
 {
     flags |= MPM_PATTERN_FLAG_NOCASE;
     return SCACAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
@@ -1341,7 +1453,7 @@ int SCACAddPatternCI(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
  */
 int SCACAddPatternCS(MpmCtx *mpm_ctx, uint8_t *pat, uint16_t patlen,
                      uint16_t offset, uint16_t depth, uint32_t pid,
-                     uint32_t sid, uint8_t flags)
+                     SigIntId sid, uint8_t flags)
 {
     return SCACAddPattern(mpm_ctx, pat, patlen, offset, depth, pid, sid, flags);
 }
@@ -1634,6 +1746,18 @@ void DetermineCudaStateTableSize(DetectEngineCtx *de_ctx)
 
 }
 
+void CudaReleasePacket(Packet *p)
+{
+    if (p->cuda_pkt_vars.cuda_mpm_enabled == 1) {
+        p->cuda_pkt_vars.cuda_mpm_enabled = 0;
+        SCMutexLock(&p->cuda_pkt_vars.cuda_mutex);
+        p->cuda_pkt_vars.cuda_done = 0;
+        SCMutexUnlock(&p->cuda_pkt_vars.cuda_mutex);
+    }
+
+    return;
+}
+
 /* \todos
  * - Use texture memory - Can we fit all the arrays into a 3d texture.
  *   Texture memory definitely offers slightly better performance even
@@ -1833,6 +1957,13 @@ static void *SCACCudaDispatcher(void *arg)
         for (uint32_t i = 0; i < no_of_items; i++, i_op_start_offset++) {
             Packet *p = (Packet *)cb_data->p_buffer[i_op_start_offset];
 
+            SCMutexLock(&p->cuda_pkt_vars.cuda_mutex);
+            if (p->cuda_pkt_vars.cuda_mpm_enabled == 0) {
+                p->cuda_pkt_vars.cuda_done = 0;
+                SCMutexUnlock(&p->cuda_pkt_vars.cuda_mutex);
+                continue;
+            }
+
             p->cuda_pkt_vars.cuda_gpu_matches =
                 cuda_results_buffer_h[((o_buffer[i_op_start_offset] - d_buffer_start_offset) * 2)];
             if (p->cuda_pkt_vars.cuda_gpu_matches != 0) {
@@ -1843,7 +1974,6 @@ static void *SCACCudaDispatcher(void *arg)
                                                 d_buffer_start_offset) * 2)] * sizeof(uint32_t)) + 4);
             }
 
-            SCMutexLock(&p->cuda_pkt_vars.cuda_mutex);
             p->cuda_pkt_vars.cuda_done = 1;
             SCMutexUnlock(&p->cuda_pkt_vars.cuda_mutex);
             SCCondSignal(&p->cuda_pkt_vars.cuda_cond);
@@ -1931,16 +2061,17 @@ uint32_t SCACCudaPacketResultsProcessing(Packet *p, MpmCtx *mpm_ctx,
          * the only change */
         for (k = 0; k < no_of_entries; k++) {
             if (pids[k] & 0xFFFF0000) {
-                if (SCMemcmp(pid_pat_list[pids[k] & 0x0000FFFF].cs,
-                             buf + offset - pid_pat_list[pids[k] & 0x0000FFFF].patlen + 1,
-                             pid_pat_list[pids[k] & 0x0000FFFF].patlen) != 0) {
+                uint32_t lower_pid = pids[k] & 0x0000FFFF;
+                if (SCMemcmp(pid_pat_list[lower_pid].cs,
+                             buf + offset - pid_pat_list[lower_pid].patlen + 1,
+                             pid_pat_list[lower_pid].patlen) != 0) {
                     /* inside loop */
                     continue;
                 }
-                if (pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] & (1 << ((pids[k] & 0x0000FFFF) % 8))) {
+                if (pmq->pattern_id_bitarray[(lower_pid) / 8] & (1 << ((lower_pid) % 8))) {
                     ;
                 } else {
-                    pmq->pattern_id_bitarray[(pids[k] & 0x0000FFFF) / 8] |= (1 << ((pids[k] & 0x0000FFFF) % 8));
+                    pmq->pattern_id_bitarray[(lower_pid) / 8] |= (1 << ((lower_pid) % 8));
                 }
                 matches++;
             } else {

@@ -33,7 +33,7 @@
 SCCtrlCondT unix_manager_ctrl_cond;
 SCCtrlMutex unix_manager_ctrl_mutex;
 
-void UnixManagerThreadSpawn(DetectEngineCtx *de_ctx, int mode);
+void UnixManagerThreadSpawn(int mode);
 void UnixSocketKillSocketThread(void);
 
 
@@ -45,5 +45,7 @@ TmEcode UnixManagerRegisterBackgroundTask(
         TmEcode (*Func)(void *),
         void *data);
 #endif
+
+void TmModuleUnixManagerRegister(void);
 
 #endif /* UNIX_MANAGER_H */

@@ -30,14 +30,7 @@
 #include "conf.h"
 #include "runmodes.h"
 #include "runmode-nfq.h"
-#include "log-httplog.h"
 #include "output.h"
-#include "source-pfring.h"
-
-#include "alert-fastlog.h"
-#include "alert-prelude.h"
-#include "alert-unified2-alert.h"
-#include "alert-debuglog.h"
 
 #include "util-debug.h"
 #include "util-time.h"
@@ -56,10 +49,6 @@ const char *RunModeIpsNFQGetDefaultMode(void)
 void RunModeIpsNFQRegister(void)
 {
     default_mode = "autofp";
-    RunModeRegisterNewRunMode(RUNMODE_NFQ, "auto",
-                              "Multi threaded NFQ IPS mode",
-                              RunModeIpsNFQAuto);
-
     RunModeRegisterNewRunMode(RUNMODE_NFQ, "autofp",
                               "Multi threaded NFQ IPS mode with respect to flow",
                               RunModeIpsNFQAutoFp);
@@ -70,26 +59,7 @@ void RunModeIpsNFQRegister(void)
     return;
 }
 
-/**
- * \brief RunModeIpsNFQAuto set up the following thread packet handlers:
- *        - Receive thread (from NFQ)
- *        - Decode thread
- *        - Stream thread
- *        - Detect: If we have only 1 cpu, it will setup one Detect thread
- *                  If we have more than one, it will setup num_cpus - 1
- *                  starting from the second cpu available.
- *        - Veredict thread (NFQ)
- *        - Respond/Reject thread
- *        - Outputs thread
- *        By default the threads will use the first cpu available
- *        except the Detection threads if we have more than one cpu.
- *
- * \param de_ctx Pointer to the Detection Engine.
- *
- * \retval 0 If all goes well. (If any problem is detected the engine will
- *           exit()).
- */
-int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx)
+int RunModeIpsNFQAutoFp(void)
 {
     SCEnter();
     int ret = 0;
@@ -101,8 +71,7 @@ int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx)
 
     LiveDeviceHasNoStats();
 
-    ret = RunModeSetIPSAuto(de_ctx,
-            NFQGetThread,
+    ret = RunModeSetIPSAutoFp(NFQGetThread,
             "ReceiveNFQ",
             "VerdictNFQ",
             "DecodeNFQ");
@@ -110,8 +79,7 @@ int RunModeIpsNFQAuto(DetectEngineCtx *de_ctx)
     return ret;
 }
 
-
-int RunModeIpsNFQAutoFp(DetectEngineCtx *de_ctx)
+int RunModeIpsNFQWorker(void)
 {
     SCEnter();
     int ret = 0;
@@ -123,29 +91,7 @@ int RunModeIpsNFQAutoFp(DetectEngineCtx *de_ctx)
 
     LiveDeviceHasNoStats();
 
-    ret = RunModeSetIPSAutoFp(de_ctx,
-            NFQGetThread,
-            "ReceiveNFQ",
-            "VerdictNFQ",
-            "DecodeNFQ");
-#endif /* NFQ */
-    return ret;
-}
-
-int RunModeIpsNFQWorker(DetectEngineCtx *de_ctx)
-{
-    SCEnter();
-    int ret = 0;
-#ifdef NFQ
-
-    RunModeInitialize();
-
-    TimeModeSetLive();
-
-    LiveDeviceHasNoStats();
-
-    ret = RunModeSetIPSWorker(de_ctx,
-            NFQGetThread,
+    ret = RunModeSetIPSWorker(NFQGetThread,
             "ReceiveNFQ",
             "VerdictNFQ",
             "DecodeNFQ");

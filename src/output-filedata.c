@@ -91,7 +91,34 @@ int OutputRegisterFiledataLogger(const char *name, FiledataLogger LogFunc, Outpu
 
 SC_ATOMIC_DECLARE(unsigned int, file_id);
 
-static TmEcode OutputFiledataLog(ThreadVars *tv, Packet *p, void *thread_data, PacketQueue *pq, PacketQueue *postpq) {
+static int CallLoggers(ThreadVars *tv, OutputLoggerThreadStore *store_list,
+        Packet *p, const File *ff, const FileData *ffd, uint8_t flags)
+{
+    OutputFiledataLogger *logger = list;
+    OutputLoggerThreadStore *store = store_list;
+    int file_logged = 0;
+
+    while (logger && store) {
+        BUG_ON(logger->LogFunc == NULL);
+
+        SCLogDebug("logger %p", logger);
+        PACKET_PROFILING_TMM_START(p, logger->module_id);
+        logger->LogFunc(tv, store->thread_data, (const Packet *)p, ff, ffd, flags);
+        PACKET_PROFILING_TMM_END(p, logger->module_id);
+
+        file_logged = 1;
+
+        logger = logger->next;
+        store = store->next;
+
+        BUG_ON(logger == NULL && store != NULL);
+        BUG_ON(logger != NULL && store == NULL);
+    }
+    return file_logged;
+}
+
+static TmEcode OutputFiledataLog(ThreadVars *tv, Packet *p, void *thread_data, PacketQueue *pq, PacketQueue *postpq)
+{
     BUG_ON(thread_data == NULL);
     BUG_ON(list == NULL);
 
@@ -143,6 +170,14 @@ static TmEcode OutputFiledataLog(ThreadVars *tv, Packet *p, void *thread_data, P
                 continue;
             }
 
+            /* if we have no data chunks left to log, we should still
+             * close the logger(s) */
+            if (ff->chunks_head == NULL && (file_trunc || file_close)) {
+                CallLoggers(tv, store, p, ff, NULL, OUTPUT_FILEDATA_FLAG_CLOSE);
+                ff->flags |= FILE_STORED;
+                continue;
+            }
+
             FileData *ffd;
             for (ffd = ff->chunks_head; ffd != NULL; ffd = ffd->next) {
                 uint8_t flags = 0;
@@ -188,24 +223,8 @@ static TmEcode OutputFiledataLog(ThreadVars *tv, Packet *p, void *thread_data, P
                 if (ffd->next == NULL && ff->state >= FILE_STATE_CLOSED)
                     flags |= OUTPUT_FILEDATA_FLAG_CLOSE;
 
-                logger = list;
-                store = op_thread_data->store;
-                while (logger && store) {
-                    BUG_ON(logger->LogFunc == NULL);
-
-                    SCLogDebug("logger %p", logger);
-                    PACKET_PROFILING_TMM_START(p, logger->module_id);
-                    logger->LogFunc(tv, store->thread_data, (const Packet *)p, (const File *)ff,
-                            (const FileData *)write_ffd, flags);
-                    PACKET_PROFILING_TMM_END(p, logger->module_id);
-                    file_logged = 1;
-
-                    logger = logger->next;
-                    store = store->next;
-
-                    BUG_ON(logger == NULL && store != NULL);
-                    BUG_ON(logger != NULL && store == NULL);
-                }
+                /* do the actual logging */
+                file_logged = CallLoggers(tv, store, p, ff, write_ffd, flags);
 
                 if (file_logged) {
                     ffd->stored = 1;
@@ -233,7 +252,8 @@ static TmEcode OutputFiledataLog(ThreadVars *tv, Packet *p, void *thread_data, P
  *
  *  \param path full path for the waldo file
  */
-static void LogFiledataLogLoadWaldo(const char *path) {
+static void LogFiledataLogLoadWaldo(const char *path)
+{
     char line[16] = "";
     unsigned int id = 0;
 
@@ -259,7 +279,8 @@ static void LogFiledataLogLoadWaldo(const char *path) {
  *
  *  \param path full path for the waldo file
  */
-static void LogFiledataLogStoreWaldo(const char *path) {
+static void LogFiledataLogStoreWaldo(const char *path)
+{
     char line[16] = "";
 
     if (SC_ATOMIC_GET(file_id) == 0) {
@@ -282,7 +303,8 @@ static void LogFiledataLogStoreWaldo(const char *path) {
 /** \brief thread init for the tx logger
  *  This will run the thread init functions for the individual registered
  *  loggers */
-static TmEcode OutputFiledataLogThreadInit(ThreadVars *tv, void *initdata, void **data) {
+static TmEcode OutputFiledataLogThreadInit(ThreadVars *tv, void *initdata, void **data)
+{
     OutputLoggerThreadData *td = SCMalloc(sizeof(*td));
     if (td == NULL)
         return TM_ECODE_FAILED;
@@ -379,7 +401,8 @@ static TmEcode OutputFiledataLogThreadInit(ThreadVars *tv, void *initdata, void 
     return TM_ECODE_OK;
 }
 
-static TmEcode OutputFiledataLogThreadDeinit(ThreadVars *tv, void *thread_data) {
+static TmEcode OutputFiledataLogThreadDeinit(ThreadVars *tv, void *thread_data)
+{
     OutputLoggerThreadData *op_thread_data = (OutputLoggerThreadData *)thread_data;
     OutputLoggerThreadStore *store = op_thread_data->store;
     OutputFiledataLogger *logger = list;
@@ -414,7 +437,8 @@ static TmEcode OutputFiledataLogThreadDeinit(ThreadVars *tv, void *thread_data) 
     return TM_ECODE_OK;
 }
 
-static void OutputFiledataLogExitPrintStats(ThreadVars *tv, void *thread_data) {
+static void OutputFiledataLogExitPrintStats(ThreadVars *tv, void *thread_data)
+{
     OutputLoggerThreadData *op_thread_data = (OutputLoggerThreadData *)thread_data;
     OutputLoggerThreadStore *store = op_thread_data->store;
     OutputFiledataLogger *logger = list;
@@ -436,7 +460,8 @@ static void OutputFiledataLogExitPrintStats(ThreadVars *tv, void *thread_data) {
     }
 }
 
-void TmModuleFiledataLoggerRegister (void) {
+void TmModuleFiledataLoggerRegister (void)
+{
     tmm_modules[TMM_FILEDATALOGGER].name = "__filedata_logger__";
     tmm_modules[TMM_FILEDATALOGGER].ThreadInit = OutputFiledataLogThreadInit;
     tmm_modules[TMM_FILEDATALOGGER].Func = OutputFiledataLog;

@@ -43,14 +43,15 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 static int DetectMarkSetup (DetectEngineCtx *, Signature *, char *);
-int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m);
+int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx);
 void DetectMarkDataFree(void *ptr);
 
 /**
  * \brief Registration function for nfq_set_mark: keyword
  */
 
-void DetectMarkRegister (void) {
+void DetectMarkRegister (void)
+{
     sigmatch_table[DETECT_MARK].name = "nfq_set_mark";
     sigmatch_table[DETECT_MARK].Match = DetectMarkPacket;
     sigmatch_table[DETECT_MARK].Setup = DetectMarkSetup;
@@ -218,7 +219,7 @@ static int DetectMarkSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         }
 
         sm->type = DETECT_MARK;
-        sm->ctx = (void *)data;
+        sm->ctx = (SigMatchCtx *)data;
 
         /* Append it to the list of tags */
         SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_TMATCH);
@@ -236,10 +237,10 @@ void DetectMarkDataFree(void *ptr)
 }
 
 
-int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
 #ifdef NFQ
-    DetectMarkData *nf_data = (DetectMarkData *) m->ctx;
+    const DetectMarkData *nf_data = (const DetectMarkData *)ctx;
     if (nf_data->mask) {
         p->nfq_v.mark = (nf_data->mark & nf_data->mask)
                         | (p->nfq_v.mark & ~(nf_data->mask));
@@ -260,7 +261,8 @@ int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, S
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int MarkTestParse01 (void) {
+static int MarkTestParse01 (void)
+{
     DetectMarkData *data;
 
     data = DetectMarkParse("1/1");
@@ -279,7 +281,8 @@ static int MarkTestParse01 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int MarkTestParse02 (void) {
+static int MarkTestParse02 (void)
+{
     DetectMarkData *data;
 
     data = DetectMarkParse("4");
@@ -298,7 +301,8 @@ static int MarkTestParse02 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int MarkTestParse03 (void) {
+static int MarkTestParse03 (void)
+{
     DetectMarkData *data;
 
     data = DetectMarkParse("0x10/0xff");
@@ -317,7 +321,8 @@ static int MarkTestParse03 (void) {
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-static int MarkTestParse04 (void) {
+static int MarkTestParse04 (void)
+{
     DetectMarkData *data;
 
     data = DetectMarkParse("0x1g/0xff");
@@ -337,7 +342,8 @@ static int MarkTestParse04 (void) {
 /**
  * \brief this function registers unit tests for Mark
  */
-void MarkRegisterTests(void) {
+void MarkRegisterTests(void)
+{
 #if defined UNITTESTS && defined NFQ
     UtRegisterTest("MarkTestParse01", MarkTestParse01, 1);
     UtRegisterTest("MarkTestParse02", MarkTestParse02, 0);

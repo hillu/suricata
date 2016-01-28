@@ -53,6 +53,7 @@ typedef enum FileState_ {
 typedef struct FileData_ {
     uint8_t *data;
     uint32_t len;
+    uint64_t stream_offset;
     int stored;     /* true if this chunk has been stored already
                      * false otherwise */
     struct FileData_ *next;
@@ -61,7 +62,7 @@ typedef struct FileData_ {
 typedef struct File_ {
     uint16_t flags;
     uint64_t txid;                  /**< tx this file is part of */
-    unsigned int file_id;
+    uint32_t file_id;
     uint8_t *name;
     uint16_t name_len;
     int16_t state;
@@ -78,6 +79,8 @@ typedef struct File_ {
     uint64_t chunks_cnt;
     uint64_t chunks_cnt_max;
 #endif
+    uint64_t content_len_so_far;
+    uint64_t content_inspected;
 } File;
 
 typedef struct FileContainer_ {
@@ -166,7 +169,7 @@ void FileDisableFilesize(Flow *f, uint8_t direction);
  */
 void FileDisableStoringForTransaction(Flow *f, uint8_t direction, uint64_t tx_id);
 
-void FlowFileDisableStoringForTransaction(struct Flow_ *f, uint16_t tx_id);
+void FlowFileDisableStoringForTransaction(struct Flow_ *f, uint64_t tx_id);
 void FilePrune(FileContainer *ffc);
 
 
@@ -181,8 +184,8 @@ int FileForceMd5(void);
 void FileForceTrackingEnable(void);
 
 void FileStoreAllFiles(FileContainer *);
-void FileStoreAllFilesForTx(FileContainer *, uint16_t);
-void FileStoreFileById(FileContainer *fc, uint16_t);
+void FileStoreAllFilesForTx(FileContainer *, uint64_t);
+void FileStoreFileById(FileContainer *fc, uint32_t);
 
 void FileTruncateAllOpenFiles(FileContainer *);
 

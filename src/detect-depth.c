@@ -42,7 +42,8 @@
 
 static int DetectDepthSetup (DetectEngineCtx *, Signature *, char *);
 
-void DetectDepthRegister (void) {
+void DetectDepthRegister (void)
+{
     sigmatch_table[DETECT_DEPTH].name = "depth";
     sigmatch_table[DETECT_DEPTH].desc = "designate how many bytes from the beginning of the payload will be checked";
     sigmatch_table[DETECT_DEPTH].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Depth";
@@ -79,7 +80,7 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSBDMATCH],
+                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
                                          DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],

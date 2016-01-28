@@ -570,7 +570,7 @@ static SCRadixNode *SCRadixAddKey(uint8_t *key_stream, uint16_t key_bitlen,
          * down along one of the paths, since either paths should end up with a
          * node that has a common prefix whose differ bit is greater than the
          * bitlen of the incoming prefix */
-        if (bitlen < node->bit) {
+        if (bitlen <= node->bit) {
             if (node->right == NULL)
                 break;
             node = node->right;
@@ -929,7 +929,8 @@ SCRadixNode *SCRadixAddKeyIPV6Netblock(uint8_t *key_stream, SCRadixTree *tree,
  *
  * \retval node Pointer to the newly created node
  */
-SCRadixNode *SCRadixAddKeyIPV4String(const char *str, SCRadixTree *tree, void *user) {
+SCRadixNode *SCRadixAddKeyIPV4String(const char *str, SCRadixTree *tree, void *user)
+{
     uint32_t ip;
     uint8_t netmask = 32;
     char ip_str[32]; /* Max length for full ipv4/mask string with NUL */
@@ -977,7 +978,8 @@ SCRadixNode *SCRadixAddKeyIPV4String(const char *str, SCRadixTree *tree, void *u
  *
  * \retval node Pointer to the newly created node
  */
-SCRadixNode *SCRadixAddKeyIPV6String(const char *str, SCRadixTree *tree, void *user) {
+SCRadixNode *SCRadixAddKeyIPV6String(const char *str, SCRadixTree *tree, void *user)
+{
     uint8_t netmask = 128;
     char ip_str[80]; /* Max length for full ipv6/mask string with NUL */
     char *mask_str = NULL;

@@ -34,7 +34,8 @@ static Signature g_tag_signature;
 /** tag packet alert structure for tag alerts */
 static PacketAlert g_tag_pa;
 
-void PacketAlertTagInit(void) {
+void PacketAlertTagInit(void)
+{
     memset(&g_tag_signature, 0x00, sizeof(g_tag_signature));
 
     g_tag_signature.id = TAG_SIG_ID;
@@ -45,12 +46,12 @@ void PacketAlertTagInit(void) {
 
     memset(&g_tag_pa, 0x00, sizeof(g_tag_pa));
 
-    g_tag_pa.order_id = 1000;
     g_tag_pa.action = ACTION_ALERT;
     g_tag_pa.s = &g_tag_signature;
 }
 
-PacketAlert *PacketAlertGetTag(void) {
+PacketAlert *PacketAlertGetTag(void)
+{
     return &g_tag_pa;
 }
 
@@ -234,7 +235,8 @@ int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, u
  * \param det_ctx detection engine thread context
  * \param p pointer to the packet
  */
-void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p) {
+void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx, Packet *p)
+{
     SCEnter();
     int i = 0;
     Signature *s = NULL;
@@ -253,7 +255,7 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
             while (sm) {
                 /* tags are set only for alerts */
                 KEYWORD_PROFILING_START;
-                sigmatch_table[sm->type].Match(NULL, det_ctx, p, s, sm);
+                sigmatch_table[sm->type].Match(NULL, det_ctx, p, s, sm->ctx);
                 KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
                 sm = sm->next;
             }
@@ -284,14 +286,23 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                 }
             }
 
-            /* set verdict on packet */
-            PACKET_UPDATE_ACTION(p, p->alerts.alerts[i].action);
+            /* set actions on packet */
+            DetectSignatureApplyActions(p, p->alerts.alerts[i].s);
 
             if (PACKET_TEST_ACTION(p, ACTION_PASS)) {
                 /* Ok, reset the alert cnt to end in the previous of pass
                  * so we ignore the rest with less prio */
                 p->alerts.cnt = i;
+
+                /* if an stream/app-layer match we enforce the pass for the flow */
+                if ((p->flow != NULL) &&
+                    (p->alerts.alerts[i].flags &
+                        (PACKET_ALERT_FLAG_STATE_MATCH|PACKET_ALERT_FLAG_STREAM_MATCH)))
+                {
+                    FlowLockSetNoPacketInspectionFlag(p->flow);
+                }
                 break;
+
             /* if the signature wants to drop, check if the
              * PACKET_ALERT_FLAG_DROP_FLOW flag is set. */
             } else if ((PACKET_TEST_ACTION(p, ACTION_DROP)) &&

@@ -77,7 +77,8 @@ extern int max_pending_packets;
 /*Handle cases where we don't have PF_RING support built-in*/
 TmEcode NoPfringSupportExit(ThreadVars *, void *, void **);
 
-void TmModuleReceivePfringRegister (void) {
+void TmModuleReceivePfringRegister (void)
+{
     tmm_modules[TMM_RECEIVEPFRING].name = "ReceivePfring";
     tmm_modules[TMM_RECEIVEPFRING].ThreadInit = NoPfringSupportExit;
     tmm_modules[TMM_RECEIVEPFRING].Func = NULL;
@@ -89,7 +90,8 @@ void TmModuleReceivePfringRegister (void) {
     tmm_modules[TMM_RECEIVEPFRING].flags = TM_FLAG_RECEIVE_TM;
 }
 
-void TmModuleDecodePfringRegister (void) {
+void TmModuleDecodePfringRegister (void)
+{
     tmm_modules[TMM_DECODEPFRING].name = "DecodePfring";
     tmm_modules[TMM_DECODEPFRING].ThreadInit = NoPfringSupportExit;
     tmm_modules[TMM_DECODEPFRING].Func = NULL;
@@ -123,6 +125,10 @@ static SCMutex pfring_bpf_set_filter_lock = SCMUTEX_INITIALIZER;
 #define LIBPFRING_REENTRANT   0
 #define LIBPFRING_WAIT_FOR_INCOMING 1
 
+typedef enum {
+    PFRING_FLAGS_ZERO_COPY = 0x1
+} PfringThreadVarsFlags;
+
 /**
  * \brief Structure to hold thread specific variables.
  */
@@ -138,6 +144,8 @@ typedef struct PfringThreadVars_
     uint16_t capture_kernel_packets;
     uint16_t capture_kernel_drops;
 
+    uint32_t flags;
+
     ThreadVars *tv;
     TmSlot *slot;
 
@@ -146,15 +154,13 @@ typedef struct PfringThreadVars_
     /* threads count */
     int threads;
 
-#ifdef HAVE_PFRING_CLUSTER_TYPE
     cluster_type ctype;
-#endif /* HAVE_PFRING_CLUSTER_TYPE */
+
     uint8_t cluster_id;
     char *interface;
     LiveDevice *livedev;
-#ifdef HAVE_PFRING_SET_BPF_FILTER
+
     char *bpf_filter;
-#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
      ChecksumValidationMode checksum_mode;
 } PfringThreadVars;
@@ -163,7 +169,8 @@ typedef struct PfringThreadVars_
  * \brief Registration Function for RecievePfring.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleReceivePfringRegister (void) {
+void TmModuleReceivePfringRegister (void)
+{
     tmm_modules[TMM_RECEIVEPFRING].name = "ReceivePfring";
     tmm_modules[TMM_RECEIVEPFRING].ThreadInit = ReceivePfringThreadInit;
     tmm_modules[TMM_RECEIVEPFRING].Func = NULL;
@@ -178,7 +185,8 @@ void TmModuleReceivePfringRegister (void) {
  * \brief Registration Function for DecodePfring.
  * \todo Unit tests are needed for this module.
  */
-void TmModuleDecodePfringRegister (void) {
+void TmModuleDecodePfringRegister (void)
+{
     tmm_modules[TMM_DECODEPFRING].name = "DecodePfring";
     tmm_modules[TMM_DECODEPFRING].ThreadInit = DecodePfringThreadInit;
     tmm_modules[TMM_DECODEPFRING].Func = DecodePfring;
@@ -196,14 +204,12 @@ static inline void PfringDumpCounters(PfringThreadVars *ptv)
          * So to get the number of packet on the interface we can add
          * the newly seen packets and drops for this thread and add it
          * to the interface counter */
-        uint64_t th_pkts = SCPerfGetLocalCounterValue(ptv->capture_kernel_packets,
-                                                      ptv->tv->sc_perf_pca);
-        uint64_t th_drops = SCPerfGetLocalCounterValue(ptv->capture_kernel_drops,
-                                                       ptv->tv->sc_perf_pca);
+        uint64_t th_pkts = StatsGetLocalCounterValue(ptv->tv, ptv->capture_kernel_packets);
+        uint64_t th_drops = StatsGetLocalCounterValue(ptv->tv, ptv->capture_kernel_drops);
         SC_ATOMIC_ADD(ptv->livedev->pkts, pfring_s.recv - th_pkts);
         SC_ATOMIC_ADD(ptv->livedev->drop, pfring_s.drop - th_drops);
-        SCPerfCounterSetUI64(ptv->capture_kernel_packets, ptv->tv->sc_perf_pca, pfring_s.recv);
-        SCPerfCounterSetUI64(ptv->capture_kernel_drops, ptv->tv->sc_perf_pca, pfring_s.drop);
+        StatsSetUI64(ptv->tv, ptv->capture_kernel_packets, pfring_s.recv);
+        StatsSetUI64(ptv->tv, ptv->capture_kernel_drops, pfring_s.drop);
     }
 }
 
@@ -217,7 +223,8 @@ static inline void PfringDumpCounters(PfringThreadVars *ptv)
  * \param h pointer to pfring packet header
  * \param p pointer to the current packet
  */
-static inline void PfringProcessPacket(void *user, struct pfring_pkthdr *h, Packet *p) {
+static inline void PfringProcessPacket(void *user, struct pfring_pkthdr *h, Packet *p)
+{
 
     PfringThreadVars *ptv = (PfringThreadVars *)user;
 
@@ -289,25 +296,23 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
 {
     SCEnter();
 
-    uint16_t packet_q_len = 0;
     PfringThreadVars *ptv = (PfringThreadVars *)data;
     Packet *p = NULL;
     struct pfring_pkthdr hdr;
     TmSlot *s = (TmSlot *)slot;
     time_t last_dump = 0;
-    struct timeval current_time;
+    u_int buffer_size;
+    u_char *pkt_buffer;
 
     ptv->slot = s->slot_next;
 
     /* we have to enable the ring here as we need to do it after all
      * the threads have called pfring_set_cluster(). */
-#ifdef HAVE_PFRING_ENABLE
     int rc = pfring_enable_ring(ptv->pd);
     if (rc != 0) {
         SCLogError(SC_ERR_PF_RING_OPEN, "pfring_enable_ring failed returned %d ", rc);
         SCReturnInt(TM_ECODE_FAILED);
     }
-#endif /* HAVE_PFRING_ENABLE */
 
     while(1) {
         if (suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL)) {
@@ -316,12 +321,7 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
 
         /* make sure we have at least one packet in the packet pool, to prevent
          * us from alloc'ing packets at line rate */
-        do {
-            packet_q_len = PacketPoolSize();
-            if (unlikely(packet_q_len == 0)) {
-                PacketPoolWait();
-            }
-        } while (packet_q_len == 0);
+        PacketPoolWait();
 
         p = PacketGetFromQueueOrAlloc();
         if (p == NULL) {
@@ -332,25 +332,25 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
         /* Some flavours of PF_RING may fail to set timestamp - see PF-RING-enabled libpcap code*/
         hdr.ts.tv_sec = hdr.ts.tv_usec = 0;
 
+        /* Check for Zero-copy mode */
+        if (ptv->flags & PFRING_FLAGS_ZERO_COPY) {
+            buffer_size = 0;
+            pkt_buffer = NULL;
+        } else {
+            buffer_size = GET_PKT_DIRECT_MAX_SIZE(p);
+            pkt_buffer = GET_PKT_DIRECT_DATA(p);
+        }
+
         /* Depending on what compile time options are used for pfring we either return 0 or -1 on error and always 1 for success */
-#ifdef HAVE_PFRING_RECV_UCHAR
-        u_char *pkt_buffer = GET_PKT_DIRECT_DATA(p);
-        u_int buffer_size = GET_PKT_DIRECT_MAX_SIZE(p);
         int r = pfring_recv(ptv->pd, &pkt_buffer,
                 buffer_size,
                 &hdr,
                 LIBPFRING_WAIT_FOR_INCOMING);
 
-        /* Check for Zero-copy if buffer size is zero */
-        if (buffer_size == 0) {
+        /* Check for Zero-copy mode */
+        if (ptv->flags & PFRING_FLAGS_ZERO_COPY) {
             PacketSetData(p, pkt_buffer, hdr.caplen);
         }
-#else
-        int r = pfring_recv(ptv->pd, (char *)GET_PKT_DIRECT_DATA(p),
-                (u_int)GET_PKT_DIRECT_MAX_SIZE(p),
-                &hdr,
-                LIBPFRING_WAIT_FOR_INCOMING);
-#endif /* HAVE_PFRING_RECV_UCHAR */
 
         if (r == 1) {
             //printf("RecievePfring src %" PRIu32 " sport %" PRIu32 " dst %" PRIu32 " dstport %" PRIu32 "\n",
@@ -364,17 +364,16 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
             }
 
             /* Trigger one dump of stats every second */
-            TimeGet(&current_time);
-            if (current_time.tv_sec != last_dump) {
+            if (p->ts.tv_sec != last_dump) {
                 PfringDumpCounters(ptv);
-                last_dump = current_time.tv_sec;
+                last_dump = p->ts.tv_sec;
             }
         } else {
             SCLogError(SC_ERR_PF_RING_RECV,"pfring_recv error  %" PRId32 "", r);
             TmqhOutputPacketpool(ptv->tv, p);
             SCReturnInt(TM_ECODE_FAILED);
         }
-        SCPerfSyncCountersIfSignalled(tv);
+        StatsSyncCountersIfSignalled(tv);
     }
 
     return TM_ECODE_OK;
@@ -394,12 +393,13 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
  * \retval TM_ECODE_OK on success
  * \retval TM_ECODE_FAILED on error
  */
-TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
+TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data)
+{
     int rc;
     u_int32_t version = 0;
     PfringIfaceConfig *pfconf = (PfringIfaceConfig *) initdata;
     unsigned int opflag;
-
+    char const *active_runmode = RunmodeGetActive();
 
     if (pfconf == NULL)
         return TM_ECODE_FAILED;
@@ -417,7 +417,6 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
     ptv->interface = SCStrdup(pfconf->iface);
     if (unlikely(ptv->interface == NULL)) {
         SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate device string");
-
         SCFree(ptv);
         SCReturnInt(TM_ECODE_FAILED);
     }
@@ -425,15 +424,19 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
     ptv->livedev = LiveGetDevice(pfconf->iface);
     if (ptv->livedev == NULL) {
         SCLogError(SC_ERR_INVALID_VALUE, "Unable to find Live device");
-
-        SCFree(ptv->interface);
         SCFree(ptv);
         SCReturnInt(TM_ECODE_FAILED);
     }
 
+    /* enable zero-copy mode for workers runmode */
+    if (active_runmode && strcmp("workers", active_runmode) == 0) {
+        ptv->flags |= PFRING_FLAGS_ZERO_COPY;
+        SCLogInfo("Enabling zero-copy for %s", ptv->interface);
+    }
+
     ptv->checksum_mode = pfconf->checksum_mode;
 
-    opflag = PF_RING_REENTRANT | PF_RING_PROMISC;
+    opflag = PF_RING_PROMISC;
 
     /* if suri uses VLAN and if we have a recent kernel, we need
      * to use parsed_pkt to get VLAN info */
@@ -452,17 +455,14 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
         }
     }
 
-#ifdef HAVE_PFRING_OPEN_NEW
     ptv->pd = pfring_open(ptv->interface, (uint32_t)default_packet_size, opflag);
-#else
-    ptv->pd = pfring_open(ptv->interface, LIBPFRING_PROMISC, (uint32_t)default_packet_size, LIBPFRING_REENTRANT);
-#endif
     if (ptv->pd == NULL) {
         SCLogError(SC_ERR_PF_RING_OPEN,"Failed to open %s: pfring_open error."
                 " Check if %s exists and pf_ring module is loaded.",
                 ptv->interface,
                 ptv->interface);
         pfconf->DerefFunc(pfconf);
+        SCFree(ptv);
         return TM_ECODE_FAILED;
     } else {
         pfring_set_application_name(ptv->pd, PROG_NAME);
@@ -479,18 +479,17 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
     } else if (strncmp(ptv->interface, "zc", 2) == 0) {
         SCLogInfo("ZC interface detected, not adding thread to cluster");
     } else {
-#ifdef HAVE_PFRING_CLUSTER_TYPE
         ptv->ctype = pfconf->ctype;
         rc = pfring_set_cluster(ptv->pd, ptv->cluster_id, ptv->ctype);
-#else
-        rc = pfring_set_cluster(ptv->pd, ptv->cluster_id);
-#endif /* HAVE_PFRING_CLUSTER_TYPE */
 
         if (rc != 0) {
             SCLogError(SC_ERR_PF_RING_SET_CLUSTER_FAILED, "pfring_set_cluster "
                     "returned %d for cluster-id: %d", rc, ptv->cluster_id);
-            pfconf->DerefFunc(pfconf);
-            return TM_ECODE_FAILED;
+            if (rc != PF_RING_ERROR_NOT_SUPPORTED || (pfconf->flags & PFRING_CONF_FLAGS_CLUSTER)) {
+                /* cluster is mandatory as explicitly specified in the configuration */
+                pfconf->DerefFunc(pfconf);
+                return TM_ECODE_FAILED;
+            }
         }
     }
 
@@ -504,7 +503,6 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
                 version & 0x000000FF, ptv->interface, ptv->cluster_id);
     }
 
-#ifdef HAVE_PFRING_SET_BPF_FILTER
     if (pfconf->bpf_filter) {
         ptv->bpf_filter = SCStrdup(pfconf->bpf_filter);
         if (unlikely(ptv->bpf_filter == NULL)) {
@@ -520,16 +518,11 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
             }
         }
     }
-#endif /* HAVE_PFRING_SET_BPF_FILTER */
 
-    ptv->capture_kernel_packets = SCPerfTVRegisterCounter("capture.kernel_packets",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
-    ptv->capture_kernel_drops = SCPerfTVRegisterCounter("capture.kernel_drops",
-            ptv->tv,
-            SC_PERF_TYPE_UINT64,
-            "NULL");
+    ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
+            ptv->tv);
+    ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
+            ptv->tv);
 
     /* A bit strange to have this here but we only have vlan information
      * during reading so we need to know if we want to keep vlan during
@@ -546,8 +539,24 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
         ptv->vlan_disabled = 1;
     }
 
+    /* If VLAN tracking is disabled, set cluster type to 5-tuple or in case of a
+     * ZC interface, do nothing */
+    if (ptv->vlan_disabled && ptv->ctype == CLUSTER_FLOW &&
+            strncmp(ptv->interface, "zc", 2) != 0) {
+        SCLogInfo("VLAN disabled, setting cluster type to CLUSTER_FLOW_5_TUPLE");
+        rc = pfring_set_cluster(ptv->pd, ptv->cluster_id, CLUSTER_FLOW_5_TUPLE);
+
+        if (rc != 0) {
+            SCLogError(SC_ERR_PF_RING_SET_CLUSTER_FAILED, "pfring_set_cluster "
+                    "returned %d for cluster-id: %d", rc, ptv->cluster_id);
+            pfconf->DerefFunc(pfconf);
+            return TM_ECODE_FAILED;
+        }
+    }
+
     *data = (void *)ptv;
     pfconf->DerefFunc(pfconf);
+
     return TM_ECODE_OK;
 }
 
@@ -556,14 +565,15 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data) {
  * \param tv pointer to ThreadVars
  * \param data pointer that gets cast into PfringThreadVars for ptv
  */
-void ReceivePfringThreadExitStats(ThreadVars *tv, void *data) {
+void ReceivePfringThreadExitStats(ThreadVars *tv, void *data)
+{
     PfringThreadVars *ptv = (PfringThreadVars *)data;
 
     PfringDumpCounters(ptv);
     SCLogInfo("(%s) Kernel: Packets %" PRIu64 ", dropped %" PRIu64 "",
             tv->name,
-            (uint64_t) SCPerfGetLocalCounterValue(ptv->capture_kernel_packets, tv->sc_perf_pca),
-            (uint64_t) SCPerfGetLocalCounterValue(ptv->capture_kernel_drops, tv->sc_perf_pca));
+            StatsGetLocalCounterValue(tv, ptv->capture_kernel_packets),
+            StatsGetLocalCounterValue(tv, ptv->capture_kernel_drops));
     SCLogInfo("(%s) Packets %" PRIu64 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
 }
 
@@ -573,17 +583,18 @@ void ReceivePfringThreadExitStats(ThreadVars *tv, void *data) {
  * \param data pointer that gets cast into PfringThreadVars for ptvi
  * \retval TM_ECODE_OK is always returned
  */
-TmEcode ReceivePfringThreadDeinit(ThreadVars *tv, void *data) {
+TmEcode ReceivePfringThreadDeinit(ThreadVars *tv, void *data)
+{
     PfringThreadVars *ptv = (PfringThreadVars *)data;
     if (ptv->interface)
         SCFree(ptv->interface);
     pfring_remove_from_cluster(ptv->pd);
-#ifdef HAVE_PFRING_SET_BPF_FILTER
+
     if (ptv->bpf_filter) {
         pfring_remove_bpf_filter(ptv->pd);
         SCFree(ptv->bpf_filter);
     }
-#endif /* HAVE_PFRING_SET_BPF_FILTER */
+
     pfring_close(ptv->pd);
     return TM_ECODE_OK;
 }
@@ -615,22 +626,11 @@ TmEcode DecodePfring(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pac
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-#if 0
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (GET_PKT_LEN(p) * 8)/1000000.0 );
-#endif
-
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
     /* If suri has set vlan during reading, we increase vlan counter */
     if (p->vlan_idx) {
-        SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
+        StatsIncr(tv, dtv->counter_vlan);
     }
 
     DecodeEthernet(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
@@ -673,7 +673,7 @@ TmEcode DecodePfringThreadInit(ThreadVars *tv, void *initdata, void **data)
 TmEcode DecodePfringThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 

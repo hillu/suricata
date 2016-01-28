@@ -1,4 +1,4 @@
-/* Copyright (C) 2012 Open Information Security Foundation
+/* Copyright (C) 2012-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -42,7 +42,8 @@
 TmEcode NoNapatechSupportExit(ThreadVars *, void *, void **);
 
 
-void TmModuleNapatechStreamRegister (void) {
+void TmModuleNapatechStreamRegister (void)
+{
     tmm_modules[TMM_RECEIVENAPATECH].name = "NapatechStream";
     tmm_modules[TMM_RECEIVENAPATECH].ThreadInit = NoNapatechSupportExit;
     tmm_modules[TMM_RECEIVENAPATECH].Func = NULL;
@@ -52,7 +53,8 @@ void TmModuleNapatechStreamRegister (void) {
     tmm_modules[TMM_RECEIVENAPATECH].cap_flags = SC_CAP_NET_ADMIN;
 }
 
-void TmModuleNapatechDecodeRegister (void) {
+void TmModuleNapatechDecodeRegister (void)
+{
     tmm_modules[TMM_DECODENAPATECH].name = "NapatechDecode";
     tmm_modules[TMM_DECODENAPATECH].ThreadInit = NoNapatechSupportExit;
     tmm_modules[TMM_DECODENAPATECH].Func = NULL;
@@ -182,7 +184,6 @@ TmEcode NapatechStreamLoop(ThreadVars *tv, void *data, void *slot)
 
     int32_t status;
     char errbuf[100];
-    uint16_t packet_q_len = 0;
     uint64_t pkt_ts;
     NtNetBuf_t packet_buffer;
     NapatechThreadVars *ntv = (NapatechThreadVars *)data;
@@ -207,12 +208,7 @@ TmEcode NapatechStreamLoop(ThreadVars *tv, void *data, void *slot)
     while (!(suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL))) {
         /* make sure we have at least one packet in the packet pool, to prevent
          * us from alloc'ing packets at line rate */
-        do {
-            packet_q_len = PacketPoolSize();
-            if (unlikely(packet_q_len == 0)) {
-                PacketPoolWait();
-            }
-        } while (packet_q_len == 0);
+        PacketPoolWait();
 
         /*
          * Napatech returns packets 1 at a time
@@ -298,7 +294,7 @@ TmEcode NapatechStreamLoop(ThreadVars *tv, void *data, void *slot)
         }
 
         NT_NetRxRelease(ntv->rx_stream, packet_buffer);
-        SCPerfSyncCountersIfSignalled(tv);
+        StatsSyncCountersIfSignalled(tv);
     }
 
     SCReturnInt(TM_ECODE_OK);
@@ -361,11 +357,7 @@ TmEcode NapatechDecode(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
     switch (p->datalink) {
         case LINKTYPE_ETHERNET:
@@ -403,7 +395,7 @@ TmEcode NapatechDecodeThreadInit(ThreadVars *tv, void *initdata, void **data)
 TmEcode NapatechDecodeThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 

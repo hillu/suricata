@@ -57,6 +57,7 @@ enum {
     ICMPV6_PKT_TOO_SMALL,           /**< icmpv6 smaller than minimum size */
     ICMPV6_IPV6_UNKNOWN_VER,        /**< unknown version in icmpv6 packet */
     ICMPV6_IPV6_TRUNC_PKT,          /**< truncated icmpv6 packet */
+    ICMPV6_MLD_MESSAGE_WITH_INVALID_HL, /**< invalid MLD that doesn't have HL 1 */
 
     /* IPV6 EVENTS */
     IPV6_PKT_TOO_SMALL,             /**< ipv6 packet smaller than minimum size */
@@ -231,6 +232,18 @@ enum {
     /* IPv6 in IPv6 events */
     IPV6_IN_IPV6_PKT_TOO_SMALL,
     IPV6_IN_IPV6_WRONG_IP_VER,
+
+    /* MPLS decode events. */
+    MPLS_HEADER_TOO_SMALL,
+    MPLS_BAD_LABEL_ROUTER_ALERT,
+    MPLS_BAD_LABEL_IMPLICIT_NULL,
+    MPLS_BAD_LABEL_RESERVED,
+    MPLS_UNKNOWN_PAYLOAD_TYPE,
+
+    /* ERSPAN events */
+    ERSPAN_HEADER_TOO_SMALL,
+    ERSPAN_UNSUPPORTED_VERSION,
+    ERSPAN_TOO_MANY_VLAN_LAYERS,
 
     /* should always be last! */
     DECODE_EVENT_MAX,

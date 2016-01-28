@@ -49,7 +49,8 @@ static void DetectPktDataTestRegister(void);
 /**
  * \brief Registration function for keyword: file_data
  */
-void DetectPktDataRegister(void) {
+void DetectPktDataRegister(void)
+{
     sigmatch_table[DETECT_PKT_DATA].name = "pkt_data";
     sigmatch_table[DETECT_PKT_DATA].Match = NULL;
     sigmatch_table[DETECT_PKT_DATA].AppLayerMatch = NULL;
@@ -105,9 +106,9 @@ static int DetectPktDataTest01(void)
     }
 
     /* sm should be in the MATCH list */
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSBDMATCH];
+    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
     if (sm == NULL) {
-        printf("sm not in DETECT_SM_LIST_HSBDMATCH: ");
+        printf("sm not in DETECT_SM_LIST_FILEDATA: ");
         goto end;
     }
 
@@ -142,7 +143,8 @@ end:
 }
 #endif
 
-static void DetectPktDataTestRegister(void){
+static void DetectPktDataTestRegister(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectPktDataTest01", DetectPktDataTest01, 1);
 #endif

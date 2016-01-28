@@ -26,6 +26,7 @@
 #define __APP_LAYER_PARSER_H__
 
 #include "app-layer-events.h"
+#include "detect-engine-state.h"
 #include "util-file.h"
 
 #define APP_LAYER_PARSER_EOF                    0x01
@@ -141,6 +142,10 @@ void AppLayerParserRegisterGetStateProgressCompletionStatus(uint8_t ipproto,
 void AppLayerParserRegisterGetEventInfo(uint8_t ipproto, AppProto alproto,
     int (*StateGetEventInfo)(const char *event_name, int *event_id,
                              AppLayerEventType *event_type));
+void AppLayerParserRegisterDetectStateFuncs(uint8_t ipproto, AppProto alproto,
+        int (*StateHasTxDetectState)(void *alstate),
+        DetectEngineState *(*GetTxDetectState)(void *tx),
+        int (*SetTxDetectState)(void *alstate, void *tx, DetectEngineState *));
 
 /***** Get and transaction functions *****/
 
@@ -153,8 +158,8 @@ uint64_t AppLayerParserGetTransactionLogId(AppLayerParserState *pstate);
 void AppLayerParserSetTransactionLogId(AppLayerParserState *pstate);
 uint64_t AppLayerParserGetTransactionInspectId(AppLayerParserState *pstate, uint8_t direction);
 void AppLayerParserSetTransactionInspectId(AppLayerParserState *pstate,
-                                uint8_t ipproto, AppProto alproto, void *alstate,
-                                uint8_t direction);
+                                const uint8_t ipproto, const AppProto alproto, void *alstate,
+                                const uint8_t flags);
 AppLayerDecoderEvents *AppLayerParserGetDecoderEvents(AppLayerParserState *pstate);
 void AppLayerParserSetDecoderEvents(AppLayerParserState *pstate, AppLayerDecoderEvents *devents);
 AppLayerDecoderEvents *AppLayerParserGetEventsByTx(uint8_t ipproto, AppProto alproto, void *alstate,
@@ -174,6 +179,11 @@ int AppLayerParserGetEventInfo(uint8_t ipproto, AppProto alproto, const char *ev
 uint64_t AppLayerParserGetTransactionActive(uint8_t ipproto, AppProto alproto, AppLayerParserState *pstate, uint8_t direction);
 
 uint8_t AppLayerParserGetFirstDataDir(uint8_t ipproto, AppProto alproto);
+
+int AppLayerParserSupportsTxDetectState(uint8_t ipproto, AppProto alproto);
+int AppLayerParserHasTxDetectState(uint8_t ipproto, AppProto alproto, void *alstate);
+DetectEngineState *AppLayerParserGetTxDetectState(uint8_t ipproto, AppProto alproto, void *tx);
+int AppLayerParserSetTxDetectState(uint8_t ipproto, AppProto alproto, void *alstate, void *tx, DetectEngineState *s);
 
 /***** General *****/
 

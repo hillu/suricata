@@ -51,6 +51,7 @@
 #include "app-layer-smb.h"
 #include "app-layer-dcerpc-common.h"
 #include "app-layer-dcerpc.h"
+#include "app-layer-smtp.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
@@ -173,7 +174,7 @@ static int DetectFileInspect(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
         if (sm != NULL && sm->next == NULL && sm->type == DETECT_FILESTORE &&
                 sm->ctx != NULL)
         {
-            DetectFilestoreData *fd = sm->ctx;
+            DetectFilestoreData *fd = (DetectFilestoreData *)sm->ctx;
             if (fd->scope > FILESTORE_SCOPE_DEFAULT) {
                 KEYWORD_PROFILING_START;
                 match = sigmatch_table[sm->type].
@@ -223,9 +224,6 @@ int DetectFileInspectHttp(ThreadVars *tv,
     else
         ffc = htp_state->files_ts;
 
-    /* inspect files for this transaction */
-    det_ctx->tx_id = (uint16_t)tx_id;
-
     int match = DetectFileInspect(tv, det_ctx, f, s, flags, ffc);
     if (match == 1) {
         r = DETECT_ENGINE_INSPECT_SIG_MATCH;
@@ -242,4 +240,62 @@ int DetectFileInspectHttp(ThreadVars *tv,
     }
 
     return r;
+}
+
+/**
+ *  \brief Inspect the file inspecting keywords against the SMTP transactions.
+ *
+ *  \param tv thread vars
+ *  \param det_ctx detection engine thread ctx
+ *  \param f flow
+ *  \param s signature to inspect
+ *  \param alstate state
+ *  \param flags direction flag
+ *
+ *  \retval 0 no match
+ *  \retval 1 match
+ *  \retval 2 can't match
+ *  \retval 3 can't match filestore signature
+ *
+ *  \note flow is not locked at this time
+ */
+int DetectFileInspectSmtp(ThreadVars *tv,
+                          DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+                          Signature *s, Flow *f, uint8_t flags, void *alstate,
+                          void *tx, uint64_t tx_id)
+{
+    SCEnter();
+    int r = DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
+    SMTPState *smtp_state = NULL;
+    FileContainer *ffc;
+
+    smtp_state = (SMTPState *)alstate;
+    if (smtp_state == NULL) {
+        SCLogDebug("no SMTP state");
+        goto end;
+    }
+
+    if (flags & STREAM_TOSERVER)
+        ffc = smtp_state->files_ts;
+    else
+        goto end;
+
+    int match = DetectFileInspect(tv, det_ctx, f, s, flags, ffc);
+    if (match == 1) {
+        r = DETECT_ENGINE_INSPECT_SIG_MATCH;
+    } else if (match == 2) {
+        if (r != 1) {
+            SCLogDebug("sid %u can't match on this transaction", s->id);
+            r = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
+        }
+    } else if (match == 3) {
+        if (r != 1) {
+            SCLogDebug("sid %u can't match on this transaction (filestore sig)", s->id);
+            r = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH_FILESTORE;
+        }
+    }
+
+
+end:
+    SCReturnInt(r);
 }

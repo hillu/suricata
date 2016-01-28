@@ -1172,6 +1172,10 @@ static int SMBParse(Flow *f, void *smb_state, AppLayerParserState *pstate,
         SCReturnInt(0);
     }
 
+    if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
+        SCReturnInt(1);
+    }
+
     if (sstate->bytesprocessed != 0 && sstate->data_needed_for_dir != dir) {
         SCReturnInt(-1);
     }
@@ -1393,7 +1397,8 @@ static int SMBParseResponse(Flow *f, void *smb_state, AppLayerParserState *pstat
  * \retval 0 if smb command is not an AndX command
  */
 
-int isAndX(SMBState *smb_state) {
+int isAndX(SMBState *smb_state)
+{
     SCEnter();
 
     switch (smb_state->smb.command) {
@@ -1417,7 +1422,8 @@ int isAndX(SMBState *smb_state) {
  *  \brief Allocate a SMBState
  *  \retval s State, or NULL in case of error
  */
-static void *SMBStateAlloc(void) {
+static void *SMBStateAlloc(void)
+{
     SCEnter();
 
     void *s = SCMalloc(sizeof(SMBState));
@@ -1433,7 +1439,8 @@ static void *SMBStateAlloc(void) {
 /** \internal
  *  \brief Free a SMBState
  */
-static void SMBStateFree(void *s) {
+static void SMBStateFree(void *s)
+{
     SCEnter();
     SMBState *sstate = (SMBState *) s;
 
@@ -1481,7 +1488,7 @@ static uint16_t SMBProbingParser(uint8_t *input, uint32_t ilen, uint32_t *offset
             case NBSS_RETARGET_SESSION_RESPONSE:
             case NBSS_SESSION_KEEP_ALIVE:
                 len = (input[1] & 0x01) << 16;
-                len = input[2] << 8;
+                len |= input[2] << 8;
                 len |= input[3];
                 break;
             default:
@@ -1519,7 +1526,8 @@ static int SMBRegisterPatternsForProtocolDetection(void)
     return 0;
 }
 
-void RegisterSMBParsers(void) {
+void RegisterSMBParsers(void)
+{
     char *proto_name = "smb";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
@@ -1569,7 +1577,8 @@ void RegisterSMBParsers(void) {
 /**
  * \test SMBParserTest01 tests the NBSS and SMB header decoding
  */
-int SMBParserTest01(void) {
+int SMBParserTest01(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf[] = "\x00\x00\x00\x85" // NBSS
@@ -1637,7 +1646,8 @@ end:
 /**
  * \test SMBParserTest02 tests the NBSS, SMB, and DCERPC over SMB header decoding
  */
-int SMBParserTest02(void) {
+int SMBParserTest02(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf[] = {
@@ -1711,7 +1721,8 @@ end:
     return result;
 }
 
-int SMBParserTest03(void) {
+int SMBParserTest03(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf1[] = {
@@ -2012,7 +2023,8 @@ end:
     return result;
 }
 
-int SMBParserTest04(void) {
+int SMBParserTest04(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf1[] = {
@@ -2319,7 +2331,8 @@ int SMBParserTest06(void)
     return result;
 }
 
-int SMBParserTest07(void) {
+int SMBParserTest07(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf1[] = {
@@ -2376,7 +2389,8 @@ end:
     return result;
 }
 
-int SMBParserTest08(void) {
+int SMBParserTest08(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf1[] = {
@@ -2475,7 +2489,8 @@ end:
     return result;
 }
 
-int SMBParserTest09(void) {
+int SMBParserTest09(void)
+{
     int result = 0;
     Flow f;
     uint8_t smbbuf1[] = {
@@ -2684,7 +2699,8 @@ end:
 
 #endif
 
-void SMBParserRegisterTests(void) {
+void SMBParserRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("SMBParserTest01", SMBParserTest01, 1);
     UtRegisterTest("SMBParserTest02", SMBParserTest02, 1);

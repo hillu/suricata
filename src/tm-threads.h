@@ -70,6 +70,10 @@ typedef struct TmSlot_ {
 
     /* linked list, only used when you have multiple slots(used by TmVarSlot) */
     struct TmSlot_ *slot_next;
+
+    /* just called once, so not perf critical */
+    TmEcode (*Management)(ThreadVars *, void *);
+
 } TmSlot;
 
 extern ThreadVars *tv_root[TVT_MAX];
@@ -85,7 +89,10 @@ ThreadVars *TmThreadCreate(char *, char *, char *, char *, char *, char *,
 ThreadVars *TmThreadCreatePacketHandler(char *, char *, char *, char *, char *,
                                         char *);
 ThreadVars *TmThreadCreateMgmtThread(char *name, void *(fn_p)(void *), int);
-ThreadVars *TmThreadCreateCmdThread(char *name, void *(fn_p)(void *), int);
+ThreadVars *TmThreadCreateMgmtThreadByName(char *name, char *module,
+                                     int mucond);
+ThreadVars *TmThreadCreateCmdThreadByName(char *name, char *module,
+                                     int mucond);
 TmEcode TmThreadSpawn(ThreadVars *);
 void TmThreadSetFlags(ThreadVars *, uint8_t);
 void TmThreadSetAOF(ThreadVars *, uint8_t);
@@ -113,9 +120,6 @@ void TmThreadCheckThreadState(void);
 TmEcode TmThreadWaitOnThreadInit(void);
 ThreadVars *TmThreadsGetCallingThread(void);
 
-void TmThreadActivateDummySlot(void);
-void TmThreadDeActivateDummySlot(void);
-
 int TmThreadsCheckFlag(ThreadVars *, uint16_t);
 void TmThreadsSetFlag(ThreadVars *, uint16_t);
 void TmThreadsUnsetFlag(ThreadVars *, uint16_t);
@@ -124,8 +128,11 @@ void TmThreadWaitForFlag(ThreadVars *, uint16_t);
 TmEcode TmThreadsSlotVarRun (ThreadVars *tv, Packet *p, TmSlot *slot);
 
 ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *);
-void TmThreadDisableThreadsWithTMS(uint8_t tm_flags);
+void TmThreadDisablePacketThreads(void);
+void TmThreadDisableReceiveThreads(void);
 TmSlot *TmThreadGetFirstTmSlotForPartialPattern(const char *);
+
+uint32_t TmThreadCountThreadsByTmmFlags(uint8_t flags);
 
 /**
  *  \brief Process the rest of the functions (if any) and queue.
@@ -188,5 +195,11 @@ static inline TmEcode TmThreadsSlotProcessPkt(ThreadVars *tv, TmSlot *s, Packet 
 
     return r;
 }
+
+
+void TmThreadsListThreads(void);
+int TmThreadsRegisterThread(ThreadVars *tv, const int type);
+void TmThreadsUnregisterThread(const int id);
+int TmThreadsInjectPacketsById(Packet **, int id);
 
 #endif /* __TM_THREADS_H__ */

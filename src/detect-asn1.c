@@ -43,7 +43,7 @@
 const char *ASN_DELIM = " \t,\n";
 
 int DetectAsn1Match(ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                     Signature *, SigMatch *);
+                     Signature *, const SigMatchCtx *);
 static int DetectAsn1Setup (DetectEngineCtx *, Signature *, char *);
 void DetectAsn1RegisterTests(void);
 void DetectAsn1Free(void *);
@@ -51,7 +51,8 @@ void DetectAsn1Free(void *);
 /**
  * \brief Registration function for asn1
  */
-void DetectAsn1Register(void) {
+void DetectAsn1Register(void)
+{
     sigmatch_table[DETECT_ASN1].name = "asn1";
     sigmatch_table[DETECT_ASN1].Match = DetectAsn1Match;
     sigmatch_table[DETECT_ASN1].Setup = DetectAsn1Setup;
@@ -75,7 +76,8 @@ void DetectAsn1Register(void) {
  *           checks that we want to perform, and the lenght of oversize check
  * \retval 1 if any of the options match, 0 if not
  */
-static uint8_t DetectAsn1Checks(Asn1Node *node, DetectAsn1Data *ad) {
+static uint8_t DetectAsn1Checks(Asn1Node *node, const DetectAsn1Data *ad)
+{
 
     /* oversize_length will check if a node has a length greater than
      * the user supplied length */
@@ -136,7 +138,7 @@ static uint8_t DetectAsn1Checks(Asn1Node *node, DetectAsn1Data *ad) {
  * \retval 1 match
  */
 int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
-                     Signature *s, SigMatch *m)
+                     Signature *s, const SigMatchCtx *ctx)
 {
     uint8_t ret = 0;
 
@@ -145,7 +147,7 @@ int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
         return 0;
     }
 
-    DetectAsn1Data *ad = (DetectAsn1Data *)m->ctx;
+    const DetectAsn1Data *ad = (const DetectAsn1Data *)ctx;
 
     Asn1Ctx *ac = SCAsn1CtxNew();
     if (ac == NULL)
@@ -195,15 +197,17 @@ int DetectAsn1Match(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
  * \retval fd pointer to DetectAsn1Data on success
  * \retval NULL on failure
  */
-DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
+DetectAsn1Data *DetectAsn1Parse(char *asn1str)
+{
     DetectAsn1Data *fd = NULL;
     char *tok = NULL;
     uint32_t ov_len = 0;
     uint32_t abs_off = 0;
     int32_t rel_off = 0;
     uint8_t flags = 0;
+    char *saveptr = NULL;
 
-    tok = strtok(asn1str, ASN_DELIM);
+    tok = strtok_r(asn1str, ASN_DELIM, &saveptr);
     if (tok == NULL) {
         SCLogError(SC_ERR_INVALID_VALUE, "Malformed asn1 argument: %s",
                    asn1str);
@@ -220,7 +224,7 @@ DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
         } else if (strcasecmp("oversize_length", tok) == 0) {
             flags |= ASN1_OVERSIZE_LEN;
             /* get the param */
-            tok = strtok(NULL, ASN_DELIM);
+            tok = strtok_r(NULL, ASN_DELIM, &saveptr);
             if ( tok == NULL ||
                 ByteExtractStringUint32(&ov_len, 10, 0, tok) <= 0)
             {
@@ -231,7 +235,7 @@ DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
         } else if (strcasecmp("absolute_offset", tok) == 0) {
             flags |= ASN1_ABSOLUTE_OFFSET;
             /* get the param */
-            tok = strtok(NULL, ASN_DELIM);
+            tok = strtok_r(NULL, ASN_DELIM, &saveptr);
             if (tok == NULL ||
                 ByteExtractStringUint32(&abs_off, 10, 0, tok) <= 0)
             {
@@ -242,7 +246,7 @@ DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
         } else if (strcasecmp("relative_offset",tok) == 0) {
             flags |= ASN1_RELATIVE_OFFSET;
             /* get the param */
-            tok = strtok(NULL, ASN_DELIM);
+            tok = strtok_r(NULL, ASN_DELIM, &saveptr);
             if (tok == NULL ||
                 ByteExtractStringInt32(&rel_off, 10, 0, tok) <= 0)
             {
@@ -255,7 +259,7 @@ DetectAsn1Data *DetectAsn1Parse(char *asn1str) {
                        asn1str);
             return NULL;
         }
-        tok = strtok(NULL, ASN_DELIM);
+        tok = strtok_r(NULL, ASN_DELIM, &saveptr);
     }
 
     fd = SCMalloc(sizeof(DetectAsn1Data));
@@ -285,7 +289,8 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectAsn1Setup(DetectEngineCtx *de_ctx, Signature *s, char *asn1str) {
+int DetectAsn1Setup(DetectEngineCtx *de_ctx, Signature *s, char *asn1str)
+{
     DetectAsn1Data *ad = NULL;
     SigMatch *sm = NULL;
 
@@ -299,7 +304,7 @@ int DetectAsn1Setup(DetectEngineCtx *de_ctx, Signature *s, char *asn1str) {
         goto error;
 
     sm->type = DETECT_ASN1;
-    sm->ctx = (void *)ad;
+    sm->ctx = (SigMatchCtx *)ad;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
@@ -317,7 +322,8 @@ error:
  *
  * \param ad pointer to DetectAsn1Data
  */
-void DetectAsn1Free(void *ptr) {
+void DetectAsn1Free(void *ptr)
+{
     DetectAsn1Data *ad = (DetectAsn1Data *)ptr;
     SCFree(ad);
 }
@@ -327,7 +333,8 @@ void DetectAsn1Free(void *ptr) {
 /**
  * \test DetectAsn1TestParse01 check that we parse oversize_length correctly
  */
-int DetectAsn1TestParse01(void) {
+int DetectAsn1TestParse01(void)
+{
     int result = 0;
     char str[] = "oversize_length 1024";
     DetectAsn1Data *ad = NULL;
@@ -346,7 +353,8 @@ int DetectAsn1TestParse01(void) {
 /**
  * \test DetectAsn1TestParse02 check that we parse absolute_offset correctly
  */
-int DetectAsn1TestParse02(void) {
+int DetectAsn1TestParse02(void)
+{
     int result = 0;
     DetectAsn1Data *ad = NULL;
     char str[] = "absolute_offset 1024";
@@ -364,7 +372,8 @@ int DetectAsn1TestParse02(void) {
 /**
  * \test DetectAsn1TestParse03 check that we parse relative_offset correctly
  */
-int DetectAsn1TestParse03(void) {
+int DetectAsn1TestParse03(void)
+{
     int result = 0;
     char str[] = "relative_offset     1024";
     DetectAsn1Data *ad = NULL;
@@ -382,7 +391,8 @@ int DetectAsn1TestParse03(void) {
 /**
  * \test DetectAsn1TestParse04 check that we parse bitstring_overflow correctly
  */
-int DetectAsn1TestParse04(void) {
+int DetectAsn1TestParse04(void)
+{
     int result = 0;
     char str[] = "bitstring_overflow";
     DetectAsn1Data *ad = NULL;
@@ -399,7 +409,8 @@ int DetectAsn1TestParse04(void) {
 /**
  * \test DetectAsn1TestParse05 check that we parse double_overflow correctly
  */
-int DetectAsn1TestParse05(void) {
+int DetectAsn1TestParse05(void)
+{
     int result = 0;
     char str[] = "double_overflow";
     DetectAsn1Data *ad = NULL;
@@ -416,7 +427,8 @@ int DetectAsn1TestParse05(void) {
 /**
  * \test DetectAsn1TestParse06 check that we fail if a needed arg is not given
  */
-int DetectAsn1TestParse06(void) {
+int DetectAsn1TestParse06(void)
+{
     int result = 1;
     char str[] = "absolute_offset";
     DetectAsn1Data *ad = NULL;
@@ -433,7 +445,8 @@ int DetectAsn1TestParse06(void) {
 /**
  * \test DetectAsn1TestParse07 check that we fail if a needed arg is not given
  */
-int DetectAsn1TestParse07(void) {
+int DetectAsn1TestParse07(void)
+{
     int result = 1;
     char str[] = "relative_offset";
     DetectAsn1Data *ad = NULL;
@@ -450,7 +463,8 @@ int DetectAsn1TestParse07(void) {
 /**
  * \test DetectAsn1TestParse08 check that we fail if a needed arg is not given
  */
-int DetectAsn1TestParse08(void) {
+int DetectAsn1TestParse08(void)
+{
     int result = 1;
     char str[] = "oversize_length";
     DetectAsn1Data *ad = NULL;
@@ -469,7 +483,8 @@ int DetectAsn1TestParse08(void) {
 /**
  * \test DetectAsn1TestParse09 test that we break on invalid options
  */
-int DetectAsn1TestParse09(void) {
+int DetectAsn1TestParse09(void)
+{
     int result = 1;
     DetectAsn1Data *fd = NULL;
     char str[] = "oversize_length 1024, lalala 360";
@@ -486,7 +501,8 @@ int DetectAsn1TestParse09(void) {
 /**
  * \test DetectAsn1TestParse10 test that we break with a empty string
  */
-int DetectAsn1TestParse10(void) {
+int DetectAsn1TestParse10(void)
+{
     int result = 1;
     DetectAsn1Data *fd = NULL;
     char str[] = "";
@@ -503,7 +519,8 @@ int DetectAsn1TestParse10(void) {
 /**
  * \test DetectAsn1TestParse11 check for combinations of keywords
  */
-int DetectAsn1TestParse11(void) {
+int DetectAsn1TestParse11(void)
+{
     int result = 0;
     char str[] = "oversize_length 1024, relative_offset 10";
     DetectAsn1Data *ad = NULL;
@@ -524,7 +541,8 @@ int DetectAsn1TestParse11(void) {
 /**
  * \test DetectAsn1TestParse12 check for combinations of keywords
  */
-int DetectAsn1TestParse12(void) {
+int DetectAsn1TestParse12(void)
+{
     int result = 0;
     char str[] = "oversize_length 1024 absolute_offset 10";
     DetectAsn1Data *ad = NULL;
@@ -545,7 +563,8 @@ int DetectAsn1TestParse12(void) {
 /**
  * \test DetectAsn1TestParse13 check for combinations of keywords
  */
-int DetectAsn1TestParse13(void) {
+int DetectAsn1TestParse13(void)
+{
     int result = 0;
     char str[] = "oversize_length 1024 absolute_offset 10, bitstring_overflow";
     DetectAsn1Data *ad = NULL;
@@ -567,7 +586,8 @@ int DetectAsn1TestParse13(void) {
 /**
  * \test DetectAsn1TestParse14 check for combinations of keywords
  */
-int DetectAsn1TestParse14(void) {
+int DetectAsn1TestParse14(void)
+{
     int result = 0;
     char str[] = "double_overflow, oversize_length 1024 absolute_offset 10,"
                  " bitstring_overflow";
@@ -591,7 +611,8 @@ int DetectAsn1TestParse14(void) {
 /**
  * \test DetectAsn1TestParse15 check for combinations of keywords
  */
-int DetectAsn1TestParse15(void) {
+int DetectAsn1TestParse15(void)
+{
     int result = 0;
     char str[] = "double_overflow, oversize_length 1024 relative_offset 10,"
                  " bitstring_overflow";
@@ -615,7 +636,8 @@ int DetectAsn1TestParse15(void) {
 /**
  * \test DetectAsn1Test01 Ensure that the checks work when they should
  */
-int DetectAsn1Test01(void) {
+int DetectAsn1Test01(void)
+{
     int result = 0;
     /* Match if any of the nodes after offset 0 has greater length than 10 */
     char str[] = "oversize_length 132 absolute_offset 0";
@@ -680,7 +702,8 @@ int DetectAsn1Test01(void) {
 /**
  * \test DetectAsn1Test02 Ensure that the checks work when they should
  */
-int DetectAsn1Test02(void) {
+int DetectAsn1Test02(void)
+{
     int result = 0;
     /* Match if any of the nodes has the bitstring overflow condition */
     char str[] = "oversize_length 133, absolute_offset 0";
@@ -747,7 +770,8 @@ int DetectAsn1Test02(void) {
 /**
  * \test DetectAsn1Test03 Ensure that the checks work when they should
  */
-int DetectAsn1Test03(void) {
+int DetectAsn1Test03(void)
+{
     int result = 0;
     /* Match if any of the nodes after offset 0 has a bitstring overflow */
     char str[] = "bitstring_overflow, absolute_offset 0";
@@ -805,7 +829,8 @@ int DetectAsn1Test03(void) {
 /**
  * \test DetectAsn1Test04 Ensure that the checks work when they should
  */
-int DetectAsn1Test04(void) {
+int DetectAsn1Test04(void)
+{
     int result = 0;
     /* Match if any of the nodes after offset 0 has a bitstring overflow */
     char str[] = "bitstring_overflow, absolute_offset 0";
@@ -866,7 +891,8 @@ int DetectAsn1Test04(void) {
 /**
  * \test DetectAsn1Test05 Ensure that the checks work when they should
  */
-int DetectAsn1Test05(void) {
+int DetectAsn1Test05(void)
+{
     int result = 0;
     /* Match if any of the nodes after offset 0 has a double overflow */
     char str[] = "double_overflow, absolute_offset 0";
@@ -935,7 +961,8 @@ int DetectAsn1Test05(void) {
 /**
  * \test DetectAsn1Test06 Ensure that the checks work when they should
  */
-int DetectAsn1Test06(void) {
+int DetectAsn1Test06(void)
+{
     int result = 0;
     /* Match if any of the nodes after offset 0 has a double overflow */
     char str[] = "double_overflow, absolute_offset 0";
@@ -1007,7 +1034,8 @@ int DetectAsn1Test06(void) {
 /**
  * \test DetectAsn1TestReal01 Ensure that all works together
  */
-int DetectAsn1TestReal01(void) {
+int DetectAsn1TestReal01(void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *) "\x60\x81\x85\x61\x10\x1A\x04""John""\x1A\x01"
                    "P""\x1A\x05""Smith""\xA0\x0A\x1A\x08""Director"
@@ -1085,7 +1113,8 @@ end:
 /**
  * \test DetectAsn1TestReal02 Ensure that all works together
  */
-int DetectAsn1TestReal02(void) {
+int DetectAsn1TestReal02(void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *) "\x60\x81\x85\x61\x10\x1A\x04""John""\x1A\x01"
                    "P""\x1A\x05""Smith""\xA0\x0A\x1A\x08""Director"
@@ -1161,7 +1190,8 @@ end:
 /**
  * \test DetectAsn1TestReal03 Ensure that all works together
  */
-int DetectAsn1TestReal03(void) {
+int DetectAsn1TestReal03(void)
+{
     int result = 0;
     uint8_t buf[261] = "";
     /* universal class, primitive type, tag_num = 9 (Data type Real) */
@@ -1221,7 +1251,8 @@ end:
  *       relative offset to check negative offset values, in this case
  *       start decoding from -7 bytes respect the content match "John"
  */
-int DetectAsn1TestReal04(void) {
+int DetectAsn1TestReal04(void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *) "\x60\x81\x85\x61\x10\x1A\x04""John""\x1A\x01"
                    "P""\x1A\x05""Smith""\xA0\x0A\x1A\x08""Director"
@@ -1299,7 +1330,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectAsn1
  */
-void DetectAsn1RegisterTests(void) {
+void DetectAsn1RegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectAsn1TestParse01", DetectAsn1TestParse01, 1);
     UtRegisterTest("DetectAsn1TestParse02", DetectAsn1TestParse02, 1);

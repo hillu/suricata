@@ -34,6 +34,9 @@
 #include "output-tx.h"
 #include "output-file.h"
 #include "output-filedata.h"
+#include "output-flow.h"
+#include "output-streaming.h"
+#include "output-stats.h"
 
 typedef struct OutputModule_ {
     const char *name;
@@ -47,7 +50,11 @@ typedef struct OutputModule_ {
     TxLogger TxLogFunc;
     FileLogger FileLogFunc;
     FiledataLogger FiledataLogFunc;
+    FlowLogger FlowLogFunc;
+    StreamingLogger StreamingLogFunc;
+    StatsLogger StatsLogFunc;
     AppProto alproto;
+    enum OutputStreamingType stream_type;
 
     TAILQ_ENTRY(OutputModule_) entries;
 } OutputModule;
@@ -79,6 +86,25 @@ void OutputRegisterFiledataModule(const char *name, const char *conf_name,
 void OutputRegisterFiledataSubModule(const char *parent_name, const char *name,
     const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
     FiledataLogger FiledataLogFunc);
+
+void OutputRegisterFlowModule(const char *name, const char *conf_name,
+    OutputCtx *(*InitFunc)(ConfNode *), FlowLogger FlowLogFunc);
+void OutputRegisterFlowSubModule(const char *parent_name, const char *name,
+    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
+    FlowLogger FlowLogFunc);
+
+void OutputRegisterStreamingModule(const char *name, const char *conf_name,
+    OutputCtx *(*InitFunc)(ConfNode *), StreamingLogger StreamingLogFunc,
+    enum OutputStreamingType stream_type);
+void OutputRegisterStreamingSubModule(const char *parent_name, const char *name,
+    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
+    StreamingLogger StreamingLogFunc, enum OutputStreamingType stream_type);
+
+void OutputRegisterStatsModule(const char *name, const char *conf_name,
+    OutputCtx *(*InitFunc)(ConfNode *), StatsLogger StatsLogFunc);
+void OutputRegisterStatsSubModule(const char *parent_name, const char *name,
+    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
+    StatsLogger StatsLogFunc);
 
 OutputModule *OutputGetModuleByConfName(const char *name);
 void OutputDeregisterAll(void);

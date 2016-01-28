@@ -317,6 +317,24 @@ static uint16_t XlateStack(MpipeThreadVars *ptv, int stack_idx)
     }
 }
 
+static void SendNoOpPacket(ThreadVars *tv, TmSlot *slot)
+{
+    Packet *p = PacketPoolGetPacket();
+    if (p == NULL) {
+        return;
+    }
+
+    p->datalink = DLT_RAW;
+    p->proto = IPPROTO_TCP;
+
+    /* So that DecodeMpipe ignores is. */
+    p->flags |= PKT_PSEUDO_STREAM_END;
+
+    p->flow = NULL;
+
+    TmThreadsSlotProcessPkt(tv, slot, p);
+}
+
 /**
  * \brief Receives packets from an interface via gxio mpipe.
  */
@@ -328,7 +346,6 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
     TmSlot *s = (TmSlot *)slot;
     ptv->slot = s->slot_next;
     Packet *p = NULL;
-    //int cpu = tmc_cpus_get_my_cpu();
     int rank = tv->rank;
     int max_queued = 0;
     char *ctype;
@@ -349,6 +366,7 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
     MpipeReceiveOpenIqueue(rank);
     gxio_mpipe_iqueue_t* iqueue = thread_iqueue;
     int update_counter = 0;
+    uint64_t last_packet_time = get_cycle_count();
 
     for (;;) {
 
@@ -364,8 +382,7 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
                 __insn_prefetch(&idesc[i]);
             }
             if (unlikely(n > max_queued)) {
-                SCPerfCounterSetUI64(ptv->max_mpipe_depth,
-                                     tv->sc_perf_pca,
+                StatsSetUI64(tv, ptv->max_mpipe_depth,
                                      (uint64_t)n);
                 max_queued = n;
             }
@@ -381,11 +398,10 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
                     if (idesc->be) {
                         /* Buffer Error - No buffer available, so mPipe
                          * dropped the packet. */
-                        SCPerfCounterIncr(XlateStack(ptv, idesc->stack_idx),
-                                          tv->sc_perf_pca);
+                        StatsIncr(tv, XlateStack(ptv, idesc->stack_idx));
                     } else {
                         /* Bad packet. CRC error */
-                        SCPerfCounterIncr(ptv->mpipe_drop, tv->sc_perf_pca);
+                        StatsIncr(tv, ptv->mpipe_drop);
                         gxio_mpipe_iqueue_drop(iqueue, idesc);
                     }
                     gxio_mpipe_iqueue_release(iqueue, idesc);
@@ -393,14 +409,24 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
             }
             /* Move forward M packets in ingress ring. */
             gxio_mpipe_iqueue_advance(iqueue, m);
+
+            last_packet_time = get_cycle_count();
         }
         if (update_counter-- <= 0) {
             /* Only periodically update and check for termination. */
-            SCPerfSyncCountersIfSignalled(tv);
+            StatsSyncCountersIfSignalled(tv);
             update_counter = 10000;
 
             if (suricata_ctl_flags != 0) {
               break;
+            }
+
+            // If no packet has been received for some period of time, process a NOP packet
+            // just to make sure that pseudo packets from the Flow manager get processed.
+            uint64_t now = get_cycle_count();
+            if (now - last_packet_time > 100000000) {
+                SendNoOpPacket(ptv->tv, ptv->slot);
+                last_packet_time = now;
             }
         }
     }
@@ -410,38 +436,16 @@ TmEcode ReceiveMpipeLoop(ThreadVars *tv, void *data, void *slot)
 static void MpipeRegisterPerfCounters(MpipeThreadVars *ptv, ThreadVars *tv)
 {
     /* register counters */
-    ptv->max_mpipe_depth = SCPerfTVRegisterCounter("mpipe.max_mpipe_depth",
-                                                    tv,
-                                                    SC_PERF_TYPE_UINT64,
-                                                    "NULL");
-    ptv->mpipe_drop = SCPerfTVRegisterCounter("mpipe.drop",
-                                              tv,
-                                              SC_PERF_TYPE_UINT64,
-                                              "NULL");
-    ptv->counter_no_buffers_0 = SCPerfTVRegisterCounter("mpipe.no_buf0", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_1 = SCPerfTVRegisterCounter("mpipe.no_buf1", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_2 = SCPerfTVRegisterCounter("mpipe.no_buf2", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_3 = SCPerfTVRegisterCounter("mpipe.no_buf3", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_4 = SCPerfTVRegisterCounter("mpipe.no_buf4", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_5 = SCPerfTVRegisterCounter("mpipe.no_buf5", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_6 = SCPerfTVRegisterCounter("mpipe.no_buf6", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
-    ptv->counter_no_buffers_7 = SCPerfTVRegisterCounter("mpipe.no_buf7", tv,
-                                                        SC_PERF_TYPE_UINT64,
-                                                        "NULL");
+    ptv->max_mpipe_depth = StatsRegisterCounter("mpipe.max_mpipe_depth", tv);
+    ptv->mpipe_drop = StatsRegisterCounter("mpipe.drop", tv);
+    ptv->counter_no_buffers_0 = StatsRegisterCounter("mpipe.no_buf0", tv);
+    ptv->counter_no_buffers_1 = StatsRegisterCounter("mpipe.no_buf1", tv);
+    ptv->counter_no_buffers_2 = StatsRegisterCounter("mpipe.no_buf2", tv);
+    ptv->counter_no_buffers_3 = StatsRegisterCounter("mpipe.no_buf3", tv);
+    ptv->counter_no_buffers_4 = StatsRegisterCounter("mpipe.no_buf4", tv);
+    ptv->counter_no_buffers_5 = StatsRegisterCounter("mpipe.no_buf5", tv);
+    ptv->counter_no_buffers_6 = StatsRegisterCounter("mpipe.no_buf6", tv);
+    ptv->counter_no_buffers_7 = StatsRegisterCounter("mpipe.no_buf7", tv);
 }
 
 static const gxio_mpipe_buffer_size_enum_t gxio_buffer_sizes[] = {
@@ -897,6 +901,7 @@ TmEcode ReceiveMpipeThreadInit(ThreadVars *tv, void *initdata, void **data)
 
     *data = (void *)ptv;
 
+    /* Only rank 0 does initialization of mpipe */
     if (rank != 0)
         SCReturnInt(TM_ECODE_OK);
 
@@ -1018,7 +1023,7 @@ TmEcode DecodeMpipeThreadInit(ThreadVars *tv, void *initdata, void **data)
 TmEcode DecodeMpipeThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -1034,13 +1039,7 @@ TmEcode DecodeMpipe(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca, GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
     /* call the decoder */
     DecodeEthernet(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);

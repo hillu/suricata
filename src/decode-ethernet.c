@@ -41,7 +41,7 @@
 int DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
                    uint8_t *pkt, uint16_t len, PacketQueue *pq)
 {
-    SCPerfCounterIncr(dtv->counter_eth, tv->sc_perf_pca);
+    StatsIncr(tv, dtv->counter_eth);
 
     if (unlikely(len < ETHERNET_HEADER_LEN)) {
         ENGINE_SET_INVALID_EVENT(p, ETHERNET_PKT_TOO_SMALL);
@@ -79,6 +79,11 @@ int DecodeEthernet(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
         case ETHERNET_TYPE_8021QINQ:
             DecodeVLAN(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
                                  len - ETHERNET_HEADER_LEN, pq);
+            break;
+        case ETHERNET_TYPE_MPLS_UNICAST:
+        case ETHERNET_TYPE_MPLS_MULTICAST:
+            DecodeMPLS(tv, dtv, p, pkt + ETHERNET_HEADER_LEN,
+                       len - ETHERNET_HEADER_LEN, pq);
             break;
         default:
             SCLogDebug("p %p pkt %p ether type %04x not supported", p,

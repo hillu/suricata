@@ -1,4 +1,4 @@
-/* Copyright (C) 2010 Open Information Security Foundation
+/* Copyright (C) 2010-2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -304,10 +304,8 @@ ReceiveErfDagThreadInit(ThreadVars *tv, void *initdata, void **data)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    ewtn->packets = SCPerfTVRegisterCounter("capture.dag_packets",
-        tv, SC_PERF_TYPE_UINT64, "NULL");
-    ewtn->drops = SCPerfTVRegisterCounter("capture.dag_drops",
-        tv, SC_PERF_TYPE_UINT64, "NULL");
+    ewtn->packets = StatsRegisterCounter("capture.dag_packets", tv);
+    ewtn->drops = StatsRegisterCounter("capture.dag_drops", tv);
 
     ewtn->tv = tv;
     *data = (void *)ewtn;
@@ -381,7 +379,7 @@ ReceiveErfDagLoop(ThreadVars *tv, void *data, void *slot)
             SCReturnInt(TM_ECODE_FAILED);
         }
 
-        SCPerfSyncCountersIfSignalled(tv);
+        StatsSyncCountersIfSignalled(tv);
 
         SCLogDebug("Read %d records from stream: %d, DAG: %s",
             pkts_read, dtv->dagstream, dtv->dagname);
@@ -407,7 +405,6 @@ ProcessErfDagRecords(ErfDagThreadVars *ewtn, uint8_t *top, uint32_t *pkts_read)
     int rlen;
     char hdr_type = 0;
     int processed = 0;
-    int packet_q_len = 0;
 
     *pkts_read = 0;
 
@@ -416,12 +413,7 @@ ProcessErfDagRecords(ErfDagThreadVars *ewtn, uint8_t *top, uint32_t *pkts_read)
 
         /* Make sure we have at least one packet in the packet pool,
          * to prevent us from alloc'ing packets at line rate. */
-        do {
-            packet_q_len = PacketPoolSize();
-            if (unlikely(packet_q_len == 0)) {
-                PacketPoolWait();
-            }
-        } while (packet_q_len == 0);
+        PacketPoolWait();
 
         prec = (char *)ewtn->btm;
         dr = (dag_record_t*)prec;
@@ -450,8 +442,7 @@ ProcessErfDagRecords(ErfDagThreadVars *ewtn, uint8_t *top, uint32_t *pkts_read)
             break;
         case TYPE_ETH:
             if (dr->lctr) {
-                SCPerfCounterAddUI64(ewtn->drops, ewtn->tv->sc_perf_pca,
-                    ntohs(dr->lctr));
+                StatsAddUI64(ewtn->tv, ewtn->drops, ntohs(dr->lctr));
             }
             break;
         default:
@@ -544,7 +535,7 @@ ProcessErfDagRecord(ErfDagThreadVars *ewtn, char *prec)
         p->ts.tv_sec++;
     }
 
-    SCPerfCounterIncr(ewtn->packets, ewtn->tv->sc_perf_pca);
+    StatsIncr(ewtn->tv, ewtn->packets);
     ewtn->bytes += wlen;
 
     if (TmThreadsSlotProcessPkt(ewtn->tv, ewtn->slot, p) != TM_ECODE_OK) {
@@ -567,16 +558,16 @@ ReceiveErfDagThreadExitStats(ThreadVars *tv, void *data)
     ErfDagThreadVars *ewtn = (ErfDagThreadVars *)data;
 
     (void)SC_ATOMIC_SET(ewtn->livedev->pkts,
-        (uint64_t)SCPerfGetLocalCounterValue(ewtn->packets, tv->sc_perf_pca));
+        StatsGetLocalCounterValue(tv, ewtn->packets));
     (void)SC_ATOMIC_SET(ewtn->livedev->drop,
-        (uint64_t)SCPerfGetLocalCounterValue(ewtn->drops, tv->sc_perf_pca));
+        StatsGetLocalCounterValue(tv, ewtn->drops));
 
     SCLogInfo("Stream: %d; Bytes: %"PRIu64"; Packets: %"PRIu64
         "; Drops: %"PRIu64,
         ewtn->dagstream,
         ewtn->bytes,
-        (uint64_t)SCPerfGetLocalCounterValue(ewtn->packets, tv->sc_perf_pca),
-        (uint64_t)SCPerfGetLocalCounterValue(ewtn->drops, tv->sc_perf_pca));
+        StatsGetLocalCounterValue(tv, ewtn->packets),
+        StatsGetLocalCounterValue(tv, ewtn->drops));
 }
 
 /**
@@ -630,20 +621,7 @@ DecodeErfDag(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq,
         return TM_ECODE_OK;
 
     /* update counters */
-    SCPerfCounterIncr(dtv->counter_pkts, tv->sc_perf_pca);
-//    SCPerfCounterIncr(dtv->counter_pkts_per_sec, tv->sc_perf_pca);
-
-    SCPerfCounterAddUI64(dtv->counter_bytes, tv->sc_perf_pca, GET_PKT_LEN(p));
-#if 0
-    SCPerfCounterAddDouble(dtv->counter_bytes_per_sec, tv->sc_perf_pca, GET_PKT_LEN(p));
-    SCPerfCounterAddDouble(dtv->counter_mbit_per_sec, tv->sc_perf_pca,
-                           (GET_PKT_LEN(p) * 8)/1000000.0);
-#endif
-
-    SCPerfCounterAddUI64(dtv->counter_avg_pkt_size, tv->sc_perf_pca,
-        GET_PKT_LEN(p));
-    SCPerfCounterSetUI64(dtv->counter_max_pkt_size, tv->sc_perf_pca,
-        GET_PKT_LEN(p));
+    DecodeUpdatePacketCounters(tv, dtv, p);
 
         /* call the decoder */
     switch(p->datalink) {
@@ -685,7 +663,7 @@ TmEcode
 DecodeErfDagThreadDeinit(ThreadVars *tv, void *data)
 {
     if (data != NULL)
-        DecodeThreadVarsFree(data);
+        DecodeThreadVarsFree(tv, data);
     SCReturnInt(TM_ECODE_OK);
 }
 

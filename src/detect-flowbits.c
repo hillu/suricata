@@ -50,12 +50,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectFlowbitMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectFlowbitMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectFlowbitSetup (DetectEngineCtx *, Signature *, char *);
 void DetectFlowbitFree (void *);
 void FlowBitsRegisterTests(void);
 
-void DetectFlowbitsRegister (void) {
+void DetectFlowbitsRegister (void)
+{
     sigmatch_table[DETECT_FLOWBITS].name = "flowbits";
     sigmatch_table[DETECT_FLOWBITS].desc = "operate on flow flag";
     sigmatch_table[DETECT_FLOWBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#Flowbits";
@@ -91,38 +92,52 @@ error:
 }
 
 
-static int DetectFlowbitMatchToggle (Packet *p, DetectFlowbitsData *fd) {
+static int DetectFlowbitMatchToggle (Packet *p, const DetectFlowbitsData *fd, const int flow_locked)
+{
     if (p->flow == NULL)
         return 0;
 
-    FlowBitToggle(p->flow,fd->idx);
+    if (flow_locked)
+        FlowBitToggleNoLock(p->flow,fd->idx);
+    else
+        FlowBitToggle(p->flow,fd->idx);
     return 1;
 }
 
-static int DetectFlowbitMatchUnset (Packet *p, DetectFlowbitsData *fd) {
+static int DetectFlowbitMatchUnset (Packet *p, const DetectFlowbitsData *fd, const int flow_locked)
+{
     if (p->flow == NULL)
         return 0;
 
-    FlowBitUnset(p->flow,fd->idx);
+    if (flow_locked)
+        FlowBitUnsetNoLock(p->flow,fd->idx);
+    else
+        FlowBitUnset(p->flow,fd->idx);
     return 1;
 }
 
-static int DetectFlowbitMatchSet (Packet *p, DetectFlowbitsData *fd) {
+static int DetectFlowbitMatchSet (Packet *p, const DetectFlowbitsData *fd, const int flow_locked)
+{
     if (p->flow == NULL)
         return 0;
 
-    FlowBitSet(p->flow,fd->idx);
+    if (flow_locked)
+        FlowBitSetNoLock(p->flow,fd->idx);
+    else
+        FlowBitSet(p->flow,fd->idx);
     return 1;
 }
 
-static int DetectFlowbitMatchIsset (Packet *p, DetectFlowbitsData *fd) {
+static int DetectFlowbitMatchIsset (Packet *p, const DetectFlowbitsData *fd)
+{
     if (p->flow == NULL)
         return 0;
 
     return FlowBitIsset(p->flow,fd->idx);
 }
 
-static int DetectFlowbitMatchIsnotset (Packet *p, DetectFlowbitsData *fd) {
+static int DetectFlowbitMatchIsnotset (Packet *p, const DetectFlowbitsData *fd)
+{
     if (p->flow == NULL)
         return 0;
 
@@ -135,11 +150,12 @@ static int DetectFlowbitMatchIsnotset (Packet *p, DetectFlowbitsData *fd) {
  *        -1: error
  */
 
-int DetectFlowbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m)
+int DetectFlowbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
 {
-    DetectFlowbitsData *fd = (DetectFlowbitsData *)m->ctx;
+    const DetectFlowbitsData *fd = (const DetectFlowbitsData *)ctx;
     if (fd == NULL)
         return 0;
+    const int flow_locked = det_ctx->flow_locked;
 
     switch (fd->cmd) {
         case DETECT_FLOWBITS_CMD_ISSET:
@@ -147,11 +163,11 @@ int DetectFlowbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
         case DETECT_FLOWBITS_CMD_ISNOTSET:
             return DetectFlowbitMatchIsnotset(p,fd);
         case DETECT_FLOWBITS_CMD_SET:
-            return DetectFlowbitMatchSet(p,fd);
+            return DetectFlowbitMatchSet(p,fd,flow_locked);
         case DETECT_FLOWBITS_CMD_UNSET:
-            return DetectFlowbitMatchUnset(p,fd);
+            return DetectFlowbitMatchUnset(p,fd,flow_locked);
         case DETECT_FLOWBITS_CMD_TOGGLE:
-            return DetectFlowbitMatchToggle(p,fd);
+            return DetectFlowbitMatchToggle(p,fd,flow_locked);
         default:
             SCLogError(SC_ERR_UNKNOWN_VALUE, "unknown cmd %" PRIu32 "", fd->cmd);
             return 0;
@@ -243,7 +259,7 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     if (unlikely(cd == NULL))
         goto error;
 
-    cd->idx = VariableNameGetIdx(de_ctx, fb_name, DETECT_FLOWBITS);
+    cd->idx = VariableNameGetIdx(de_ctx, fb_name, VAR_TYPE_FLOW_BIT);
     cd->cmd = fb_cmd;
 
     SCLogDebug("idx %" PRIu32 ", cmd %s, name %s",
@@ -256,12 +272,10 @@ int DetectFlowbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         goto error;
 
     sm->type = DETECT_FLOWBITS;
-    sm->ctx = (void *)cd;
+    sm->ctx = (SigMatchCtx *)cd;
 
     switch (fb_cmd) {
-        case DETECT_FLOWBITS_CMD_NOALERT:
-            /* nothing to do */
-            break;
+        /* case DETECT_FLOWBITS_CMD_NOALERT can't happen here */
 
         case DETECT_FLOWBITS_CMD_ISNOTSET:
         case DETECT_FLOWBITS_CMD_ISSET:
@@ -287,7 +301,8 @@ error:
     return -1;
 }
 
-void DetectFlowbitFree (void *ptr) {
+void DetectFlowbitFree (void *ptr)
+{
     DetectFlowbitsData *fd = (DetectFlowbitsData *)ptr;
 
     if (fd == NULL)
@@ -372,7 +387,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig01(void) {
+static int FlowBitsTestSig01(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -446,7 +462,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig02(void) {
+static int FlowBitsTestSig02(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -567,7 +584,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig03(void) {
+static int FlowBitsTestSig03(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -644,7 +662,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig04(void) {
+static int FlowBitsTestSig04(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -678,7 +697,7 @@ static int FlowBitsTestSig04(void) {
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert ip any any -> any any (msg:\"isset option\"; flowbits:isset,fbt; content:\"GET \"; sid:1;)");
 
-    idx = VariableNameGetIdx(de_ctx, "fbt", DETECT_FLOWBITS);
+    idx = VariableNameGetIdx(de_ctx, "fbt", VAR_TYPE_FLOW_BIT);
 
     if (s == NULL || idx != 1) {
         goto end;
@@ -725,7 +744,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig05(void) {
+static int FlowBitsTestSig05(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -803,7 +823,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig06(void) {
+static int FlowBitsTestSig06(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -857,7 +878,7 @@ static int FlowBitsTestSig06(void) {
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    idx = VariableNameGetIdx(de_ctx, "myflow", DETECT_FLOWBITS);
+    idx = VariableNameGetIdx(de_ctx, "myflow", VAR_TYPE_FLOW_BIT);
 
     gv = p->flow->flowvar;
 
@@ -906,7 +927,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig07(void) {
+static int FlowBitsTestSig07(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -962,7 +984,7 @@ static int FlowBitsTestSig07(void) {
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    idx = VariableNameGetIdx(de_ctx, "myflow", DETECT_FLOWBITS);
+    idx = VariableNameGetIdx(de_ctx, "myflow", VAR_TYPE_FLOW_BIT);
 
     gv = p->flow->flowvar;
 
@@ -1012,7 +1034,8 @@ end:
  *  \retval 0 on failure
  */
 
-static int FlowBitsTestSig08(void) {
+static int FlowBitsTestSig08(void)
+{
     uint8_t *buf = (uint8_t *)
                     "GET /one/ HTTP/1.1\r\n"
                     "Host: one.example.org\r\n"
@@ -1070,7 +1093,7 @@ static int FlowBitsTestSig08(void) {
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    idx = VariableNameGetIdx(de_ctx, "myflow", DETECT_FLOWBITS);
+    idx = VariableNameGetIdx(de_ctx, "myflow", VAR_TYPE_FLOW_BIT);
 
     gv = p->flow->flowvar;
 
@@ -1117,7 +1140,8 @@ end:
 /**
  * \brief this function registers unit tests for FlowBits
  */
-void FlowBitsRegisterTests(void) {
+void FlowBitsRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("FlowBitsTestParse01", FlowBitsTestParse01, 1);
     UtRegisterTest("FlowBitsTestSig01", FlowBitsTestSig01, 0);

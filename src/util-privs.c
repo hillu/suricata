@@ -80,7 +80,7 @@ void SCDropMainThreadCaps(uint32_t userid, uint32_t groupid)
             break;
         case RUNMODE_PFRING:
             capng_updatev(CAPNG_ADD, CAPNG_EFFECTIVE|CAPNG_PERMITTED,
-                    CAP_NET_ADMIN,
+                    CAP_NET_ADMIN, CAP_NET_RAW,
                     -1);
             break;
         case RUNMODE_NFQ:
@@ -101,7 +101,8 @@ void SCDropMainThreadCaps(uint32_t userid, uint32_t groupid)
     SCLogInfo("dropped the caps for main thread");
 }
 
-void SCDropCaps(ThreadVars *tv) {
+void SCDropCaps(ThreadVars *tv)
+{
 #if 0
     capng_clear(CAPNG_SELECT_BOTH);
     capng_apply(CAPNG_SELECT_BOTH);

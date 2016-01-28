@@ -102,26 +102,36 @@ int UnixNew(UnixCommand * this)
     TAILQ_INIT(&this->tasks);
     TAILQ_INIT(&this->clients);
 
-    /* Create socket dir */
-    ret = mkdir(SOCKET_PATH, S_IRWXU|S_IXGRP|S_IRGRP);
-    if ( ret != 0 ) {
-        int err = errno;
-        if (err != EEXIST) {
-            SCLogError(SC_ERR_OPENING_FILE,
-                    "Cannot create socket directory %s: %s", SOCKET_PATH, strerror(err));
-            return 0;
-        }
-    }
-
     if (ConfGet("unix-command.filename", &socketname) == 1) {
-        int socketlen = strlen(SOCKET_PATH) + strlen(socketname) + 2;
-        sockettarget = SCMalloc(socketlen);
-        if (unlikely(sockettarget == NULL)) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-            return 0;
+        if (PathIsAbsolute(socketname)) {
+            sockettarget = SCStrdup(socketname);
+            if (unlikely(sockettarget == NULL)) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
+                return 0;
+            }
+        } else {
+            int socketlen = strlen(SOCKET_PATH) + strlen(socketname) + 2;
+            sockettarget = SCMalloc(socketlen);
+            if (unlikely(sockettarget == NULL)) {
+                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
+                return 0;
+            }
+            snprintf(sockettarget, socketlen, "%s/%s", SOCKET_PATH, socketname);
+
+            /* Create socket dir */
+            ret = mkdir(SOCKET_PATH, S_IRWXU|S_IXGRP|S_IRGRP);
+            if ( ret != 0 ) {
+                int err = errno;
+                if (err != EEXIST) {
+                    SCFree(sockettarget);
+                    SCLogError(SC_ERR_OPENING_FILE,
+                            "Cannot create socket directory %s: %s", SOCKET_PATH, strerror(err));
+                    return 0;
+                }
+            }
+
         }
-        snprintf(sockettarget, socketlen, "%s/%s", SOCKET_PATH, socketname);
-        SCLogInfo("Use unix socket file '%s'.", sockettarget);
+        SCLogInfo("Using unix socket file '%s'", sockettarget);
     }
     if (sockettarget == NULL) {
         sockettarget = SCStrdup(SOCKET_TARGET);
@@ -346,7 +356,7 @@ int UnixCommandAccept(UnixCommand *this)
     json_decref(server_msg);
 
     /* client connected */
-    SCLogInfo("Unix socket: client connected");
+    SCLogDebug("Unix socket: client connected");
 
     uclient = SCMalloc(sizeof(UnixClient));
     if (unlikely(uclient == NULL)) {
@@ -468,9 +478,9 @@ void UnixCommandRun(UnixCommand * this, UnixClient *client)
     ret = recv(client->fd, buffer, sizeof(buffer) - 1, 0);
     if (ret <= 0) {
         if (ret == 0) {
-            SCLogInfo("Unix socket: lost connection with client");
+            SCLogDebug("Unix socket: lost connection with client");
         } else {
-            SCLogInfo("Unix socket: error on recv() from client: %s",
+            SCLogError(SC_ERR_SOCKET, "Unix socket: error on recv() from client: %s",
                       strerror(errno));
         }
         UnixCommandClose(this, client->fd);
@@ -515,7 +525,7 @@ int UnixMain(UnixCommand * this)
         if (errno == EINTR) {
             return 1;
         }
-        SCLogInfo("Command server: select() fatal error: %s", strerror(errno));
+        SCLogError(SC_ERR_SOCKET, "Command server: select() fatal error: %s", strerror(errno));
         return 0;
     }
 
@@ -634,6 +644,18 @@ TmEcode UnixManagerCaptureModeCommand(json_t *cmd,
 {
     SCEnter();
     json_object_set_new(server_msg, "message", json_string(RunModeGetMainMode()));
+    SCReturnInt(TM_ECODE_OK);
+}
+
+TmEcode UnixManagerReloadRules(json_t *cmd, json_t *server_msg, void *data)
+{
+    SCEnter();
+    DetectEngineReloadStart();
+
+    while (DetectEngineReloadIsDone() == 0)
+        usleep(100);
+
+    json_object_set_new(server_msg, "message", json_string("done"));
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -760,7 +782,7 @@ TmEcode UnixManagerRegisterCommand(const char * keyword,
 
     TAILQ_FOREACH(lcmd, &command.commands, next) {
         if (!strcmp(keyword, lcmd->name)) {
-            SCLogError(SC_ERR_INVALID_ARGUMENT, "Null keyword");
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "%s already registered", keyword);
             SCReturnInt(TM_ECODE_FAILED);
         }
     }
@@ -819,17 +841,15 @@ TmEcode UnixManagerRegisterBackgroundTask(TmEcode (*Func)(void *),
     SCReturnInt(TM_ECODE_OK);
 }
 
-void *UnixManagerThread(void *td)
+typedef struct UnixManagerThreadData_ {
+    int padding;
+} UnixManagerThreadData;
+
+static TmEcode UnixManagerThreadInit(ThreadVars *t, void *initdata, void **data)
 {
-    ThreadVars *th_v = (ThreadVars *)td;
-    int ret;
-
-    /* set the thread name */
-    (void) SCSetThreadName(th_v->name);
-    SCLogDebug("%s started...", th_v->name);
-
-    th_v->sc_perf_pca = SCPerfGetAllCountersArray(&th_v->sc_perf_pctx);
-    SCPerfAddToClubbedTMTable(th_v->name, &th_v->sc_perf_pctx);
+    UnixManagerThreadData *utd = SCCalloc(1, sizeof(*utd));
+    if (utd == NULL)
+        return TM_ECODE_FAILED;
 
     if (UnixNew(&command) == 0) {
         int failure_fatal = 0;
@@ -841,14 +861,9 @@ void *UnixManagerThread(void *td)
         if (failure_fatal) {
             exit(EXIT_FAILURE);
         } else {
-            TmThreadsSetFlag(th_v, THV_INIT_DONE|THV_RUNNING_DONE);
-            pthread_exit((void *) 0);
+            return TM_ECODE_FAILED;
         }
     }
-
-    /* Set the threads capability */
-    th_v->cap_flags = 0;
-    SCDropCaps(th_v);
 
     /* Init Unix socket */
     UnixManagerRegisterCommand("shutdown", UnixManagerShutdownCommand, NULL, 0);
@@ -859,10 +874,36 @@ void *UnixManagerThread(void *td)
     UnixManagerRegisterCommand("running-mode", UnixManagerRunningModeCommand, &command, 0);
     UnixManagerRegisterCommand("capture-mode", UnixManagerCaptureModeCommand, &command, 0);
     UnixManagerRegisterCommand("conf-get", UnixManagerConfGetCommand, &command, UNIX_CMD_TAKE_ARGS);
-    UnixManagerRegisterCommand("dump-counters", SCPerfOutputCounterSocket, NULL, 0);
-#if 0
+    UnixManagerRegisterCommand("dump-counters", StatsOutputCounterSocket, NULL, 0);
     UnixManagerRegisterCommand("reload-rules", UnixManagerReloadRules, NULL, 0);
-#endif
+    UnixManagerRegisterCommand("register-tenant-handler", UnixSocketRegisterTenantHandler, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("unregister-tenant-handler", UnixSocketUnregisterTenantHandler, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("register-tenant", UnixSocketRegisterTenant, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("reload-tenant", UnixSocketReloadTenant, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("unregister-tenant", UnixSocketUnregisterTenant, &command, UNIX_CMD_TAKE_ARGS);
+
+    *data = utd;
+    return TM_ECODE_OK;
+}
+
+static TmEcode UnixManagerThreadDeinit(ThreadVars *t, void *data)
+{
+    SCFree(data);
+    return TM_ECODE_OK;
+}
+
+static TmEcode UnixManager(ThreadVars *th_v, void *thread_data)
+{
+    int ret;
+
+    /* set the thread name */
+    SCLogDebug("%s started...", th_v->name);
+
+    StatsSetupPrivate(th_v);
+
+    /* Set the threads capability */
+    th_v->cap_flags = 0;
+    SCDropCaps(th_v);
 
     TmThreadsSetFlag(th_v, THV_INIT_DONE);
     while (1) {
@@ -878,33 +919,29 @@ void *UnixManagerThread(void *td)
                 close(item->fd);
                 SCFree(item);
             }
-            SCPerfSyncCounters(th_v);
+            StatsSyncCounters(th_v);
             break;
         }
 
         UnixCommandBackgroundTasks(&command);
     }
-    TmThreadWaitForFlag(th_v, THV_DEINIT);
-
-    TmThreadsSetFlag(th_v, THV_CLOSED);
-    pthread_exit((void *) 0);
+    return TM_ECODE_OK;
 }
 
 
 /** \brief Spawn the unix socket manager thread
  *
- * \param de_ctx context for detection engine
  * \param mode if set to 1, init failure cause suricata exit
  * */
-void UnixManagerThreadSpawn(DetectEngineCtx *de_ctx, int mode)
+void UnixManagerThreadSpawn(int mode)
 {
     ThreadVars *tv_unixmgr = NULL;
 
     SCCtrlCondInit(&unix_manager_ctrl_cond, NULL);
     SCCtrlMutexInit(&unix_manager_ctrl_mutex, NULL);
 
-    tv_unixmgr = TmThreadCreateCmdThread("UnixManagerThread",
-                                          UnixManagerThread, 0);
+    tv_unixmgr = TmThreadCreateCmdThreadByName("UnixManagerThread",
+                                          "UnixManager", 0);
 
     if (tv_unixmgr == NULL) {
         SCLogError(SC_ERR_INITIALIZATION, "TmThreadsCreate failed");
@@ -966,7 +1003,7 @@ void UnixSocketKillSocketThread(void)
 
 #else /* BUILD_UNIX_SOCKET */
 
-void UnixManagerThreadSpawn(DetectEngineCtx *de_ctx, int mode)
+void UnixManagerThreadSpawn(int mode)
 {
     SCLogError(SC_ERR_UNIMPLEMENTED, "Unix socket is not compiled");
     return;
@@ -978,3 +1015,15 @@ void UnixSocketKillSocketThread(void)
 }
 
 #endif /* BUILD_UNIX_SOCKET */
+
+void TmModuleUnixManagerRegister (void)
+{
+#ifdef BUILD_UNIX_SOCKET
+    tmm_modules[TMM_UNIXMANAGER].name = "UnixManager";
+    tmm_modules[TMM_UNIXMANAGER].ThreadInit = UnixManagerThreadInit;
+    tmm_modules[TMM_UNIXMANAGER].ThreadDeinit = UnixManagerThreadDeinit;
+    tmm_modules[TMM_UNIXMANAGER].Management = UnixManager;
+    tmm_modules[TMM_UNIXMANAGER].cap_flags = 0;
+    tmm_modules[TMM_UNIXMANAGER].flags = TM_FLAG_COMMAND_TM;
+#endif /* BUILD_UNIX_SOCKET */
+}

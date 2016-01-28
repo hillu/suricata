@@ -148,7 +148,8 @@ static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t n)
 
 #define SCMEMCMP_BYTES  16
 
-static inline int SCMemcmp(const void *s1, const void *s2, size_t len) {
+static inline int SCMemcmp(const void *s1, const void *s2, size_t len)
+{
     size_t offset = 0;
     __m128i b1, b2, c;
 
@@ -190,7 +191,8 @@ static inline int SCMemcmp(const void *s1, const void *s2, size_t len) {
 #define UPPER_LOW   0x40 /* "A" - 1 */
 #define UPPER_HIGH  0x5B /* "Z" + 1 */
 
-static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len) {
+static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len)
+{
     size_t offset = 0;
     __m128i b1, b2, mask1, mask2, upper1, upper2, nulls, uplow;
 
@@ -256,7 +258,8 @@ static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len) 
 
 #define SCMEMCMP_BYTES  16
 
-static inline int SCMemcmp(const void *s1, const void *s2, size_t len) {
+static inline int SCMemcmp(const void *s1, const void *s2, size_t len)
+{
     size_t offset = 0;
     __m128i b1, b2, c;
 
@@ -299,7 +302,8 @@ static inline int SCMemcmp(const void *s1, const void *s2, size_t len) {
 #define UPPER_HIGH  0x5B /* "Z" + 1 */
 #define UPPER_DELTA 0xDF /* 0xFF - 0x20 */
 
-static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len) {
+static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len)
+{
     size_t offset = 0;
     __m128i b1, b2, mask1, mask2, upper1, upper2, delta;
 
@@ -361,13 +365,11 @@ static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len) 
 
 #include <ctype.h>
 
-static inline int SCMemcmp(const void *s1, const void *s2, size_t len)
+/* Compare to non-zero sequence of bytes. */
+static inline int SCMemcmpNZ(const void *s1, const void *s2, size_t len)
 {
     uint64_t b1, w1, aligned1;
     uint64_t b2, w2, aligned2;
-
-    if (len == 0)
-        return 0;
 
     /* Load aligned words containing the beginning of each string.
      * These loads don't trigger unaligned events.
@@ -407,6 +409,13 @@ static inline int SCMemcmp(const void *s1, const void *s2, size_t len)
     return 0;
 }
 
+/* Compare two sequences of bytes. */
+static inline int SCMemcmp(const void *s1, const void *s2, size_t len)
+{
+    if (len == 0)
+        return 0;
+    return SCMemcmpNZ(s1, s2, len);
+}
 /** \brief Convert 8 characters to lower case using SIMD.
  *  \param Word containing the 8 bytes.
  *  \return Word containing 8-bytes each converted to lowercase.
@@ -482,7 +491,8 @@ static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len)
     memcmp((a), (b), (c)) ? 1 : 0; \
 })
 
-static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len) {
+static inline int SCMemcmpLowercase(const void *s1, const void *s2, size_t len)
+{
     return MemcmpLowercase(s1, s2, len);
 }
 

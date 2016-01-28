@@ -61,9 +61,9 @@ int DecodeVLAN(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, u
     uint32_t proto;
 
     if (p->vlan_idx == 0)
-        SCPerfCounterIncr(dtv->counter_vlan, tv->sc_perf_pca);
+        StatsIncr(tv, dtv->counter_vlan);
     else if (p->vlan_idx == 1)
-        SCPerfCounterIncr(dtv->counter_vlan_qinq, tv->sc_perf_pca);
+        StatsIncr(tv, dtv->counter_vlan_qinq);
 
     if(len < VLAN_HEADER_LEN)    {
         ENGINE_SET_INVALID_EVENT(p, VLAN_HEADER_TOO_SMALL);
@@ -150,7 +150,8 @@ uint16_t DecodeVLANGetId(const Packet *p, uint8_t layer)
  *  \retval 1 on success
  *  \retval 0 on failure
  */
-static int DecodeVLANtest01 (void)   {
+static int DecodeVLANtest01 (void)
+{
     uint8_t raw_vlan[] = { 0x00, 0x20, 0x08 };
     Packet *p = PacketGetFromAlloc();
     if (unlikely(p == NULL))
@@ -178,7 +179,8 @@ static int DecodeVLANtest01 (void)   {
  *  \retval 1 on success
  *  \retval 0 on failure
  */
-static int DecodeVLANtest02 (void)   {
+static int DecodeVLANtest02 (void)
+{
     uint8_t raw_vlan[] = {
         0x00, 0x20, 0x01, 0x00, 0x45, 0x00, 0x00, 0x34,
         0x3b, 0x36, 0x40, 0x00, 0x40, 0x06, 0xb7, 0xc9,
@@ -214,7 +216,8 @@ static int DecodeVLANtest02 (void)   {
  *  \retval 1 on success
  *  \retval 0 on failure
  */
-static int DecodeVLANtest03 (void)   {
+static int DecodeVLANtest03 (void)
+{
     uint8_t raw_vlan[] = {
         0x00, 0x20, 0x08, 0x00, 0x45, 0x00, 0x00, 0x34,
         0x3b, 0x36, 0x40, 0x00, 0x40, 0x06, 0xb7, 0xc9,
@@ -262,7 +265,8 @@ error:
 }
 #endif /* UNITTESTS */
 
-void DecodeVLANRegisterTests(void) {
+void DecodeVLANRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DecodeVLANtest01", DecodeVLANtest01, 1);
     UtRegisterTest("DecodeVLANtest02", DecodeVLANtest02, 1);

@@ -44,7 +44,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
+int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
 static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, char *);
 void DetectStreamSizeFree(void *);
 void DetectStreamSizeRegisterTests(void);
@@ -53,7 +53,8 @@ void DetectStreamSizeRegisterTests(void);
  * \brief Registration function for stream_size: keyword
  */
 
-void DetectStreamSizeRegister(void) {
+void DetectStreamSizeRegister(void)
+{
     sigmatch_table[DETECT_STREAM_SIZE].name = "stream_size";
     sigmatch_table[DETECT_STREAM_SIZE].desc = "match on amount of bytes of a stream";
     sigmatch_table[DETECT_STREAM_SIZE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#stream_size";
@@ -140,10 +141,11 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, SigMatch *m) {
+int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+{
 
     int ret = 0;
-    DetectStreamSizeData *sd = (DetectStreamSizeData *) m->ctx;
+    const DetectStreamSizeData *sd = (const DetectStreamSizeData *)ctx;
 
     if (!(PKT_IS_TCP(p)))
         return ret;
@@ -193,7 +195,8 @@ int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
  * \retval NULL on failure
  */
 
-DetectStreamSizeData *DetectStreamSizeParse (char *streamstr) {
+DetectStreamSizeData *DetectStreamSizeParse (char *streamstr)
+{
 
     DetectStreamSizeData *sd = NULL;
     char *arg = NULL;
@@ -302,7 +305,8 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *streamstr) {
+static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *streamstr)
+{
 
     DetectStreamSizeData *sd = NULL;
     SigMatch *sm = NULL;
@@ -316,7 +320,7 @@ static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
         goto error;
 
     sm->type = DETECT_STREAM_SIZE;
-    sm->ctx = (void *)sd;
+    sm->ctx = (SigMatchCtx *)sd;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
 
@@ -333,7 +337,8 @@ error:
  *
  * \param ptr pointer to DetectStreamSizeData
  */
-void DetectStreamSizeFree(void *ptr) {
+void DetectStreamSizeFree(void *ptr)
+{
     DetectStreamSizeData *sd = (DetectStreamSizeData *)ptr;
     SCFree(sd);
 }
@@ -344,7 +349,8 @@ void DetectStreamSizeFree(void *ptr) {
  *  user options correctly, when given valid stream_size options.
  */
 
-static int DetectStreamSizeParseTest01 (void) {
+static int DetectStreamSizeParseTest01 (void)
+{
     int result = 0;
     DetectStreamSizeData *sd = NULL;
     sd = DetectStreamSizeParse("server,<,6");
@@ -362,7 +368,8 @@ static int DetectStreamSizeParseTest01 (void) {
  *  invalid stream_size options.
  */
 
-static int DetectStreamSizeParseTest02 (void) {
+static int DetectStreamSizeParseTest02 (void)
+{
     int result = 1;
     DetectStreamSizeData *sd = NULL;
     sd = DetectStreamSizeParse("invalidoption,<,6");
@@ -380,7 +387,8 @@ static int DetectStreamSizeParseTest02 (void) {
  *  packet correctly provided valid stream size.
  */
 
-static int DetectStreamSizeParseTest03 (void) {
+static int DetectStreamSizeParseTest03 (void)
+{
 
     int result = 0;
     DetectStreamSizeData *sd = NULL;
@@ -439,9 +447,9 @@ static int DetectStreamSizeParseTest03 (void) {
     f.protoctx = &ssn;
     p->flow = &f;
     p->tcph = &tcph;
-    sm.ctx = sd;
+    sm.ctx = (SigMatchCtx*)sd;
 
-    result = DetectStreamSizeMatch(&tv, &dtx, p, &s, &sm);
+    result = DetectStreamSizeMatch(&tv, &dtx, p, &s, sm.ctx);
     if (result == 0) {
         printf("result 0 != 1: ");
     }
@@ -455,7 +463,8 @@ static int DetectStreamSizeParseTest03 (void) {
  *  stream_size against invalid packet parameters.
  */
 
-static int DetectStreamSizeParseTest04 (void) {
+static int DetectStreamSizeParseTest04 (void)
+{
 
     int result = 0;
     DetectStreamSizeData *sd = NULL;
@@ -498,9 +507,9 @@ static int DetectStreamSizeParseTest04 (void) {
     f.protoctx = &ssn;
     p->flow = &f;
     p->ip4h = &ip4h;
-    sm.ctx = sd;
+    sm.ctx = (SigMatchCtx*)sd;
 
-    if (!DetectStreamSizeMatch(&tv, &dtx, p, &s, &sm))
+    if (!DetectStreamSizeMatch(&tv, &dtx, p, &s, sm.ctx))
         result = 1;
 
     SCFree(p);
@@ -511,7 +520,8 @@ static int DetectStreamSizeParseTest04 (void) {
 /**
  * \brief this function registers unit tests for DetectStreamSize
  */
-void DetectStreamSizeRegisterTests(void) {
+void DetectStreamSizeRegisterTests(void)
+{
 #ifdef UNITTESTS
     UtRegisterTest("DetectStreamSizeParseTest01", DetectStreamSizeParseTest01, 1);
     UtRegisterTest("DetectStreamSizeParseTest02", DetectStreamSizeParseTest02, 1);

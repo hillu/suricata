@@ -49,7 +49,7 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 int DetectIdMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                    Signature *, SigMatch *);
+                    Signature *, const SigMatchCtx *);
 static int DetectIdSetup (DetectEngineCtx *, Signature *, char *);
 void DetectIdRegisterTests(void);
 void DetectIdFree(void *);
@@ -57,7 +57,8 @@ void DetectIdFree(void *);
 /**
  * \brief Registration function for keyword: id
  */
-void DetectIdRegister (void) {
+void DetectIdRegister (void)
+{
     sigmatch_table[DETECT_ID].name = "id";
     sigmatch_table[DETECT_ID].desc = "match on a specific IP ID value";
     sigmatch_table[DETECT_ID].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#Id";
@@ -102,9 +103,9 @@ error:
  * \retval 1 match
  */
 int DetectIdMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
-                        Signature *s, SigMatch *m)
+                        Signature *s, const SigMatchCtx *ctx)
 {
-    DetectIdData *id_d = (DetectIdData *)m->ctx;
+    const DetectIdData *id_d = (const DetectIdData *)ctx;
 
     /**
      * To match a ipv4 packet with a "id" rule
@@ -138,7 +139,6 @@ DetectIdData *DetectIdParse (char *idstr)
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
 
-
     ret = pcre_exec(parse_regex, parse_regex_study, idstr, strlen(idstr), 0, 0,
                     ov, MAX_SUBSTRINGS);
 
@@ -151,26 +151,16 @@ DetectIdData *DetectIdParse (char *idstr)
 
 
     if (ret > 1) {
-        const char *str_ptr;
-        char *orig;
+        char copy_str[128] = "";
         char *tmp_str;
-        res = pcre_get_substring((char *)idstr, ov, MAX_SUBSTRINGS, 1,
-                                    &str_ptr);
+        res = pcre_copy_substring((char *)idstr, ov, MAX_SUBSTRINGS, 1,
+                                    copy_str, sizeof(copy_str));
         if (res < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
             goto error;
         }
 
-        /* We have a correct id option */
-        id_d = SCMalloc(sizeof(DetectIdData));
-        if (unlikely(id_d == NULL))
-            goto error;
-
-        orig = SCStrdup((char*)str_ptr);
-        if (unlikely(orig == NULL)) {
-            goto error;
-        }
-        tmp_str=orig;
+        tmp_str = copy_str;
 
         /* Let's see if we need to scape "'s */
         if (tmp_str[0] == '"')
@@ -186,13 +176,15 @@ DetectIdData *DetectIdParse (char *idstr)
             SCLogError(SC_ERR_INVALID_VALUE, "\"id\" option  must be in "
                         "the range %u - %u",
                         DETECT_IPID_MIN, DETECT_IPID_MAX);
-
-            SCFree(orig);
             goto error;
         }
-        id_d->id = temp;
 
-        SCFree(orig);
+        /* We have a correct id option */
+        id_d = SCMalloc(sizeof(DetectIdData));
+        if (unlikely(id_d == NULL))
+            goto error;
+
+        id_d->id = temp;
 
         SCLogDebug("detect-id: will look for ip_id: %u\n", id_d->id);
     }
@@ -200,7 +192,8 @@ DetectIdData *DetectIdParse (char *idstr)
     return id_d;
 
 error:
-    if (id_d != NULL) DetectIdFree(id_d);
+    if (id_d != NULL)
+        DetectIdFree(id_d);
     return NULL;
 
 }
@@ -232,7 +225,7 @@ int DetectIdSetup (DetectEngineCtx *de_ctx, Signature *s, char *idstr)
         goto error;
 
     sm->type = DETECT_ID;
-    sm->ctx = (void *)id_d;
+    sm->ctx = (SigMatchCtx *)id_d;
 
     SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MATCH);
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
@@ -251,7 +244,8 @@ error:
  *
  * \param id_d pointer to DetectIdData
  */
-void DetectIdFree(void *ptr) {
+void DetectIdFree(void *ptr)
+{
     DetectIdData *id_d = (DetectIdData *)ptr;
     SCFree(id_d);
 }
@@ -262,7 +256,8 @@ void DetectIdFree(void *ptr) {
  * \test DetectIdTestParse01 is a test to make sure that we parse the "id"
  *       option correctly when given valid id option
  */
-int DetectIdTestParse01 (void) {
+int DetectIdTestParse01 (void)
+{
     DetectIdData *id_d = NULL;
     id_d = DetectIdParse(" 35402 ");
     if (id_d != NULL &&id_d->id==35402) {
@@ -278,7 +273,8 @@ int DetectIdTestParse01 (void) {
  *       option correctly when given an invalid id option
  *       it should return id_d = NULL
  */
-int DetectIdTestParse02 (void) {
+int DetectIdTestParse02 (void)
+{
     DetectIdData *id_d = NULL;
     id_d = DetectIdParse("65537");
     if (id_d == NULL) {
@@ -294,7 +290,8 @@ int DetectIdTestParse02 (void) {
  *       option correctly when given an invalid id option
  *       it should return id_d = NULL
  */
-int DetectIdTestParse03 (void) {
+int DetectIdTestParse03 (void)
+{
     DetectIdData *id_d = NULL;
     id_d = DetectIdParse("12what?");
     if (id_d == NULL) {
@@ -309,7 +306,8 @@ int DetectIdTestParse03 (void) {
  * \test DetectIdTestParse04 is a test to make sure that we parse the "id"
  *       option correctly when given valid id option but wrapped with "'s
  */
-int DetectIdTestParse04 (void) {
+int DetectIdTestParse04 (void)
+{
     DetectIdData *id_d = NULL;
     /* yep, look if we trim blank spaces correctly and ignore "'s */
     id_d = DetectIdParse(" \"35402\" ");
@@ -325,7 +323,8 @@ int DetectIdTestParse04 (void) {
  * \test DetectIdTestSig01
  * \brief Test to check "id" keyword with constructed packets
  */
-int DetectIdTestMatch01(void) {
+int DetectIdTestMatch01(void)
+{
     int result = 0;
     uint8_t *buf = (uint8_t *)"Hi all!";
     uint16_t buflen = strlen((char *)buf);
@@ -372,7 +371,8 @@ end:
 /**
  * \brief this function registers unit tests for DetectId
  */
-void DetectIdRegisterTests(void) {
+void DetectIdRegisterTests(void)
+{
 #ifdef UNITTESTS /* UNITTESTS */
     UtRegisterTest("DetectIdTestParse01", DetectIdTestParse01, 1);
     UtRegisterTest("DetectIdTestParse02", DetectIdTestParse02, 1);
