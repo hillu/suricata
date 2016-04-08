@@ -23,7 +23,7 @@ Build-Depends: autotools-dev,
                zlib1g-dev | libz-dev
 Build-Conflicts: libhtp-dev
 X-Python-Version: >= 2.6
-Standards-Version: 3.9.6
+Standards-Version: 3.9.7
 Homepage: http://www.openinfosecfoundation.org/
 XS-Testsuite: autopkgtest
 
