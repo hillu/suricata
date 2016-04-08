@@ -372,6 +372,7 @@ util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
 util-mpm-b2g.c util-mpm-b2g.h \
 util-mpm-b3g.c util-mpm-b3g.h \
+util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
 util-mpm-wumanber.c util-mpm-wumanber.h \
 util-optimize.h \
@@ -421,7 +422,7 @@ EXTRA_DIST = util-mpm-ac-cuda-kernel.cu ptxdump.py
 AM_CPPFLAGS = $(all_includes)
 
 # the library search path.
-suricata_LDFLAGS = $(all_libraries)
+suricata_LDFLAGS = $(all_libraries) ${SECLDFLAGS}
 suricata_LDADD = $(HTP_LDADD)
 
 # Rules to build CUDA ptx modules
@@ -433,36 +434,15 @@ util-mpm-ac-cuda-kernel.cu
 
 NVCCFLAGS=-O2
 
-SUFFIXES = \
-.ptx_sm_10 \
-.ptx_sm_11 \
-.ptx_sm_12 \
-.ptx_sm_13 \
-.ptx_sm_20 \
-.ptx_sm_21 \
-.ptx_sm_30 \
-.ptx_sm_35
-
-PTXS =  $(suricata_CUDA_KERNELS:.cu=.ptx_sm_10)
-PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_11)
-PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_12)
-PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_13)
-PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_20)
+PTXS = $(suricata_CUDA_KERNELS:.cu=.ptx_sm_20)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_21)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_30)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_32)
 PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_35)
-
-.cu.ptx_sm_10:
-	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_10 -ptx $<
-
-.cu.ptx_sm_11:
-	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_11 -ptx $<
-
-.cu.ptx_sm_12:
-	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_12 -ptx $<
-
-.cu.ptx_sm_13:
-	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_13 -ptx $<
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_37)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_50)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_52)
+PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_53)
 
 .cu.ptx_sm_20:
 	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_20 -ptx $<
@@ -473,8 +453,23 @@ PTXS += $(suricata_CUDA_KERNELS:.cu=.ptx_sm_35)
 .cu.ptx_sm_30:
 	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_30 -ptx $<
 
+.cu.ptx_sm_32:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_32 -ptx $<
+
 .cu.ptx_sm_35:
 	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_35 -ptx $<
+
+.cu.ptx_sm_37:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_37 -ptx $<
+
+.cu.ptx_sm_50:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_50 -ptx $<
+
+.cu.ptx_sm_52:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_52 -ptx $<
+
+.cu.ptx_sm_53:
+	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_53 -ptx $<
 
 cuda-ptxdump.h: $(PTXS)
 	$(PYTHON) ptxdump.py cuda-ptxdump $(PTXS)

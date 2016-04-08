@@ -422,11 +422,10 @@ void StreamTcpInitConfig(char quiet)
                 "enabled" : "disabled");
     }
 
-    int inl = 0;
-
-
     char *temp_stream_inline_str;
     if (ConfGet("stream.inline", &temp_stream_inline_str) == 1) {
+        int inl = 0;
+
         /* checking for "auto" and falling back to boolean to provide
          * backward compatibility */
         if (strcmp(temp_stream_inline_str, "auto") == 0) {
@@ -437,6 +436,13 @@ void StreamTcpInitConfig(char quiet)
             }
         } else if (ConfGetBool("stream.inline", &inl) == 1) {
             stream_inline = inl;
+        }
+    } else {
+        /* default to 'auto' */
+        if (EngineModeIsIPS()) {
+            stream_inline = 1;
+        } else {
+            stream_inline = 0;
         }
     }
 
@@ -635,9 +641,10 @@ void StreamTcpFreeConfig(char quiet)
 /** \brief The function is used to to fetch a TCP session from the
  *         ssn_pool, when a TCP SYN is received.
  *
- *  \param quiet Packet P, which has been recieved for the new TCP session.
+ *  \param p packet starting the new TCP session.
+ *  \param id thread pool id
  *
- *  \retval TcpSession A new TCP session with field initilaized to 0/NULL.
+ *  \retval ssn new TCP session.
  */
 TcpSession *StreamTcpNewSession (Packet *p, int id)
 {
@@ -5920,8 +5927,8 @@ void StreamTcpPseudoPacketCreateStreamEndPacket(ThreadVars *tv, StreamTcpThread 
 /**
  * \brief Run callback function on each TCP segment
  *
- * This function is used by StreamMsgForEach() which
- * should be used directly.
+ * \note when stream engine is running in inline mode all segments are used,
+ *       in IDS/non-inline mode only ack'd segments are iterated.
  *
  * \return -1 in case of error, the number of segment in case of success
  *
@@ -5949,8 +5956,12 @@ int StreamTcpSegmentForEach(const Packet *p, uint8_t flag, StreamSegmentCallback
     } else {
         stream = &(ssn->client);
     }
+
+    /* for IDS, return ack'd segments. For IPS all. */
     TcpSegment *seg = stream->seg_list;
-    for (; seg != NULL && SEQ_LT(seg->seq, stream->last_ack);) {
+    for (; seg != NULL &&
+            (stream_inline || SEQ_LT(seg->seq, stream->last_ack));)
+    {
         ret = CallbackFunc(p, data, seg->payload, seg->payload_len);
         if (ret != 1) {
             SCLogDebug("Callback function has failed");
@@ -10249,7 +10260,7 @@ static int StreamTcpTest40(void)
 
     DecodeVLAN(&tv, &dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), NULL);
 
-    if(p->vlanh == NULL) {
+    if(p->vlanh[0] == NULL) {
         SCFree(p);
         return 0;
     }

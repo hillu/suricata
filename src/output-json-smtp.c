@@ -52,7 +52,6 @@
 #include "output-json-email-common.h"
 
 #ifdef HAVE_LIBJANSSON
-#include <jansson.h>
 
 static json_t *JsonSmtpDataLogger(const Flow *f, void *state, void *vtx, uint64_t tx_id)
 {
@@ -87,7 +86,6 @@ static int JsonSmtpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Fl
 {
     SCEnter();
     JsonEmailLogThread *jhl = (JsonEmailLogThread *)thread_data;
-    MemBuffer *buffer = (MemBuffer *)jhl->buffer;
 
     json_t *sjs;
     json_t *js = CreateJSONHeaderWithTxId((Packet *)p, 1, "smtp", tx_id);
@@ -95,7 +93,7 @@ static int JsonSmtpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Fl
         return TM_ECODE_OK;
 
     /* reset */
-    MemBufferReset(buffer);
+    MemBufferReset(jhl->buffer);
 
     sjs = JsonSmtpDataLogger(f, state, tx, tx_id);
     if (sjs) {
@@ -103,7 +101,7 @@ static int JsonSmtpLogger(ThreadVars *tv, void *thread_data, const Packet *p, Fl
     }
 
     if (JsonEmailLogJson(jhl, js, p, f, state, tx, tx_id) == TM_ECODE_OK) {
-        OutputJSONBuffer(js, jhl->emaillog_ctx->file_ctx, buffer);
+        OutputJSONBuffer(js, jhl->emaillog_ctx->file_ctx, &jhl->buffer);
     }
     json_object_del(js, "email");
     if (sjs) {

@@ -541,6 +541,69 @@ int DetectEngineReloadIsDone(void)
     return r;
 }
 
+/* nudge capture loops to wake up */
+static void BreakCapture(void)
+{
+    SCMutexLock(&tv_root_lock);
+    ThreadVars *tv = tv_root[TVT_PPT];
+    while (tv) {
+        /* find the correct slot */
+        TmSlot *slots = tv->tm_slots;
+        while (slots != NULL) {
+            if (suricata_ctl_flags != 0) {
+                SCMutexUnlock(&tv_root_lock);
+                return;
+            }
+
+            TmModule *tm = TmModuleGetById(slots->tm_id);
+            if (!(tm->flags & TM_FLAG_RECEIVE_TM)) {
+                slots = slots->slot_next;
+                continue;
+            }
+
+            /* signal capture method that we need a packet. */
+            TmThreadsSetFlag(tv, THV_CAPTURE_INJECT_PKT);
+            /* if the method supports it, BreakLoop. Otherwise we rely on
+             * the capture method's recv timeout */
+            if (tm->PktAcqLoop && tm->PktAcqBreakLoop) {
+                tm->PktAcqBreakLoop(tv, SC_ATOMIC_GET(slots->slot_data));
+            }
+
+            break;
+        }
+        tv = tv->next;
+    }
+    SCMutexUnlock(&tv_root_lock);
+}
+
+/** \internal
+ *  \brief inject a pseudo packet into each detect thread that doesn't use the
+ *         new det_ctx yet
+ */
+static void InjectPackets(ThreadVars **detect_tvs,
+                          DetectEngineThreadCtx **new_det_ctx,
+                          int no_of_detect_tvs)
+{
+    int i;
+    /* inject a fake packet if the detect thread isn't using the new ctx yet,
+     * this speeds up the process */
+    for (i = 0; i < no_of_detect_tvs; i++) {
+        if (SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) != 1) {
+            if (detect_tvs[i]->inq != NULL) {
+                Packet *p = PacketGetFromAlloc();
+                if (p != NULL) {
+                    p->flags |= PKT_PSEUDO_STREAM_END;
+                    PacketQueue *q = &trans_q[detect_tvs[i]->inq->id];
+                    SCMutexLock(&q->mutex_q);
+                    PacketEnqueue(q, p);
+                    SCCondSignal(&q->cond_q);
+                    SCMutexUnlock(&q->mutex_q);
+                }
+            }
+        }
+    }
+}
+
 /** \internal
  *  \brief Update detect threads with new detect engine
  *
@@ -675,11 +738,10 @@ static int DetectEngineReloadThreads(DetectEngineCtx *new_de_ctx)
     SCLogInfo("Live rule swap has swapped %d old det_ctx's with new ones, "
               "along with the new de_ctx", no_of_detect_tvs);
 
-    /* inject a fake packet if the detect thread isn't using the new ctx yet,
-     * this speeds up the process */
+    InjectPackets(detect_tvs, new_det_ctx, no_of_detect_tvs);
+
     for (i = 0; i < no_of_detect_tvs; i++) {
         int break_out = 0;
-        int pseudo_pkt_inserted = 0;
         usleep(1000);
         while (SC_ATOMIC_GET(new_det_ctx[i]->so_far_used_by_detect) != 1) {
             if (suricata_ctl_flags != 0) {
@@ -687,20 +749,7 @@ static int DetectEngineReloadThreads(DetectEngineCtx *new_de_ctx)
                 break;
             }
 
-            if (pseudo_pkt_inserted == 0) {
-                pseudo_pkt_inserted = 1;
-                if (detect_tvs[i]->inq != NULL) {
-                    Packet *p = PacketGetFromAlloc();
-                    if (p != NULL) {
-                        p->flags |= PKT_PSEUDO_STREAM_END;
-                        PacketQueue *q = &trans_q[detect_tvs[i]->inq->id];
-                        SCMutexLock(&q->mutex_q);
-                        PacketEnqueue(q, p);
-                        SCCondSignal(&q->cond_q);
-                        SCMutexUnlock(&q->mutex_q);
-                    }
-                }
-            }
+            BreakCapture();
             usleep(1000);
         }
         if (break_out)
@@ -854,6 +903,9 @@ static DetectEngineCtx *DetectEngineCtxInitReal(int minimal, const char *prefix)
     de_ctx->id = detect_engine_ctx_id++;
     return de_ctx;
 error:
+    if (de_ctx != NULL) {
+        DetectEngineCtxFree(de_ctx);
+    }
     return NULL;
 
 }
@@ -1017,6 +1069,9 @@ static uint8_t DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
         /* for now, since we still haven't implemented any intelligence into
          * understanding the patterns and distributing mpm_ctx across sgh */
         if (de_ctx->mpm_matcher == DEFAULT_MPM || de_ctx->mpm_matcher == MPM_AC_GFBS ||
+#ifdef BUILD_HYPERSCAN
+            de_ctx->mpm_matcher == MPM_HS ||
+#endif
 #ifdef __SC_CUDA_SUPPORT__
             de_ctx->mpm_matcher == MPM_AC_BS || de_ctx->mpm_matcher == MPM_AC_CUDA) {
 #else
@@ -1334,7 +1389,9 @@ static TmEcode DetectEngineThreadCtxInitForMT(ThreadVars *tv, DetectEngineThread
             map_cnt = 0;
             map = master->tenant_mapping_list;
             while (map) {
-                BUG_ON(map_cnt > map_array_size);
+                if (map_cnt >= map_array_size) {
+                    goto error;
+                }
                 map_array[map_cnt].traffic_id = map->traffic_id;
                 map_array[map_cnt].tenant_id = map->tenant_id;
                 map_cnt++;
@@ -1351,7 +1408,9 @@ static TmEcode DetectEngineThreadCtxInitForMT(ThreadVars *tv, DetectEngineThread
                 DetectEngineThreadCtx *mt_det_ctx = DetectEngineThreadCtxInitForReload(tv, list, 0);
                 if (mt_det_ctx == NULL)
                     goto error;
-                BUG_ON(HashTableAdd(mt_det_ctxs_hash, mt_det_ctx, 0) != 0);
+                if (HashTableAdd(mt_det_ctxs_hash, mt_det_ctx, 0) != 0) {
+                    goto error;
+                }
             }
             list = list->next;
         }
@@ -1669,6 +1728,17 @@ void DetectEngineThreadCtxFree(DetectEngineThreadCtx *det_ctx)
             SCLogDebug("det_ctx->hcbd[i].buffer_size %u", det_ctx->hcbd[i].buffer_size);
         }
         SCFree(det_ctx->hcbd);
+    }
+
+    /* SMTP */
+    if (det_ctx->smtp != NULL) {
+        SCLogDebug("det_ctx smtp %u", det_ctx->smtp_buffers_size);
+        for (i = 0; i < det_ctx->smtp_buffers_size; i++) {
+            if (det_ctx->smtp[i].buffer != NULL)
+                SCFree(det_ctx->smtp[i].buffer);
+            SCLogDebug("det_ctx->smtp[i].buffer_size %u", det_ctx->smtp[i].buffer_size);
+        }
+        SCFree(det_ctx->smtp);
     }
 
     /* Decoded base64 data. */
@@ -2506,7 +2576,9 @@ int DetectEngineReload(const char *filename, SCInstance *suri)
     DetectEngineCtx *new_de_ctx = NULL;
     DetectEngineCtx *old_de_ctx = NULL;
 
-    char prefix[128] = "";
+    char prefix[128];
+    memset(prefix, 0, sizeof(prefix));
+
     if (filename != NULL) {
         snprintf(prefix, sizeof(prefix), "detect-engine-reloads.%d", reloads++);
         if (ConfYamlLoadFileWithPrefix(filename, prefix) != 0) {

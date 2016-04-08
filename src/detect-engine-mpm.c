@@ -183,20 +183,25 @@ uint32_t PacketPatternSearchWithStreamCtx(DetectEngineThreadCtx *det_ctx,
     SCEnter();
 
     uint32_t ret = 0;
+    MpmCtx *mpm_ctx = NULL;
 
     if (p->flowflags & FLOW_PKT_TOSERVER) {
         DEBUG_VALIDATE_BUG_ON(det_ctx->sgh->mpm_stream_ctx_ts == NULL);
 
-        ret = mpm_table[det_ctx->sgh->mpm_stream_ctx_ts->mpm_type].
-            Search(det_ctx->sgh->mpm_stream_ctx_ts, &det_ctx->mtc, &det_ctx->pmq,
-                   p->payload, p->payload_len);
+        mpm_ctx = det_ctx->sgh->mpm_stream_ctx_ts;
+
     } else {
         DEBUG_VALIDATE_BUG_ON(det_ctx->sgh->mpm_stream_ctx_tc == NULL);
 
-        ret = mpm_table[det_ctx->sgh->mpm_stream_ctx_tc->mpm_type].
-            Search(det_ctx->sgh->mpm_stream_ctx_tc, &det_ctx->mtc, &det_ctx->pmq,
-                   p->payload, p->payload_len);
+        mpm_ctx = det_ctx->sgh->mpm_stream_ctx_tc;
     }
+    if (unlikely(mpm_ctx == NULL)) {
+        SCReturnInt(0);
+    }
+
+    ret = mpm_table[mpm_ctx->mpm_type].
+        Search(mpm_ctx, &det_ctx->mtc, &det_ctx->pmq,
+                p->payload, p->payload_len);
 
     SCReturnInt(ret);
 }
@@ -1064,14 +1069,14 @@ void PatternMatchDestroyGroup(SigGroupHead *sh)
  *         always used, etc. */
 typedef struct ContentHash_ {
     DetectContentData *ptr;
-    uint16_t cnt;
-    uint8_t use; /* use no matter what */
+    uint32_t cnt;
+    int use; /* use no matter what */
 } ContentHash;
 
 typedef struct UricontentHash_ {
     DetectContentData *ptr;
-    uint16_t cnt;
-    uint8_t use; /* use no matter what */
+    uint32_t cnt;
+    int use; /* use no matter what */
 } UricontentHash;
 
 uint32_t ContentHashFunc(HashTable *ht, void *data, uint16_t datalen)
@@ -1211,28 +1216,40 @@ static void PopulateMpmHelperAddPatternToPktCtx(MpmCtx *mpm_ctx,
                                                 Signature *s, uint8_t flags,
                                                 int chop)
 {
+    uint16_t pat_offset = cd->offset;
+    uint16_t pat_depth = cd->depth;
+
+    /* recompute offset/depth to cope with chop */
+    if (chop && (pat_depth || pat_offset)) {
+        pat_offset += cd->fp_chop_offset;
+        if (pat_depth) {
+            pat_depth -= cd->content_len;
+            pat_depth += cd->fp_chop_offset + cd->fp_chop_len;
+        }
+    }
+
     if (cd->flags & DETECT_CONTENT_NOCASE) {
         if (chop) {
             MpmAddPatternCI(mpm_ctx,
                             cd->content + cd->fp_chop_offset, cd->fp_chop_len,
-                            0, 0,
+                            pat_offset, pat_depth,
                             cd->id, s->num, flags);
         } else {
             MpmAddPatternCI(mpm_ctx,
                             cd->content, cd->content_len,
-                            0, 0,
+                            pat_offset, pat_depth,
                             cd->id, s->num, flags);
         }
     } else {
         if (chop) {
             MpmAddPatternCS(mpm_ctx,
                             cd->content + cd->fp_chop_offset, cd->fp_chop_len,
-                            0, 0,
+                            pat_offset, pat_depth,
                             cd->id, s->num, flags);
         } else {
             MpmAddPatternCS(mpm_ctx,
                             cd->content, cd->content_len,
-                            0, 0,
+                            pat_offset, pat_depth,
                             cd->id, s->num, flags);
         }
     }
@@ -2714,8 +2731,8 @@ typedef struct MpmPatternIdTableElmt_ {
     uint8_t *pattern;       /**< ptr to the pattern */
     uint16_t pattern_len;   /**< pattern len */
     PatIntId id;            /**< pattern id */
-    uint16_t dup_count;     /**< duplicate count */
-    uint8_t sm_list;        /**< SigMatch list */
+    uint32_t dup_count;     /**< duplicate count */
+    int sm_list;            /**< SigMatch list */
 } MpmPatternIdTableElmt;
 
 /** \brief Hash compare func for MpmPatternId api

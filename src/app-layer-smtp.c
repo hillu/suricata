@@ -58,11 +58,11 @@
 #include "util-misc.h"
 
 /* content-limit default value */
-#define FILEDATA_CONTENT_LIMIT 1000
+#define FILEDATA_CONTENT_LIMIT 100000
 /* content-inspect-min-size default value */
-#define FILEDATA_CONTENT_INSPECT_MIN_SIZE 1000
+#define FILEDATA_CONTENT_INSPECT_MIN_SIZE 32768
 /* content-inspect-window default value */
-#define FILEDATA_CONTENT_INSPECT_WINDOW 1000
+#define FILEDATA_CONTENT_INSPECT_WINDOW 4096
 
 #define SMTP_MAX_REQUEST_AND_REPLY_LINE_LENGTH 510
 
@@ -143,6 +143,12 @@ SCEnumCharMap smtp_decoder_event_table[ ] = {
       SMTP_DECODER_EVENT_MIME_LONG_HEADER_VALUE },
     { "MIME_LONG_BOUNDARY",
       SMTP_DECODER_EVENT_MIME_BOUNDARY_TOO_LONG },
+
+    /* Invalid behavior or content */
+    { "DUPLICATE_FIELDS",
+      SMTP_DECODER_EVENT_DUPLICATE_FIELDS },
+    { "UNPARSABLE_CONTENT",
+      SMTP_DECODER_EVENT_UNPARSABLE_CONTENT },
 
     { NULL,                      -1 },
 };
@@ -276,34 +282,40 @@ static void SMTPConfigure(void) {
     /* Pass mime config data to MimeDec API */
     MimeDecSetConfig(&smtp_config.mime_config);
 
+    smtp_config.content_limit = FILEDATA_CONTENT_LIMIT;
+    smtp_config.content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+    smtp_config.content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+
     ConfNode *t = ConfGetNode("app-layer.protocols.smtp.inspected-tracker");
     ConfNode *p = NULL;
 
-    if (t == NULL)
-        return;
-
-    TAILQ_FOREACH(p, &t->head, next) {
-        if (strcasecmp("content-limit", p->name) == 0) {
-            if (ParseSizeStringU32(p->val, &content_limit) < 0) {
-                SCLogWarning(SC_ERR_SIZE_PARSE, "Error parsing content-limit "
-                             "from conf file - %s. Killing engine", p->val);
-                content_limit = FILEDATA_CONTENT_LIMIT;
+    if (t != NULL) {
+        TAILQ_FOREACH(p, &t->head, next) {
+            if (strcasecmp("content-limit", p->name) == 0) {
+                if (ParseSizeStringU32(p->val, &content_limit) < 0) {
+                    SCLogWarning(SC_ERR_SIZE_PARSE,
+                            "parsing content-limit %s failed", p->val);
+                    content_limit = FILEDATA_CONTENT_LIMIT;
+                }
+                smtp_config.content_limit = content_limit;
             }
-        }
 
-        if (strcasecmp("content-inspect-min-size", p->name) == 0) {
-            if (ParseSizeStringU32(p->val, &content_inspect_min_size) < 0) {
-                SCLogWarning(SC_ERR_SIZE_PARSE, "Error parsing content-inspect-min-size-limit "
-                             "from conf file - %s. Killing engine", p->val);
-                content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+            if (strcasecmp("content-inspect-min-size", p->name) == 0) {
+                if (ParseSizeStringU32(p->val, &content_inspect_min_size) < 0) {
+                    SCLogWarning(SC_ERR_SIZE_PARSE,
+                            "parsing content-inspect-min-size %s failed", p->val);
+                    content_inspect_min_size = FILEDATA_CONTENT_INSPECT_MIN_SIZE;
+                }
+                smtp_config.content_inspect_min_size = content_inspect_min_size;
             }
-        }
 
-        if (strcasecmp("content-inspect-window", p->name) == 0) {
-            if (ParseSizeStringU32(p->val, &content_inspect_window) < 0) {
-                SCLogWarning(SC_ERR_SIZE_PARSE, "Error parsing content-inspect-window "
-                             "from conf file - %s. Killing engine", p->val);
-                content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+            if (strcasecmp("content-inspect-window", p->name) == 0) {
+                if (ParseSizeStringU32(p->val, &content_inspect_window) < 0) {
+                    SCLogWarning(SC_ERR_SIZE_PARSE,
+                            "parsing content-inspect-window %s failed", p->val);
+                    content_inspect_window = FILEDATA_CONTENT_INSPECT_WINDOW;
+                }
+                smtp_config.content_inspect_window = content_inspect_window;
             }
         }
     }
@@ -335,9 +347,46 @@ static SMTPTransaction *SMTPTransactionCreate(void)
     return tx;
 }
 
-int SMTPProcessDataChunk(const uint8_t *chunk, uint32_t len,
-        MimeDecParseState *state) {
+/** \internal
+ *  \brief update inspected tracker if it gets to far behind
+ *
+ *  As smtp uses the FILE_USE_DETECT flag in the file API, we are responsible
+ *  for making sure that File::content_inspected is not getting too far
+ *  behind.
+ */
+static void SMTPPruneFiles(FileContainer *files)
+{
+    SCLogDebug("cfg: win %"PRIu32" min_size %"PRIu32,
+            smtp_config.content_inspect_window, smtp_config.content_inspect_min_size);
 
+    File *file = files->head;
+    while (file) {
+        if (file->chunks_head) {
+            uint32_t window = smtp_config.content_inspect_window;
+            if (file->chunks_head->stream_offset == 0)
+                window = MAX(window, smtp_config.content_inspect_min_size);
+
+            uint64_t file_size = file->content_len_so_far;
+            uint64_t data_size = file_size - file->chunks_head->stream_offset;
+
+            SCLogDebug("window %"PRIu32", file_size %"PRIu64", data_size %"PRIu64,
+                    window, file_size, data_size);
+
+            if (data_size > (window * 3)) {
+                uint64_t left_edge = file_size - window;
+                SCLogDebug("file->content_inspected now %"PRIu64, left_edge);
+                file->content_inspected = left_edge;
+            }
+        }
+
+        file = file->next;
+    }
+}
+
+int SMTPProcessDataChunk(const uint8_t *chunk, uint32_t len,
+        MimeDecParseState *state)
+{
+    SCEnter();
     int ret = MIME_DEC_OK;
     Flow *flow = (Flow *) state->data;
     SMTPState *smtp_state = (SMTPState *) flow->alstate;
@@ -398,7 +447,7 @@ int SMTPProcessDataChunk(const uint8_t *chunk, uint32_t len,
             }
 
             if (FileOpenFile(files, (uint8_t *) entity->filename, entity->filename_len,
-                    (uint8_t *) chunk, len, flags) == NULL) {
+                    (uint8_t *) chunk, len, flags|FILE_USE_DETECT) == NULL) {
                 ret = MIME_DEC_ERR_DATA;
                 SCLogDebug("FileOpenFile() failed");
             }
@@ -454,6 +503,7 @@ int SMTPProcessDataChunk(const uint8_t *chunk, uint32_t len,
     }
 
     if (files != NULL) {
+        SMTPPruneFiles(files);
         FilePrune(files);
     }
 
@@ -1005,11 +1055,19 @@ static int SMTPParseCommandWithParam(SMTPState *state, uint8_t prefix_len, uint8
 
 static int SMTPParseCommandHELO(SMTPState *state)
 {
+    if (state->helo) {
+        SMTPSetEvent(state, SMTP_DECODER_EVENT_DUPLICATE_FIELDS);
+        return 0;
+    }
     return SMTPParseCommandWithParam(state, 4, &state->helo, &state->helo_len);
 }
 
 static int SMTPParseCommandMAILFROM(SMTPState *state)
 {
+    if (state->curr_tx->mail_from) {
+        SMTPSetEvent(state, SMTP_DECODER_EVENT_DUPLICATE_FIELDS);
+        return 0;
+    }
     return SMTPParseCommandWithParam(state, 9,
                                      &state->curr_tx->mail_from,
                                      &state->curr_tx->mail_from_len);
@@ -1082,6 +1140,18 @@ static int SMTPProcessRequest(SMTPState *state, Flow *f,
                    SCMemcmpLowercase("data", state->current_line, 4) == 0) {
             state->current_command = SMTP_COMMAND_DATA;
             if (smtp_config.decode_mime) {
+                if (tx->mime_state) {
+                    /* We have 2 chained mails and did not detect the end
+                     * of first one. So we start a new transaction. */
+                    tx->mime_state->state_flag = PARSE_ERROR;
+                    SMTPSetEvent(state, SMTP_DECODER_EVENT_UNPARSABLE_CONTENT);
+                    tx = SMTPTransactionCreate();
+                    if (tx == NULL)
+                        return -1;
+                    state->curr_tx = tx;
+                    TAILQ_INSERT_TAIL(&state->tx_list, tx, next);
+                    tx->tx_id = state->tx_cnt++;
+                }
                 tx->mime_state = MimeDecInitParser(f, SMTPProcessDataChunk);
                 if (tx->mime_state == NULL) {
                     SCLogError(SC_ERR_MEM_ALLOC, "MimeDecInitParser() failed to "

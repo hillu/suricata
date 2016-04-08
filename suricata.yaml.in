@@ -349,6 +349,7 @@ outputs:
       log-dir: files    # directory to store the files
       force-magic: no   # force logging magic on all stored files
       force-md5: no     # force logging of md5 checksums
+      force-filestore: no # force storing of all files
       #waldo: file.waldo # waldo file to store the file_id across runs
 
   # output module to log files tracked in a easily parsable json format
@@ -395,7 +396,7 @@ outputs:
 
 # Magic file. The extension .mgc is added to the value here.
 #magic-file: /usr/share/file/magic
-magic-file: @e_magic_file@
+@e_magic_file_comment@magic-file: @e_magic_file@
 
 # When running in NFQ inline mode, it is possible to use a simulated
 # non-terminal NFQUEUE verdict.
@@ -879,9 +880,10 @@ flow-timeouts:
 #                               # This lower the risk of some evasion technics but could lead
 #                               # detection change between runs. It is set to 'yes' by default.
 #     randomize-chunk-range: 10 # If randomize-chunk-size is active, the value of chunk-size is
-#                               # a random value between (1 - randomize-chunk-range/100)*randomize-chunk-size
-#                               # and (1 + randomize-chunk-range/100)*randomize-chunk-size. Default value
-#                               # of randomize-chunk-range is 10.
+#                               # a random value between (1 - randomize-chunk-range/100)*toserver-chunk-size
+#                               # and (1 + randomize-chunk-range/100)*toserver-chunk-size and the same
+#                               # calculation for toclient-chunk-size.
+#                               # Default value of randomize-chunk-range is 10.
 #
 #     raw: yes                  # 'Raw' reassembly enabled or disabled.
 #                               # raw is for content inspection by detection
@@ -1129,7 +1131,7 @@ rule-files:
  - compromised.rules
  - drop.rules
  - dshield.rules
- - emerging-activex.rules
+# - emerging-activex.rules
  - emerging-attack_response.rules
  - emerging-chat.rules
  - emerging-current_events.rules
@@ -1137,11 +1139,11 @@ rule-files:
  - emerging-dos.rules
  - emerging-exploit.rules
  - emerging-ftp.rules
- - emerging-games.rules
- - emerging-icmp_info.rules
+# - emerging-games.rules
+# - emerging-icmp_info.rules
 # - emerging-icmp.rules
  - emerging-imap.rules
- - emerging-inappropriate.rules
+# - emerging-inappropriate.rules
  - emerging-malware.rules
  - emerging-misc.rules
  - emerging-mobile_malware.rules
@@ -1152,7 +1154,7 @@ rule-files:
  - emerging-rpc.rules
  - emerging-scada.rules
  - emerging-scan.rules
- - emerging-shellcode.rules
+# - emerging-shellcode.rules
  - emerging-smtp.rules
  - emerging-snmp.rules
  - emerging-sql.rules
@@ -1163,7 +1165,7 @@ rule-files:
  - emerging-voip.rules
  - emerging-web_client.rules
  - emerging-web_server.rules
- - emerging-web_specific_apps.rules
+# - emerging-web_specific_apps.rules
  - emerging-worm.rules
  - tor.rules
  - decoder-events.rules # available in suricata sources under rules dir
@@ -1330,9 +1332,9 @@ app-layer:
         body-md5: no
       # Configure inspected-tracker for file_data keyword
       inspected-tracker:
-        content-limit: 1000
-        content-inspect-min-size: 1000
-        content-inspect-window: 1000
+        content-limit: 100000
+        content-inspect-min-size: 32768
+        content-inspect-window: 4096
     imap:
       enabled: detection-only
     msn:

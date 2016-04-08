@@ -216,6 +216,12 @@ static Asn1Generic * DecodeAsn1DerGeneric(const unsigned char *buffer, uint32_t 
              * sequence parsing will fail
              */
             child->length += (d_ptr - save_d_ptr);
+
+            if (child->length > max_size - (d_ptr - buffer)) {
+                SCFree(child);
+                return NULL;
+            }
+
             break;
     };
     if (child == NULL)
@@ -741,6 +747,9 @@ Asn1Generic * DecodeDer(const unsigned char *buffer, uint32_t size, uint32_t *er
     uint32_t d_length, numbytes;
     Asn1Generic *cert;
     uint8_t c;
+
+    if (size < 2)
+        return NULL;
 
     /* Check that buffer is an ASN.1 structure (basic checks) */
     if (d_ptr[0] != 0x30 && d_ptr[1] != 0x82) /* Sequence */

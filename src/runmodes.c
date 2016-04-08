@@ -49,6 +49,8 @@
 
 #include "source-pfring.h"
 
+#include "tmqh-flow.h"
+
 int debuglog_enabled = 0;
 
 /**
@@ -360,10 +362,17 @@ void RunModeDispatch(int runmode, const char *custom_mode)
     }
 
     /* Export the custom mode */
+    if (active_runmode) {
+        SCFree(active_runmode);
+    }
     active_runmode = SCStrdup(custom_mode);
     if (unlikely(active_runmode == NULL)) {
         SCLogError(SC_ERR_MEM_ALLOC, "Unable to dup active mode");
         exit(EXIT_FAILURE);
+    }
+
+    if (strcasecmp(active_runmode, "autofp") == 0) {
+        TmqhFlowPrintAutofpHandler();
     }
 
     mode->RunModeFunc();
@@ -819,6 +828,13 @@ void RunModeInitializeOutputs(void)
         } else if (strcmp(output->val, "lua") == 0) {
             SCLogDebug("handle lua");
 
+            if (output_ctx == NULL)
+                continue;
+
+            OutputModule *lua_module = OutputGetModuleByConfName(output->val);
+            BUG_ON(lua_module == NULL);
+            AddOutputToFreeList(lua_module, output_ctx);
+
             ConfNode *scripts = ConfNodeLookupChild(output_config, "scripts");
             BUG_ON(scripts == NULL); //TODO
 
@@ -843,6 +859,7 @@ void RunModeInitializeOutputs(void)
                     continue;
                 }
 
+                AddOutputToFreeList(m, sub_output_ctx);
                 SetupOutput(m->name, m, sub_output_ctx);
             }
 

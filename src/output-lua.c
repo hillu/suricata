@@ -471,7 +471,7 @@ static int LuaFileLogger(ThreadVars *tv, void *thread_data, const Packet *p, con
     /* Get the TX so the script can get more context about it.
      * TODO hardcoded to HTTP currently */
     void *txptr = NULL;
-    if (p && p->flow && p->flow->alstate)
+    if (p->flow && p->flow->alstate)
         txptr = AppLayerParserGetTx(p->proto, ALPROTO_HTTP, p->flow->alstate, ff->txid);
 
     SCMutexLock(&td->lua_ctx->m);
@@ -800,6 +800,12 @@ error:
     return NULL;
 }
 
+static void LogLuaSubFree(OutputCtx *oc) {
+    if (oc->data)
+        SCFree(oc->data);
+    SCFree(oc);
+}
+
 /** \brief initialize output for a script instance
  *
  *  Runs script 'setup' function.
@@ -841,7 +847,7 @@ static OutputCtx *OutputLuaLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     SCLogDebug("lua_ctx %p", lua_ctx);
 
     output_ctx->data = lua_ctx;
-    output_ctx->DeInit = NULL;
+    output_ctx->DeInit = LogLuaSubFree;
 
     return output_ctx;
 error:
@@ -851,10 +857,16 @@ error:
     return NULL;
 }
 
-static void LogLuaMasterFree(OutputCtx *oc) {
-    BUG_ON(oc == NULL);
+static void LogLuaMasterFree(OutputCtx *oc)
+{
     if (oc->data)
         SCFree(oc->data);
+
+    OutputModule *om, *tom;
+    TAILQ_FOREACH_SAFE(om, &oc->submodules, entries, tom) {
+        SCFree(om);
+    }
+    SCFree(oc);
 }
 
 /** \internal
@@ -968,12 +980,9 @@ static OutputCtx *OutputLuaLogInit(ConfNode *conf)
     return output_ctx;
 
 error:
-
-    if (output_ctx != NULL) {
-        if (output_ctx->DeInit && output_ctx->data)
-            output_ctx->DeInit(output_ctx->data);
-        SCFree(output_ctx);
-    }
+    if (output_ctx->DeInit && output_ctx->data)
+        output_ctx->DeInit(output_ctx->data);
+    SCFree(output_ctx);
     return NULL;
 }
 
@@ -995,6 +1004,7 @@ static void OutputLuaLogDoDeinit(LogLuaCtx *lua_ctx)
         SCLogError(SC_ERR_LUA_ERROR, "couldn't run script 'deinit' function: %s", lua_tostring(luastate, -1));
         return;
     }
+    lua_close(luastate);
 }
 
 /** \internal
