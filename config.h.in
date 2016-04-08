@@ -1,5 +1,8 @@
 /* config.h.in.  Generated from configure.ac by autoheader.  */
 
+/* Intel Hyperscan support enabled */
+#undef BUILD_HYPERSCAN
+
 /* Unix socket support enabled */
 #undef BUILD_UNIX_SOCKET
 
@@ -82,6 +85,9 @@
 /* libhiredis available */
 #undef HAVE_LIBHIREDIS
 
+/* Define to 1 if you have the `hs' library (-lhs). */
+#undef HAVE_LIBHS
+
 /* Define to 1 if you have the `htp' library (-lhtp). */
 #undef HAVE_LIBHTP
 
@@ -90,6 +96,9 @@
 
 /* Define to 1 if you have the `jansson' library (-ljansson). */
 #undef HAVE_LIBJANSSON
+
+/* Define to 1 if you have the `lua' library (-llua). */
+#undef HAVE_LIBLUA
 
 /* Define to 1 if you have the `luajit-5.1' library (-lluajit-5.1). */
 #undef HAVE_LIBLUAJIT_5_1
@@ -262,6 +271,9 @@
 /* Define to 1 if stdbool.h conforms to C99. */
 #undef HAVE_STDBOOL_H
 
+/* Define to 1 if you have the <stddef.h> header file. */
+#undef HAVE_STDDEF_H
+
 /* Define to 1 if you have the <stdint.h> header file. */
 #undef HAVE_STDINT_H
 
@@ -416,9 +428,6 @@
 /* Git revision */
 #undef REVISION
 
-/* (CUDA support enabled) */
-#undef SC_CUDA_SUPPORT__
-
 /* Define to 1 if you have the ANSI C header files. */
 #undef STDC_HEADERS
 
@@ -480,6 +489,9 @@
 
 /* Fake GCC atomic support */
 #undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
+
+/* (CUDA support enabled) */
+#undef __SC_CUDA_SUPPORT__
 
 /* Define to `__inline__' or `__inline' if that's what the C compiler
    calls it, or to nothing if 'inline' is not supported under any name.  */

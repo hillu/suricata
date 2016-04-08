@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "3.0"
+#define PROG_VER "3.0.1"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -181,11 +181,6 @@ extern char *conf_filename;
 void EngineStop(void);
 void EngineKill(void);
 void EngineDone(void);
-
-/* live rule swap required this to be made static */
-void SignalHandlerSigusr2(int);
-void SignalHandlerSigusr2EngineShutdown(int);
-void SignalHandlerSigusr2Idle(int sig);
 
 int RunmodeIsUnittests(void);
 int RunmodeGetCurrent(void);

@@ -274,18 +274,10 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 
                 MemBufferReset(payload);
 
-                if (!EngineModeIsIPS()) {
-                    if (p->flowflags & FLOW_PKT_TOSERVER) {
-                        flag = FLOW_PKT_TOCLIENT;
-                    } else {
-                        flag = FLOW_PKT_TOSERVER;
-                    }
+                if (p->flowflags & FLOW_PKT_TOSERVER) {
+                    flag = FLOW_PKT_TOCLIENT;
                 } else {
-                    if (p->flowflags & FLOW_PKT_TOSERVER) {
-                        flag = FLOW_PKT_TOSERVER;
-                    } else {
-                        flag = FLOW_PKT_TOCLIENT;
-                    }
+                    flag = FLOW_PKT_TOSERVER;
                 }
 
                 StreamSegmentForEach((const Packet *)p, flag,
@@ -341,7 +333,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         HttpXFFCfg *xff_cfg = json_output_ctx->xff_cfg;
 
         /* xff header */
-        if (!(xff_cfg->flags & XFF_DISABLED) && p->flow != NULL) {
+        if ((xff_cfg != NULL) && !(xff_cfg->flags & XFF_DISABLED) && p->flow != NULL) {
             int have_xff_ip = 0;
             char buffer[XFF_MAXLEN];
 
@@ -369,7 +361,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
             }
         }
 
-        OutputJSONBuffer(js, aft->file_ctx, aft->json_buffer);
+        OutputJSONBuffer(js, aft->file_ctx, &aft->json_buffer);
         json_object_del(js, "alert");
     }
     json_object_clear(js);
@@ -380,7 +372,6 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 
 static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 {
-    MemBuffer *buffer = (MemBuffer *)aft->json_buffer;
     int i;
     char timebuf[64];
     json_t *js;
@@ -391,7 +382,7 @@ static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const 
     CreateIsoTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     for (i = 0; i < p->alerts.cnt; i++) {
-        MemBufferReset(buffer);
+        MemBufferReset(aft->json_buffer);
 
         const PacketAlert *pa = &p->alerts.alerts[i];
         if (unlikely(pa->s == NULL)) {
@@ -443,7 +434,7 @@ static int AlertJsonDecoderEvent(ThreadVars *tv, JsonAlertLogThread *aft, const 
 
         /* alert */
         json_object_set_new(js, "alert", ajs);
-        OutputJSONBuffer(js, aft->file_ctx, buffer);
+        OutputJSONBuffer(js, aft->file_ctx, &aft->json_buffer);
         json_object_clear(js);
         json_decref(js);
     }
@@ -522,9 +513,15 @@ static TmEcode JsonAlertLogThreadDeinit(ThreadVars *t, void *data)
 
 static void JsonAlertLogDeInitCtx(OutputCtx *output_ctx)
 {
-    SCLogDebug("cleaning up output_ctx");
-    LogFileCtx *logfile_ctx = (LogFileCtx *)output_ctx->data;
-    LogFileFreeCtx(logfile_ctx);
+    AlertJsonOutputCtx *json_output_ctx = (AlertJsonOutputCtx *) output_ctx->data;
+    if (json_output_ctx != NULL) {
+        HttpXFFCfg *xff_cfg = json_output_ctx->xff_cfg;
+        if (xff_cfg != NULL) {
+            SCFree(xff_cfg);
+        }
+        LogFileFreeCtx(json_output_ctx->file_ctx);
+        SCFree(json_output_ctx);
+    }
     SCFree(output_ctx);
 }
 
@@ -547,61 +544,16 @@ static void JsonAlertLogDeInitCtxSub(OutputCtx *output_ctx)
 
 #define DEFAULT_LOG_FILENAME "alert.json"
 
-/**
- * \brief Create a new LogFileCtx for "fast" output style.
- * \param conf The configuration node for this output.
- * \return A LogFileCtx pointer on success, NULL on failure.
- */
-static OutputCtx *JsonAlertLogInitCtx(ConfNode *conf)
+static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
 {
-    LogFileCtx *logfile_ctx = LogFileNewCtx();
-    if (logfile_ctx == NULL) {
-        SCLogDebug("AlertFastLogInitCtx2: Could not create new LogFileCtx");
-        return NULL;
-    }
-
-    if (SCConfLogOpenGeneric(conf, logfile_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
-        LogFileFreeCtx(logfile_ctx);
-        return NULL;
-    }
-
-    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (unlikely(output_ctx == NULL))
-        return NULL;
-    output_ctx->data = logfile_ctx;
-    output_ctx->DeInit = JsonAlertLogDeInitCtx;
-
-    return output_ctx;
-}
-
-/**
- * \brief Create a new LogFileCtx for "fast" output style.
- * \param conf The configuration node for this output.
- * \return A LogFileCtx pointer on success, NULL on failure.
- */
-static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
-{
-    OutputJsonCtx *ajt = parent_ctx->data;
-    AlertJsonOutputCtx *json_output_ctx = NULL;
     HttpXFFCfg *xff_cfg = NULL;
-
-    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
-    if (unlikely(output_ctx == NULL))
-        return NULL;
-
-    json_output_ctx = SCMalloc(sizeof(AlertJsonOutputCtx));
-    if (unlikely(json_output_ctx == NULL)) {
-        goto error;
-    }
-    memset(json_output_ctx, 0, sizeof(AlertJsonOutputCtx));
 
     xff_cfg = SCMalloc(sizeof(HttpXFFCfg));
     if (unlikely(xff_cfg == NULL)) {
-        goto error;
+        return;
     }
     memset(xff_cfg, 0, sizeof(HttpXFFCfg));
 
-    json_output_ctx->file_ctx = ajt->file_ctx;
     json_output_ctx->xff_cfg = xff_cfg;
 
     if (conf != NULL) {
@@ -651,6 +603,74 @@ static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
 
         HttpXFFGetCfg(conf, xff_cfg);
     }
+}
+
+/**
+ * \brief Create a new LogFileCtx for "fast" output style.
+ * \param conf The configuration node for this output.
+ * \return A LogFileCtx pointer on success, NULL on failure.
+ */
+static OutputCtx *JsonAlertLogInitCtx(ConfNode *conf)
+{
+    AlertJsonOutputCtx *json_output_ctx = NULL;
+    LogFileCtx *logfile_ctx = LogFileNewCtx();
+    if (logfile_ctx == NULL) {
+        SCLogDebug("AlertFastLogInitCtx2: Could not create new LogFileCtx");
+        return NULL;
+    }
+
+    if (SCConfLogOpenGeneric(conf, logfile_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
+        LogFileFreeCtx(logfile_ctx);
+        return NULL;
+    }
+
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (unlikely(output_ctx == NULL)) {
+        LogFileFreeCtx(logfile_ctx);
+        return NULL;
+    }
+
+    json_output_ctx = SCMalloc(sizeof(AlertJsonOutputCtx));
+    if (unlikely(json_output_ctx == NULL)) {
+        LogFileFreeCtx(logfile_ctx);
+        SCFree(output_ctx);
+        return NULL;
+    }
+    memset(json_output_ctx, 0, sizeof(AlertJsonOutputCtx));
+
+    json_output_ctx->file_ctx = logfile_ctx;
+
+    XffSetup(json_output_ctx, conf);
+
+    output_ctx->data = json_output_ctx;
+    output_ctx->DeInit = JsonAlertLogDeInitCtx;
+
+    return output_ctx;
+}
+
+/**
+ * \brief Create a new LogFileCtx for "fast" output style.
+ * \param conf The configuration node for this output.
+ * \return A LogFileCtx pointer on success, NULL on failure.
+ */
+static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
+{
+    OutputJsonCtx *ajt = parent_ctx->data;
+    AlertJsonOutputCtx *json_output_ctx = NULL;
+
+    OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
+    if (unlikely(output_ctx == NULL))
+        return NULL;
+
+    json_output_ctx = SCMalloc(sizeof(AlertJsonOutputCtx));
+    if (unlikely(json_output_ctx == NULL)) {
+        goto error;
+    }
+    memset(json_output_ctx, 0, sizeof(AlertJsonOutputCtx));
+
+    json_output_ctx->file_ctx = ajt->file_ctx;
+
+    XffSetup(json_output_ctx, conf);
 
     output_ctx->data = json_output_ctx;
     output_ctx->DeInit = JsonAlertLogDeInitCtxSub;

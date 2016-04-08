@@ -116,7 +116,6 @@ enum DetectSigmatchListEnum {
 
     DETECT_SM_LIST_AMATCH,
     DETECT_SM_LIST_DMATCH,
-    DETECT_SM_LIST_TMATCH,
 
     DETECT_SM_LIST_FILEMATCH,
 
@@ -130,8 +129,14 @@ enum DetectSigmatchListEnum {
 
     DETECT_SM_LIST_TEMPLATE_BUFFER_MATCH,
 
+    /* Demarcation between detection and post-detection lists. All
+     * detection lists must come before this. */
+    DETECT_SM_LIST_DETECT_MAX,
+
     /* list for post match actions: flowbit set, flowint increment, etc */
-    DETECT_SM_LIST_POSTMATCH,
+    DETECT_SM_LIST_POSTMATCH = DETECT_SM_LIST_DETECT_MAX,
+
+    DETECT_SM_LIST_TMATCH, /**< post-detection tagging */
 
     /* lists for alert thresholding and suppression */
     DETECT_SM_LIST_SUPPRESS,
@@ -640,7 +645,7 @@ typedef struct DetectEngineCtx_ {
     /** hash table for looking up patterns for
      *  id sharing and id tracking. */
     MpmPatternIdStore *mpm_pattern_id_store;
-    uint16_t max_fp_id;
+    uint32_t max_fp_id;
 
     MpmCtxFactoryContainer *mpm_ctx_factory_container;
 

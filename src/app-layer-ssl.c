@@ -65,6 +65,9 @@ SCEnumCharMap tls_decoder_event_table[ ] = {
     { "INVALID_HEARTBEAT_MESSAGE",   TLS_DECODER_EVENT_INVALID_HEARTBEAT },
     { "OVERFLOW_HEARTBEAT_MESSAGE",  TLS_DECODER_EVENT_OVERFLOW_HEARTBEAT },
     { "DATALEAK_HEARTBEAT_MISMATCH", TLS_DECODER_EVENT_DATALEAK_HEARTBEAT_MISMATCH },
+    { "MULTIPLE_SNI_EXTENSIONS",     TLS_DECODER_EVENT_MULTIPLE_SNI_EXTENSIONS },
+    { "INVALID_SNI_TYPE",            TLS_DECODER_EVENT_INVALID_SNI_TYPE },
+    { "INVALID_SNI_LENGTH",          TLS_DECODER_EVENT_INVALID_SNI_LENGTH },
     /* Certificates decoding messages */
     { "INVALID_CERTIFICATE",         TLS_DECODER_EVENT_INVALID_CERTIFICATE },
     { "CERTIFICATE_MISSING_ELEMENT", TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT },
@@ -205,8 +208,31 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
                 switch (ext_type) {
                     case SSL_EXTENSION_SNI:
                     {
-                        /* skip sni_list_length and sni_type */
-                        input += 3;
+                        /* there must not be more than one extension of the same
+                           type (RFC5246 section 7.4.1.4) */
+                        if (ssl_state->curr_connp->sni) {
+                            SCLogDebug("Multiple SNI extensions");
+                            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                                    TLS_DECODER_EVENT_MULTIPLE_SNI_EXTENSIONS);
+                            return -1;
+                        }
+
+                        /* skip sni_list_length */
+                        input += 2;
+
+                        if (!(HAS_SPACE(1)))
+                            goto end;
+
+                        uint8_t sni_type = *(input++);
+
+                        /* currently the only type allowed is host_name
+                           (RFC6066 section 3) */
+                        if (sni_type != SSL_SNI_TYPE_HOST_NAME) {
+                            SCLogDebug("Unknown SNI type");
+                            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                                    TLS_DECODER_EVENT_INVALID_SNI_TYPE);
+                            return -1;
+                        }
 
                         if (!(HAS_SPACE(2)))
                             goto end;
@@ -214,13 +240,23 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
                         uint16_t sni_len = ntohs(*(uint16_t *)input);
                         input += 2;
 
+                        if (!(HAS_SPACE(sni_len)))
+                            goto end;
+
+                        /* host_name contains the fully qualified domain name,
+                           and should therefore be limited by the maximum domain
+                           name length */
+                        if (sni_len > 255) {
+                            SCLogDebug("SNI length >255");
+                            AppLayerDecoderEventsSetEvent(ssl_state->f,
+                                    TLS_DECODER_EVENT_INVALID_SNI_LENGTH);
+                            return -1;
+                        }
+
                         size_t sni_strlen = sni_len + 1;
                         ssl_state->curr_connp->sni = SCMalloc(sni_strlen);
 
                         if (unlikely(ssl_state->curr_connp->sni == NULL))
-                            goto end;
-
-                        if (!(HAS_SPACE(sni_len)))
                             goto end;
 
                         memcpy(ssl_state->curr_connp->sni, input,
@@ -709,6 +745,20 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
         return (input - initial_input);
     }
 
+    /* record_length should never be 0 */
+    if (ssl_state->curr_connp->record_length == 0) {
+        SCLogDebug("SSLv2 record length is 0");
+        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_SSLV2_HEADER);
+        return -1;
+    }
+
+    /* record_lenghts_length should never be 0 */
+    if (ssl_state->curr_connp->record_lengths_length == 0) {
+        SCLogDebug("SSLv2 record lengths length is 0");
+        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_SSLV2_HEADER);
+        return -1;
+    }
+
     switch (ssl_state->curr_connp->content_type) {
         case SSLV2_MT_ERROR:
             SCLogDebug("SSLV2_MT_ERROR msg_type received.  "
@@ -936,6 +986,13 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
         return -1;
     }
 
+    /* record_length should never be 0 */
+    if (ssl_state->curr_connp->record_length == 0) {
+        SCLogDebug("SSLv3 Record length is 0");
+        AppLayerDecoderEventsSetEvent(ssl_state->f, TLS_DECODER_EVENT_INVALID_TLS_HEADER);
+        return -1;
+    }
+
     switch (ssl_state->curr_connp->content_type) {
 
         /* we don't need any data from these types */
@@ -1146,7 +1203,7 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
                                "previously left off");
                     retval = SSLv2Decode(direction, ssl_state, pstate, input,
                                          input_len);
-                    if (retval == -1) {
+                    if (retval < 0) {
                         SCLogDebug("Error parsing SSLv2.x.  Reseting parser "
                                    "state.  Let's get outta here");
                         SSLParserReset(ssl_state);

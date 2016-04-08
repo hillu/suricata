@@ -277,9 +277,9 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
 	util-mpm-ac-gfbs.$(OBJEXT) util-mpm-ac-tile.$(OBJEXT) \
 	util-mpm-ac-tile-small.$(OBJEXT) util-mpm-b2g.$(OBJEXT) \
-	util-mpm-b3g.$(OBJEXT) util-mpm.$(OBJEXT) \
-	util-mpm-wumanber.$(OBJEXT) util-path.$(OBJEXT) \
-	util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-mpm-b3g.$(OBJEXT) util-mpm-hs.$(OBJEXT) \
+	util-mpm.$(OBJEXT) util-mpm-wumanber.$(OBJEXT) \
+	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
 	util-pool-thread.$(OBJEXT) util-print.$(OBJEXT) \
 	util-privs.$(OBJEXT) util-profiling.$(OBJEXT) \
 	util-profiling-locks.$(OBJEXT) util-profiling-rules.$(OBJEXT) \
@@ -422,6 +422,8 @@ LIBHTPDEVVERSION_LIBS = @LIBHTPDEVVERSION_LIBS@
 LIBHTPMINVERSION_CFLAGS = @LIBHTPMINVERSION_CFLAGS@
 LIBHTPMINVERSION_LIBS = @LIBHTPMINVERSION_LIBS@
 LIBOBJS = @LIBOBJS@
+LIBPCREVERSION_CFLAGS = @LIBPCREVERSION_CFLAGS@
+LIBPCREVERSION_LIBS = @LIBPCREVERSION_LIBS@
 LIBPRELUDE_CFLAGS = @LIBPRELUDE_CFLAGS@
 LIBPRELUDE_CONFIG = @LIBPRELUDE_CONFIG@
 LIBPRELUDE_CONFIG_PREFIX = @LIBPRELUDE_CONFIG_PREFIX@
@@ -502,6 +504,7 @@ e_logcertsdir = @e_logcertsdir@
 e_logdir = @e_logdir@
 e_logfilesdir = @e_logfilesdir@
 e_magic_file = @e_magic_file@
+e_magic_file_comment = @e_magic_file_comment@
 e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
@@ -517,6 +520,8 @@ infodir = @infodir@
 install_sh = @install_sh@
 libdir = @libdir@
 libexecdir = @libexecdir@
+libhs_CFLAGS = @libhs_CFLAGS@
+libhs_LIBS = @libhs_LIBS@
 libhtp_CFLAGS = @libhtp_CFLAGS@
 libhtp_LIBS = @libhtp_LIBS@
 libnspr_CFLAGS = @libnspr_CFLAGS@
@@ -918,6 +923,7 @@ util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
 util-mpm-b2g.c util-mpm-b2g.h \
 util-mpm-b3g.c util-mpm-b3g.h \
+util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
 util-mpm-wumanber.c util-mpm-wumanber.h \
 util-optimize.h \
@@ -967,7 +973,7 @@ EXTRA_DIST = util-mpm-ac-cuda-kernel.cu ptxdump.py
 AM_CPPFLAGS = $(all_includes)
 
 # the library search path.
-suricata_LDFLAGS = $(all_libraries)
+suricata_LDFLAGS = $(all_libraries) ${SECLDFLAGS}
 suricata_LDADD = $(HTP_LDADD)
 
 # Rules to build CUDA ptx modules
@@ -976,24 +982,15 @@ suricata_LDADD = $(HTP_LDADD)
 @BUILD_CUDA_TRUE@util-mpm-ac-cuda-kernel.cu
 
 @BUILD_CUDA_TRUE@NVCCFLAGS = -O2
-@BUILD_CUDA_TRUE@SUFFIXES = \
-@BUILD_CUDA_TRUE@.ptx_sm_10 \
-@BUILD_CUDA_TRUE@.ptx_sm_11 \
-@BUILD_CUDA_TRUE@.ptx_sm_12 \
-@BUILD_CUDA_TRUE@.ptx_sm_13 \
-@BUILD_CUDA_TRUE@.ptx_sm_20 \
-@BUILD_CUDA_TRUE@.ptx_sm_21 \
-@BUILD_CUDA_TRUE@.ptx_sm_30 \
-@BUILD_CUDA_TRUE@.ptx_sm_35
-
-@BUILD_CUDA_TRUE@PTXS = $(suricata_CUDA_KERNELS:.cu=.ptx_sm_10) \
-@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_11) \
-@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_12) \
-@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_13) \
-@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_20) \
+@BUILD_CUDA_TRUE@PTXS = $(suricata_CUDA_KERNELS:.cu=.ptx_sm_20) \
 @BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_21) \
 @BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_30) \
-@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_35)
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_32) \
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_35) \
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_37) \
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_50) \
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_52) \
+@BUILD_CUDA_TRUE@	$(suricata_CUDA_KERNELS:.cu=.ptx_sm_53)
 @BUILD_CUDA_TRUE@CLEANFILES = $(PTXS) cuda-ptxdump.h
 
 # default CFLAGS
@@ -1006,7 +1003,7 @@ all: $(BUILT_SOURCES)
 	$(MAKE) $(AM_MAKEFLAGS) all-am
 
 .SUFFIXES:
-.SUFFIXES: .ptx_sm_10 .ptx_sm_11 .ptx_sm_12 .ptx_sm_13 .ptx_sm_20 .ptx_sm_21 .ptx_sm_30 .ptx_sm_35 .c .cu .lo .o .obj
+.SUFFIXES: .c .cu .lo .o .obj .ptx_sm_20 .ptx_sm_21 .ptx_sm_30 .ptx_sm_32 .ptx_sm_35 .ptx_sm_37 .ptx_sm_50 .ptx_sm_52 .ptx_sm_53
 $(srcdir)/Makefile.in:  $(srcdir)/Makefile.am  $(am__configure_deps)
 	@for dep in $?; do \
 	  case '$(am__configure_deps)' in \
@@ -1460,6 +1457,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-ac.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b2g.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-b3g.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-hs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-wumanber.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-path.Po@am__quote@
@@ -1737,18 +1735,6 @@ uninstall-am: uninstall-binPROGRAMS
 	uninstall-binPROGRAMS
 
 
-@BUILD_CUDA_TRUE@.cu.ptx_sm_10:
-@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_10 -ptx $<
-
-@BUILD_CUDA_TRUE@.cu.ptx_sm_11:
-@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_11 -ptx $<
-
-@BUILD_CUDA_TRUE@.cu.ptx_sm_12:
-@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_12 -ptx $<
-
-@BUILD_CUDA_TRUE@.cu.ptx_sm_13:
-@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_13 -ptx $<
-
 @BUILD_CUDA_TRUE@.cu.ptx_sm_20:
 @BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_20 -ptx $<
 
@@ -1758,8 +1744,23 @@ uninstall-am: uninstall-binPROGRAMS
 @BUILD_CUDA_TRUE@.cu.ptx_sm_30:
 @BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_30 -ptx $<
 
+@BUILD_CUDA_TRUE@.cu.ptx_sm_32:
+@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_32 -ptx $<
+
 @BUILD_CUDA_TRUE@.cu.ptx_sm_35:
 @BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_35 -ptx $<
+
+@BUILD_CUDA_TRUE@.cu.ptx_sm_37:
+@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_37 -ptx $<
+
+@BUILD_CUDA_TRUE@.cu.ptx_sm_50:
+@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_50 -ptx $<
+
+@BUILD_CUDA_TRUE@.cu.ptx_sm_52:
+@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_52 -ptx $<
+
+@BUILD_CUDA_TRUE@.cu.ptx_sm_53:
+@BUILD_CUDA_TRUE@	$(NVCC) $(NVCCFLAGS) -o $@ -arch=sm_53 -ptx $<
 
 @BUILD_CUDA_TRUE@cuda-ptxdump.h: $(PTXS)
 @BUILD_CUDA_TRUE@	$(PYTHON) ptxdump.py cuda-ptxdump $(PTXS)

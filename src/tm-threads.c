@@ -73,6 +73,8 @@ __thread uint64_t rwr_lock_cnt;
 /* prototypes */
 static int SetCPUAffinity(uint16_t cpu);
 
+static void TmThreadDeinitMC(ThreadVars *tv);
+
 /* root of the threadvars list */
 ThreadVars *tv_root[TVT_MAX] = { NULL };
 
@@ -1042,7 +1044,9 @@ ThreadVars *TmThreadCreate(char *name, char *inq_name, char *inqh_name,
     SC_ATOMIC_INIT(tv->flags);
     SCMutexInit(&tv->perf_public_ctx.m, NULL);
 
-    tv->name = name;
+    tv->name = SCStrdup(name);
+    if (unlikely(tv->name == NULL))
+        goto error;
     /* default state for every newly created thread */
     TmThreadsSetFlag(tv, THV_PAUSE);
     TmThreadsSetFlag(tv, THV_USE);
@@ -1438,10 +1442,11 @@ again:
      * with all receive threads */
     while (tv) {
         int disable = 0;
+        TmModule *tm = NULL;
         /* obtain the slots for this TV */
         TmSlot *slots = tv->tm_slots;
         while (slots != NULL) {
-            TmModule *tm = TmModuleGetById(slots->tm_id);
+            tm = TmModuleGetById(slots->tm_id);
 
             if (tm->flags & TM_FLAG_RECEIVE_TM) {
                 disable = 1;
@@ -1470,6 +1475,9 @@ again:
             }
 
             /* we found a receive TV. Send it a KILL_PKTACQ signal. */
+            if (tm && tm->PktAcqBreakLoop != NULL) {
+                tm->PktAcqBreakLoop(tv, SC_ATOMIC_GET(slots->slot_data));
+            }
             TmThreadsSetFlag(tv, THV_KILL_PKTACQ);
 
             if (tv->inq != NULL) {
@@ -1650,6 +1658,15 @@ void TmThreadFree(ThreadVars *tv)
 
     StatsThreadCleanup(tv);
 
+    TmThreadDeinitMC(tv);
+
+    if (tv->name) {
+        SCFree(tv->name);
+    }
+    if (tv->thread_group_name) {
+        SCFree(tv->thread_group_name);
+    }
+
     s = (TmSlot *)tv->tm_slots;
     while (s) {
         ps = s;
@@ -1659,6 +1676,24 @@ void TmThreadFree(ThreadVars *tv)
 
     TmThreadsUnregisterThread(tv->id);
     SCFree(tv);
+}
+
+void TmThreadSetGroupName(ThreadVars *tv, const char *name)
+{
+    char *thread_group_name = NULL;
+
+    if (name == NULL)
+        return;
+
+    if (tv == NULL)
+        return;
+
+    thread_group_name = SCStrdup(name);
+    if (unlikely(thread_group_name == NULL)) {
+        SCLogError(SC_ERR_RUNMODE, "error allocating memory");
+        return;
+    }
+    tv->thread_group_name = thread_group_name;
 }
 
 void TmThreadClearThreadsFamily(int family)
@@ -1773,6 +1808,19 @@ void TmThreadInitMC(ThreadVars *tv)
         exit(EXIT_FAILURE);
     }
 
+    return;
+}
+
+static void TmThreadDeinitMC(ThreadVars *tv)
+{
+    if (tv->ctrl_mutex) {
+        SCCtrlMutexDestroy(tv->ctrl_mutex);
+        SCFree(tv->ctrl_mutex);
+    }
+    if (tv->ctrl_cond) {
+        SCCtrlCondDestroy(tv->ctrl_cond);
+        SCFree(tv->ctrl_cond);
+    }
     return;
 }
 

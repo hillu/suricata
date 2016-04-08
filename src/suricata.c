@@ -194,6 +194,7 @@
 #include "util-cuda-buffer.h"
 #include "util-mpm-ac.h"
 #endif
+#include "util-mpm-hs.h"
 #include "util-storage.h"
 #include "host-storage.h"
 
@@ -273,37 +274,27 @@ int RunmodeGetCurrent(void)
     return run_mode;
 }
 
+/** signal handlers
+ *
+ *  WARNING: don't use the SCLog* API in the handlers. The API is complex
+ *  with memory allocation possibly happening, calls to syslog, json message
+ *  construction, etc.
+ */
+
 static void SignalHandlerSigint(/*@unused@*/ int sig)
 {
     sigint_count = 1;
-    suricata_ctl_flags |= SURICATA_STOP;
 }
 static void SignalHandlerSigterm(/*@unused@*/ int sig)
 {
     sigterm_count = 1;
-    suricata_ctl_flags |= SURICATA_KILL;
-}
-
-void SignalHandlerSigusr2StartingUp(int sig)
-{
-    SCLogInfo("Live rule reload only possible after engine completely started.");
-}
-
-void SignalHandlerSigusr2DelayedDetect(int sig)
-{
-    SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Live rule reload blocked while delayed detect is still loading.");
-}
-
-void SignalHandlerSigusr2SigFileStartup(int sig)
-{
-    SCLogInfo("Live rule reload not possible if -s or -S option used at runtime.");
 }
 
 /**
  * SIGUSR2 handler.  Just set sigusr2_count.  The main loop will act on
  * it.
  */
-void SignalHandlerSigusr2(int sig)
+static void SignalHandlerSigusr2(int sig)
 {
     sigusr2_count = 1;
 }
@@ -433,6 +424,7 @@ static int SetBpfString(int optind, char *argv[])
     if(strlen(bpf_filter) > 0) {
         if (ConfSetFinal("bpf-filter", bpf_filter) != 1) {
             SCLogError(SC_ERR_FATAL, "Failed to set bpf filter.");
+            SCFree(bpf_filter);
             return TM_ECODE_FAILED;
         }
     }
@@ -590,6 +582,7 @@ void usage(const char *progname)
     printf("\t--pfring-cluster-id <id>             : pfring cluster id \n");
     printf("\t--pfring-cluster-type <type>         : pfring cluster type for PF_RING 4.1.2 and later cluster_round_robin|cluster_flow\n");
 #endif /* HAVE_PFRING */
+    printf("\t--simulate-ips                       : force engine into IPS mode. Useful for QA\n");
 #ifdef HAVE_LIBCAP_NG
     printf("\t--user <user>                        : run suricata as this user after init\n");
     printf("\t--group <group>                      : run suricata as this group after init\n");
@@ -778,8 +771,19 @@ void SCPrintBuildInfo(void)
 #if __SSP_ALL__ == 2
     printf("compiled with -fstack-protector-all\n");
 #endif
-#ifdef _FORTIFY_SOURCE
-    printf("compiled with _FORTIFY_SOURCE=%d\n", _FORTIFY_SOURCE);
+/*
+ * Workaround for special defines of _FORTIFY_SOURCE like
+ * FORTIFY_SOURCE=((defined __OPTIMIZE && OPTIMIZE > 0) ? 2 : 0)
+ * which is used by Gentoo for example and would result in the error
+ * 'defined' undeclared when _FORTIFY_SOURCE used via %d in printf func
+ *
+ */
+#if _FORTIFY_SOURCE == 2
+    printf("compiled with _FORTIFY_SOURCE=2\n");
+#elif _FORTIFY_SOURCE == 1
+    printf("compiled with _FORTIFY_SOURCE=1\n");
+#elif _FORTIFY_SOURCE == 0
+    printf("compiled with _FORTIFY_SOURCE=0\n");
 #endif
 #ifdef CLS
     printf("L1 cache line size (CLS)=%d\n", CLS);
@@ -971,6 +975,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
             /* not an error condition if we have a 1.0 config */
             LiveBuildDeviceList("pfring");
         }
+#ifdef HAVE_AF_PACKET
     } else if (run_mode == RUNMODE_AFP_DEV) {
         /* iface has been set on command line */
         if (strlen(pcap_dev)) {
@@ -989,6 +994,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
                 EngineModeSetIPS();
             }
         }
+#endif
 #ifdef HAVE_NETMAP
     } else if (run_mode == RUNMODE_NETMAP) {
         /* iface has been set on command line */
@@ -1126,6 +1132,7 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
         {"af-packet", optional_argument, 0, 0},
         {"netmap", optional_argument, 0, 0},
         {"pcap", optional_argument, 0, 0},
+        {"simulate-ips", 0, 0 , 0},
 #ifdef BUILD_UNIX_SOCKET
         {"unix-socket", optional_argument, 0, 0},
 #endif
@@ -1311,6 +1318,9 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
                     usage(argv[0]);
                     return TM_ECODE_FAILED;
                 }
+            } else if(strcmp((long_opts[option_index]).name, "simulate-ips") == 0) {
+                SCLogInfo("Setting IPS mode");
+                EngineModeSetIPS();
             } else if(strcmp((long_opts[option_index]).name, "init-errors-fatal") == 0) {
                 if (ConfSetFinal("engine.init-failure-fatal", "1") != 1) {
                     fprintf(stderr, "ERROR: Failed to set engine init-failure-fatal.\n");
@@ -1529,6 +1539,44 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
                 return TM_ECODE_FAILED;
             }
 
+            /* warn user if af-packet, netmap or pf-ring are available */
+#if defined HAVE_AF_PACKET || HAVE_PFRING || HAVE_NETMAP
+            int i = 0;
+#ifdef HAVE_AF_PACKET
+            i++;
+#endif
+#ifdef HAVE_PFRING
+            i++;
+#endif
+#ifdef HAVE_NETMAP
+            i++;
+#endif
+            SCLogWarning(SC_WARN_FASTER_CAPTURE_AVAILABLE, "faster capture "
+                "option%s %s available:"
+#ifdef HAVE_AF_PACKET
+                " AF_PACKET (--af-packet=%s)"
+#endif
+#ifdef HAVE_PFRING
+                " PF_RING (--pfring-int=%s)"
+#endif
+#ifdef HAVE_NETMAP
+                " NETMAP (--netmap=%s)"
+#endif
+                ". Use --pcap=%s to suppress this warning",
+                i == 1 ? "" : "s", i == 1 ? "is" : "are"
+
+#ifdef HAVE_AF_PACKET
+                , optarg
+#endif
+#ifdef HAVE_PFRING
+                , optarg
+#endif
+#ifdef HAVE_NETMAP
+                , optarg
+#endif
+                , optarg
+                );
+#endif
             /* some windows shells require escaping of the \ in \Device. Otherwise
              * the backslashes are stripped. We put them back here. */
             if (strlen(optarg) > 9 && strncmp(optarg, "DeviceNPF", 9) == 0) {
@@ -1812,6 +1860,7 @@ static int InitSignalHandler(SCInstance *suri)
 {
     /* registering signals we use */
     UtilSignalHandlerSetup(SIGINT, SignalHandlerSigint);
+    UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
     UtilSignalHandlerSetup(SIGTERM, SignalHandlerSigterm);
     UtilSignalHandlerSetup(SIGPIPE, SIG_IGN);
     UtilSignalHandlerSetup(SIGSYS, SIG_IGN);
@@ -2146,11 +2195,6 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
     DetectEngineRegisterAppInspectionEngines();
 
-    if (suri->sig_file != NULL)
-        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2SigFileStartup);
-    else
-        UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2StartingUp);
-
     StorageFinalize();
 
     TmModuleRunInit();
@@ -2304,7 +2348,8 @@ int main(int argc, char **argv)
                     "detection engine contexts failed.");
             exit(EXIT_FAILURE);
         }
-        if (suri.delayed_detect || (mt_enabled && !default_tenant)) {
+        if ((suri.delayed_detect || (mt_enabled && !default_tenant)) &&
+            (suri.run_mode != RUNMODE_CONF_TEST)) {
             de_ctx = DetectEngineCtxInitMinimal();
         } else {
             de_ctx = DetectEngineCtxInit();
@@ -2404,11 +2449,6 @@ int main(int argc, char **argv)
     if (suri.delayed_detect) {
         /* force 'reload', this will load the rules and swap engines */
         DetectEngineReload(NULL, &suri);
-
-        if (suri.sig_file != NULL)
-            UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2SigFileStartup);
-        else
-            UtilSignalHandlerSetup(SIGUSR2, SignalHandlerSigusr2);
         SCLogNotice("Signature(s) loaded, Detect thread(s) activated.");
     }
 
@@ -2422,9 +2462,14 @@ int main(int argc, char **argv)
 
     int engine_retval = EXIT_SUCCESS;
     while(1) {
+        if (sigterm_count) {
+            suricata_ctl_flags |= SURICATA_KILL;
+        } else if (sigint_count) {
+            suricata_ctl_flags |= SURICATA_STOP;
+        }
+
         if (suricata_ctl_flags & (SURICATA_KILL | SURICATA_STOP)) {
             SCLogNotice("Signal Received.  Stopping engine.");
-
             break;
         }
 
@@ -2436,11 +2481,21 @@ int main(int argc, char **argv)
         }
 
         if (sigusr2_count > 0) {
-            DetectEngineReload(conf_filename, &suri);
+            if (suri.sig_file != NULL) {
+                SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Live rule reload not "
+                        "possible if -s or -S option used at runtime.");
+            } else {
+                DetectEngineReload(conf_filename, &suri);
+            }
             sigusr2_count--;
         } else if (DetectEngineReloadIsStart()) {
-            DetectEngineReload(conf_filename, &suri);
-            DetectEngineReloadSetDone();
+            if (suri.sig_file != NULL) {
+                SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Live rule reload not "
+                        "possible if -s or -S option used at runtime.");
+            } else {
+                DetectEngineReload(conf_filename, &suri);
+                DetectEngineReloadSetDone();
+            }
         }
 
         usleep(10* 1000);
@@ -2560,6 +2615,10 @@ int main(int argc, char **argv)
 #endif /* OS_WIN32 */
 
     SC_ATOMIC_DESTROY(engine_stage);
+
+#ifdef BUILD_HYPERSCAN
+    MpmHSGlobalCleanup();
+#endif
 
 #ifdef __SC_CUDA_SUPPORT__
     if (PatternMatchDefaultMatcher() == MPM_AC_CUDA)

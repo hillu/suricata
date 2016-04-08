@@ -302,6 +302,10 @@ typedef enum {
     SC_ERR_INVALID_RULE_ARGUMENT, /**< Generic error code for invalid
                                    * rule argument. */
     SC_ERR_MT_NO_MAPPING,
+    SC_ERR_STATS_LOG_NEGATED, /** When totals and threads are both NO in yaml **/
+    SC_ERR_JSON_STATS_LOG_NEGATED, /** When totals and threads are both NO in yaml **/
+    SC_ERR_DEPRECATED_CONF, /**< Deprecated configuration parameter. */
+    SC_WARN_FASTER_CAPTURE_AVAILABLE,
 } SCError;
 
 const char *SCErrorToString(SCError);
