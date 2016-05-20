@@ -28,6 +28,7 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--disable-coccinelle \
+	--enable-geoip \
 	$(ENABLE_LUAJIT)
 
 override_dh_auto_install:
