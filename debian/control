@@ -27,7 +27,6 @@ Build-Conflicts: libhtp-dev
 X-Python-Version: >= 2.6
 Standards-Version: 3.9.8
 Homepage: http://www.openinfosecfoundation.org/
-XS-Testsuite: autopkgtest
 
 Package: suricata
 Architecture: linux-any
