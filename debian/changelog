@@ -1,3 +1,13 @@
+suricata (3.0.1-2) unstable; urgency=medium
+
+  * [178f3cf] suricata: add libgeoip support
+  * [c8a0a0a] d/control: bump std-version to 3.9.8
+  * [523203d] d/control: wrap-and-sort
+  * [e5abae9] suricata: add hiredis support
+  * [9ec82b8] d/control: get rid of XS-Testsuite directive
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Mon, 23 May 2016 11:39:40 +0200
+
 suricata (3.0.1-1) unstable; urgency=medium
 
   * Imported Upstream version 3.0.1
