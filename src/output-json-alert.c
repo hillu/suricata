@@ -35,10 +35,10 @@
 #include "threadvars.h"
 #include "util-debug.h"
 
+#include "util-misc.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-#include "detect.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
@@ -83,6 +83,7 @@
 typedef struct AlertJsonOutputCtx_ {
     LogFileCtx* file_ctx;
     uint8_t flags;
+    uint32_t payload_buffer_size;
     HttpXFFCfg *xff_cfg;
 } AlertJsonOutputCtx;
 
@@ -285,7 +286,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
                                     (void *)payload);
 
                 if (json_output_ctx->flags & LOG_JSON_PAYLOAD_BASE64) {
-                    unsigned long len = JSON_STREAM_BUFFER_SIZE * 2;
+                    unsigned long len = json_output_ctx->payload_buffer_size * 2;
                     uint8_t encoded[len];
                     Base64Encode(payload->buffer, payload->offset, encoded, &len);
                     json_object_set_new(js, "payload", json_string((char *)encoded));
@@ -468,7 +469,7 @@ static TmEcode JsonAlertLogThreadInit(ThreadVars *t, void *initdata, void **data
     memset(aft, 0, sizeof(JsonAlertLogThread));
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for AlertFastLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogAlert.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -479,17 +480,17 @@ static TmEcode JsonAlertLogThreadInit(ThreadVars *t, void *initdata, void **data
         return TM_ECODE_FAILED;
     }
 
-    aft->payload_buffer = MemBufferCreateNew(JSON_STREAM_BUFFER_SIZE);
-    if (aft->payload_buffer == NULL) {
-        SCFree(aft);
-        return TM_ECODE_FAILED;
-    }
-
     /** Use the Output Context (file pointer and mutex) */
     AlertJsonOutputCtx *json_output_ctx = ((OutputCtx *)initdata)->data;
     aft->file_ctx = json_output_ctx->file_ctx;
     aft->json_output_ctx = json_output_ctx;
 
+    aft->payload_buffer = MemBufferCreateNew(json_output_ctx->payload_buffer_size);
+    if (aft->payload_buffer == NULL) {
+        SCFree(aft);
+        return TM_ECODE_FAILED;
+    }
+    
     *data = (void *)aft;
     return TM_ECODE_OK;
 }
@@ -556,8 +557,11 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
 
     json_output_ctx->xff_cfg = xff_cfg;
 
+    uint32_t payload_buffer_size = JSON_STREAM_BUFFER_SIZE;
+
     if (conf != NULL) {
         const char *payload = ConfNodeLookupChildValue(conf, "payload");
+        const char *payload_buffer_value = ConfNodeLookupChildValue(conf, "payload-buffer-size");
         const char *packet  = ConfNodeLookupChildValue(conf, "packet");
         const char *payload_printable = ConfNodeLookupChildValue(conf, "payload-printable");
         const char *http = ConfNodeLookupChildValue(conf, "http");
@@ -595,12 +599,24 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
                 json_output_ctx->flags |= LOG_JSON_PAYLOAD_BASE64;
             }
         }
+        if (payload_buffer_value != NULL) {
+            uint32_t value;
+            if (ParseSizeStringU32(payload_buffer_value, &value) < 0) {
+                SCLogError(SC_ERR_ALERT_PAYLOAD_BUFFER, "Error parsing "
+                           "payload-buffer-size - %s. Killing engine",
+                           payload_buffer_value);
+                exit(EXIT_FAILURE);
+            } else {
+                payload_buffer_size = value;
+            }
+        }
         if (packet != NULL) {
             if (ConfValIsTrue(packet)) {
                 json_output_ctx->flags |= LOG_JSON_PACKET;
             }
         }
 
+	json_output_ctx->payload_buffer_size = payload_buffer_size;
         HttpXFFGetCfg(conf, xff_cfg);
     }
 }

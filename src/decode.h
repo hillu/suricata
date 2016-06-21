@@ -30,6 +30,7 @@
 #include "suricata-common.h"
 #include "threadvars.h"
 #include "decode-events.h"
+#include "flow-worker.h"
 
 #ifdef __SC_CUDA_SUPPORT__
 #include "util-cuda-buffer.h"
@@ -325,6 +326,11 @@ typedef struct PktProfilingTmmData_ {
 #endif
 } PktProfilingTmmData;
 
+typedef struct PktProfilingData_ {
+    uint64_t ticks_start;
+    uint64_t ticks_end;
+} PktProfilingData;
+
 typedef struct PktProfilingDetectData_ {
     uint64_t ticks_start;
     uint64_t ticks_end;
@@ -341,6 +347,7 @@ typedef struct PktProfiling_ {
     uint64_t ticks_end;
 
     PktProfilingTmmData tmm[TMM_SIZE];
+    PktProfilingData flowworker[PROFILE_FLOWWORKER_SIZE];
     PktProfilingAppData app[ALPROTO_MAX];
     PktProfilingDetectData detect[PROF_DETECT_SIZE];
     uint64_t proto_detect;
@@ -398,6 +405,10 @@ typedef struct Packet_
     uint32_t flags;
 
     struct Flow_ *flow;
+
+    /* raw hash value for looking up the flow, will need to modulated to the
+     * hash size still */
+    uint32_t flow_hash;
 
     struct timeval ts;
 
@@ -907,6 +918,13 @@ int DecodeERSPAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t
 
 void AddressDebugPrint(Address *);
 
+#ifdef AFLFUZZ_DECODER
+typedef int (*DecoderFunc)(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+         uint8_t *pkt, uint16_t len, PacketQueue *pq);
+
+int DecoderParseDataFromFile(char *filename, DecoderFunc Decoder);
+#endif
+
 /** \brief Set the No payload inspection Flag for the packet.
  *
  * \param p Packet to set the flag in
@@ -1041,6 +1059,10 @@ void AddressDebugPrint(Address *);
 #define PKT_IS_FRAGMENT                 (1<<19)     /**< Packet is a fragment */
 #define PKT_IS_INVALID                  (1<<20)
 #define PKT_PROFILE                     (1<<21)
+
+/** indication by decoder that it feels the packet should be handled by
+ *  flow engine: Packet::flow_hash will be set */
+#define PKT_WANTS_FLOW                  (1<<22)
 
 /** \brief return 1 if the packet is a pseudo packet */
 #define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)

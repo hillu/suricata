@@ -247,6 +247,55 @@ static int NetmapGetIfaceFlags(int fd, const char *ifname)
 #endif
 }
 
+#ifdef SIOCGIFCAP
+static int NetmapGetIfaceCaps(int fd, const char *ifname)
+{
+    struct ifreq ifr;
+
+    memset(&ifr, 0, sizeof(ifr));
+    strlcpy(ifr.ifr_name, ifname, sizeof(ifr.ifr_name));
+
+    if (ioctl(fd, SIOCGIFCAP, &ifr) == -1) {
+        SCLogError(SC_ERR_NETMAP_CREATE,
+                   "Unable to get caps for iface \"%s\": %s",
+                   ifname, strerror(errno));
+        return -1;
+    }
+
+    return ifr.ifr_curcap;
+}
+#endif
+
+static void NetmapCheckOffloading(int fd, const char *ifname)
+{
+#ifdef SIOCGIFCAP
+    int if_caps = NetmapGetIfaceCaps(fd, ifname);
+    if (if_caps == -1) {
+        return;
+    }
+    SCLogDebug("if_caps %X", if_caps);
+
+    if (if_caps & IFCAP_RXCSUM) {
+        SCLogWarning(SC_ERR_NETMAP_CREATE,
+                "Using NETMAP with RXCSUM activated can lead to capture "
+                "problems: ifconfig %s -rxcsum", ifname);
+    }
+    if (if_caps & (IFCAP_TSO|IFCAP_TOE|IFCAP_LRO)) {
+        SCLogWarning(SC_ERR_NETMAP_CREATE,
+                "Using NETMAP with TSO, TOE or LRO activated can lead to "
+                "capture problems: ifconfig %s -tso -toe -lro", ifname);
+    }
+#else
+    if (GetIfaceOffloading(ifname) == 1) {
+        SCLogWarning(SC_ERR_NETMAP_CREATE,
+                "Using NETMAP with GRO or LRO activated can lead to "
+                "capture problems: "
+                "ethtool -K %s rx off sg off gro off gso off tso off",
+                ifname);
+    }
+#endif
+}
+
 /**
  * \brief Set interface flags.
  * \param fd Network susbystem file descritor.
@@ -275,6 +324,46 @@ static int NetmapSetIfaceFlags(int fd, const char *ifname, int flags)
     }
 
     return 0;
+}
+
+/** \brief get RSS RX-queue count
+ *  \retval rx_rings RSS RX queue count or 1 on error
+ */
+int NetmapGetRSSCount(const char *ifname)
+{
+    struct nmreq nm_req;
+    int rx_rings = 1;
+
+    SCMutexLock(&netmap_devlist_lock);
+
+    /* open netmap */
+    int fd = open("/dev/netmap", O_RDWR);
+    if (fd == -1) {
+        SCLogError(SC_ERR_NETMAP_CREATE,
+                "Couldn't open netmap device, error %s",
+                strerror(errno));
+        goto error_open;
+    }
+
+    /* query netmap info */
+    memset(&nm_req, 0, sizeof(nm_req));
+    strlcpy(nm_req.nr_name, ifname, sizeof(nm_req.nr_name));
+    nm_req.nr_version = NETMAP_API;
+
+    if (ioctl(fd, NIOCGINFO, &nm_req) != 0) {
+        SCLogError(SC_ERR_NETMAP_CREATE,
+                "Couldn't query netmap for %s, error %s",
+                ifname, strerror(errno));
+        goto error_fd;
+    };
+
+    rx_rings = nm_req.nr_rx_rings;
+
+error_fd:
+    close(fd);
+error_open:
+    SCMutexUnlock(&netmap_devlist_lock);
+    return rx_rings;
 }
 
 /**
@@ -353,6 +442,8 @@ static int NetmapOpen(char *ifname, int promisc, NetmapDevice **pdevice, int ver
         if_flags |= IFF_PROMISC;
         NetmapSetIfaceFlags(if_fd, ifname, if_flags);
     }
+
+    NetmapCheckOffloading(if_fd, ifname);
     close(if_fd);
 
     /* query netmap info */
@@ -474,7 +565,8 @@ static int NetmapClose(NetmapDevice *dev)
             pdev->ref--;
             if (!pdev->ref) {
                 munmap(pdev->mem, pdev->memsize);
-                for (int i = 0; i <= pdev->rings_cnt; i++) {
+                // First close SW ring (https://github.com/luigirizzo/netmap/issues/144)
+                for (int i = pdev->rings_cnt; i >= 0; i--) {
                     NetmapRing *pring = &pdev->rings[i];
                     close(pring->fd);
                     SCSpinDestroy(&pring->tx_lock);
@@ -633,7 +725,7 @@ static TmEcode ReceiveNetmapThreadInit(ThreadVars *tv, void *initdata, void **da
     if ((aconf->copy_mode != NETMAP_COPY_MODE_NONE) && active_runmode
             && !strcmp("workers", active_runmode)) {
         ntv->flags |= NETMAP_FLAG_ZERO_COPY;
-        SCLogInfo("Enabling zero copy mode for %s->%s",
+        SCLogPerf("Enabling zero copy mode for %s->%s",
                   aconf->iface_name, aconf->out_iface_name);
     } else {
         uint16_t ring_size = ntv->ifsrc->rings[0].rx->num_slots;
@@ -647,7 +739,7 @@ static TmEcode ReceiveNetmapThreadInit(ThreadVars *tv, void *initdata, void **da
     }
 
     if (aconf->bpf_filter) {
-        SCLogInfo("Using BPF '%s' on iface '%s'",
+        SCLogConfig("Using BPF '%s' on iface '%s'",
                   aconf->bpf_filter, ntv->ifsrc->ifname);
         if (pcap_compile_nopcap(default_packet_size,  /* snaplen_arg */
                     LINKTYPE_ETHERNET,    /* linktype_arg */
@@ -659,11 +751,6 @@ static TmEcode ReceiveNetmapThreadInit(ThreadVars *tv, void *initdata, void **da
             SCLogError(SC_ERR_NETMAP_CREATE, "Filter compilation failed.");
             goto error_dst;
         }
-    }
-
-    if (GetIfaceOffloading(aconf->iface) == 1) {
-        SCLogWarning(SC_ERR_NETMAP_CREATE,
-                     "Using netmap mode with GRO or LRO activated can lead to capture problems");
     }
 
     *data = (void *)ntv;
@@ -962,7 +1049,7 @@ static void ReceiveNetmapThreadExitStats(ThreadVars *tv, void *data)
     NetmapThreadVars *ntv = (NetmapThreadVars *)data;
 
     NetmapDumpCounters(ntv);
-    SCLogInfo("(%s) Kernel: Packets %" PRIu64 ", dropped %" PRIu64 ", bytes %" PRIu64 "",
+    SCLogPerf("(%s) Kernel: Packets %" PRIu64 ", dropped %" PRIu64 ", bytes %" PRIu64 "",
               tv->name,
               StatsGetLocalCounterValue(tv, ntv->capture_kernel_packets),
               StatsGetLocalCounterValue(tv, ntv->capture_kernel_drops),

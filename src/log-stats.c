@@ -138,6 +138,9 @@ int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
                 if (st->tstats[u].name == NULL)
                     continue;
 
+                if (!(aft->statslog_ctx->flags & LOG_STATS_NULLS) && st->tstats[u].value == 0)
+                    continue;
+
                 char line[256];
                 size_t len = snprintf(line, sizeof(line), "%-42s | %-25s | %-" PRIu64 "\n",
                         st->tstats[u].name, st->tstats[u].tm_name, st->tstats[u].value);
@@ -172,7 +175,7 @@ TmEcode LogStatsLogThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for HTTPLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for LogStats.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -221,7 +224,7 @@ OutputCtx *LogStatsLogInitCtx(ConfNode *conf)
 {
     LogFileCtx *file_ctx = LogFileNewCtx();
     if (file_ctx == NULL) {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "couldn't create new file_ctx");
+        SCLogError(SC_ERR_STATS_LOG_GENERIC, "couldn't create new file_ctx");
         return NULL;
     }
 

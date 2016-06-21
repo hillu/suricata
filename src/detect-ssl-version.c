@@ -79,29 +79,7 @@ void DetectSslVersionRegister(void)
     sigmatch_table[DETECT_AL_SSL_VERSION].Free  = DetectSslVersionFree;
     sigmatch_table[DETECT_AL_SSL_VERSION].RegisterTests = DetectSslVersionRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-	SCLogDebug("registering ssl_version rule option");
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                    PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    return;
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /**
@@ -793,12 +771,15 @@ end:
 void DetectSslVersionRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectSslVersionTestParse01", DetectSslVersionTestParse01, 1);
-    UtRegisterTest("DetectSslVersionTestParse02", DetectSslVersionTestParse02, 1);
-    UtRegisterTest("DetectSslVersionTestParse03", DetectSslVersionTestParse03, 1);
-    UtRegisterTest("DetectSslVersionTestDetect01", DetectSslVersionTestDetect01, 1);
-    UtRegisterTest("DetectSslVersionTestDetect02", DetectSslVersionTestDetect02, 1);
-    UtRegisterTest("DetectSslVersionTestDetect03", DetectSslVersionTestDetect03, 1);
+    UtRegisterTest("DetectSslVersionTestParse01", DetectSslVersionTestParse01);
+    UtRegisterTest("DetectSslVersionTestParse02", DetectSslVersionTestParse02);
+    UtRegisterTest("DetectSslVersionTestParse03", DetectSslVersionTestParse03);
+    UtRegisterTest("DetectSslVersionTestDetect01",
+                   DetectSslVersionTestDetect01);
+    UtRegisterTest("DetectSslVersionTestDetect02",
+                   DetectSslVersionTestDetect02);
+    UtRegisterTest("DetectSslVersionTestDetect03",
+                   DetectSslVersionTestDetect03);
 #endif /* UNITTESTS */
 
     return;
