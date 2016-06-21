@@ -40,13 +40,14 @@
 #include "util-memcpy.h"
 #include "util-hash.h"
 #include "util-hash-lookup3.h"
+#include "util-hyperscan.h"
 
 #ifdef BUILD_HYPERSCAN
 
 #include <hs.h>
 
 void SCHSInitCtx(MpmCtx *);
-void SCHSInitThreadCtx(MpmCtx *, MpmThreadCtx *, uint32_t);
+void SCHSInitThreadCtx(MpmCtx *, MpmThreadCtx *);
 void SCHSDestroyCtx(MpmCtx *);
 void SCHSDestroyThreadCtx(MpmCtx *, MpmThreadCtx *);
 int SCHSAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
@@ -54,8 +55,8 @@ int SCHSAddPatternCI(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
 int SCHSAddPatternCS(MpmCtx *, uint8_t *, uint16_t, uint16_t, uint16_t,
                      uint32_t, SigIntId, uint8_t);
 int SCHSPreparePatterns(MpmCtx *mpm_ctx);
-uint32_t SCHSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
-                    PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen);
+uint32_t SCHSSearch(const MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
+                    PatternMatcherQueue *pmq, const uint8_t *buf, const uint16_t buflen);
 void SCHSPrintInfo(MpmCtx *mpm_ctx);
 void SCHSPrintSearchStats(MpmThreadCtx *mpm_thread_ctx);
 void SCHSRegisterTests(void);
@@ -109,34 +110,6 @@ static void SCHSSetAllocators(void)
         SCLogError(SC_ERR_FATAL, "Failed to set Hyperscan allocator.");
         exit(EXIT_FAILURE);
     }
-}
-
-/**
- * \internal
- * \brief Convert a pattern into a regex string accepted by the Hyperscan
- * compiler.
- *
- * For simplicity, we just take each byte of the original pattern and render it
- * with a hex escape (i.e. ' ' -> "\x20")/
- */
-static char *SCHSRenderPattern(uint8_t *pat, uint16_t pat_len)
-{
-    if (pat == NULL) {
-        return NULL;
-    }
-    const size_t hex_len = (pat_len * 4) + 1;
-    char *str = SCMalloc(hex_len);
-    if (str == NULL) {
-        return NULL;
-    }
-    memset(str, 0, hex_len);
-    char *sp = str;
-    for (uint16_t i = 0; i < pat_len; i++) {
-        snprintf(sp, 5, "\\x%02x", pat[i]);
-        sp += 4;
-    }
-    *sp = '\0';
-    return str;
 }
 
 /**
@@ -679,7 +652,7 @@ int SCHSPreparePatterns(MpmCtx *mpm_ctx)
             cd->flags[i] |= HS_FLAG_CASELESS;
         }
 
-        cd->expressions[i] = SCHSRenderPattern(p->original_pat, p->len);
+        cd->expressions[i] = HSRenderPattern(p->original_pat, p->len);
 
         if (p->flags & (MPM_PATTERN_FLAG_OFFSET | MPM_PATTERN_FLAG_DEPTH)) {
             cd->ext[i] = SCMalloc(sizeof(hs_expr_ext_t));
@@ -761,10 +734,8 @@ error:
  *
  * \param mpm_ctx        Pointer to the mpm context.
  * \param mpm_thread_ctx Pointer to the mpm thread context.
- * \param matchsize      We don't need this.
  */
-void SCHSInitThreadCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
-                       uint32_t matchsize)
+void SCHSInitThreadCtx(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx)
 {
     memset(mpm_thread_ctx, 0, sizeof(MpmThreadCtx));
 
@@ -922,8 +893,6 @@ static int SCHSMatchEvent(unsigned int id, unsigned long long from,
                " (pat id=%" PRIu32 ")",
                cctx->match_count, (uint32_t)id, (uintmax_t)to, pat->id);
 
-    pmq->pattern_id_bitarray[pat->id / 8] |= (1 << (pat->id % 8));
-    MpmAddPid(pmq, pat->id);
     MpmAddSids(pmq, pat->sids, pat->sids_size);
 
     cctx->match_count++;
@@ -942,13 +911,17 @@ static int SCHSMatchEvent(unsigned int id, unsigned long long from,
  *
  * \retval matches Match count.
  */
-uint32_t SCHSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
-                    PatternMatcherQueue *pmq, uint8_t *buf, uint16_t buflen)
+uint32_t SCHSSearch(const MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
+                    PatternMatcherQueue *pmq, const uint8_t *buf, const uint16_t buflen)
 {
     uint32_t ret = 0;
     SCHSCtx *ctx = (SCHSCtx *)mpm_ctx->ctx;
     SCHSThreadCtx *hs_thread_ctx = (SCHSThreadCtx *)(mpm_thread_ctx->ctx);
     const PatternDatabase *pd = ctx->pattern_db;
+
+    if (unlikely(buflen == 0)) {
+        return 0;
+    }
 
     SCHSCallbackCtx cctx = {.ctx = ctx, .pmq = pmq, .match_count = 0};
 
@@ -960,8 +933,11 @@ uint32_t SCHSSearch(MpmCtx *mpm_ctx, MpmThreadCtx *mpm_thread_ctx,
     hs_error_t err = hs_scan(pd->hs_db, (const char *)buf, buflen, 0, scratch,
                              SCHSMatchEvent, &cctx);
     if (err != HS_SUCCESS) {
-        SCLogError(SC_ERR_FATAL, "Scanning with Hyperscan returned error %d",
-                   err);
+        /* An error value (other than HS_SCAN_TERMINATED) from hs_scan()
+         * indicates that it was passed an invalid database or scratch region,
+         * which is not something we can recover from at scan time. */
+        SCLogError(SC_ERR_FATAL, "Hyperscan returned error %d", err);
+        exit(EXIT_FAILURE);
     } else {
         ret = cctx.match_count;
     }
@@ -1061,8 +1037,6 @@ void SCHSPrintInfo(MpmCtx *mpm_ctx)
 void MpmHSRegister(void)
 {
     mpm_table[MPM_HS].name = "hs";
-    mpm_table[MPM_HS].max_pattern_length = 0;
-
     mpm_table[MPM_HS].InitCtx = SCHSInitCtx;
     mpm_table[MPM_HS].InitThreadCtx = SCHSInitThreadCtx;
     mpm_table[MPM_HS].DestroyCtx = SCHSDestroyCtx;
@@ -1089,7 +1063,7 @@ void MpmHSGlobalCleanup(void)
 {
     SCMutexLock(&g_scratch_proto_mutex);
     if (g_scratch_proto) {
-        SCLogInfo("Cleaning up Hyperscan global scratch");
+        SCLogPerf("Cleaning up Hyperscan global scratch");
         hs_free_scratch(g_scratch_proto);
         g_scratch_proto = NULL;
     }
@@ -1097,7 +1071,7 @@ void MpmHSGlobalCleanup(void)
 
     SCMutexLock(&g_db_table_mutex);
     if (g_db_table != NULL) {
-        SCLogInfo("Clearing Hyperscan database cache");
+        SCLogPerf("Clearing Hyperscan database cache");
         HashTableFree(g_db_table);
         g_db_table = NULL;
     }
@@ -1121,10 +1095,10 @@ static int SCHSTest01(void)
 
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghjiklmnopqrstuvwxyz";
 
@@ -1155,10 +1129,10 @@ static int SCHSTest02(void)
 
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abce", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghjiklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1192,10 +1166,10 @@ static int SCHSTest03(void)
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"bcde", 4, 0, 0, 1, 0, 0);
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"fghj", 4, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 3);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghjiklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1226,10 +1200,10 @@ static int SCHSTest04(void)
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"bcdegh", 6, 0, 0, 1, 0, 0);
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"fghjxyz", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 3);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghjiklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1260,10 +1234,10 @@ static int SCHSTest05(void)
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"fghJikl", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 3);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghjiklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1292,10 +1266,10 @@ static int SCHSTest06(void)
     MpmInitCtx(&mpm_ctx, MPM_HS);
 
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcd";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1336,10 +1310,10 @@ static int SCHSTest07(void)
     /* 1 */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 30,
                     0, 0, 5, 0, 0);
-    PmqSetup(&pmq, 6);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1369,10 +1343,10 @@ static int SCHSTest08(void)
 
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     uint32_t cnt =
         SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)"a", 1);
@@ -1401,10 +1375,10 @@ static int SCHSTest09(void)
 
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"ab", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     uint32_t cnt =
         SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)"ab", 2);
@@ -1433,10 +1407,10 @@ static int SCHSTest10(void)
 
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcdefgh", 8, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "01234567890123456789012345678901234567890123456789"
                 "01234567890123456789012345678901234567890123456789"
@@ -1476,12 +1450,12 @@ static int SCHSTest11(void)
         goto end;
     if (MpmAddPatternCS(&mpm_ctx, (uint8_t *)"hers", 4, 0, 0, 4, 0, 0) == -1)
         goto end;
-    PmqSetup(&pmq, 5);
+    PmqSetup(&pmq);
 
     if (SCHSPreparePatterns(&mpm_ctx) == -1)
         goto end;
 
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     result = 1;
 
@@ -1520,10 +1494,10 @@ static int SCHSTest12(void)
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"wxyz", 4, 0, 0, 0, 0, 0);
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"vwxyz", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 2);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1554,10 +1528,10 @@ static int SCHSTest13(void)
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCD";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyzABCD";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1588,10 +1562,10 @@ static int SCHSTest14(void)
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCDE";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyzABCDE";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1622,10 +1596,10 @@ static int SCHSTest15(void)
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABCDEF";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyzABCDEF";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1656,10 +1630,10 @@ static int SCHSTest16(void)
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzABC";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyzABC";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1690,10 +1664,10 @@ static int SCHSTest17(void)
     /* 1 match */
     char *pat = "abcdefghijklmnopqrstuvwxyzAB";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyzAB";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1729,10 +1703,10 @@ static int SCHSTest18(void)
                 "uvwxy"
                 "z";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcde"
                 "fghij"
@@ -1768,10 +1742,10 @@ static int SCHSTest19(void)
     /* 1 */
     char *pat = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1808,10 +1782,10 @@ static int SCHSTest20(void)
                 "AAAAA"
                 "AA";
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)pat, strlen(pat), 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "AAAAA"
                 "AAAAA"
@@ -1847,10 +1821,10 @@ static int SCHSTest21(void)
 
     /* 1 */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     uint32_t cnt =
         SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)"AA", 2);
@@ -1881,10 +1855,10 @@ static int SCHSTest22(void)
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcd", 4, 0, 0, 0, 0, 0);
     /* 1 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"abcde", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 2);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "abcdefghijklmnopqrstuvwxyz";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -1914,10 +1888,10 @@ static int SCHSTest23(void)
 
     /* 1 */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     uint32_t cnt =
         SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)"aa", 2);
@@ -1946,10 +1920,10 @@ static int SCHSTest24(void)
 
     /* 1 */
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"AA", 2, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     uint32_t cnt =
         SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)"aa", 2);
@@ -1979,10 +1953,10 @@ static int SCHSTest25(void)
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"ABCD", 4, 0, 0, 0, 0, 0);
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"bCdEfG", 6, 0, 0, 1, 0, 0);
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"fghiJkl", 7, 0, 0, 2, 0, 0);
-    PmqSetup(&pmq, 3);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -2012,10 +1986,10 @@ static int SCHSTest26(void)
 
     MpmAddPatternCI(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 0, 0, 0);
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"Works", 5, 0, 0, 1, 0, 0);
-    PmqSetup(&pmq, 2);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "works";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -2045,10 +2019,10 @@ static int SCHSTest27(void)
 
     /* 0 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"ONE", 3, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "tone";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -2078,10 +2052,10 @@ static int SCHSTest28(void)
 
     /* 0 match */
     MpmAddPatternCS(&mpm_ctx, (uint8_t *)"one", 3, 0, 0, 0, 0, 0);
-    PmqSetup(&pmq, 1);
+    PmqSetup(&pmq);
 
     SCHSPreparePatterns(&mpm_ctx);
-    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx, 0);
+    SCHSInitThreadCtx(&mpm_ctx, &mpm_thread_ctx);
 
     char *buf = "tONE";
     uint32_t cnt = SCHSSearch(&mpm_ctx, &mpm_thread_ctx, &pmq, (uint8_t *)buf,
@@ -2161,35 +2135,35 @@ end:
 void SCHSRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("SCHSTest01", SCHSTest01, 1);
-    UtRegisterTest("SCHSTest02", SCHSTest02, 1);
-    UtRegisterTest("SCHSTest03", SCHSTest03, 1);
-    UtRegisterTest("SCHSTest04", SCHSTest04, 1);
-    UtRegisterTest("SCHSTest05", SCHSTest05, 1);
-    UtRegisterTest("SCHSTest06", SCHSTest06, 1);
-    UtRegisterTest("SCHSTest07", SCHSTest07, 1);
-    UtRegisterTest("SCHSTest08", SCHSTest08, 1);
-    UtRegisterTest("SCHSTest09", SCHSTest09, 1);
-    UtRegisterTest("SCHSTest10", SCHSTest10, 1);
-    UtRegisterTest("SCHSTest11", SCHSTest11, 1);
-    UtRegisterTest("SCHSTest12", SCHSTest12, 1);
-    UtRegisterTest("SCHSTest13", SCHSTest13, 1);
-    UtRegisterTest("SCHSTest14", SCHSTest14, 1);
-    UtRegisterTest("SCHSTest15", SCHSTest15, 1);
-    UtRegisterTest("SCHSTest16", SCHSTest16, 1);
-    UtRegisterTest("SCHSTest17", SCHSTest17, 1);
-    UtRegisterTest("SCHSTest18", SCHSTest18, 1);
-    UtRegisterTest("SCHSTest19", SCHSTest19, 1);
-    UtRegisterTest("SCHSTest20", SCHSTest20, 1);
-    UtRegisterTest("SCHSTest21", SCHSTest21, 1);
-    UtRegisterTest("SCHSTest22", SCHSTest22, 1);
-    UtRegisterTest("SCHSTest23", SCHSTest23, 1);
-    UtRegisterTest("SCHSTest24", SCHSTest24, 1);
-    UtRegisterTest("SCHSTest25", SCHSTest25, 1);
-    UtRegisterTest("SCHSTest26", SCHSTest26, 1);
-    UtRegisterTest("SCHSTest27", SCHSTest27, 1);
-    UtRegisterTest("SCHSTest28", SCHSTest28, 1);
-    UtRegisterTest("SCHSTest29", SCHSTest29, 1);
+    UtRegisterTest("SCHSTest01", SCHSTest01);
+    UtRegisterTest("SCHSTest02", SCHSTest02);
+    UtRegisterTest("SCHSTest03", SCHSTest03);
+    UtRegisterTest("SCHSTest04", SCHSTest04);
+    UtRegisterTest("SCHSTest05", SCHSTest05);
+    UtRegisterTest("SCHSTest06", SCHSTest06);
+    UtRegisterTest("SCHSTest07", SCHSTest07);
+    UtRegisterTest("SCHSTest08", SCHSTest08);
+    UtRegisterTest("SCHSTest09", SCHSTest09);
+    UtRegisterTest("SCHSTest10", SCHSTest10);
+    UtRegisterTest("SCHSTest11", SCHSTest11);
+    UtRegisterTest("SCHSTest12", SCHSTest12);
+    UtRegisterTest("SCHSTest13", SCHSTest13);
+    UtRegisterTest("SCHSTest14", SCHSTest14);
+    UtRegisterTest("SCHSTest15", SCHSTest15);
+    UtRegisterTest("SCHSTest16", SCHSTest16);
+    UtRegisterTest("SCHSTest17", SCHSTest17);
+    UtRegisterTest("SCHSTest18", SCHSTest18);
+    UtRegisterTest("SCHSTest19", SCHSTest19);
+    UtRegisterTest("SCHSTest20", SCHSTest20);
+    UtRegisterTest("SCHSTest21", SCHSTest21);
+    UtRegisterTest("SCHSTest22", SCHSTest22);
+    UtRegisterTest("SCHSTest23", SCHSTest23);
+    UtRegisterTest("SCHSTest24", SCHSTest24);
+    UtRegisterTest("SCHSTest25", SCHSTest25);
+    UtRegisterTest("SCHSTest26", SCHSTest26);
+    UtRegisterTest("SCHSTest27", SCHSTest27);
+    UtRegisterTest("SCHSTest28", SCHSTest28);
+    UtRegisterTest("SCHSTest29", SCHSTest29);
 #endif
 
     return;

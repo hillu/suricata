@@ -347,7 +347,9 @@ Packet *PacketDefragPktSetup(Packet *parent, uint8_t *pkt, uint16_t len, uint8_t
         p->root = parent;
 
     /* copy packet and set lenght, proto */
-    PacketCopyData(p, pkt, len);
+    if (pkt && len) {
+        PacketCopyData(p, pkt, len);
+    }
     p->recursion_level = parent->recursion_level; /* NOT incremented */
     p->ts.tv_sec = parent->ts.tv_sec;
     p->ts.tv_usec = parent->ts.tv_usec;
@@ -579,6 +581,55 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s)
     s->counter_ips_rejected = StatsRegisterCounter("ips.rejected", tv);
     s->counter_ips_replaced = StatsRegisterCounter("ips.replaced", tv);
 }
+
+#ifdef AFLFUZZ_DECODER
+int DecoderParseDataFromFile(char *filename, DecoderFunc Decoder) {
+    uint8_t buffer[65536];
+    int result = 1;
+
+#ifdef AFLFUZZ_PERSISTANT_MODE
+    while (__AFL_LOOP(1000)) {
+        /* reset state */
+        memset(buffer, 0, sizeof(buffer));
+#endif /* AFLFUZZ_PERSISTANT_MODE */
+
+        FILE *fp = fopen(filename, "r");
+        BUG_ON(fp == NULL);
+
+        ThreadVars tv;
+        memset(&tv, 0, sizeof(tv));
+        DecodeThreadVars *dtv = DecodeThreadVarsAlloc(&tv);
+        DecodeRegisterPerfCounters(dtv, &tv);
+        StatsSetupPrivate(&tv);
+
+        while (1) {
+            int done = 0;
+            size_t result = fread(&buffer, 1, sizeof(buffer), fp);
+            if (result < sizeof(buffer))
+                 done = 1;
+
+            Packet *p = PacketGetFromAlloc();
+            if (p != NULL) {
+                (void) Decoder (&tv, dtv, p, buffer, result, NULL);
+                PacketFree(p);
+            }
+
+            if (done)
+                break;
+        }
+        DecodeThreadVarsFree(&tv, dtv);
+
+        fclose(fp);
+
+#ifdef AFLFUZZ_PERSISTANT_MODE
+    }
+#endif /* AFLFUZZ_PERSISTANT_MODE */
+
+    result = 0;
+    return result;
+
+}
+#endif /* AFLFUZZ_DECODER */
 
 /**
  * @}

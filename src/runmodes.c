@@ -51,7 +51,24 @@
 
 #include "tmqh-flow.h"
 
+#ifdef __SC_CUDA_SUPPORT__
+#include "util-cuda-buffer.h"
+#include "util-mpm-ac.h"
+#endif
+
 int debuglog_enabled = 0;
+
+/* Runmode Global Thread Names */
+const char *thread_name_autofp = "RX";
+const char *thread_name_single = "W";
+const char *thread_name_workers = "W";
+const char *thread_name_verdict = "TX";
+const char *thread_name_flow_mgr = "FM";
+const char *thread_name_flow_rec = "FR";
+const char *thread_name_unix_socket = "US";
+const char *thread_name_detect_loader = "DL";
+const char *thread_name_counter_stats = "CS";
+const char *thread_name_counter_wakeup = "CW";
 
 /**
  * \brief Holds description for a runmode.
@@ -379,6 +396,15 @@ void RunModeDispatch(int runmode, const char *custom_mode)
 
     if (local_custom_mode != NULL)
         SCFree(local_custom_mode);
+
+#ifdef __SC_CUDA_SUPPORT__
+    if (PatternMatchDefaultMatcher() == MPM_AC_CUDA)
+        SCACCudaStartDispatcher();
+#endif
+
+    /* Check if the alloted queues have at least 1 reader and writer */
+    TmValidateQueueState();
+
     return;
 }
 
@@ -591,7 +617,8 @@ static void SetupOutput(const char *name, OutputModule *module, OutputCtx *outpu
     } else if (module->TxLogFunc) {
         SCLogDebug("%s is a tx logger", module->name);
         OutputRegisterTxLogger(module->name, module->alproto,
-                module->TxLogFunc, output_ctx);
+                module->TxLogFunc, output_ctx, module->tc_log_progress,
+                module->ts_log_progress, module->TxLogCondition);
 
         /* need one instance of the tx logger module */
         if (tx_logger_module == NULL) {
@@ -786,7 +813,7 @@ void RunModeInitializeOutputs(void)
             if (types != NULL) {
                 ConfNode *type = NULL;
                 TAILQ_FOREACH(type, &types->head, next) {
-                    SCLogInfo("enabling 'eve-log' module '%s'", type->val);
+                    SCLogConfig("enabling 'eve-log' module '%s'", type->val);
 
                     char subname[256];
                     snprintf(subname, sizeof(subname), "%s.%s", output->val, type->val);

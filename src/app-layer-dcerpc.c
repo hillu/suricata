@@ -1295,19 +1295,19 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
                         dcerpc->dcerpchdr.frag_length |= *(p + 9) << 8;
                         dcerpc->dcerpchdr.auth_length = *(p + 10);
                         dcerpc->dcerpchdr.auth_length |= *(p + 11) << 8;
-                        dcerpc->dcerpchdr.call_id = *(p + 12) << 24;
-                        dcerpc->dcerpchdr.call_id |= *(p + 13) << 16;
-                        dcerpc->dcerpchdr.call_id |= *(p + 14) << 8;
-                        dcerpc->dcerpchdr.call_id |= *(p + 15);
+                        dcerpc->dcerpchdr.call_id = (uint32_t) *(p + 12) << 24;
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 13) << 16;
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 14) << 8;
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 15);
                     } else {
                         dcerpc->dcerpchdr.frag_length = *(p + 8) << 8;
                         dcerpc->dcerpchdr.frag_length |= *(p + 9);
                         dcerpc->dcerpchdr.auth_length = *(p + 10) << 8;
                         dcerpc->dcerpchdr.auth_length |= *(p + 11);
-                        dcerpc->dcerpchdr.call_id = *(p + 12);
-                        dcerpc->dcerpchdr.call_id |= *(p + 13) << 8;
-                        dcerpc->dcerpchdr.call_id |= *(p + 14) << 16;
-                        dcerpc->dcerpchdr.call_id |= *(p + 15) << 24;
+                        dcerpc->dcerpchdr.call_id = (uint32_t) *(p + 12);
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 13) << 8;
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 14) << 16;
+                        dcerpc->dcerpchdr.call_id |= (uint32_t) *(p + 15) << 24;
                     }
                     dcerpc->bytesprocessed = DCERPC_HDR_LEN;
                     SCReturnInt(16);
@@ -1382,22 +1382,22 @@ static int DCERPCParseHeader(DCERPC *dcerpc, uint8_t *input, uint32_t input_len)
                     break;
                 /* fall through */
             case 12:
-                dcerpc->dcerpchdr.call_id = *(p++);
+                dcerpc->dcerpchdr.call_id = (uint32_t) *(p++);
                 if (!(--input_len))
                     break;
                 /* fall through */
             case 13:
-                dcerpc->dcerpchdr.call_id |= *(p++) << 8;
+                dcerpc->dcerpchdr.call_id |= (uint32_t) *(p++) << 8;
                 if (!(--input_len))
                     break;
                 /* fall through */
             case 14:
-                dcerpc->dcerpchdr.call_id |= *(p++) << 16;
+                dcerpc->dcerpchdr.call_id |= (uint32_t) *(p++) << 16;
                 if (!(--input_len))
                     break;
                 /* fall through */
             case 15:
-                dcerpc->dcerpchdr.call_id |= *(p++) << 24;
+                dcerpc->dcerpchdr.call_id |= (uint32_t) *(p++) << 24;
                 if (!(dcerpc->dcerpchdr.packed_drep[0] & 0x10)) {
                     dcerpc->dcerpchdr.frag_length = SCByteSwap16(dcerpc->dcerpchdr.frag_length);
                     dcerpc->dcerpchdr.auth_length = SCByteSwap16(dcerpc->dcerpchdr.auth_length);
@@ -6382,25 +6382,25 @@ end:
 void DCERPCParserRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DCERPCParserTest01", DCERPCParserTest01, 1);
-    UtRegisterTest("DCERPCParserTest02", DCERPCParserTest02, 1);
-    UtRegisterTest("DCERPCParserTest03", DCERPCParserTest03, 1);
-    UtRegisterTest("DCERPCParserTest04", DCERPCParserTest04, 1);
-    UtRegisterTest("DCERPCParserTest05", DCERPCParserTest05, 1);
-    UtRegisterTest("DCERPCParserTest06", DCERPCParserTest06, 1);
-    UtRegisterTest("DCERPCParserTest07", DCERPCParserTest07, 1);
-    UtRegisterTest("DCERPCParserTest08", DCERPCParserTest08, 1);
-    UtRegisterTest("DCERPCParserTest09", DCERPCParserTest09, 1);
-    UtRegisterTest("DCERPCParserTest10", DCERPCParserTest10, 1);
-    UtRegisterTest("DCERPCParserTest11", DCERPCParserTest11, 1);
-    UtRegisterTest("DCERPCParserTest12", DCERPCParserTest12, 1);
-    UtRegisterTest("DCERPCParserTest13", DCERPCParserTest13, 1);
-    UtRegisterTest("DCERPCParserTest14", DCERPCParserTest14, 1);
-    UtRegisterTest("DCERPCParserTest15", DCERPCParserTest15, 1);
-    UtRegisterTest("DCERPCParserTest16", DCERPCParserTest16, 1);
-    UtRegisterTest("DCERPCParserTest17", DCERPCParserTest17, 1);
-    UtRegisterTest("DCERPCParserTest18", DCERPCParserTest18, 1);
-    UtRegisterTest("DCERPCParserTest19", DCERPCParserTest19, 1);
+    UtRegisterTest("DCERPCParserTest01", DCERPCParserTest01);
+    UtRegisterTest("DCERPCParserTest02", DCERPCParserTest02);
+    UtRegisterTest("DCERPCParserTest03", DCERPCParserTest03);
+    UtRegisterTest("DCERPCParserTest04", DCERPCParserTest04);
+    UtRegisterTest("DCERPCParserTest05", DCERPCParserTest05);
+    UtRegisterTest("DCERPCParserTest06", DCERPCParserTest06);
+    UtRegisterTest("DCERPCParserTest07", DCERPCParserTest07);
+    UtRegisterTest("DCERPCParserTest08", DCERPCParserTest08);
+    UtRegisterTest("DCERPCParserTest09", DCERPCParserTest09);
+    UtRegisterTest("DCERPCParserTest10", DCERPCParserTest10);
+    UtRegisterTest("DCERPCParserTest11", DCERPCParserTest11);
+    UtRegisterTest("DCERPCParserTest12", DCERPCParserTest12);
+    UtRegisterTest("DCERPCParserTest13", DCERPCParserTest13);
+    UtRegisterTest("DCERPCParserTest14", DCERPCParserTest14);
+    UtRegisterTest("DCERPCParserTest15", DCERPCParserTest15);
+    UtRegisterTest("DCERPCParserTest16", DCERPCParserTest16);
+    UtRegisterTest("DCERPCParserTest17", DCERPCParserTest17);
+    UtRegisterTest("DCERPCParserTest18", DCERPCParserTest18);
+    UtRegisterTest("DCERPCParserTest19", DCERPCParserTest19);
 #endif /* UNITTESTS */
 
     return;

@@ -87,6 +87,7 @@ detect-depth.c detect-depth.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-distance.c detect-distance.h \
 detect-dns-query.c detect-dns-query.h \
+detect-tls-sni.c detect-tls-sni.h \
 detect-dsize.c detect-dsize.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
@@ -98,6 +99,7 @@ detect-engine.c detect-engine.h \
 detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-dns.c detect-engine-dns.h \
+detect-engine-tls.c detect-engine-tls.h \
 detect-engine-modbus.c detect-engine-modbus.h \
 detect-engine-event.c detect-engine-event.h \
 detect-engine-file.c detect-engine-file.h \
@@ -121,6 +123,7 @@ detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-port.c detect-engine-port.h \
 detect-engine-proto.c detect-engine-proto.h \
+detect-engine-profile.c detect-engine-profile.h \
 detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine-state.c detect-engine-state.h \
@@ -219,6 +222,7 @@ flow-storage.c flow-storage.h \
 flow-timeout.c flow-timeout.h \
 flow-util.c flow-util.h \
 flow-var.c flow-var.h \
+flow-worker.c flow-worker.h \
 host.c host.h \
 host-bit.c host-bit.h \
 host-queue.c host-queue.h \
@@ -349,6 +353,7 @@ util-hashlist.c util-hashlist.h \
 util-hash-lookup3.c util-hash-lookup3.h \
 util-host-os-info.c util-host-os-info.h \
 util-host-info.c util-host-info.h \
+util-hyperscan.c util-hyperscan.h \
 util-ioctl.h util-ioctl.c \
 util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
@@ -367,14 +372,10 @@ util-memrchr.c util-memrchr.h \
 util-misc.c util-misc.h \
 util-mpm-ac-bs.c util-mpm-ac-bs.h \
 util-mpm-ac.c util-mpm-ac.h \
-util-mpm-ac-gfbs.c util-mpm-ac-gfbs.h \
 util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
-util-mpm-b2g.c util-mpm-b2g.h \
-util-mpm-b3g.c util-mpm-b3g.h \
 util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
-util-mpm-wumanber.c util-mpm-wumanber.h \
 util-optimize.h \
 util-path.c util-path.h \
 util-pidfile.c util-pidfile.h \
@@ -386,6 +387,7 @@ util-profiling.c util-profiling.h \
 util-profiling-locks.c util-profiling-locks.h \
 util-profiling-rules.c \
 util-profiling-keywords.c \
+util-profiling-rulegroups.c \
 util-proto-name.c util-proto-name.h \
 util-radix-tree.c util-radix-tree.h \
 util-random.c util-random.h \
@@ -399,8 +401,10 @@ util-signal.c util-signal.h \
 util-spm-bm.c util-spm-bm.h \
 util-spm-bs2bm.c util-spm-bs2bm.h \
 util-spm-bs.c util-spm-bs.h \
+util-spm-hs.c util-spm-hs.h \
 util-spm.c util-spm.h util-clock.h \
 util-storage.c util-storage.h \
+util-streaming-buffer.c util-streaming-buffer.h \
 util-strlcatu.c \
 util-strlcpyu.c \
 util-syslog.c util-syslog.h \

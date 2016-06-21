@@ -115,7 +115,6 @@ void *ParseAFPConfig(const char *iface)
     ConfNode *if_root;
     ConfNode *if_default = NULL;
     ConfNode *af_packet_node;
-    AFPIfaceConfig *aconf = SCMalloc(sizeof(*aconf));
     char *tmpclusterid;
     char *tmpctype;
     char *copymodestr;
@@ -124,34 +123,36 @@ void *ParseAFPConfig(const char *iface)
     char *bpf_filter = NULL;
     char *out_iface = NULL;
 
+    if (iface == NULL) {
+        return NULL;
+    }
+
+    AFPIfaceConfig *aconf = SCCalloc(1, sizeof(*aconf));
     if (unlikely(aconf == NULL)) {
         return NULL;
     }
 
-    if (iface == NULL) {
-        SCFree(aconf);
-        return NULL;
-    }
-
     strlcpy(aconf->iface, iface, sizeof(aconf->iface));
-    aconf->threads = 1;
+    aconf->threads = 0;
     SC_ATOMIC_INIT(aconf->ref);
     (void) SC_ATOMIC_ADD(aconf->ref, 1);
     aconf->buffer_size = 0;
     aconf->cluster_id = 1;
-    aconf->cluster_type = PACKET_FANOUT_HASH;
+    aconf->cluster_type = PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG;
     aconf->promisc = 1;
     aconf->checksum_mode = CHECKSUM_VALIDATION_KERNEL;
     aconf->DerefFunc = AFPDerefConfig;
-    aconf->flags = 0;
+    aconf->flags = AFP_RING_MODE;
     aconf->bpf_filter = NULL;
     aconf->out_iface = NULL;
     aconf->copy_mode = AFP_COPY_MODE_NONE;
+    aconf->block_timeout = 10;
+    aconf->block_size = getpagesize() << AFP_BLOCK_SIZE_DEFAULT_ORDER;
 
     if (ConfGet("bpf-filter", &bpf_filter) == 1) {
         if (strlen(bpf_filter) > 0) {
             aconf->bpf_filter = bpf_filter;
-            SCLogInfo("Going to use command-line provided bpf filter '%s'",
+            SCLogConfig("Going to use command-line provided bpf filter '%s'",
                        aconf->bpf_filter);
         }
     }
@@ -159,19 +160,18 @@ void *ParseAFPConfig(const char *iface)
     /* Find initial node */
     af_packet_node = ConfGetNode("af-packet");
     if (af_packet_node == NULL) {
-        SCLogInfo("Unable to find af-packet config using default value");
-        return aconf;
+        SCLogInfo("unable to find af-packet config using default values");
+        goto finalize;
     }
 
-    if_root = ConfNodeLookupKeyValue(af_packet_node, "interface", iface);
-
-    if_default = ConfNodeLookupKeyValue(af_packet_node, "interface", "default");
+    if_root = ConfFindDeviceConfig(af_packet_node, iface);
+    if_default = ConfFindDeviceConfig(af_packet_node, "default");
 
     if (if_root == NULL && if_default == NULL) {
-        SCLogInfo("Unable to find af-packet config for "
-                  "interface \"%s\" or \"default\", using default value",
+        SCLogInfo("unable to find af-packet config for "
+                  "interface \"%s\" or \"default\", using default values",
                   iface);
-        return aconf;
+        goto finalize;
     }
 
     /* If there is no setting for current interface use default one as main iface */
@@ -191,24 +191,6 @@ void *ParseAFPConfig(const char *iface)
             }
         }
     }
-    if (aconf->threads == 0) {
-        int rss_queues;
-        aconf->threads = (int)UtilCpuGetNumProcessorsOnline();
-        /* Get the number of RSS queues and take the min */
-        rss_queues = GetIfaceRSSQueuesNum(iface);
-        if (rss_queues > 0) {
-            if (rss_queues < aconf->threads) {
-                aconf->threads = rss_queues;
-                SCLogInfo("More cores than RSS queues, using %d threads for interface %s",
-                          aconf->threads, iface);
-            }
-        }
-        if (aconf->threads)
-            SCLogInfo("Using %d AF_PACKET threads for interface %s", aconf->threads, iface);
-    }
-    if (aconf->threads <= 0) {
-        aconf->threads = 1;
-    }
 
     if (ConfGetChildValueWithDefault(if_root, if_default, "copy-iface", &out_iface) == 1) {
         if (strlen(out_iface) > 0) {
@@ -216,19 +198,55 @@ void *ParseAFPConfig(const char *iface)
         }
     }
 
-    (void)ConfGetChildValueBoolWithDefault(if_root, if_default, "use-mmap", (int *)&boolval);
-    if (boolval) {
-        SCLogInfo("Enabling mmaped capture on iface %s",
-                aconf->iface);
-        aconf->flags |= AFP_RING_MODE;
-    }
-    (void)ConfGetChildValueBoolWithDefault(if_root, if_default, "use-emergency-flush", (int *)&boolval);
-    if (boolval) {
-        SCLogInfo("Enabling ring emergency flush on iface %s",
-                aconf->iface);
-        aconf->flags |= AFP_EMERGENCY_MODE;
+    if (ConfGetChildValueBoolWithDefault(if_root, if_default, "use-mmap", (int *)&boolval) == 1) {
+        if (!boolval) {
+            SCLogConfig("Disabling mmaped capture on iface %s",
+                    aconf->iface);
+            aconf->flags &= ~(AFP_RING_MODE|AFP_TPACKET_V3);
+        }
     }
 
+    if (aconf->flags & AFP_RING_MODE) {
+        (void)ConfGetChildValueBoolWithDefault(if_root, if_default,
+                                               "mmap-locked", (int *)&boolval);
+        if (boolval) {
+            SCLogConfig("Enabling locked memory for mmap on iface %s",
+                    aconf->iface);
+            aconf->flags |= AFP_MMAP_LOCKED;
+        }
+
+        if (ConfGetChildValueBoolWithDefault(if_root, if_default,
+                                             "tpacket-v3", (int *)&boolval) == 1)
+        {
+            if (boolval) {
+                if (strcasecmp(RunmodeGetActive(), "workers") == 0) {
+#ifdef HAVE_TPACKET_V3
+                    SCLogConfig("Enabling tpacket v3 capture on iface %s",
+                            aconf->iface);
+                    aconf->flags |= AFP_TPACKET_V3;
+#else
+                    SCLogNotice("System too old for tpacket v3 switching to v2");
+                    aconf->flags &= ~AFP_TPACKET_V3;
+#endif
+                } else {
+                    SCLogWarning(SC_ERR_RUNMODE,
+                            "tpacket v3 is only implemented for 'workers' runmode."
+                            " Switching to tpacket v2.");
+                    aconf->flags &= ~AFP_TPACKET_V3;
+                }
+            } else {
+                aconf->flags &= ~AFP_TPACKET_V3;
+            }
+        }
+
+        (void)ConfGetChildValueBoolWithDefault(if_root, if_default,
+                                               "use-emergency-flush", (int *)&boolval);
+        if (boolval) {
+            SCLogConfig("Enabling ring emergency flush on iface %s",
+                    aconf->iface);
+            aconf->flags |= AFP_EMERGENCY_MODE;
+        }
+    }
 
     aconf->copy_mode = AFP_COPY_MODE_NONE;
     if (ConfGetChildValueWithDefault(if_root, if_default, "copy-mode", &copymodestr) == 1) {
@@ -255,9 +273,6 @@ void *ParseAFPConfig(const char *iface)
         }
     }
 
-    SC_ATOMIC_RESET(aconf->ref);
-    (void) SC_ATOMIC_ADD(aconf->ref, aconf->threads);
-
     if (ConfGetChildValueWithDefault(if_root, if_default, "cluster-id", &tmpclusterid) != 1) {
         aconf->cluster_id = (uint16_t)(cluster_id_auto++);
     } else {
@@ -269,7 +284,7 @@ void *ParseAFPConfig(const char *iface)
         /* default to our safest choice: flow hashing + defrag enabled */
         aconf->cluster_type = PACKET_FANOUT_HASH | PACKET_FANOUT_FLAG_DEFRAG;
     } else if (strcmp(tmpctype, "cluster_round_robin") == 0) {
-        SCLogInfo("Using round-robin cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using round-robin cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_LB;
     } else if (strcmp(tmpctype, "cluster_flow") == 0) {
@@ -277,42 +292,40 @@ void *ParseAFPConfig(const char *iface)
          * compute the hash */
         uint16_t defrag = 0;
         int conf_val = 0;
-        SCLogInfo("Using flow cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using flow cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         ConfGetChildValueBoolWithDefault(if_root, if_default, "defrag", &conf_val);
         if (conf_val) {
-            SCLogInfo("Using defrag kernel functionality for AF_PACKET (iface %s)",
+            SCLogConfig("Using defrag kernel functionality for AF_PACKET (iface %s)",
                     aconf->iface);
             defrag = PACKET_FANOUT_FLAG_DEFRAG;
         }
         aconf->cluster_type = PACKET_FANOUT_HASH | defrag;
     } else if (strcmp(tmpctype, "cluster_cpu") == 0) {
-        SCLogInfo("Using cpu cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using cpu cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_CPU;
     } else if (strcmp(tmpctype, "cluster_qm") == 0) {
-        SCLogInfo("Using queue based cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using queue based cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_QM;
     } else if (strcmp(tmpctype, "cluster_random") == 0) {
-        SCLogInfo("Using random based cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using random based cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_RND;
     } else if (strcmp(tmpctype, "cluster_rollover") == 0) {
-        SCLogInfo("Using rollover based cluster mode for AF_PACKET (iface %s)",
+        SCLogConfig("Using rollover based cluster mode for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type = PACKET_FANOUT_ROLLOVER;
 
     } else {
-        SCLogError(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
-        SCFree(aconf);
-        return NULL;
+        SCLogWarning(SC_ERR_INVALID_CLUSTER_TYPE,"invalid cluster-type %s",tmpctype);
     }
 
     int conf_val = 0;
     ConfGetChildValueBoolWithDefault(if_root, if_default, "rollover", &conf_val);
     if (conf_val) {
-        SCLogInfo("Using rollover kernel functionality for AF_PACKET (iface %s)",
+        SCLogConfig("Using rollover kernel functionality for AF_PACKET (iface %s)",
                 aconf->iface);
         aconf->cluster_type |= PACKET_FANOUT_FLAG_ROLLOVER;
     }
@@ -323,7 +336,7 @@ void *ParseAFPConfig(const char *iface)
         if (ConfGetChildValueWithDefault(if_root, if_default, "bpf-filter", &bpf_filter) == 1) {
             if (strlen(bpf_filter) > 0) {
                 aconf->bpf_filter = bpf_filter;
-                SCLogInfo("Going to use bpf filter %s", aconf->bpf_filter);
+                SCLogConfig("Going to use bpf filter %s", aconf->bpf_filter);
             }
         }
     }
@@ -335,7 +348,68 @@ void *ParseAFPConfig(const char *iface)
     }
     if ((ConfGetChildValueIntWithDefault(if_root, if_default, "ring-size", &value)) == 1) {
         aconf->ring_size = value;
-        if (value * aconf->threads < max_pending_packets) {
+    }
+
+    if ((ConfGetChildValueIntWithDefault(if_root, if_default, "block-size", &value)) == 1) {
+        if (value % getpagesize()) {
+            SCLogError(SC_ERR_INVALID_VALUE, "Block-size must be a multiple of pagesize.");
+        } else {
+            aconf->block_size = value;
+        }
+    }
+
+    if ((ConfGetChildValueIntWithDefault(if_root, if_default, "block-timeout", &value)) == 1) {
+        aconf->block_timeout = value;
+    } else {
+        aconf->block_timeout = 10;
+    }
+
+    (void)ConfGetChildValueBoolWithDefault(if_root, if_default, "disable-promisc", (int *)&boolval);
+    if (boolval) {
+        SCLogConfig("Disabling promiscuous mode on iface %s",
+                aconf->iface);
+        aconf->promisc = 0;
+    }
+
+    if (ConfGetChildValueWithDefault(if_root, if_default, "checksum-checks", &tmpctype) == 1) {
+        if (strcmp(tmpctype, "auto") == 0) {
+            aconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
+        } else if (ConfValIsTrue(tmpctype)) {
+            aconf->checksum_mode = CHECKSUM_VALIDATION_ENABLE;
+        } else if (ConfValIsFalse(tmpctype)) {
+            aconf->checksum_mode = CHECKSUM_VALIDATION_DISABLE;
+        } else if (strcmp(tmpctype, "kernel") == 0) {
+            aconf->checksum_mode = CHECKSUM_VALIDATION_KERNEL;
+        } else {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid value for checksum-checks for %s", aconf->iface);
+        }
+    }
+
+finalize:
+
+    if (aconf->threads == 0) {
+        int rss_queues;
+        aconf->threads = (int)UtilCpuGetNumProcessorsOnline();
+        /* Get the number of RSS queues and take the min */
+        rss_queues = GetIfaceRSSQueuesNum(iface);
+        if (rss_queues > 0) {
+            if (rss_queues < aconf->threads) {
+                aconf->threads = rss_queues;
+                SCLogInfo("More cores than RSS queues, using %d threads for interface %s",
+                          aconf->threads, iface);
+            }
+        }
+        if (aconf->threads)
+            SCLogPerf("Using %d AF_PACKET threads for interface %s", aconf->threads, iface);
+    }
+    if (aconf->threads <= 0) {
+        aconf->threads = 1;
+    }
+    SC_ATOMIC_RESET(aconf->ref);
+    (void) SC_ATOMIC_ADD(aconf->ref, aconf->threads);
+
+    if (aconf->ring_size != 0) {
+        if (aconf->ring_size * aconf->threads < max_pending_packets) {
             aconf->ring_size = max_pending_packets / aconf->threads + 1;
             SCLogWarning(SC_ERR_AFP_CREATE, "Inefficient setup: ring-size < max_pending_packets. "
                          "Resetting to decent value %d.", aconf->ring_size);
@@ -348,28 +422,6 @@ void *ParseAFPConfig(const char *iface)
          * size by 2. */
         aconf->ring_size = max_pending_packets * 2 / aconf->threads;
     }
-
-    (void)ConfGetChildValueBoolWithDefault(if_root, if_default, "disable-promisc", (int *)&boolval);
-    if (boolval) {
-        SCLogInfo("Disabling promiscuous mode on iface %s",
-                aconf->iface);
-        aconf->promisc = 0;
-    }
-
-    if (ConfGetChildValueWithDefault(if_root, if_default, "checksum-checks", &tmpctype) == 1) {
-        if (strcmp(tmpctype, "auto") == 0) {
-            aconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
-        } else if (strcmp(tmpctype, "yes") == 0) {
-            aconf->checksum_mode = CHECKSUM_VALIDATION_ENABLE;
-        } else if (strcmp(tmpctype, "no") == 0) {
-            aconf->checksum_mode = CHECKSUM_VALIDATION_DISABLE;
-        } else if (strcmp(tmpctype, "kernel") == 0) {
-            aconf->checksum_mode = CHECKSUM_VALIDATION_KERNEL;
-        } else {
-            SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid value for checksum-checks for %s", aconf->iface);
-        }
-    }
-
 
     int ltype = AFPGetLinkType(iface);
     switch (ltype) {
@@ -386,7 +438,6 @@ void *ParseAFPConfig(const char *iface)
     char *active_runmode = RunmodeGetActive();
     if (active_runmode && !strcmp("workers", active_runmode)) {
         aconf->flags |= AFP_ZERO_COPY;
-        SCLogInfo("%s: enabling zero copy mode", iface);
     } else {
         /* If we are using copy mode we need a lock */
         aconf->flags |= AFP_SOCK_PROTECT;
@@ -396,7 +447,10 @@ void *ParseAFPConfig(const char *iface)
      * by using the data release mechanism */
     if (aconf->flags & AFP_RING_MODE) {
         aconf->flags |= AFP_ZERO_COPY;
-        SCLogInfo("%s: enabling zero copy mode by using data release call", iface);
+    }
+
+    if (aconf->flags & AFP_ZERO_COPY) {
+        SCLogConfig("%s: enabling zero copy mode by using data release call", iface);
     }
 
     return aconf;
@@ -427,13 +481,13 @@ int AFPRunModeIsIPS()
     if_default = ConfNodeLookupKeyValue(af_packet_node, "interface", "default");
 
     for (ldev = 0; ldev < nlive; ldev++) {
-        char *live_dev = LiveGetDeviceName(ldev);
+        const char *live_dev = LiveGetDeviceName(ldev);
         if (live_dev == NULL) {
             SCLogError(SC_ERR_INVALID_VALUE, "Problem with config file");
             return 0;
         }
         char *copymodestr = NULL;
-        if_root = ConfNodeLookupKeyValue(af_packet_node, "interface", live_dev);
+        if_root = ConfFindDeviceConfig(af_packet_node, live_dev);
 
         if (if_root == NULL) {
             if (if_default == NULL) {
@@ -457,7 +511,7 @@ int AFPRunModeIsIPS()
     if (has_ids && has_ips) {
         SCLogInfo("AF_PACKET mode using IPS and IDS mode");
         for (ldev = 0; ldev < nlive; ldev++) {
-            char *live_dev = LiveGetDeviceName(ldev);
+            const char *live_dev = LiveGetDeviceName(ldev);
             if (live_dev == NULL) {
                 SCLogError(SC_ERR_INVALID_VALUE, "Problem with config file");
                 return 0;
@@ -514,7 +568,7 @@ int RunModeIdsAFPAutoFp(void)
     ret = RunModeSetLiveCaptureAutoFp(ParseAFPConfig,
                               AFPConfigGeThreadsCount,
                               "ReceiveAFP",
-                              "DecodeAFP", "RxAFP",
+                              "DecodeAFP", thread_name_autofp,
                               live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");
@@ -556,7 +610,7 @@ int RunModeIdsAFPSingle(void)
     ret = RunModeSetLiveCaptureSingle(ParseAFPConfig,
                                     AFPConfigGeThreadsCount,
                                     "ReceiveAFP",
-                                    "DecodeAFP", "AFPacket",
+                                    "DecodeAFP", thread_name_single,
                                     live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");
@@ -601,7 +655,7 @@ int RunModeIdsAFPWorkers(void)
     ret = RunModeSetLiveCaptureWorkers(ParseAFPConfig,
                                     AFPConfigGeThreadsCount,
                                     "ReceiveAFP",
-                                    "DecodeAFP", "AFPacket",
+                                    "DecodeAFP", thread_name_workers,
                                     live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");

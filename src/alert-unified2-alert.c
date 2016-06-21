@@ -42,8 +42,6 @@
 #include "alert-unified2-alert.h"
 #include "decode-ipv4.h"
 
-#include "flow.h"
-
 #include "host.h"
 #include "util-profiling.h"
 #include "decode.h"
@@ -61,7 +59,6 @@
 #include "app-layer-htp-xff.h"
 
 #include "output.h"
-#include "alert-unified2-alert.h"
 #include "util-privs.h"
 
 #include "stream.h"
@@ -1176,7 +1173,7 @@ TmEcode Unified2AlertThreadInit(ThreadVars *t, void *initdata, void **data)
     memset(aun, 0, sizeof(Unified2AlertThread));
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for Unified2Alert.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for AlertUnified2.  \"initdata\" argument NULL");
         SCFree(aun);
         return TM_ECODE_FAILED;
     }
@@ -1214,8 +1211,8 @@ TmEcode Unified2AlertThreadDeinit(ThreadVars *t, void *data)
     }
 
     if (!(aun->unified2alert_ctx->file_ctx->flags & LOGFILE_ALERTS_PRINTED)) {
-        SCLogInfo("Alert unified2 module wrote %"PRIu64" alerts",
-                aun->unified2alert_ctx->file_ctx->alerts);
+        //SCLogInfo("Alert unified2 module wrote %"PRIu64" alerts",
+        //        aun->unified2alert_ctx->file_ctx->alerts);
 
         /* Do not print it for each thread */
         aun->unified2alert_ctx->file_ctx->flags |= LOGFILE_ALERTS_PRINTED;
@@ -1967,11 +1964,12 @@ error:
 void Unified2RegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("Unified2Test01 -- Ipv4 test", Unified2Test01, 1);
-    UtRegisterTest("Unified2Test02 -- Ipv6 test", Unified2Test02, 1);
-    UtRegisterTest("Unified2Test03 -- GRE test", Unified2Test03, 1);
-    UtRegisterTest("Unified2Test04 -- PPP test", Unified2Test04, 1);
-    UtRegisterTest("Unified2Test05 -- Inline test", Unified2Test05, 1);
-    UtRegisterTest("Unified2TestRotate01 -- Rotate File", Unified2TestRotate01, 1);
+    UtRegisterTest("Unified2Test01 -- Ipv4 test", Unified2Test01);
+    UtRegisterTest("Unified2Test02 -- Ipv6 test", Unified2Test02);
+    UtRegisterTest("Unified2Test03 -- GRE test", Unified2Test03);
+    UtRegisterTest("Unified2Test04 -- PPP test", Unified2Test04);
+    UtRegisterTest("Unified2Test05 -- Inline test", Unified2Test05);
+    UtRegisterTest("Unified2TestRotate01 -- Rotate File",
+                   Unified2TestRotate01);
 #endif /* UNITTESTS */
 }

@@ -36,6 +36,7 @@
 #include "util-privs.h"
 #include "util-signal.h"
 #include "unix-manager.h"
+#include "runmodes.h"
 
 #include "output.h"
 #include "output-stats.h"
@@ -221,6 +222,10 @@ static ConfNode *GetConfig(void) {
 static void StatsInitCtx(void)
 {
     SCEnter();
+#ifdef AFLFUZZ_DISABLE_MGTTHREADS
+    stats_enabled = FALSE;
+    SCReturn;
+#endif
     ConfNode *stats = GetConfig();
     if (stats != NULL) {
         const char *enabled = ConfNodeLookupChildValue(stats, "enabled");
@@ -839,7 +844,7 @@ void StatsSpawnThreads(void)
     ThreadVars *tv_mgmt = NULL;
 
     /* spawn the stats wakeup thread */
-    tv_wakeup = TmThreadCreateMgmtThread("StatsWakeupThread",
+    tv_wakeup = TmThreadCreateMgmtThread(thread_name_counter_wakeup,
                                          StatsWakeupThread, 1);
     if (tv_wakeup == NULL) {
         SCLogError(SC_ERR_THREAD_CREATE, "TmThreadCreateMgmtThread "
@@ -854,7 +859,7 @@ void StatsSpawnThreads(void)
     }
 
     /* spawn the stats mgmt thread */
-    tv_mgmt = TmThreadCreateMgmtThread("StatsMgmtThread",
+    tv_mgmt = TmThreadCreateMgmtThread(thread_name_counter_stats,
                                        StatsMgmtThread, 1);
     if (tv_mgmt == NULL) {
         SCLogError(SC_ERR_THREAD_CREATE,
@@ -1286,7 +1291,7 @@ static int StatsTestCounterReg02()
 
     memset(&pctx, 0, sizeof(StatsPublicThreadContext));
 
-    return RegisterCounter(NULL, NULL, &pctx);
+    return RegisterCounter(NULL, NULL, &pctx) == 0;
 }
 
 static int StatsTestCounterReg03()
@@ -1384,7 +1389,7 @@ static int StatsTestCntArraySize07()
     StatsReleaseCounters(tv.perf_public_ctx.head);
     StatsReleasePrivateThreadContext(pca);
 
-    return result;
+    PASS_IF(result == 2);
 }
 
 static int StatsTestUpdateCounter08()
@@ -1409,7 +1414,7 @@ static int StatsTestUpdateCounter08()
     StatsReleaseCounters(tv.perf_public_ctx.head);
     StatsReleasePrivateThreadContext(pca);
 
-    return result;
+    return result == 101;
 }
 
 static int StatsTestUpdateCounter09()
@@ -1519,16 +1524,16 @@ static int StatsTestCounterValues11()
 void StatsRegisterTests()
 {
 #ifdef UNITTESTS
-    UtRegisterTest("StatsTestCounterReg02", StatsTestCounterReg02, 0);
-    UtRegisterTest("StatsTestCounterReg03", StatsTestCounterReg03, 1);
-    UtRegisterTest("StatsTestCounterReg04", StatsTestCounterReg04, 1);
-    UtRegisterTest("StatsTestGetCntArray05", StatsTestGetCntArray05, 1);
-    UtRegisterTest("StatsTestGetCntArray06", StatsTestGetCntArray06, 1);
-    UtRegisterTest("StatsTestCntArraySize07", StatsTestCntArraySize07, 2);
-    UtRegisterTest("StatsTestUpdateCounter08", StatsTestUpdateCounter08, 101);
-    UtRegisterTest("StatsTestUpdateCounter09", StatsTestUpdateCounter09, 1);
+    UtRegisterTest("StatsTestCounterReg02", StatsTestCounterReg02);
+    UtRegisterTest("StatsTestCounterReg03", StatsTestCounterReg03);
+    UtRegisterTest("StatsTestCounterReg04", StatsTestCounterReg04);
+    UtRegisterTest("StatsTestGetCntArray05", StatsTestGetCntArray05);
+    UtRegisterTest("StatsTestGetCntArray06", StatsTestGetCntArray06);
+    UtRegisterTest("StatsTestCntArraySize07", StatsTestCntArraySize07);
+    UtRegisterTest("StatsTestUpdateCounter08", StatsTestUpdateCounter08);
+    UtRegisterTest("StatsTestUpdateCounter09", StatsTestUpdateCounter09);
     UtRegisterTest("StatsTestUpdateGlobalCounter10",
-                   StatsTestUpdateGlobalCounter10, 1);
-    UtRegisterTest("StatsTestCounterValues11", StatsTestCounterValues11, 1);
+                   StatsTestUpdateGlobalCounter10);
+    UtRegisterTest("StatsTestCounterValues11", StatsTestCounterValues11);
 #endif
 }

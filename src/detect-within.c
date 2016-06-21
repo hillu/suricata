@@ -36,7 +36,6 @@
 #include "detect-bytejump.h"
 #include "detect-byte-extract.h"
 #include "app-layer.h"
-#include "detect-parse.h"
 
 #include "flow-var.h"
 
@@ -287,8 +286,8 @@ end:
 void DetectWithinRegisterTests(void)
 {
     #ifdef UNITTESTS
-    UtRegisterTest("DetectWithinTestPacket01", DetectWithinTestPacket01, 1);
-    UtRegisterTest("DetectWithinTestPacket02", DetectWithinTestPacket02, 1);
-    UtRegisterTest("DetectWithinTestVarSetup", DetectWithinTestVarSetup, 1);
+    UtRegisterTest("DetectWithinTestPacket01", DetectWithinTestPacket01);
+    UtRegisterTest("DetectWithinTestPacket02", DetectWithinTestPacket02);
+    UtRegisterTest("DetectWithinTestVarSetup", DetectWithinTestVarSetup);
     #endif /* UNITTESTS */
 }
