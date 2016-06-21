@@ -1,3 +1,10 @@
+suricata (3.1-1) unstable; urgency=medium
+
+  * [d2cce67] d/control: add Vcs-Browser and Vcs-Git information
+  * [8bb2030] Imported Upstream version 3.1
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Tue, 21 Jun 2016 11:00:55 +0200
+
 suricata (3.0.1-2) unstable; urgency=medium
 
   * [178f3cf] suricata: add libgeoip support
