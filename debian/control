@@ -32,6 +32,7 @@ Vcs-Git: https://alioth.debian.org/anonscm/git/pkg-suricata/pkg-suricata.git
 
 Package: suricata
 Architecture: linux-any
+Pre-Depends: dpkg (>= 1.15.7.2)
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)

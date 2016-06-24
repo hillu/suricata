@@ -1,0 +1,9 @@
+#!/bin/bash
+
+set -e
+
+dpkg-maintscript-helper mv_conffile \
+	/etc/suricata/suricata-debian.yml /etc/suricata/suricata.yaml \
+	3.1-1 suricata -- "$@"
+
+#DEBHELPER#
