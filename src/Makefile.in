@@ -285,16 +285,16 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-logopenfile-tile.$(OBJEXT) util-lua.$(OBJEXT) \
 	util-lua-common.$(OBJEXT) util-lua-dns.$(OBJEXT) \
 	util-lua-http.$(OBJEXT) util-lua-tls.$(OBJEXT) \
-	util-lua-ssh.$(OBJEXT) util-magic.$(OBJEXT) \
-	util-memcmp.$(OBJEXT) util-memrchr.$(OBJEXT) \
-	util-misc.$(OBJEXT) util-mpm-ac-bs.$(OBJEXT) \
-	util-mpm-ac.$(OBJEXT) util-mpm-ac-tile.$(OBJEXT) \
-	util-mpm-ac-tile-small.$(OBJEXT) util-mpm-hs.$(OBJEXT) \
-	util-mpm.$(OBJEXT) util-path.$(OBJEXT) util-pidfile.$(OBJEXT) \
-	util-pool.$(OBJEXT) util-pool-thread.$(OBJEXT) \
-	util-print.$(OBJEXT) util-privs.$(OBJEXT) \
-	util-profiling.$(OBJEXT) util-profiling-locks.$(OBJEXT) \
-	util-profiling-rules.$(OBJEXT) \
+	util-lua-ssh.$(OBJEXT) util-lua-smtp.$(OBJEXT) \
+	util-magic.$(OBJEXT) util-memcmp.$(OBJEXT) \
+	util-memrchr.$(OBJEXT) util-misc.$(OBJEXT) \
+	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
+	util-mpm-ac-tile.$(OBJEXT) util-mpm-ac-tile-small.$(OBJEXT) \
+	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) util-path.$(OBJEXT) \
+	util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-pool-thread.$(OBJEXT) util-print.$(OBJEXT) \
+	util-privs.$(OBJEXT) util-profiling.$(OBJEXT) \
+	util-profiling-locks.$(OBJEXT) util-profiling-rules.$(OBJEXT) \
 	util-profiling-keywords.$(OBJEXT) \
 	util-profiling-rulegroups.$(OBJEXT) util-proto-name.$(OBJEXT) \
 	util-radix-tree.$(OBJEXT) util-random.$(OBJEXT) \
@@ -933,6 +933,7 @@ util-lua-dns.c util-lua-dns.h \
 util-lua-http.c util-lua-http.h \
 util-lua-tls.c util-lua-tls.h \
 util-lua-ssh.c util-lua-ssh.h \
+util-lua-smtp.c util-lua-smtp.h \
 util-magic.c util-magic.h \
 util-memcmp.c util-memcmp.h \
 util-memcpy.h \
@@ -1469,6 +1470,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-common.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-dns.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-http.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-smtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-ssh.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua.Po@am__quote@

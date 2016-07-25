@@ -67,6 +67,12 @@ int OutputRegisterTxLogger(const char *name, AppProto alproto, TxLogger LogFunc,
     if (module_id < 0)
         return -1;
 
+    if (!(AppLayerParserIsTxAware(alproto))) {
+        SCLogNotice("%s logger not enabled: protocol %s is disabled",
+            name, AppProtoToString(alproto));
+        return -1;
+    }
+
     OutputTxLogger *op = SCMalloc(sizeof(*op));
     if (op == NULL)
         return -1;
@@ -79,20 +85,20 @@ int OutputRegisterTxLogger(const char *name, AppProto alproto, TxLogger LogFunc,
     op->name = name;
     op->module_id = (TmmId) module_id;
 
-    if (tc_log_progress) {
-        op->tc_log_progress = tc_log_progress;
-    } else {
+    if (tc_log_progress < 0) {
         op->tc_log_progress =
             AppLayerParserGetStateProgressCompletionStatus(alproto,
                                                            STREAM_TOCLIENT);
+    } else {
+        op->tc_log_progress = tc_log_progress;
     }
 
-    if (ts_log_progress) {
-        op->ts_log_progress = ts_log_progress;
-    } else {
+    if (ts_log_progress < 0) {
         op->ts_log_progress =
             AppLayerParserGetStateProgressCompletionStatus(alproto,
                                                            STREAM_TOSERVER);
+    } else {
+        op->ts_log_progress = ts_log_progress;
     }
 
     if (list == NULL) {
@@ -165,13 +171,18 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data, PacketQ
         int tx_progress_tc = AppLayerParserGetStateProgress(p->proto, alproto,
                 tx, FlowGetDisruptionFlags(f, STREAM_TOCLIENT));
 
+        SCLogDebug("tx_progress_ts %d tx_progress_tc %d",
+                tx_progress_ts, tx_progress_tc);
+
         // call each logger here (pseudo code)
         logger = list;
         store = op_thread_data->store;
         while (logger && store) {
             BUG_ON(logger->LogFunc == NULL);
 
-            SCLogDebug("logger %p", logger);
+            SCLogDebug("logger %p, LogCondition %p, ts_log_progress %d "
+                    "tc_log_progress %d", logger, logger->LogCondition,
+                    logger->ts_log_progress, logger->tc_log_progress);
             if (logger->alproto == alproto) {
                 SCLogDebug("alproto match, logging tx_id %ju", tx_id);
 
