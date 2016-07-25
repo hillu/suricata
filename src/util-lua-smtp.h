@@ -1,4 +1,4 @@
-/* Copyright (C) 2010 Open Information Security Foundation
+/* Copyright (C) 2014 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,22 +15,13 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
- *
- * \author Eric Leblond <eleblond@edenwall.com>
- */
+#ifndef __UTIL_LUA_SMTP_H__
+#define __UTIL_LUA_SMTP_H__
 
-int GetIfaceMTU(const char *pcap_dev);
-int GetIfaceMaxPacketSize(const char *pcap_dev);
-int GetIfaceOffloading(const char *dev, int csum, int other);
-int GetIfaceRSSQueuesNum(const char *pcap_dev);
-#ifdef SIOCGIFFLAGS
-int GetIfaceFlags(const char *ifname);
-#endif
-#ifdef SIOCSIFFLAGS
-int SetIfaceFlags(const char *ifname, int flags);
-#endif
-#ifdef SIOCGIFCAP
-int GetIfaceCaps(const char *ifname);
-#endif
+#ifdef HAVE_LUA
+
+int LuaRegisterSmtpFunctions(lua_State *luastate);
+
+#endif /* HAVE_LUA */
+
+#endif /* __UTIL_LUA_SMTP_H__ */
