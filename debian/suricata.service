@@ -1,0 +1,19 @@
+[Unit]
+Description=Suricata IDS/IDP daemon
+After=network.target
+Requires=network.target
+Documentation=man:suricata(8) man:suricatasc(8)
+Documentation=https://redmine.openinfosecfoundation.org/projects/suricata/wiki
+
+[Service]
+Type=forking
+#Environment=LD_PREDLOAD=/usr/lib/libtcmalloc_minimal.so.4
+Environment=MODE=--af-packet
+Environment=CFG=/etc/suricata/suricata.yaml PID=/var/run/suricata.pid
+PIDFile=/var/run/suricata.pid
+ExecStart=/usr/bin/suricata -D $MODE -c $CFG --pidfile $PID -D
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStop=/bin/kill $MAINPID
+
+[Install]
+WantedBy=multi-user.target

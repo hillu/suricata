@@ -4,7 +4,7 @@
 RUN=no
 
 # Configuration file to load
-SURCONF=/etc/suricata/suricata-debian.yaml
+SURCONF=/etc/suricata/suricata.yaml
 
 # Listen mode: pcap, nfqueue or af-packet
 # depending on this value, only one of the two following options
