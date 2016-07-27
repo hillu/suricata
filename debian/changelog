@@ -1,3 +1,14 @@
+suricata (3.1.1-2) unstable; urgency=medium
+
+  * [833f1c5] d/: add new binary package suricata-oinkmaster
+  * [6155001] d/suricata.service: remove duplicated -D switch in
+    ExecStart=
+  * [6ebbd82] d/patches: add debian-default-cfg.patch [enable unix socket
+    by default]
+  * [2286eb4] d/suricatasc.1: update manpage
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Thu, 28 Jul 2016 13:21:30 +0200
+
 suricata (3.1.1-1) unstable; urgency=medium
 
   * [cafb099] d/suricata: rename suricata main conffile to
