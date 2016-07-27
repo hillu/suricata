@@ -36,7 +36,7 @@ Pre-Depends: dpkg (>= 1.15.7.2)
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)
-Recommends: oinkmaster, python, snort-rules-default
+Recommends: suricata-oinkmaster (=${binary:Version}), python, snort-rules-default
 Suggests: libtcmalloc-minimal4
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on
@@ -49,6 +49,17 @@ Description: Next Generation Intrusion Detection and Prevention Tool
  cards.
  .
  This version has inline (NFQUEUE) support enabled.
+
+Package: suricata-oinkmaster
+Architecture: all
+Depends: oinkmaster, suricata (>= ${source:Version}), ${misc:Depends}
+Description: Integration package between suricata and oinkmaster
+ Suricata is a network Intrusion Detection System (IDS). It is based on
+ rules (and is fully compatible with snort rules) to detect a variety of
+ attacks / probes by searching packet content.
+ .
+ This package contains the integration bits between suricata and oinkmaster
+ to allow easy automated ruleset updates.
 
 Package: suricata-dbg
 Section: debug

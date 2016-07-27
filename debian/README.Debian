@@ -37,3 +37,21 @@ For more help, see
 https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule_Management_with_Oinkmaster
 
  -- Pierre Chifflier <pollux@debian.org>  Thu, 17 Nov 2011 22:58:00 +0100
+
+Using suricata-oinkmaster
+-------------------------
+
+The package 'suricata-oinkmaster' deploys a pre-configured system to allow
+easy auto-update of suricata rules daily using oinkmaster.
+
+There is a config file /etc/suricata/suricata-oinkmaster.conf which contains
+the oinkmaster configuration for the auto-update.
+Also, there is a cronjob at /etc/cron.daily/suricata-oinkmaster-updater which
+calls oinkmaster and the suricatasc to reload the rules.
+
+Of course, this requires:
+ * suricata daemon running
+ * network access to download rules
+ * suricatasc working (ie, suricata running with unix socket)
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com> July 2016
