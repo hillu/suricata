@@ -1,26 +1,14 @@
-.\" (C) Copyright 2015 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>,
+.\" (C) Copyright 2015-2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>,
 .\"
 .\"
-.TH SURICATASC 1 "Mar  31, 2015"
-.\" Please adjust this date whenever revising the manpage.
-.\"
-.\"usage: suricatasc [-h] [-v] [socket]
-.\"
-.\"Client for Suricata unix socket
-.\"
-.\"positional arguments:
-.\"  socket         socket file to connnect to
-.\"
-.\"optional arguments:
-.\"  -h, --help     show this help message and exit
-.\"  -v, --verbose  verbose output (including JSON dump)
-.\"
+.TH SURICATASC 1 "Jul  28, 2016"
+.\" Please adjust this date whenever updating the manpage.
 
 .SH NAME
 suricatasc \- client for Suricata unix socket
 .SH SYNOPSIS
 .B suricatasc
-[-h] [-v] [\fIsocket\fP]
+-h] [-v] [-c COMMAND] [\fIsocket\fP]
 .br
 .SH DESCRIPTION
 This manual page documents briefly the \fBsuricatasc\fP command.
@@ -37,7 +25,7 @@ unix-command:
 .br
   enabled: yes
 .br
-  #filename: custom.socket # use this to specify an alternate file
+  filename: /var/run/suricata-command.socket
 .br
 [...]
 .PP
@@ -48,7 +36,7 @@ suricata --unix-socket
 suricata --unix-socket=\fIsocket\fP
 .br
 .PP
-In case you don't specify \fIsocket\fP, the default is \fI/var/run/suricata/suricata-command.socket\fP.
+In case you don't specify \fIsocket\fP, the default is \fI/var/run/suricata-command.socket\fP.
 .PP
 To know if the \fBsuricata(8)\fP daemon is build with the required
 capabilities run \fBsuricata --build-info\fP and look for "Unix socket enabled: yes".
@@ -65,14 +53,26 @@ Show summary of options.
 .B \-v, \-\-verbose
 Verbose output (including JSON dump).
 
-.SH COMMANDS
-When running \fBsuricatasc\fP, you will get an 'interactive' CLI. The list of available commands will show up.
 .TP
-.B command-list
-list available commands
+.B \-c, \-\-command COMMAND
+Execute a single COMMAND and return a JSON result (see below for possible commands).
+
+.SH RUNNING MODES
+You can use \fBsuricatasc\fP in two modes:
+.IP
+* one shot command
+.br
+* interactive CLI
+.PP
+
+.SH COMMANDS
+The list of available commands is:
 .TP
 .B shutdown
 this shutdown suricata
+.TP
+.B command-list
+list available commands
 .TP
 .B help
 alias of command-list
@@ -102,6 +102,30 @@ Success:
 .TP
 .B dump-counters
 dump Suricata's performance counters
+.TP
+.B reload-rules
+suricata will reload the rulesets
+.TP
+.B register-tenant-handler
+register a tenant handler
+.TP
+.B unregister-tenant-handler
+the inverse of the above
+.TP
+.B register-tenant
+register a tenant
+.TP
+.B reload-tenant
+reload a tenant
+.TP
+.B unregister-tenant
+unregister a tenant
+.TP
+.B iface-stat <iface>
+show interface stats
+.TP
+.B iface-list
+show interfaces list
 .TP
 .B pcap-file <file>
 load a file for pcap treatment
