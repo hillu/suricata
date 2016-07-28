@@ -11,7 +11,7 @@ Type=forking
 Environment=MODE=--af-packet
 Environment=CFG=/etc/suricata/suricata.yaml PID=/var/run/suricata.pid
 PIDFile=/var/run/suricata.pid
-ExecStart=/usr/bin/suricata -D $MODE -c $CFG --pidfile $PID -D
+ExecStart=/usr/bin/suricata -D $MODE -c $CFG --pidfile $PID
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStop=/bin/kill $MAINPID
 
