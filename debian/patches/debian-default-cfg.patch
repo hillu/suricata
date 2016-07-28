@@ -1,0 +1,43 @@
+From: Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+Subject: Debian default configuration
+ This patch sets Debian defaults for suricata configuration.
+ .
+ Currently, it sets a proper path for suricata unix socket.
+Forwarded: not-needed
+Last-Update: 2016-07-28
+
+--- a/suricata.yaml.in
++++ b/suricata.yaml.in
+@@ -901,8 +901,8 @@
+ # to activate the feature. You can use the filename variable to set
+ # the file name of the socket.
+ unix-command:
+-  enabled: no
+-  #filename: custom.socket
++  enabled: yes
++  filename: @e_localstatedir@suricata-command.socket
+ 
+ # Magic file. The extension .mgc is added to the value here.
+ #magic-file: /usr/share/file/magic
+--- a/src/unix-manager.c
++++ b/src/unix-manager.c
+@@ -51,7 +51,7 @@
+ # endif
+ #endif
+ 
+-#define SOCKET_PATH LOCAL_STATE_DIR "/run/suricata/"
++#define SOCKET_PATH LOCAL_STATE_DIR "/"
+ #define SOCKET_FILENAME "suricata-command.socket"
+ #define SOCKET_TARGET SOCKET_PATH SOCKET_FILENAME
+ 
+--- a/configure.ac
++++ b/configure.ac
+@@ -1932,7 +1932,7 @@
+   EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
+   EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
+   EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
+-  EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/suricata")
++  EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/")
+ fi
+ AC_SUBST(e_logdir)
+ AC_SUBST(e_rundir)
