@@ -10,8 +10,8 @@ Files: debian/*
 Copyright: 2010 Pierre Chifflier <pollux@debian.org>
 License: GPL-2
 
-Files: debian/suricatasc.1
-Copyright: 2015 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+Files: debian/suricatasc.1 debian/oinkmaster/suricata-oinkmaster-updater
+Copyright: 2015-2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
 License: GPL-2
 
 Files: src/queue.h
