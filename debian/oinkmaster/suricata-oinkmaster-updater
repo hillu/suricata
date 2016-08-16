@@ -53,19 +53,19 @@ if [ $(id -u) -ne 0 ] ; then
 	msg_err "this script requires root permissions"
 fi
 
-if [ ! -x $OINKMASTER_BIN ] ; then
+if [ ! -x "$OINKMASTER_BIN" ] ; then
 	msg_err "no oinkmaster binary found"
 fi
 
-if [ ! -x $SURICATASC_BIN ] ; then
+if [ ! -x "$SURICATASC_BIN" ] ; then
 	msg_err "no suricatasc binary found"
 fi
 
-if [ ! -r $CONFIG_FILE ] ; then
+if [ ! -r "$CONFIG_FILE" ] ; then
 	msg_err "unable to read config file"
 fi
 
-if [ ! -d $OUTPUT_DIR ] ; then
+if [ ! -d "$OUTPUT_DIR" ] ; then
 	msg_err "missing output dir $OUTPUT_DIR"
 fi
 
