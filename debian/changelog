@@ -1,3 +1,11 @@
+suricata (3.1.1-3) unstable; urgency=medium
+
+  * [22d26a5] suricata-oinkmaster-updater: prevent bogus if evaluation
+  * [4805c7a] suricata-oinkmaster-updater: dont exit with error if missing
+    requirements (Closes: #834029)
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Tue, 16 Aug 2016 13:53:12 +0200
+
 suricata (3.1.1-2) unstable; urgency=medium
 
   * [833f1c5] d/: add new binary package suricata-oinkmaster
