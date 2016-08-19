@@ -5,8 +5,6 @@ The engine is an Open Source Next Generation Intrusion Detection and
 Prevention Tool, not intended to just replace or emulate the existing tools in
 the industry, but to bring new ideas and technologies to the field.
 
-This is considered as a beta release.
-
 To run the engine with default configuration on interface eth0 (in live mode),
 run the following command (as root):
 
