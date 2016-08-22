@@ -1,68 +1,166 @@
-.\"                                      Hey, EMACS: -*- nroff -*-
-.\" First parameter, NAME, should be all caps
-.\" Second parameter, SECTION, should be 1-8, maybe w/ subsection
-.\" other parameters are allowed: see man(7), man(1)
-.TH SURICATA 8 "February 2010"
-.\" Please adjust this date whenever revising the manpage.
-.\"
-.\" Some roff macros, for reference:
-.\" .nh        disable hyphenation
-.\" .hy        enable hyphenation
-.\" .ad l      left justify
-.\" .ad b      justify to both left and right margins
-.\" .nf        disable filling
-.\" .fi        enable filling
-.\" .br        insert line break
-.\" .sp <n>    insert n+1 empty lines
-.\" for manpage-specific macros, see man(7)
+.TH SURICATA 8 "22 Aug 2016"
 .SH NAME
 suricata \- Next Generation Intrusion Detection and Prevention Tool
 .SH SYNOPSIS
-.B suricata
-.RI [ options ]
+.BI "suricata [OPTIONS] [BPF FILTER]"
 .br
 .SH DESCRIPTION
-.B suricata
-is a network Intrusion Detection System (IDS). It is based on
+\fBsuricata\fP is a network Intrusion Detection System (IDS). It is based on
 rules (and is fully compatible with snort rules) to detect a variety of
 attacks / probes by searching packet content.
 
-This new Engine supports Multi-Threading, Automatic Protocol Detection
+This engine supports Multi-Threading, Automatic Protocol Detection
 (IP, TCP, UDP, ICMP, HTTP, TLS, FTP and SMB), Gzip Decompression, Fast
-IP Matching and coming soon hardware acceleration on CUDA and OpenCL GPU
-cards.
+IP Matching and hardware acceleration on CUDA, OpenCL GPU cards and more.
 
-It supports acquiring packets through NFQUEUE, PCAP (live or offline) etc.
+It supports acquiring packets through AF_PACKET, NFQUEUE, PF_RING, PCAP
+(live or offline) and more.
 .PP
 .SH OPTIONS
-.IP "-c config_file"
-Use configuration file
-.I config_file
-.IP "-i interface"
-Sniff packets on
-.I interface.
-.IP "-r file"
-Read the tcpdump-formatted file
-.I tcpdump-file.
-This will cause Suricata to read and process the file fed to it.  This is
-useful for offline analysis.
-.IP "-q queue_id"
-Sniff packets sent by the kernel through NFQUEUE. This allows running
-Suricata in inline mode (IPS) for packets captured by iptables using
-the NFQUEUE target.
-.IP "-s signatures"
-Path to the signatures file.
-.IP "-l log_dir"
-Path to the default log directory.
-.IP "-D"
-Run as daemon
-.IP "--init-errors-fatal"
+
+.TP
+.BI "-c <path>"
+Load main configuration file (by default, \fI/etc/suricata/suricata.yaml\fP).
+
+.TP
+.BI -T
+Test configuration file (use with \fI-c\fP).
+
+.TP
+.BI "-i <dev or ip>"
+Run in PCAP live mode.
+
+.TP
+.BI "-F <bpf filter file>"
+Load BPF filter file.
+
+.TP
+.BI "-r <path>"
+Run in PCAP file/offile mode.
+
+.TP
+.BI "-q <qid>"
+Run in inline NFQUEUE mode.
+
+.TP
+.BI "-s <path>"
+Load signature file in addition to the main configuration file.
+
+.TP
+.BI "-S <path>"
+Load signature file exclusively.
+
+.TP
+.BI "-l <dir>"
+Set log directory (by default /var/log/suricata).
+
+.TP
+.BI -D
+Run as a background daemon (suricata will fork itself).
+
+.TP
+.BI "-k [all|none]"
+Force checksum cheks (all) or disable it (none).
+
+.TP
+.BI -V
+Print \fBsuricata\fP version.
+
+.TP
+.BI -v[v]
+Increase default verbosity.
+
+.TP
+.BI --list-app-layer-protos
+Print list of supported app layer protocols.
+
+.TP
+.BI --list-keywords[=all|csv|<kword>]
+List keywords implemented by the engine.
+
+.TP
+.BI --list-runmodes
+List supported runmodes.
+
+.TP
+.BI "--runmode <runomde_id>"
+Specific runmode in which the engine should run. The argument \fIrunmode_id\fP
+should be the id of the runmode obtained using \fI--list-runmodes\fP.
+
+.TP
+.BI --engine-analysis
+Print reports on analysis of different sections in the engine.
+
+.TP
+.BI "--pidfile <path>"
+Write PID to the file.
+
+.TP
+.BI --init-errors-fatal
 Enable fatal failure on signature init error.
+
+.TP
+.BI --disable-detection
+Disable detection engine.
+
+.TP
+.BI --dump-config
+Show the running configuration.
+
+.TP
+.BI --build-info
+Display build information.
+
+.TP
+.BI --pacp[=<dev>]
+Run in PCAP mode. No \fIdev\fP value selects interfaces from main
+configuration file.
+
+.TP
+.BI --pcap-buffer-size
+Size of PCAP buffer. Values from 0 to 2147483647.
+
+.TP
+.BI --af-packet[=<dev>]
+Run in AF_PACKET mode. No \fIdev\fP value selects interfaces from main
+configuration file.
+
+.TP
+.BI --simulate-ips
+Force engine into IPS mode. Useful for QA.
+
+.TP
+.BI "--user <user>"
+Run \fBsuricata\fP as this \fIuser\fP after inet.
+
+.TP
+.BI "--group <group>"
+Run \fBsuricata\fP as this \fIgorup\fP after inet.
+
+.TP
+.BI "--unix-socket[=<file>]
+UNIX socket to control \fBsuricata\fP work from \fBsuricatasc(1)\fP.
+The default is /var/run/suricata-command.socket.
+
+.TP
+.BI "--set name=value"
+Set configuration variable \fIname\fP to \fIvalue\fP.
+
+.SH EXAMPLES
+
+To run the engine with default configuration on interface eth0 with signature
+file "signatiures.rules", run the command as:
+
+ % suricata -c suricata.yaml -s signatures.rules -i eth0
+
+
 .SH SEE ALSO
+.BR suricatasc (1),
 .BR tcpdump (1),
 .BR pcap (3).
 .SH AUTHOR
 suricata was written by the Open Information Security Foundation.
 .PP
-This manual page was written by Pierre Chifflier <pollux@debian.org>,
+This manual page was written by Pierre Chifflier <pollux@debian.org> and
+Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
 for the Debian project (and may be used by others).
