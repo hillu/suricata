@@ -10,8 +10,8 @@ Type=forking
 #Environment=LD_PREDLOAD=/usr/lib/libtcmalloc_minimal.so.4
 PIDFile=/var/run/suricata.pid
 ExecStart=/usr/bin/suricata -D --af-packet -c /etc/suricata/suricata.yaml --pidfile /var/run/suricata.pid
-ExecReload=/bin/kill -HUP $MAINPID
-ExecStop=/bin/kill $MAINPID
+ExecReload=/usr/bin/suricatasc -c reload-rules ; /bin/kill -HUP $MAINPID
+ExecStop=/usr/bin/suricatasc -c shutdown
 
 [Install]
 WantedBy=multi-user.target
