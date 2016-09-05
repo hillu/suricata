@@ -28,11 +28,14 @@ You can start/stop the daemon with:
 You should copy /lib/systemd/system/suricata.service to
 /etc/systemd/system/suricata.service and adapt the configuration to your needs.
 
+The sysvinit script and related files (/etc/init.d/suricata and
+/etc/default/suricata) will be eventually discarted at some point in the
+future. The /etc/default/suricata file is ignored by the default
+suricata.service file.
+
 By now, there is no integration between suricata and libsystemd (so, options
 like the watchdog are not supported).
 
-The last version of the suricata debian package which included support for
-sysvinit was 3.1.1-3.
 
 Updating Rules
 --------------
