@@ -89,6 +89,10 @@
 #include <string.h>
 #endif
 
+#if HAVE_STRINGS_H
+#include <strings.h>
+#endif
+
 #if HAVE_FCNTL_H
 #include <fcntl.h>
 #endif
@@ -300,6 +304,9 @@
 #ifndef MAX
 #define MAX(x, y) (((x)<(y))?(y):(x))
 #endif
+
+#define BIT_U32(n) (1UL  << (n))
+#define BIT_U64(n) (1ULL << (n))
 
 typedef enum PacketProfileDetectId_ {
     PROF_DETECT_MPM,

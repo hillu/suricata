@@ -467,10 +467,12 @@ typedef struct Packet_
     /* Can only be one of TCP, UDP, ICMP at any given time */
     union {
         TCPVars tcpvars;
-        UDPVars udpvars;
         ICMPV4Vars icmpv4vars;
         ICMPV6Vars icmpv6vars;
-    };
+    } l4vars;
+#define tcpvars     l4vars.tcpvars
+#define icmpv4vars  l4vars.icmpv4vars
+#define icmpv6vars  l4vars.icmpv6vars
 
     TCPHdr *tcph;
 
@@ -658,6 +660,10 @@ typedef struct CaptureStats_ {
 
 void CaptureStatsUpdate(ThreadVars *tv, CaptureStats *s, const Packet *p);
 void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
+
+#define PACKET_CLEAR_L4VARS(p) do {                         \
+        memset(&(p)->l4vars, 0x00, sizeof((p)->l4vars));    \
+    } while (0)
 
 /**
  *  \brief reset these to -1(indicates that the packet is fresh from the queue)
@@ -975,6 +981,10 @@ int DecoderParseDataFromFile(char *filename, DecoderFunc Decoder);
     } \
     r; \
 })
+
+#ifndef IPPROTO_IPIP
+#define IPPROTO_IPIP 4
+#endif
 
 /* older libcs don't contain a def for IPPROTO_DCCP
  * inside of <netinet/in.h>
