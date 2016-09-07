@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 3.1.1)
+    AC_INIT(suricata, 3.1.2)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     m4_ifndef([AS_VERSION_COMPARE], [AC_DEFUN([AS_VERSION_COMPARE],[])])
     AC_CONFIG_HEADERS([config.h])
@@ -127,7 +127,7 @@
     AC_CHECK_HEADERS([arpa/inet.h assert.h ctype.h errno.h fcntl.h inttypes.h])
     AC_CHECK_HEADERS([getopt.h])
     AC_CHECK_HEADERS([limits.h netdb.h netinet/in.h poll.h sched.h signal.h])
-    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h string.h sys/ioctl.h])
+    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h string.h strings.h sys/ioctl.h])
     AC_CHECK_HEADERS([syslog.h sys/prctl.h sys/socket.h sys/stat.h sys/syscall.h])
     AC_CHECK_HEADERS([sys/time.h time.h unistd.h])
     AC_CHECK_HEADERS([sys/ioctl.h linux/if_ether.h linux/if_packet.h linux/filter.h])
@@ -227,6 +227,10 @@
             LUA_PC_NAME="lua"
             LUA_LIB_NAME="lua"
             WINDOWS_PATH="yes"
+            ;;
+        *-*-solaris*)
+            AC_MSG_WARN([support for Solaris/Illumos/SunOS is experimental])
+            LDFLAGS="${LDFLAGS} -lsocket -lnsl"
             ;;
         *)
             AC_MSG_WARN([unsupported OS this may or may not work])
@@ -1663,7 +1667,7 @@
                     echo "   ERROR!  liblua library not found, go get it"
                     echo "   from http://lua.org/index.html or your distribution:"
                     echo
-                    echo "   Ubuntu: apt-get install liblua-5.1-dev"
+                    echo "   Ubuntu: apt-get install liblua5.1-dev"
                     echo "   CentOS/Fedora: yum install lua-devel"
                     echo
                     echo "   If you installed software in a non-standard prefix"
@@ -1699,7 +1703,7 @@
                 echo "   ERROR!  liblua headers not found, go get them"
                 echo "   from http://lua.org/index.html or your distribution:"
                 echo
-                echo "   Ubuntu: apt-get install liblua-5.1-dev"
+                echo "   Ubuntu: apt-get install liblua5.1-dev"
                 echo "   CentOS/Fedora: yum install lua-devel"
                 echo
                 echo "   If you installed software in a non-standard prefix"
