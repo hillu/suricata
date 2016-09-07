@@ -48,7 +48,6 @@ msg_err()
 # main execution
 #
 
-# checks
 if [ $(id -u) -ne 0 ] ; then
 	msg_err "this script requires root permissions"
 fi
@@ -61,4 +60,3 @@ fi
 set -e
 $OINKMASTER_BIN -C $CONFIG_FILE -o $OUTPUT_DIR
 $SURICATASC_BIN -c reload-rules
-exit 0
