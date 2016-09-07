@@ -13,6 +13,8 @@ ExecStart=/usr/bin/suricata -D --af-packet -c /etc/suricata/suricata.yaml --pidf
 ExecReload=/usr/bin/suricatasc -c reload-rules ; /bin/kill -HUP $MAINPID
 ExecStop=/usr/bin/suricatasc -c shutdown
 Restart=on-failure
+ProtectSystem=full
+ProtectHome=true
 
 [Install]
 WantedBy=multi-user.target
