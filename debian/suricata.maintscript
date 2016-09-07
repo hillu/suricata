@@ -1,0 +1,2 @@
+# Rename file
+mv_conffile /etc/suricata/suricata-debian.yaml /etc/suricata/suricata.yaml 3.1-1 suricata
