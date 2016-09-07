@@ -1,3 +1,19 @@
+suricata (3.1.2-1) unstable; urgency=medium
+
+  * [4e0605d] Revert "suricata: drop support for sysvinit"
+  * [f5abe38] d/patches: add reproducible.patch.
+    Thanks to Christoph Berg <myon@debian.org> for the pointers.
+  * [6569809] New upstream version 3.1.2
+  * [5fea3a6] d/suricata.service: include Restart=on-failure
+  * [d1a973d] d/suricata.service: add ProtectSystem=full and ProtectHome=true
+  * [8e1cddd] d/tests/systemd-service-test.sh: don't test the reload operation by now
+  * [87c00b1] d/suricata.maintscript: factorize renaming of old config file
+    (Closes: #835643)
+  * [55c7a32] d/oinkmaster/suricata-oinkmaster-updater: drop warnings
+  * [7651669] d/oinkmaster/suricata-oinkmaster-updater: cleanup file
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Wed, 07 Sep 2016 13:25:13 +0200
+
 suricata (3.1.1-4) unstable; urgency=medium
 
   * [c9b6efd] d/tests/: add new systemd-service-test.sh test
