@@ -1,3 +1,11 @@
+suricata (3.1.2-2) unstable; urgency=medium
+
+  * [482c6f6] d/tests/control: allow-stderr for systemd-service-test.sh
+  * [a4eff10] d/tests/control: add tests for suricatasc
+  * [892096c] d/suricata.8: fix typo 'inet' vs 'init'
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Thu, 08 Sep 2016 12:46:44 +0200
+
 suricata (3.1.2-1) unstable; urgency=medium
 
   * [4e0605d] Revert "suricata: drop support for sysvinit"
