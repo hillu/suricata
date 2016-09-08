@@ -1,7 +1,42 @@
 Test-Command: suricata --build-info
 Depends: @
 
+Test-Command: suricatasc -c "dump-counters"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "uptime"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "capture-mode"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "reload-rules"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "version"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "command-list"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "iface-list"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "shutdown"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "running-mode"
+Depends: @
+Restrictions: needs-root, isolation-container
+
 Tests: systemd-service-test.sh
 Depends: @, systemd, procps
 Restrictions: needs-root, isolation-container, allow-stderr
-
