@@ -1,0 +1,5 @@
+#!/bin/sh
+
+BIN="$(which suricata-oinkmaster-updater)"
+[ ! -x "$BIN" ] && exit 0
+$BIN
