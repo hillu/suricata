@@ -1,3 +1,15 @@
+suricata (3.1.2-3) unstable; urgency=medium
+
+  * [165d14e] suricata-oinkmaster: move the update script to /usr/sbin
+    (Closes: #838129)
+  * [2e21734] d/tests/control: add a basic test for suricata-oinkmaster-
+    updater
+  * [be640f3] suricata: split libhtp to separate binary packages
+  * [c41567a] suricata-oinkmaster: add manpage for suricata-oinkmaster-
+    updater
+
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Wed, 21 Sep 2016 13:21:51 +0200
+
 suricata (3.1.2-2) unstable; urgency=medium
 
   * [482c6f6] d/tests/control: allow-stderr for systemd-service-test.sh
