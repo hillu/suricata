@@ -1,0 +1,45 @@
+.\" (C) Copyright 2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>,
+.\"
+.\"
+.TH SURICATAS-OINKMASTER-UPDATER 8 "Sept 21, 2016"
+.\" Please adjust this date whenever updating the manpage.
+
+.SH NAME
+suricata-oinkmaster-updater \- Run oinkmaster to update suricata ruleset
+
+.SH SYNOPSIS
+.B suricatas-oinkmaster-updater
+
+.SH DESCRIPTION
+This manual page documents briefly the \fBsuricatas-oinkmaster-updater\fP
+command.
+.PP
+\fBsuricata-oinkmaster-updater\fP is a shell script that run
+\fBoinkmaster(1)\fP to update \fBsuricata(8)\fP ruleset.
+The intention is to hook the call to this script from a daily cron job,
+so \fBsuricata(8)\fP rulesets are automagically updated every day.
+
+.SH HOW IT WORKS
+The default Debian configuration will run \fBoinkmaster(1)\fP with the config
+file \fI/etc/suricata/suricata-oinkmaster.conf\fP which is pre-configured to
+donwload the \fPEmergingThreats\fP open ruleset for \fBsuricata(8)\fP.
+.PP
+When the donwload is completed, \fBsuricatasc(1)\fP will be called to
+instruct \fBsuricata(8)\fP to reload the ruleset.
+
+.SH CONFIGURATION
+By now, the only way to modify the behaviour of
+\fPsuricata-oinkmaster-updater\fP is to modify the
+\fI/etc/suricata/suricata-oinkmaster.conf\fP file. Or modify the shell
+script itself.
+.PP
+More options may be added in the future.
+
+.SH SEE ALSO
+\fBsuricata(8)\fP, \fBoinkmaster(1)\fP, \fBsuricatasc(1)\fP
+
+.SH ABOUT
+\fBsuricata-oinkmaster-updater\fP and this manpage were written by
+Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+for the Debian GNU/Linux distribution (but it may be used by others).
+
