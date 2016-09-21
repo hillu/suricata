@@ -33,7 +33,7 @@ Vcs-Git: https://alioth.debian.org/anonscm/git/pkg-suricata/pkg-suricata.git
 Package: suricata
 Architecture: linux-any
 Pre-Depends: dpkg (>= 1.15.7.2)
-Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}
+Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}, libhtp-0.5.22-1 (= ${binary:Version})
 Conflicts: libhtp1 (<< 0.5.16)
 Replaces: libhtp1 (<< 0.5.16)
 Recommends: suricata-oinkmaster (=${binary:Version}), python, snort-rules-default
@@ -72,3 +72,34 @@ Description: Next Generation Intrusion Detection and Prevention Tool - debug sym
  attacks / probes by searching packet content.
  .
  This package contains the debug symbols for Suricata.
+
+Package: libhtp-0.5.22-1
+Section: libs
+Architecture: any
+Priority: extra
+Pre-Depends: ${misc:Pre-Depends}
+Depends: ${misc:Depends}, ${shlibs:Depends}
+Description: HTTP normalizer and parser library
+ The HTP Library is an HTTP normalizer and parser.
+ This integrates and provides very advanced processing of HTTP streams
+ for Suricata.
+ .
+ The HTP library is required by the suricata engine, but may also be used
+ independently in a range of applications and tools.
+ .
+ This package provides the runtime files for libhtp.
+
+Package: libhtp-dev
+Section: libdevel
+Architecture: linux-any
+Pre-Depends: ${misc:Pre-Depends}
+Depends: libhtp-0.5.22-1 (= ${binary:Version}), pkg-config, ${misc:Depends}
+Description: Development files for libhtp
+ The HTP Library is an HTTP normalizer and parser.
+ This integrates and provides very advanced processing of HTTP streams
+ for Suricata.
+ .
+ The HTP library is required by the suricata engine, but may also be used
+ independently in a range of applications and tools.
+ .
+ This package provides the development files and static libraries.

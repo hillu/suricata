@@ -1,4 +1,4 @@
 etc/suricata
 usr/bin
-usr/lib
+usr/lib/python*
 var/log/suricata

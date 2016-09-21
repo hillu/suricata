@@ -12,7 +12,7 @@ export DH_VERBOSE=1
 
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
 
-DEB_DESTDIR = $(CURDIR)/debian/suricata
+SURICATA_DESTDIR = $(CURDIR)/debian/suricata
 
 ARCH ?= $(shell dpkg --print-architecture)
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
@@ -32,16 +32,10 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 	$(ENABLE_LUAJIT)
 
 override_dh_auto_install:
-	dh_auto_install --destdir=$(DEB_DESTDIR)
-	rm -rf $(DEB_DESTDIR)/usr/lib/python*;\
+	dh_auto_install
+	rm -rf $(SURICATA_DESTDIR)/usr/lib/python*;\
 	(cd scripts/suricatasc &&\
-		python -B setup.py install --install-layout=deb --prefix $(DEB_DESTDIR)/usr)
-	# we don't want to deploy any of the libhtp files, only the .so
-	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.la
-	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.a
-	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/*.so
-	rm -rf $(CURDIR)/debian/suricata/usr/lib/*/pkgconfig
-	rm -rf $(CURDIR)/debian/suricata/usr/include
+		python -B setup.py install --install-layout=deb --prefix $(SURICATA_DESTDIR)/usr)
 	# clean upstream install documentation
 	rm -rf $(CURDIR)/debian/suricata/usr/share/doc/suricata/*
 
