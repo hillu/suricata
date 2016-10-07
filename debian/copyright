@@ -6,72 +6,305 @@ Files: *
 Copyright: 2008 Victor Julien <victor@inliniac.net>
 License: GPL-2
 
+Files: contrib/*
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: contrib/Makefile.am
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: contrib/file_processor/*
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: contrib/file_processor/Action/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: contrib/file_processor/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: contrib/file_processor/Processor/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: contrib/file_processor/file_processor.pl
+Copyright: 2012, Martin Holste
+License: GPL-2
+
+Files: contrib/suri-graphite
+Copyright: 2013, 2015, Eric Leblond <eric@regit.org>
+License: GPL-2
+
+Files: contrib/tile_pcie_logd/Makefile.am
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: contrib/tile_pcie_logd/tile_pcie_logd.c
+Copyright: 2013, 2014, Tilera Corporation.
+License: GPL-2
+
 Files: debian/*
 Copyright: 2010 Pierre Chifflier <pollux@debian.org>
 License: GPL-2
 
-Files: debian/suricatasc.1 debian/oinkmaster/suricata-oinkmaster-updater
-Copyright: 2015-2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+Files: debian/oinkmaster/*
+Copyright: 2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+License: GPL-2
+
+Files: doc/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: install-sh
+Copyright: 1994, X Consortium
+License: Expat
+
+Files: libhtp/INSTALL
+Copyright: 1994-1996, 1999-2002, 2004-2013, Free Software Foundation
+License: GPL-2
+
+Files: libhtp/Makefile.in
+  libhtp/aclocal.m4
+  libhtp/configure
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: libhtp/compile
+  libhtp/depcomp
+  libhtp/ltmain.sh
+  libhtp/missing
+  libhtp/test-driver
+Copyright: 1996-2015, Free Software Foundation, Inc.
+License: GPL-2+
+
+Files: libhtp/config.guess
+  libhtp/config.sub
+Copyright: 1992-2015, Free Software Foundation, Inc.
+License: GPL-3
+
+Files: libhtp/docs/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: libhtp/htp/*
+Copyright: 2010-2013, Qualys, Inc.
+  2009, 2010, Open Information Security Foundation
+License: BSD-3-clause
+
+Files: libhtp/htp/Makefile.am
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: libhtp/htp/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: libhtp/htp/htp_config_auto.h
+Copyright: 2009, 2010, Open Information Security Foundation
+License: BSD-3-clause
+
+Files: libhtp/htp/htp_utf8_decoder.c
+  libhtp/htp/htp_utf8_decoder.h
+Copyright: 2010-2013, Qualys, Inc.
+  2009, 2010, Open Information Security Foundation
+License: BSD-3-clause or Expat
+
+Files: libhtp/htp/strlcat.c
+  libhtp/htp/strlcpy.c
+Copyright: 1998, Todd C. Miller <Todd.Miller@courtesan.com>
+License: BSD-3-clause
+
+Files: libhtp/install-sh
+Copyright: 1994, X Consortium
+License: Expat
+
+Files: libhtp/test/*
+Copyright: 2010-2013, Qualys, Inc.
+  2009, 2010, Open Information Security Foundation
+License: BSD-3-clause
+
+Files: libhtp/test/Makefile.am
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: libhtp/test/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: libhtp/test/files/*
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: libhtp/test/files/generate-gzip-tests.php
+Copyright: 2010-2013, Qualys, Inc.
+  2009, 2010, Open Information Security Foundation
+License: BSD-3-clause
+
+Files: libhtp/test/gtest/*
+Copyright: 2005, 2006, 2008, Google Inc.
+License: BSD-3-clause
+
+Files: qa/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: qa/coccinelle/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: qa/coccinelle/sz3.cocci
+Copyright: 2012, - LIP6/INRIA
+License: GPL-2
+
+Files: qa/wirefuzz.pl
+Copyright: 2007-2016, Open Information Security Foundation
+License: GPL-2
+
+Files: rules/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: scripts/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: scripts/suricatasc/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: scripts/suricatasc/src/suricatasc.py
+Copyright: 2012, 2013, Open Information Security Foundation
+License: GPL-2
+
+Files: scripts/suricatasc/suricatasc.in
+Copyright: 2012, 2013, Open Information Security Foundation
+License: GPL-2
+
+Files: src/*
+Copyright: 2007-2016, Open Information Security Foundation
+License: GPL-2
+
+Files: src/Makefile.am
+  src/ptxdump.py
+  src/util-hash-lookup3.c
+  src/util-hash-lookup3.h
+Copyright: 2008 Victor Julien <victor@inliniac.net>
+License: GPL-2
+
+Files: src/Makefile.in
+Copyright: 1989, 1991-2015, Free Software Foundation, Inc.
+License: GPL-2
+
+Files: src/app-layer-htp-libhtp.c
+  src/app-layer-htp-libhtp.h
+Copyright: 2010-2013, Qualys, Inc.
+  2009, 2010, Open Information Security Foundation
+License: BSD-3-clause
+
+Files: src/app-layer-modbus.c
+  src/app-layer-modbus.h
+  src/app-layer-tls-handshake.c
+  src/app-layer-tls-handshake.h
+  src/detect-engine-modbus.c
+  src/detect-engine-modbus.h
+  src/detect-modbus.c
+  src/detect-modbus.h
+  src/detect-tls.c
+  src/detect-tls.h
+  src/util-decode-der-get.c
+  src/util-decode-der-get.h
+  src/util-decode-der.c
+  src/util-decode-der.h
+Copyright: 2011-2015, ANSSI
+License: BSD-3-clause
+
+Files: src/data-queue.c
+  src/data-queue.h
+Copyright: 2009, 2010, Open Information Security Foundation.
 License: GPL-2
 
 Files: src/queue.h
-Copyright: 1991-1993 The Regents of the University of California
-License: BSD-3-Clause
+  src/win32-syslog.h
+Copyright: 1982, 1986, 1988, 1991, 1993, The Regents of the University of California.
+License: BSD-3-clause
 
-Files: src/util-fix_checksum.h src/util-fix_checksum.c
-Copyright: 2001 Daniel Hartmeier
-	   2002-2008 Henning Brauer
-License: BSD-2-Clause
+Files: src/util-decode-mime.c
+  src/util-decode-mime.h
+Copyright: 2012, BAE Systems
+License: GPL-2
 
-License: BSD-2-Clause
+Files: src/util-fix_checksum.c
+  src/util-fix_checksum.h
+Copyright: 2002-2008, Henning Brauer
+  2001, Daniel Hartmeier
+License: BSD-2-clause
+ Please fill license BSD-2-clause from header of src/util-fix_checksum.c src/util-fix_checksum.h
+
+Files: src/util-strlcatu.c
+  src/util-strlcpyu.c
+Copyright: 1998, Todd C. Miller <Todd.Miller@courtesan.com>
+License: BSD-3-clause
+
+License: BSD-3-clause
+ The BSD License
+ .
  Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
+ modification, are permitted provided that the following conditions are
+ met:
  .
- 1. Redistributions of source code must retain the above copyright notice, this
- list of conditions and the following disclaimer.
+   * Redistributions of source code must retain the above copyright
+     notice, this list of conditions and the following disclaimer.
  .
- 2. Redistributions in binary form must reproduce the above copyright notice,
- this list of conditions and the following disclaimer in the documentation
- and/or other materials provided with the distribution.
+   * Redistributions in binary form must reproduce the above copyright
+     notice, this list of conditions and the following disclaimer in the
+     documentation and/or other materials provided with the distribution. 
  .
- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
- THE POSSIBILITY OF SUCH DAMAGE.
+   * Neither the name of foo nor the names of its
+     contributors may be used to endorse or promote products derived from
+     this software without specific prior written permission. 
+ .
+ THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS
+ IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+ TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+ PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR
+ CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+ EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+ PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+ PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-License: BSD-3-Clause
- Redistribution and use in source and binary forms, with or without
- modification, are permitted provided that the following conditions are met:
+License: Expat
+ The MIT License
  .
- 1. Redistributions of source code must retain the above copyright notice, this
- list of conditions and the following disclaimer.
+ Permission is hereby granted, free of charge, to any person
+ obtaining a copy of this software and associated
+ documentation files (the "Software"), to deal in the Software
+ without restriction, including without limitation the rights to
+ use, copy, modify, merge, publish, distribute, sublicense,
+ and/or sell copies of the Software, and to permit persons to
+ whom the Software is furnished to do so, subject to the
+ following conditions:
  .
- 2. Redistributions in binary form must reproduce the above copyright notice,
- this list of conditions and the following disclaimer in the documentation
- and/or other materials provided with the distribution.
+ The above copyright notice and this permission notice shall
+ be included in all copies or substantial portions of the
+ Software.
  .
- 3. Neither the name of the copyright holder nor the names of its contributors
- may be used to endorse or promote products derived from this software without
- specific prior written permission.
- .
- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
- LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
- THE POSSIBILITY OF SUCH DAMAGE.
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT
+ WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+ INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+ MERCHANTABILITY, FITNESS FOR A PARTICULAR
+ PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+ SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+ TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+ CONNECTION WITH THE SOFTWARE OR THE USE OR
+ OTHER DEALINGS IN THE SOFTWARE.
 
 License: GPL-2
  This program is free software; you can redistribute it and/or modify
@@ -88,3 +321,20 @@ License: GPL-2
  .
  On Debian systems, the complete text of the GNU General
  Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+License: GPL-2+
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 2 dated June, 1991, or (at
+ your option) any later version.
+ .
+ On Debian systems, the complete text of version 2 of the GNU General
+ Public License can be found in '/usr/share/common-licenses/GPL-2'.
+
+License: GPL-3
+ This program is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; version 3 dated June, 2007.
+ .
+ On Debian systems, the complete text of version 3 of the GNU General
+ Public License can be found in '/usr/share/common-licenses/GPL-3'.
