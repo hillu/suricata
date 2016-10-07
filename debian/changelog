@@ -1,5 +1,9 @@
 suricata (3.1.2-3) unstable; urgency=medium
 
+  * [b5b6483] d/copyright: refresh file
+  * [2be2225] d/control: add references to IPS and firewall
+  * [47015f2] d/: add symbols file for libhtp
+  * [ce1007e] suricata-oinkmaster-updater.8: fix typo
   * [165d14e] suricata-oinkmaster: move the update script to /usr/sbin
     (Closes: #838129)
   * [2e21734] d/tests/control: add a basic test for suricata-oinkmaster-
@@ -8,7 +12,7 @@ suricata (3.1.2-3) unstable; urgency=medium
   * [c41567a] suricata-oinkmaster: add manpage for suricata-oinkmaster-
     updater
 
- -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Wed, 21 Sep 2016 13:21:51 +0200
+ -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>  Fri, 7 Oct 2016 13:21:51 +0200
 
 suricata (3.1.2-2) unstable; urgency=medium
 
