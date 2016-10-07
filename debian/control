@@ -43,6 +43,9 @@ Description: Next Generation Intrusion Detection and Prevention Tool
  rules (and is fully compatible with snort rules) to detect a variety of
  attacks / probes by searching packet content.
  .
+ It can also be used as Intrusion Prevention System (IPS), and as higher layer
+ firewall.
+ .
  This new Engine supports Multi-Threading, Automatic Protocol Detection
  (IP, TCP, UDP, ICMP, HTTP, TLS, FTP and SMB), Gzip Decompression, Fast
  IP Matching and coming soon hardware acceleration on CUDA and OpenCL GPU
