@@ -73,4 +73,4 @@ Of course, this requires:
  * network access to download rules
  * suricatasc working (ie, suricata running with unix socket)
 
- -- Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com> July 2016
+ -- Arturo Borrero Gonzalez <arturo@debian.org> July 2016

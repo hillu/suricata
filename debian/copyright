@@ -51,7 +51,7 @@ Copyright: 2010 Pierre Chifflier <pollux@debian.org>
 License: GPL-2
 
 Files: debian/oinkmaster/*
-Copyright: 2016 Arturo Borrero Gonzalez <arturo.borrero.glez@gmail.com>
+Copyright: 2016 Arturo Borrero Gonzalez <arturo@debian.org>
 License: GPL-2
 
 Files: doc/Makefile.in
