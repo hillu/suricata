@@ -3,3 +3,4 @@ reference.config /etc/suricata
 rules/*.rules /etc/suricata/rules
 suricata.yaml	/etc/suricata
 threshold.config /etc/suricata
+usr/bin/*
