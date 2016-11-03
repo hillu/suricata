@@ -114,14 +114,12 @@ case "$OS" in
         FreeBSD*)
                 AC_MSG_RESULT(FreeBSD)
                 OS_FREEBSD="true"
-                NO_STACK_PROTECTOR="true"
                 CPPFLAGS="${CPPFLAGS} -I/usr/local/include"
                 LDFLAGS="${LDFLAGS} -L/usr/local/lib"
         ;;
         OpenBSD*)
                 AC_MSG_RESULT(OpenBSD)
                 OS_OPENBSD="true"
-                NO_STACK_PROTECTOR="true"
                 CPPFLAGS="${CPPFLAGS} -I/usr/local/include"
                 LDFLAGS="${LDFLAGS} -L/usr/local/lib"
         ;;
@@ -192,6 +190,15 @@ CFLAGS="${CFLAGS} -Wformat -Wformat-security"
 AC_TRY_COMPILE(,,[gcc_have_format_security=yes],[gcc_have_format_security=no])
 AC_MSG_RESULT($gcc_have_format_security)
 if test "$gcc_have_format_security" != "yes"; then
+    CFLAGS="${TMPCFLAGS}"
+fi
+
+AC_MSG_CHECKING(for gcc support of -fPIC)
+TMPCFLAGS="${CFLAGS}"
+CFLAGS="${CFLAGS} -fPIC"
+AC_TRY_COMPILE(,,[gcc_have_fpic=yes],[gcc_have_fpic=no])
+AC_MSG_RESULT($gcc_have_fpic)
+if test "$gcc_have_fpic" != "yes"; then
     CFLAGS="${TMPCFLAGS}"
 fi
 

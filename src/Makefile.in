@@ -290,8 +290,8 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-memrchr.$(OBJEXT) util-misc.$(OBJEXT) \
 	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
 	util-mpm-ac-tile.$(OBJEXT) util-mpm-ac-tile-small.$(OBJEXT) \
-	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) util-path.$(OBJEXT) \
-	util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
+	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) util-pages.$(OBJEXT) \
+	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
 	util-pool-thread.$(OBJEXT) util-print.$(OBJEXT) \
 	util-privs.$(OBJEXT) util-profiling.$(OBJEXT) \
 	util-profiling-locks.$(OBJEXT) util-profiling-rules.$(OBJEXT) \
@@ -947,6 +947,7 @@ util-mpm-ac-tile-small.c \
 util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
 util-optimize.h \
+util-pages.c util-pages.h \
 util-path.c util-path.h \
 util-pidfile.c util-pidfile.h \
 util-pool.c util-pool.h \
@@ -1484,6 +1485,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-ac.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-hs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pages.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-path.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pidfile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pool-thread.Po@am__quote@

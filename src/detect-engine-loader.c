@@ -150,7 +150,7 @@ void TmThreadWakeupDetectLoaderThreads()
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
         while (tv != NULL) {
-            if (strcmp(tv->name,"DetectLoader") == 0) {
+            if (strncmp(tv->name,"DL#",3) == 0) {
                 BUG_ON(tv->ctrl_cond == NULL);
                 pthread_cond_broadcast(tv->ctrl_cond);
             }
@@ -174,7 +174,7 @@ void TmThreadContinueDetectLoaderThreads()
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
         while (tv != NULL) {
-            if (strcmp(tv->name,"DetectLoader") == 0)
+            if (strncmp(tv->name,"DL#",3) == 0)
                 TmThreadContinue(tv);
 
             tv = tv->next;
@@ -241,6 +241,7 @@ static TmEcode DetectLoader(ThreadVars *th_v, void *thread_data)
             int r = task->Func(task->ctx, ftd->instance);
             loader->result |= r;
             TAILQ_REMOVE(&loader->task_list, task, next);
+            SCFree(task->ctx);
             SCFree(task);
         }
 
