@@ -1,19 +1,28 @@
-suricata (3.1.2-3) unstable; urgency=medium
+suricata (3.1.3-1) unstable; urgency=medium
 
+  [ Arturo Borrero Gonzalez ]
   * [165d14e] suricata-oinkmaster: move the update script to /usr/sbin
     (Closes: #838129)
-  * [2e21734] d/tests/control: add a basic test for suricata-oinkmaster-
-    updater
+  * [2e21734] d/tests/control: add a basic test for suricata-oinkmaster-updater
   * [be640f3] suricata: split libhtp to separate binary packages
-  * [c41567a] suricata-oinkmaster: add manpage for suricata-oinkmaster-
-    updater
+  * [c41567a] suricata-oinkmaster: add manpage for suricata-oinkmaster-updater
   * [b5b6483] d/copyright: refresh file
   * [2be2225] d/control: add references to IPS and firewall
   * [bd6a9ed] d/: add symbols file for libhtp
-  * [f61be7d] suricata-oinkmaster-updater.8: fix typo
+  * [f61be7d] suricata-oinkmaster-updater.8: fix typo donwload
   * [ead4a84] d/: update email address to 'arturo@debian.org'
+  * [36d9b9d] d/: refresh date of manpages
 
- -- Arturo Borrero Gonzalez <arturo@debian.org>  Mon, 10 Oct 2016 11:15:28 +0200
+  [ Sascha Steinbiss ]
+  * [da1c3c6] d/suricata.logrotate: use 'copytruncate' instead of 'create'
+
+  [ Arturo Borrero Gonzalez ]
+  * [cd9d5d4] New upstream version 3.1.3
+  * [f32a582] libhtp: symbols: refresh file
+  * [1e3edb0] libhtp: bump soname
+  * [138b1bc] d/control: suricata depends on lsb-base
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 03 Nov 2016 19:25:21 +0100
 
 suricata (3.1.2-2) unstable; urgency=medium
 
