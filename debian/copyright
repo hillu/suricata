@@ -110,6 +110,7 @@ Files: libhtp/htp/htp_utf8_decoder.c
   libhtp/htp/htp_utf8_decoder.h
 Copyright: 2010-2013, Qualys, Inc.
   2009, 2010, Open Information Security Foundation
+  2008-2009 Bjoern Hoehrmann <bjoern@hoehrmann.de>
 License: BSD-3-clause or Expat
 
 Files: libhtp/htp/strlcat.c
