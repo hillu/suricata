@@ -37,7 +37,7 @@ Test-Command: suricatasc -c "running-mode"
 Depends: @
 Restrictions: needs-root, isolation-container
 
-Test-Command: suricatas-oinkmaster-updater
+Test-Command: suricata-oinkmaster-updater
 Depends: @
 Restrictions: needs-root, isolation-container
 
