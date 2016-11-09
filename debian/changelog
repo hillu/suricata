@@ -1,3 +1,12 @@
+suricata (3.1.3-2) unstable; urgency=medium
+
+  * [5c395f9] d/tests/control: rearange suricatasc command tests
+  * [789723b] d/tests/control: fix typo in test command 'suricatas'
+  * [353e030] d/changelog: clean word with typo from the changelog
+  * [b4cf113] d/: add libhtp-0.5.23-1.lintian-overrides
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 09 Nov 2016 13:44:17 +0100
+
 suricata (3.1.3-1) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
