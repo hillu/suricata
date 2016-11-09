@@ -1,6 +1,18 @@
 Test-Command: suricata --build-info
 Depends: @
 
+Test-Command: suricatasc -c "version"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "command-list"
+Depends: @
+Restrictions: needs-root, isolation-container
+
+Test-Command: suricatasc -c "capture-mode"
+Depends: @
+Restrictions: needs-root, isolation-container
+
 Test-Command: suricatasc -c "dump-counters"
 Depends: @
 Restrictions: needs-root, isolation-container
@@ -9,19 +21,7 @@ Test-Command: suricatasc -c "uptime"
 Depends: @
 Restrictions: needs-root, isolation-container
 
-Test-Command: suricatasc -c "capture-mode"
-Depends: @
-Restrictions: needs-root, isolation-container
-
 Test-Command: suricatasc -c "reload-rules"
-Depends: @
-Restrictions: needs-root, isolation-container
-
-Test-Command: suricatasc -c "version"
-Depends: @
-Restrictions: needs-root, isolation-container
-
-Test-Command: suricatasc -c "command-list"
 Depends: @
 Restrictions: needs-root, isolation-container
 
