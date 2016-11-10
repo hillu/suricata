@@ -39,7 +39,7 @@ Restrictions: needs-root, isolation-container
 
 Test-Command: suricata-oinkmaster-updater
 Depends: @
-Restrictions: needs-root, isolation-container
+Restrictions: needs-root, isolation-container, allow-stderr
 
 Tests: systemd-service-test.sh
 Depends: @, systemd, procps
