@@ -1,2 +1,2 @@
 # false positive, the link is there. Somehow lintian is confused
-libhtp-0.5.23-1: dev-pkg-without-shlib-symlink usr/lib/x86_64-linux-gnu/libhtp-0.5.23.so.1.0.0 usr/lib/x86_64-linux-gnu/libhtp-0.5.23.so
+libhtp-0.5.23-1: dev-pkg-without-shlib-symlink
