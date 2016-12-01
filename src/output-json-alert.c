@@ -44,6 +44,7 @@
 #include "detect-engine-mpm.h"
 #include "detect-reference.h"
 #include "app-layer-parser.h"
+#include "app-layer-dnp3.h"
 #include "app-layer-htp.h"
 #include "app-layer-htp-xff.h"
 #include "util-classification-config.h"
@@ -52,6 +53,7 @@
 
 #include "output.h"
 #include "output-json.h"
+#include "output-json-dnp3.h"
 #include "output-json-http.h"
 #include "output-json-tls.h"
 #include "output-json-ssh.h"
@@ -70,20 +72,21 @@
 
 #ifdef HAVE_LIBJANSSON
 
-#define LOG_JSON_PAYLOAD        0x01
-#define LOG_JSON_PACKET         0x02
-#define LOG_JSON_PAYLOAD_BASE64 0x04
-#define LOG_JSON_HTTP           0x08
-#define LOG_JSON_TLS            0x10
-#define LOG_JSON_SSH            0x20
-#define LOG_JSON_SMTP           0x40
-#define LOG_JSON_TAGGED_PACKETS 0x80
+#define LOG_JSON_PAYLOAD        0x001
+#define LOG_JSON_PACKET         0x002
+#define LOG_JSON_PAYLOAD_BASE64 0x004
+#define LOG_JSON_HTTP           0x008
+#define LOG_JSON_TLS            0x010
+#define LOG_JSON_SSH            0x020
+#define LOG_JSON_SMTP           0x040
+#define LOG_JSON_TAGGED_PACKETS 0x080
+#define LOG_JSON_DNP3           0x100
 
 #define JSON_STREAM_BUFFER_SIZE 4096
 
 typedef struct AlertJsonOutputCtx_ {
     LogFileCtx* file_ctx;
-    uint8_t flags;
+    uint16_t flags;
     uint32_t payload_buffer_size;
     HttpXFFCfg *xff_cfg;
 } AlertJsonOutputCtx;
@@ -139,13 +142,51 @@ static void AlertJsonSsh(const Flow *f, json_t *js)
     return;
 }
 
+static void AlertJsonDnp3(const Flow *f, json_t *js)
+{
+    DNP3State *dnp3_state = (DNP3State *)FlowGetAppState(f);
+    if (dnp3_state) {
+        uint64_t tx_id = AppLayerParserGetTransactionLogId(f->alparser);
+        DNP3Transaction *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_DNP3,
+            dnp3_state, tx_id);
+        if (tx) {
+            json_t *dnp3js = json_object();
+            if (likely(dnp3js != NULL)) {
+                if (tx->has_request && tx->request_done) {
+                    json_t *request = JsonDNP3LogRequest(tx);
+                    if (request != NULL) {
+                        json_object_set_new(dnp3js, "request", request);
+                    }
+                }
+                if (tx->has_response && tx->response_done) {
+                    json_t *response = JsonDNP3LogResponse(tx);
+                    if (response != NULL) {
+                        json_object_set_new(dnp3js, "response", response);
+                    }
+                }
+                json_object_set_new(js, "dnp3", dnp3js);
+            }
+        }
+    }
+
+    return;
+}
+
 void AlertJsonHeader(const Packet *p, const PacketAlert *pa, json_t *js)
 {
     char *action = "allowed";
-    if (pa->action & (ACTION_REJECT|ACTION_REJECT_DST|ACTION_REJECT_BOTH)) {
-        action = "blocked";
-    } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
-        action = "blocked";
+    /* use packet action if rate_filter modified the action */
+    if (unlikely(pa->flags & PACKET_ALERT_RATE_FILTER_MODIFIED)) {
+        if (PACKET_TEST_ACTION(p, (ACTION_DROP|ACTION_REJECT|
+                                   ACTION_REJECT_DST|ACTION_REJECT_BOTH))) {
+            action = "blocked";
+        }
+    } else {
+        if (pa->action & (ACTION_REJECT|ACTION_REJECT_DST|ACTION_REJECT_BOTH)) {
+            action = "blocked";
+        } else if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
+            action = "blocked";
+        }
     }
 
     /* Add tx_id to root element for correlation with other events. */
@@ -221,7 +262,6 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 
         if (json_output_ctx->flags & LOG_JSON_HTTP) {
             if (p->flow != NULL) {
-                FLOWLOCK_RDLOCK(p->flow);
                 uint16_t proto = FlowGetAppProtocol(p->flow);
 
                 /* http alert */
@@ -230,40 +270,31 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
                     if (hjs)
                         json_object_set_new(js, "http", hjs);
                 }
-
-                FLOWLOCK_UNLOCK(p->flow);
             }
         }
 
         if (json_output_ctx->flags & LOG_JSON_TLS) {
             if (p->flow != NULL) {
-                FLOWLOCK_RDLOCK(p->flow);
                 uint16_t proto = FlowGetAppProtocol(p->flow);
 
                 /* http alert */
                 if (proto == ALPROTO_TLS)
                     AlertJsonTls(p->flow, js);
-
-                FLOWLOCK_UNLOCK(p->flow);
             }
         }
 
         if (json_output_ctx->flags & LOG_JSON_SSH) {
             if (p->flow != NULL) {
-                FLOWLOCK_RDLOCK(p->flow);
                 uint16_t proto = FlowGetAppProtocol(p->flow);
 
                 /* http alert */
                 if (proto == ALPROTO_SSH)
                     AlertJsonSsh(p->flow, js);
-
-                FLOWLOCK_UNLOCK(p->flow);
             }
         }
 
         if (json_output_ctx->flags & LOG_JSON_SMTP) {
             if (p->flow != NULL) {
-                FLOWLOCK_RDLOCK(p->flow);
                 uint16_t proto = FlowGetAppProtocol(p->flow);
 
                 /* http alert */
@@ -276,8 +307,15 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
                     if (hjs)
                         json_object_set_new(js, "email", hjs);
                 }
+            }
+        }
 
-                FLOWLOCK_UNLOCK(p->flow);
+        if (json_output_ctx->flags & LOG_JSON_DNP3) {
+            if (p->flow != NULL) {
+                uint16_t proto = FlowGetAppProtocol(p->flow);
+                if (proto == ALPROTO_DNP3) {
+                    AlertJsonDnp3(p->flow, js);
+                }
             }
         }
 
@@ -355,7 +393,6 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
             int have_xff_ip = 0;
             char buffer[XFF_MAXLEN];
 
-            FLOWLOCK_RDLOCK(p->flow);
             if (FlowGetAppProtocol(p->flow) == ALPROTO_HTTP) {
                 if (pa->flags & PACKET_ALERT_FLAG_TX) {
                     have_xff_ip = HttpXFFGetIPFromTx(p, pa->tx_id, xff_cfg, buffer, XFF_MAXLEN);
@@ -363,7 +400,6 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
                     have_xff_ip = HttpXFFGetIP(p, xff_cfg, buffer, XFF_MAXLEN);
                 }
             }
-            FLOWLOCK_UNLOCK(p->flow);
 
             if (have_xff_ip) {
                 if (xff_cfg->flags & XFF_EXTRADATA) {
@@ -600,6 +636,7 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
         const char *ssh = ConfNodeLookupChildValue(conf, "ssh");
         const char *smtp = ConfNodeLookupChildValue(conf, "smtp");
         const char *tagged_packets = ConfNodeLookupChildValue(conf, "tagged-packets");
+        const char *dnp3 = ConfNodeLookupChildValue(conf, "dnp3");
 
         if (ssh != NULL) {
             if (ConfValIsTrue(ssh)) {
@@ -650,6 +687,11 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
         if (tagged_packets != NULL) {
             if (ConfValIsTrue(tagged_packets)) {
                 json_output_ctx->flags |= LOG_JSON_TAGGED_PACKETS;
+            }
+        }
+        if (dnp3 != NULL) {
+            if (ConfValIsTrue(dnp3)) {
+                json_output_ctx->flags |= LOG_JSON_DNP3;
             }
         }
 
@@ -741,32 +783,21 @@ error:
     return NULL;
 }
 
-void TmModuleJsonAlertLogRegister (void)
+void JsonAlertLogRegister (void)
 {
-    tmm_modules[TMM_JSONALERTLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONALERTLOG].ThreadInit = JsonAlertLogThreadInit;
-    tmm_modules[TMM_JSONALERTLOG].ThreadDeinit = JsonAlertLogThreadDeinit;
-    tmm_modules[TMM_JSONALERTLOG].cap_flags = 0;
-    tmm_modules[TMM_JSONALERTLOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterPacketModule(MODULE_NAME, "alert-json-log",
-            JsonAlertLogInitCtx, JsonAlertLogger, JsonAlertLogCondition);
-    OutputRegisterPacketSubModule("eve-log", MODULE_NAME, "eve-log.alert",
-            JsonAlertLogInitCtxSub, JsonAlertLogger, JsonAlertLogCondition);
+    OutputRegisterPacketModule(LOGGER_JSON_ALERT, MODULE_NAME, "alert-json-log",
+        JsonAlertLogInitCtx, JsonAlertLogger, JsonAlertLogCondition,
+        JsonAlertLogThreadInit, JsonAlertLogThreadDeinit, NULL);
+    OutputRegisterPacketSubModule(LOGGER_JSON_ALERT, "eve-log", MODULE_NAME,
+        "eve-log.alert", JsonAlertLogInitCtxSub, JsonAlertLogger,
+        JsonAlertLogCondition, JsonAlertLogThreadInit, JsonAlertLogThreadDeinit,
+        NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonAlertLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonAlertLogRegister (void)
-{
-    tmm_modules[TMM_JSONALERTLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONALERTLOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

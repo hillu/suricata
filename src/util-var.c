@@ -130,12 +130,16 @@ void GenericVarRemove(GenericVar **list, GenericVar *gv)
 }
 
 // Checks if a variable is already in a resolve list and if it's not, adds it.
-int AddVariableToResolveList(ResolvedVariablesList *list, char *var)
+int AddVariableToResolveList(ResolvedVariablesList *list, const char *var)
 {
     ResolvedVariable *p_item;
 
     if (list == NULL || var == NULL)
         return 0;
+
+    if (var[0] != '$') {
+        return 0;
+    }
 
     TAILQ_FOREACH(p_item, list, next) {
         if (!strcmp(p_item->var_name, var)) {

@@ -26,6 +26,13 @@
  */
 
 #include "suricata-common.h"
+
+#if defined(HAVE_DIRENT_H) && defined(HAVE_FNMATCH_H)
+#define INIT_RING_BUFFER
+#include <dirent.h>
+#include <fnmatch.h>
+#endif
+
 #include "debug.h"
 #include "detect.h"
 #include "flow.h"
@@ -80,6 +87,14 @@ SC_ATOMIC_DECLARE(uint32_t, thread_cnt);
 typedef struct PcapFileName_ {
     char *filename;
     char *dirname;
+
+    /* Like a struct timeval, but with fixed size. This is only used when
+     * seeding the ring buffer on start. */
+    struct {
+        uint64_t secs;
+        uint32_t usecs;
+    };
+
     TAILQ_ENTRY(PcapFileName_) next; /**< Pointer to next Pcap File for tailq. */
 } PcapFileName;
 
@@ -138,28 +153,30 @@ typedef struct PcapLogThreadData_ {
     PcapLogData *pcap_log;
 } PcapLogThreadData;
 
+/* Pattern for extracting timestamp from pcap log files. */
+static const char timestamp_pattern[] = ".*?(\\d+)(\\.(\\d+))?";
+static pcre *pcre_timestamp_code = NULL;
+static pcre_extra *pcre_timestamp_extra = NULL;
+
 /* global pcap data for when we're using multi mode. At exit we'll
  * merge counters into this one and then report counters. */
 static PcapLogData *g_pcap_data = NULL;
 
 static int PcapLogOpenFileCtx(PcapLogData *);
-static TmEcode PcapLog(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
+static int PcapLog(ThreadVars *, void *, const Packet *);
 static TmEcode PcapLogDataInit(ThreadVars *, void *, void **);
 static TmEcode PcapLogDataDeinit(ThreadVars *, void *);
 static void PcapLogFileDeInitCtx(OutputCtx *);
 static OutputCtx *PcapLogInitCtx(ConfNode *);
 static void PcapLogProfilingDump(PcapLogData *);
+static int PcapLogCondition(ThreadVars *, const Packet *);
 
-void TmModulePcapLogRegister(void)
+void PcapLogRegister(void)
 {
-    tmm_modules[TMM_PCAPLOG].name = MODULE_NAME;
-    tmm_modules[TMM_PCAPLOG].ThreadInit = PcapLogDataInit;
-    tmm_modules[TMM_PCAPLOG].Func = PcapLog;
-    tmm_modules[TMM_PCAPLOG].ThreadDeinit = PcapLogDataDeinit;
-    tmm_modules[TMM_PCAPLOG].RegisterTests = NULL;
-
-    OutputRegisterModule(MODULE_NAME, "pcap-log", PcapLogInitCtx);
-
+    OutputRegisterPacketModule(LOGGER_PCAP, MODULE_NAME, "pcap-log",
+        PcapLogInitCtx, PcapLog, PcapLogCondition, PcapLogDataInit,
+        PcapLogDataDeinit, NULL);
+    PcapLogProfileSetup();
     SC_ATOMIC_INIT(thread_cnt);
     return;
 }
@@ -170,6 +187,17 @@ void TmModulePcapLogRegister(void)
 #define PCAPLOG_PROFILE_END(prof) \
     (prof).total += (UtilCpuGetTicks() - pcaplog_profile_ticks); \
     (prof).cnt++
+
+static int PcapLogCondition(ThreadVars *tv, const Packet *p)
+{
+    if (p->flags & PKT_PSEUDO_STREAM_END) {
+        return FALSE;
+    }
+    if (IS_TUNNEL_PKT(p) && !IS_TUNNEL_ROOT_PKT(p)) {
+        return FALSE;
+    }
+    return TRUE;
+}
 
 /**
  * \brief Function to close pcaplog file
@@ -281,7 +309,7 @@ static int PcapLogRotateFile(ThreadVars *t, PcapLogData *pl)
     return 0;
 }
 
-static int PcapLogOpenHandles(PcapLogData *pl, Packet *p)
+static int PcapLogOpenHandles(PcapLogData *pl, const Packet *p)
 {
     PCAPLOG_PROFILE_START;
 
@@ -345,8 +373,7 @@ static void PcapLogUnlock(PcapLogData *pl)
  * \retval TM_ECODE_OK on succes
  * \retval TM_ECODE_FAILED on serious error
  */
-static TmEcode PcapLog (ThreadVars *t, Packet *p, void *thread_data, PacketQueue *pq,
-                 PacketQueue *postpq)
+static int PcapLog (ThreadVars *t, void *thread_data, const Packet *p)
 {
     size_t len;
     int rotate = 0;
@@ -468,6 +495,194 @@ static PcapLogData *PcapLogDataCopy(const PcapLogData *pl)
     return copy;
 }
 
+#ifdef INIT_RING_BUFFER
+static int PcapLogGetTimeOfFile(const char *filename, uint64_t *secs,
+    uint32_t *usecs)
+{
+    int pcre_ovecsize = 4 * 3;
+    int pcre_ovec[pcre_ovecsize];
+    char buf[PATH_MAX];
+
+    int n = pcre_exec(pcre_timestamp_code, pcre_timestamp_extra,
+        filename, strlen(filename), 0, 0, pcre_ovec,
+        pcre_ovecsize);
+    if (n != 2 && n != 4) {
+        /* No match. */
+        return 0;
+    }
+
+    if (n >= 2) {
+        /* Extract seconds. */
+        if (pcre_copy_substring(filename, pcre_ovec, pcre_ovecsize,
+                1, buf, sizeof(buf)) < 0) {
+            return 0;
+        }
+        if (ByteExtractStringUint64(secs, 10, 0, buf) < 0) {
+            return 0;
+        }
+    }
+    if (n == 4) {
+        /* Extract microseconds. */
+        if (pcre_copy_substring(filename, pcre_ovec, pcre_ovecsize,
+                3, buf, sizeof(buf)) < 0) {
+            return 0;
+        }
+        if (ByteExtractStringUint32(usecs, 10, 0, buf) < 0) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+static TmEcode PcapLogInitRingBuffer(PcapLogData *pl)
+{
+    char pattern[PATH_MAX];
+
+    SCLogInfo("Initializing PCAP ring buffer for %s/%s.",
+        pl->dir, pl->prefix);
+
+    strlcpy(pattern, pl->dir, PATH_MAX);
+    if (pattern[strlen(pattern) - 1] != '/') {
+        strlcat(pattern, "/", PATH_MAX);
+    }
+    if (pl->mode == LOGMODE_MULTI) {
+        for (int i = 0; i < pl->filename_part_cnt; i++) {
+            char *part = pl->filename_parts[i];
+            if (part == NULL || strlen(part) == 0) {
+                continue;
+            }
+            if (part[0] != '%' || strlen(part) < 2) {
+                strlcat(pattern, part, PATH_MAX);
+                continue;
+            }
+            switch (part[1]) {
+                case 'i':
+                    SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "Thread ID not allowed inring buffer mode.");
+                    return TM_ECODE_FAILED;
+                case 'n': {
+                    char tmp[PATH_MAX];
+                    snprintf(tmp, PATH_MAX, "%"PRIu32, pl->thread_number);
+                    strlcat(pattern, tmp, PATH_MAX);
+                    break;
+                }
+                case 't':
+                    strlcat(pattern, "*", PATH_MAX);
+                    break;
+                default:
+                    SCLogError(SC_ERR_INVALID_ARGUMENT,
+                        "Unsupported format character: %%%s", part);
+                    return TM_ECODE_FAILED;
+            }
+        }
+    } else {
+        strlcat(pattern, pl->prefix, PATH_MAX);
+        strlcat(pattern, ".*", PATH_MAX);
+    }
+
+    char *basename = strrchr(pattern, '/');
+    *basename++ = '\0';
+
+    /* Pattern is now just the directory name. */
+    DIR *dir = opendir(pattern);
+    if (dir == NULL) {
+        SCLogWarning(SC_ERR_DIR_OPEN, "Failed to open directory %s: %s",
+            pattern, strerror(errno));
+        return TM_ECODE_FAILED;
+    }
+
+    for (;;) {
+        struct dirent *entry = readdir(dir);
+        if (entry == NULL) {
+            break;
+        }
+        if (fnmatch(basename, entry->d_name, 0) != 0) {
+            continue;
+        }
+
+        uint64_t secs = 0;
+        uint32_t usecs = 0;
+
+        if (!PcapLogGetTimeOfFile(entry->d_name, &secs, &usecs)) {
+            /* Failed to get time stamp out of file name. Not necessarily a
+             * failure as the file might just not be a pcap log file. */
+            continue;
+        }
+
+        PcapFileName *pf = SCCalloc(sizeof(*pf), 1);
+        if (unlikely(pf == NULL)) {
+            goto fail;
+        }
+        char path[PATH_MAX];
+        snprintf(path, PATH_MAX - 1, "%s/%s", pattern, entry->d_name);
+        if ((pf->filename = SCStrdup(path)) == NULL) {
+            goto fail;
+        }
+        if ((pf->dirname = SCStrdup(pattern)) == NULL) {
+            goto fail;
+        }
+        pf->secs = secs;
+        pf->usecs = usecs;
+
+        if (TAILQ_EMPTY(&pl->pcap_file_list)) {
+            TAILQ_INSERT_TAIL(&pl->pcap_file_list, pf, next);
+        } else {
+            /* Ordered insert. */
+            PcapFileName *it = NULL;
+            TAILQ_FOREACH(it, &pl->pcap_file_list, next) {
+                if (pf->secs < it->secs) {
+                    break;
+                } else if (pf->secs == it->secs && pf->usecs < it->usecs) {
+                    break;
+                }
+            }
+            if (it == NULL) {
+                TAILQ_INSERT_TAIL(&pl->pcap_file_list, pf, next);
+            } else {
+                TAILQ_INSERT_BEFORE(it, pf, next);
+            }
+        }
+        pl->file_cnt++;
+        continue;
+
+    fail:
+        if (pf != NULL) {
+            if (pf->filename != NULL) {
+                SCFree(pf->filename);
+            }
+            if (pf->dirname != NULL) {
+                SCFree(pf->dirname);
+            }
+            SCFree(pf);
+        }
+        break;
+    }
+
+    if (pl->file_cnt > pl->max_files) {
+        PcapFileName *pf = TAILQ_FIRST(&pl->pcap_file_list);
+        while (pf != NULL && pl->file_cnt > pl->max_files) {
+            SCLogDebug("Removing PCAP file %s", pf->filename);
+            if (remove(pf->filename) != 0) {
+                SCLogWarning(SC_WARN_REMOVE_FILE,
+                    "Failed to remove PCAP file %s: %s", pf->filename,
+                    strerror(errno));
+            }
+            TAILQ_REMOVE(&pl->pcap_file_list, pf, next);
+            pf = TAILQ_FIRST(&pl->pcap_file_list);
+            pl->file_cnt--;
+        }
+    }
+
+    closedir(dir);
+
+    /* For some reason file count is initialized at one, instead of 0. */
+    SCLogNotice("Ring buffer initialized with %d files.", pl->file_cnt - 1);
+
+    return TM_ECODE_OK;
+}
+#endif /* INIT_RING_BUFFER */
+
 static TmEcode PcapLogDataInit(ThreadVars *t, void *initdata, void **data)
 {
     if (initdata == NULL) {
@@ -493,7 +708,9 @@ static TmEcode PcapLogDataInit(ThreadVars *t, void *initdata, void **data)
     td->pcap_log->pkt_cnt = 0;
     td->pcap_log->pcap_dead_handle = NULL;
     td->pcap_log->pcap_dumper = NULL;
-    td->pcap_log->file_cnt = 1;
+    if (td->pcap_log->file_cnt < 1) {
+        td->pcap_log->file_cnt = 1;
+    }
 
     struct timeval ts;
     memset(&ts, 0x00, sizeof(struct timeval));
@@ -510,6 +727,16 @@ static TmEcode PcapLogDataInit(ThreadVars *t, void *initdata, void **data)
     SCMutexUnlock(&pl->plog_lock);
 
     *data = (void *)td;
+
+    if (pl->max_files && (pl->mode == LOGMODE_MULTI || pl->threads == 1)) {
+#ifdef INIT_RING_BUFFER
+        if (PcapLogInitRingBuffer(td->pcap_log) == TM_ECODE_FAILED) {
+            return TM_ECODE_FAILED;
+        }
+#else
+        SCLogInfo("Unable to initialize ring buffer on this platform.");
+#endif /* INIT_RING_BUFFER */
+    }
 
     return TM_ECODE_OK;
 }
@@ -538,6 +765,27 @@ static void StatsMerge(PcapLogData *dst, PcapLogData *src)
     dst->profile_unlock.cnt += src->profile_unlock.cnt;
 
     dst->profile_data_size += src->profile_data_size;
+}
+
+static void PcapLogDataFree(PcapLogData *pl)
+{
+
+    PcapFileName *pf;
+    while ((pf = TAILQ_FIRST(&pl->pcap_file_list)) != NULL) {
+        TAILQ_REMOVE(&pl->pcap_file_list, pf, next);
+        PcapFileNameFree(pf);
+    }
+    if (pl == g_pcap_data) {
+        for (int i = 0; i < MAX_TOKS; i++) {
+            if (pl->filename_parts[i] != NULL) {
+                SCFree(pl->filename_parts[i]);
+            }
+        }
+    }
+    SCFree(pl->h);
+    SCFree(pl->filename);
+    SCFree(pl->prefix);
+    SCFree(pl);
 }
 
 /**
@@ -572,6 +820,12 @@ static TmEcode PcapLogDataDeinit(ThreadVars *t, void *thread_data)
             pl->reported = 1;
         }
     }
+
+    if (pl != g_pcap_data) {
+        PcapLogDataFree(pl);
+    }
+
+    SCFree(td);
     return TM_ECODE_OK;
 }
 
@@ -667,6 +921,9 @@ error:
  * */
 static OutputCtx *PcapLogInitCtx(ConfNode *conf)
 {
+    const char *pcre_errbuf;
+    int pcre_erroffset;
+
     PcapLogData *pl = SCMalloc(sizeof(PcapLogData));
     if (unlikely(pl == NULL)) {
         SCLogError(SC_ERR_MEM_ALLOC, "Failed to allocate Memory for PcapLogData");
@@ -692,6 +949,19 @@ static OutputCtx *PcapLogInitCtx(ConfNode *conf)
     TAILQ_INIT(&pl->pcap_file_list);
 
     SCMutexInit(&pl->plog_lock, NULL);
+
+    /* Initialize PCREs. */
+    pcre_timestamp_code = pcre_compile(timestamp_pattern, 0, &pcre_errbuf,
+        &pcre_erroffset, NULL);
+    if (pcre_timestamp_code == NULL) {
+        FatalError(SC_ERR_PCRE_COMPILE,
+            "Failed to compile \"%s\" at offset %"PRIu32": %s",
+            timestamp_pattern, pcre_erroffset, pcre_errbuf);
+    }
+    pcre_timestamp_extra = pcre_study(pcre_timestamp_code, 0, &pcre_errbuf);
+    if (pcre_timestamp_extra == NULL) {
+        FatalError(SC_ERR_PCRE_STUDY, "Fail to study pcre: %s", pcre_errbuf);
+    }
 
     /* conf params */
 
@@ -894,7 +1164,8 @@ static void PcapLogFileDeInitCtx(OutputCtx *output_ctx)
     TAILQ_FOREACH(pf, &pl->pcap_file_list, next) {
         SCLogDebug("PCAP files left at exit: %s\n", pf->filename);
     }
-
+    PcapLogDataFree(pl);
+    SCFree(output_ctx);
     return;
 }
 

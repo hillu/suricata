@@ -45,8 +45,10 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine.h"
 
 #include "detect-modbus.h"
+#include "detect-engine-modbus.h"
 
 #include "util-debug.h"
 
@@ -404,7 +406,6 @@ void DetectModbusRegister(void)
     sigmatch_table[DETECT_AL_MODBUS].name          = "modbus";
     sigmatch_table[DETECT_AL_MODBUS].Match         = NULL;
     sigmatch_table[DETECT_AL_MODBUS].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_AL_MODBUS].alproto       = ALPROTO_MODBUS;
     sigmatch_table[DETECT_AL_MODBUS].Setup         = DetectModbusSetup;
     sigmatch_table[DETECT_AL_MODBUS].Free          = DetectModbusFree;
     sigmatch_table[DETECT_AL_MODBUS].RegisterTests = DetectModbusRegisterTests;
@@ -413,11 +414,16 @@ void DetectModbusRegister(void)
             &function_parse_regex, &function_parse_regex_study);
     DetectSetupParseRegexes(PARSE_REGEX_ACCESS,
             &access_parse_regex, &access_parse_regex_study);
+
+    DetectAppLayerInspectEngineRegister(ALPROTO_MODBUS, SIG_FLAG_TOSERVER,
+            DETECT_SM_LIST_MODBUS_MATCH,
+            DetectEngineInspectModbus);
+    DetectAppLayerInspectEngineRegister(ALPROTO_MODBUS, SIG_FLAG_TOCLIENT,
+            DETECT_SM_LIST_MODBUS_MATCH,
+            DetectEngineInspectModbus);
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
-#include "detect-engine.h"
-
 #include "util-unittest.h"
 
 /** \test Signature containing a function. */
@@ -450,7 +456,7 @@ static int DetectModbusTest01(void)
     modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
 
     if (modbus->function != 1) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, modbus->function);
+        printf("expected function %d, got %" PRIu8 ": ", 1, modbus->function);
         goto end;
     }
 
@@ -494,8 +500,8 @@ static int DetectModbusTest02(void)
     modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
 
     if ((modbus->function != 8) || (*modbus->subfunction != 4)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, modbus->function);
-        printf("expected subfunction %" PRIu8 ", got %" PRIu16 ": ", 4, *modbus->subfunction);
+        printf("expected function %d, got %" PRIu8 ": ", 1, modbus->function);
+        printf("expected subfunction %d, got %" PRIu16 ": ", 4, *modbus->subfunction);
         goto end;
     }
 
@@ -539,7 +545,7 @@ static int DetectModbusTest03(void)
     modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
 
     if (modbus->category != MODBUS_CAT_RESERVED) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", MODBUS_CAT_RESERVED, modbus->category);
+        printf("expected function %d, got %" PRIu8 ": ", MODBUS_CAT_RESERVED, modbus->category);
         goto end;
     }
 
@@ -585,7 +591,7 @@ static int DetectModbusTest04(void)
     modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
 
     if (modbus->category != category) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", ~MODBUS_CAT_PUBLIC_ASSIGNED, modbus->category);
+        printf("expected function %u, got %" PRIu8 ": ", ~MODBUS_CAT_PUBLIC_ASSIGNED, modbus->category);
         goto end;
     }
 
@@ -629,7 +635,7 @@ static int DetectModbusTest05(void)
     modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
 
     if (modbus->type != MODBUS_TYP_READ) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", MODBUS_TYP_READ, modbus->type);
+        printf("expected function %d, got %" PRIu8 ": ", MODBUS_TYP_READ, modbus->type);
         goto end;
     }
 
@@ -724,8 +730,8 @@ static int DetectModbusTest07(void)
         ((*modbus->address).mode != mode) ||
         ((*modbus->address).min != 1000)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected mode %" PRIu8 ", got %" PRIu16 ": ", mode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 1000, (*modbus->address).min);
+        printf("expected mode %u, got %u: ", mode, (*modbus->address).mode);
+        printf("expected address %d, got %" PRIu16 ": ", 1000, (*modbus->address).min);
         goto end;
     }
 
@@ -774,8 +780,8 @@ static int DetectModbusTest08(void)
         ((*modbus->address).mode != mode) ||
         ((*modbus->address).min != 500)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected mode %" PRIu8 ", got %" PRIu16 ": ", mode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->address).min);
+        printf("expected mode %d, got %u: ", mode, (*modbus->address).mode);
+        printf("expected address %u, got %" PRIu16 ": ", 500, (*modbus->address).min);
         goto end;
     }
 
@@ -828,11 +834,11 @@ static int DetectModbusTest09(void)
         ((*modbus->data).min != 500)   ||
         ((*modbus->data).max != 1000)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected address mode %" PRIu8 ", got %" PRIu16 ": ", addressMode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->address).min);
-        printf("expected value mode %" PRIu8 ", got %" PRIu16 ": ", valueMode, (*modbus->data).mode);
-        printf("expected min value %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->data).min);
-        printf("expected max value %" PRIu8 ", got %" PRIu16 ": ", 1000, (*modbus->data).max);
+        printf("expected address mode %u, got %u: ", addressMode, (*modbus->address).mode);
+        printf("expected address %d, got %" PRIu16 ": ", 500, (*modbus->address).min);
+        printf("expected value mode %u, got %u: ", valueMode, (*modbus->data).mode);
+        printf("expected min value %d, got %" PRIu16 ": ", 500, (*modbus->data).min);
+        printf("expected max value %d, got %" PRIu16 ": ", 1000, (*modbus->data).max);
         goto end;
     }
 

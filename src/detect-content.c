@@ -56,7 +56,7 @@ void DetectContentRegister (void)
 {
     sigmatch_table[DETECT_CONTENT].name = "content";
     sigmatch_table[DETECT_CONTENT].desc = "match on payload content";
-    sigmatch_table[DETECT_CONTENT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Content";
+    sigmatch_table[DETECT_CONTENT].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#content";
     sigmatch_table[DETECT_CONTENT].Match = NULL;
     sigmatch_table[DETECT_CONTENT].Setup = DetectContentSetup;
     sigmatch_table[DETECT_CONTENT].Free  = DetectContentFree;
@@ -291,8 +291,7 @@ void DetectContentPrint(DetectContentData *cd)
         SCLogDebug("DetectContentData \"cd\" is NULL");
         return;
     }
-    char *tmpstr=SCMalloc(sizeof(char) * cd->content_len + 1);
-
+    char *tmpstr = SCMalloc(sizeof(char) * cd->content_len + 1);
     if (tmpstr != NULL) {
         for (i = 0; i < cd->content_len; i++) {
             if (isprint(cd->content[i]))
@@ -318,19 +317,20 @@ void DetectContentPrint(DetectContentData *cd)
     SCLogDebug("flags: %u ", cd->flags);
     SCLogDebug("negated: %s ", cd->flags & DETECT_CONTENT_NEGATED ? "true" : "false");
     SCLogDebug("relative match next: %s ", cd->flags & DETECT_CONTENT_RELATIVE_NEXT ? "true" : "false");
-    if (cd->replace && cd->replace_len) {
-        char *tmpstr=SCMalloc(sizeof(char) * cd->replace_len + 1);
 
-        if (tmpstr != NULL) {
+    if (cd->replace && cd->replace_len) {
+        char *tmprstr = SCMalloc(sizeof(char) * cd->replace_len + 1);
+
+        if (tmprstr != NULL) {
             for (i = 0; i < cd->replace_len; i++) {
                 if (isprint(cd->replace[i]))
-                    tmpstr[i] = cd->replace[i];
+                    tmprstr[i] = cd->replace[i];
                 else
-                    tmpstr[i] = '.';
+                    tmprstr[i] = '.';
             }
-            tmpstr[i] = '\0';
-            SCLogDebug("Replace: \"%s\"", tmpstr);
-            SCFree(tmpstr);
+            tmprstr[i] = '\0';
+            SCLogDebug("Replace: \"%s\"", tmprstr);
+            SCFree(tmprstr);
         } else {
             SCLogDebug("Replace: ");
             for (i = 0; i < cd->replace_len; i++)

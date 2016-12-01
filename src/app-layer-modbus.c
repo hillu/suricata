@@ -43,6 +43,7 @@
 #include "util-misc.h"
 
 #include "stream.h"
+#include "stream-tcp.h"
 
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
@@ -51,6 +52,7 @@
 #include "app-layer-detect-proto.h"
 
 #include "conf.h"
+#include "conf-yaml-loader.h"
 #include "decode.h"
 
 SCEnumCharMap modbus_decoder_event_table[ ] = {
@@ -163,7 +165,11 @@ typedef struct ModbusHeader_ ModbusHeader;
 /* Modbus Default unreplied Modbus requests are considered a flood */
 #define MODBUS_CONFIG_DEFAULT_REQUEST_FLOOD 500
 
+/* Modbus default stream reassembly depth */
+#define MODBUS_CONFIG_DEFAULT_STREAM_DEPTH 0
+
 static uint32_t request_flood = MODBUS_CONFIG_DEFAULT_REQUEST_FLOOD;
+static uint32_t stream_depth = MODBUS_CONFIG_DEFAULT_STREAM_DEPTH;
 
 int ModbusStateGetEventInfo(const char *event_name, int *event_id, AppLayerEventType *event_type) {
     *event_id = SCMapEnumNameToValue(event_name, modbus_decoder_event_table);
@@ -1463,7 +1469,8 @@ void RegisterModbusParsers(void)
             }
         }
 
-        ConfNode *p = ConfGetNode("app-layer.protocols.modbus.request-flood");
+        ConfNode *p = NULL;
+        p = ConfGetNode("app-layer.protocols.modbus.request-flood");
         if (p != NULL) {
             uint32_t value;
             if (ParseSizeStringU32(p->val, &value) < 0) {
@@ -1473,6 +1480,17 @@ void RegisterModbusParsers(void)
             }
         }
         SCLogConfig("Modbus request flood protection level: %u", request_flood);
+
+        p = ConfGetNode("app-layer.protocols.modbus.stream-depth");
+        if (p != NULL) {
+            uint32_t value;
+            if (ParseSizeStringU32(p->val, &value) < 0) {
+                SCLogError(SC_ERR_MODBUS_CONFIG, "invalid value for stream-depth %s", p->val);
+            } else {
+                stream_depth = value;
+            }
+        }
+        SCLogConfig("Modbus stream depth: %u", stream_depth);
     } else {
 #ifndef AFLFUZZ_APPLAYER
         SCLogConfig("Protocol detection and parser disabled for %s protocol.", proto_name);
@@ -1506,6 +1524,8 @@ void RegisterModbusParsers(void)
         AppLayerParserRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_MODBUS, ModbusStateGetEventInfo);
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_MODBUS, STREAM_TOSERVER);
+
+        AppLayerParserSetStreamDepth(IPPROTO_TCP, ALPROTO_MODBUS, stream_depth);
     } else {
         SCLogConfig("Parsed disabled for %s protocol. Protocol detection" "still on.", proto_name);
     }
@@ -1718,20 +1738,22 @@ static int ModbusParserTest01(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    readCoilsReq, sizeof(readCoilsReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, readCoilsReq,
+                                sizeof(readCoilsReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -1740,26 +1762,26 @@ static int ModbusParserTest01(void) {
     }
 
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
-
     if ((tx->function != 1) || (tx->read.address != 0x7890) || (tx->read.quantity != 19)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, tx->function);
-        printf("expected address %" PRIu8 ", got %" PRIu8 ": ", 0x7890, tx->read.address);
-        printf("expected quantity %" PRIu8 ", got %" PRIu8 ": ", 19, tx->read.quantity);
+        printf("expected function %d, got %" PRIu8 ": ", 1, tx->function);
+        printf("expected address %d, got %" PRIu16 ": ", 0x7890, tx->read.address);
+        printf("expected quantity %d, got %" PRIu16 ": ", 19, tx->read.quantity);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                    readCoilsRsp, sizeof(readCoilsRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, readCoilsRsp,
+                            sizeof(readCoilsRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -1783,20 +1805,22 @@ static int ModbusParserTest02(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    writeMultipleRegistersReq, sizeof(writeMultipleRegistersReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, writeMultipleRegistersReq,
+                                sizeof(writeMultipleRegistersReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -1808,27 +1832,28 @@ static int ModbusParserTest02(void) {
 
     if ((tx->function != 16) || (tx->write.address != 0x01) || (tx->write.quantity != 2) ||
         (tx->write.count != 4) || (tx->data[0] != 0x000A) || (tx->data[1] != 0x0102)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
-        printf("expected write address %" PRIu8 ", got %" PRIu8 ": ", 0x01, tx->write.address);
-        printf("expected write quantity %" PRIu8 ", got %" PRIu8 ": ", 2, tx->write.quantity);
-        printf("expected write count %" PRIu8 ", got %" PRIu8 ": ", 4, tx->write.count);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x000A, tx->data[0]);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x0102, tx->data[1]);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
+        printf("expected write address %d, got %" PRIu16 ": ", 0x01, tx->write.address);
+        printf("expected write quantity %d, got %" PRIu16 ": ", 2, tx->write.quantity);
+        printf("expected write count %d, got %" PRIu8 ": ", 4, tx->write.count);
+        printf("expected data %d, got %" PRIu16 ": ", 0x000A, tx->data[0]);
+        printf("expected data %d, got %" PRIu16 ": ", 0x0102, tx->data[1]);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                            writeMultipleRegistersRsp, sizeof(writeMultipleRegistersRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, writeMultipleRegistersRsp,
+                            sizeof(writeMultipleRegistersRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -1887,15 +1912,17 @@ static int ModbusParserTest03(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                readWriteMultipleRegistersReq, sizeof(readWriteMultipleRegistersReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER,
+                                readWriteMultipleRegistersReq,
+                                sizeof(readWriteMultipleRegistersReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -1908,30 +1935,31 @@ static int ModbusParserTest03(void) {
     if ((tx->function != 23) || (tx->read.address != 0x03) || (tx->read.quantity != 6) ||
         (tx->write.address != 0x0E) || (tx->write.quantity != 3) || (tx->write.count != 6) ||
         (tx->data[0] != 0x1234) || (tx->data[1] != 0x5678) || (tx->data[2] != 0x9ABC)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 23, tx->function);
-        printf("expected read address %" PRIu8 ", got %" PRIu8 ": ", 0x03, tx->read.address);
-        printf("expected read quantity %" PRIu8 ", got %" PRIu8 ": ", 6, tx->read.quantity);
-        printf("expected write address %" PRIu8 ", got %" PRIu8 ": ", 0x0E, tx->write.address);
-        printf("expected write quantity %" PRIu8 ", got %" PRIu8 ": ", 3, tx->write.quantity);
-        printf("expected write count %" PRIu8 ", got %" PRIu8 ": ", 6, tx->write.count);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x1234, tx->data[0]);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x5678, tx->data[1]);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x9ABC, tx->data[2]);
+        printf("expected function %d, got %" PRIu8 ": ", 23, tx->function);
+        printf("expected read address %d, got %" PRIu16 ": ", 0x03, tx->read.address);
+        printf("expected read quantity %d, got %" PRIu16 ": ", 6, tx->read.quantity);
+        printf("expected write address %d, got %" PRIu16 ": ", 0x0E, tx->write.address);
+        printf("expected write quantity %d, got %" PRIu16 ": ", 3, tx->write.quantity);
+        printf("expected write count %d, got %" PRIu8 ": ", 6, tx->write.count);
+        printf("expected data %d, got %" PRIu16 ": ", 0x1234, tx->data[0]);
+        printf("expected data %d, got %" PRIu16 ": ", 0x5678, tx->data[1]);
+        printf("expected data %d, got %" PRIu16 ": ", 0x9ABC, tx->data[2]);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                readWriteMultipleRegistersRsp, sizeof(readWriteMultipleRegistersRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, readWriteMultipleRegistersRsp,
+                            sizeof(readWriteMultipleRegistersRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -1970,20 +1998,22 @@ static int ModbusParserTest04(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                        forceListenOnlyMode, sizeof(forceListenOnlyMode));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, forceListenOnlyMode,
+                                sizeof(forceListenOnlyMode));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -1994,8 +2024,8 @@ static int ModbusParserTest04(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 8) || (tx->subFunction != 4)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 8, tx->function);
-        printf("expected sub-function %" PRIu8 ", got %" PRIu8 ": ", 0x04, tx->subFunction);
+        printf("expected function %d, got %" PRIu8 ": ", 8, tx->function);
+        printf("expected sub-function %d, got %" PRIu16 ": ", 0x04, tx->subFunction);
         goto end;
     }
 
@@ -2054,15 +2084,16 @@ static int ModbusParserTest05(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                invalidProtocolIdReq, sizeof(invalidProtocolIdReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, invalidProtocolIdReq,
+                                sizeof(invalidProtocolIdReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2140,15 +2171,16 @@ static int ModbusParserTest06(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                    readCoilsRsp, sizeof(readCoilsRsp));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOCLIENT, readCoilsRsp,
+                                sizeof(readCoilsRsp));
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2226,16 +2258,17 @@ static int ModbusParserTest07(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    invalidLengthWriteMultipleRegistersReq,
-                                    sizeof(invalidLengthWriteMultipleRegistersReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER,
+                                invalidLengthWriteMultipleRegistersReq,
+                                sizeof(invalidLengthWriteMultipleRegistersReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2313,15 +2346,16 @@ static int ModbusParserTest08(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    readCoilsReq, sizeof(readCoilsReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, readCoilsReq,
+                                sizeof(readCoilsReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2332,24 +2366,25 @@ static int ModbusParserTest08(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 1) || (tx->read.address != 0x7890) || (tx->read.quantity != 19)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, tx->function);
-        printf("expected address %" PRIu8 ", got %" PRIu8 ": ", 0x7890, tx->read.address);
-        printf("expected quantity %" PRIu8 ", got %" PRIu8 ": ", 19, tx->read.quantity);
+        printf("expected function %d, got %" PRIu8 ": ", 1, tx->function);
+        printf("expected address %d, got %" PRIu16 ": ", 0x7890, tx->read.address);
+        printf("expected quantity %d, got %" PRIu16 ": ", 19, tx->read.quantity);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                readCoilsErrorRsp, sizeof(readCoilsErrorRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, readCoilsErrorRsp,
+                            sizeof(readCoilsErrorRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -2391,28 +2426,29 @@ static int ModbusParserTest09(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    input, input_len - part2_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, input, input_len - part2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                        input, input_len);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOSERVER, input, input_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2423,9 +2459,9 @@ static int ModbusParserTest09(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 1) || (tx->read.address != 0x7890) || (tx->read.quantity != 19)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, tx->function);
-        printf("expected address %" PRIu8 ", got %" PRIu8 ": ", 0x7890, tx->read.address);
-        printf("expected quantity %" PRIu8 ", got %" PRIu8 ": ", 19, tx->read.quantity);
+        printf("expected function %d, got %" PRIu8 ": ", 1, tx->function);
+        printf("expected address %d, got %" PRIu16 ": ", 0x7890, tx->read.address);
+        printf("expected quantity %d, got %" PRIu16 ": ", 19, tx->read.quantity);
         goto end;
     }
 
@@ -2433,26 +2469,26 @@ static int ModbusParserTest09(void) {
     part2_len = 10;
     input = readCoilsRsp;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                input, input_len - part2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, input, input_len - part2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                input, input_len);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, input, input_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -2486,20 +2522,21 @@ static int ModbusParserTest10(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    input, input_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, input, input_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2508,7 +2545,7 @@ static int ModbusParserTest10(void) {
     }
 
     if (modbus_state->transaction_max !=2) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 2, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 2, modbus_state->transaction_max);
         goto end;
     }
 
@@ -2516,12 +2553,12 @@ static int ModbusParserTest10(void) {
 
     if ((tx->function != 16) || (tx->write.address != 0x01) || (tx->write.quantity != 2) ||
         (tx->write.count != 4) || (tx->data[0] != 0x000A) || (tx->data[1] != 0x0102)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
-        printf("expected write address %" PRIu8 ", got %" PRIu8 ": ", 0x01, tx->write.address);
-        printf("expected write quantity %" PRIu8 ", got %" PRIu8 ": ", 2, tx->write.quantity);
-        printf("expected write count %" PRIu8 ", got %" PRIu8 ": ", 4, tx->write.count);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x000A, tx->data[0]);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x0102, tx->data[1]);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
+        printf("expected write address %d, got %" PRIu16 ": ", 0x01, tx->write.address);
+        printf("expected write quantity %d, got %" PRIu16 ": ", 2, tx->write.quantity);
+        printf("expected write count %d, got %" PRIu8 ": ", 4, tx->write.count);
+        printf("expected data %d, got %" PRIu16 ": ", 0x000A, tx->data[0]);
+        printf("expected data %d, got %" PRIu16 ": ", 0x0102, tx->data[1]);
         goto end;
     }
 
@@ -2535,15 +2572,15 @@ static int ModbusParserTest10(void) {
     memcpy(input, readCoilsRsp, sizeof(readCoilsRsp));
     memcpy(input + sizeof(readCoilsRsp), writeMultipleRegistersRsp, sizeof(writeMultipleRegistersRsp));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                input, sizeof(input_len));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, input, sizeof(input_len));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     result = 1;
 end:
@@ -2602,16 +2639,17 @@ static int ModbusParserTest11(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    exceededLengthWriteMultipleRegistersReq,
-                                    sizeof(exceededLengthWriteMultipleRegistersReq) + 65523 /* header.length - 7 */ * sizeof(uint8_t));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER,
+                                exceededLengthWriteMultipleRegistersReq,
+                                sizeof(exceededLengthWriteMultipleRegistersReq) + 65523 * sizeof(uint8_t));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2689,16 +2727,17 @@ static int ModbusParserTest12(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    invalidLengthPDUWriteMultipleRegistersReq,
-                                    sizeof(invalidLengthPDUWriteMultipleRegistersReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER,
+                                invalidLengthPDUWriteMultipleRegistersReq,
+                                sizeof(invalidLengthPDUWriteMultipleRegistersReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2741,20 +2780,22 @@ static int ModbusParserTest13(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    maskWriteRegisterReq, sizeof(maskWriteRegisterReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, maskWriteRegisterReq,
+                                sizeof(maskWriteRegisterReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2765,24 +2806,25 @@ static int ModbusParserTest13(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 22) || (tx->data[0] != 0x00F2) || (tx->data[1] != 0x0025)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
-        printf("expected And_Mask %" PRIu8 ", got %" PRIu8 ": ", 0x00F2, tx->data[0]);
-        printf("expected Or_Mask %" PRIu8 ", got %" PRIu8 ": ", 0x0025, tx->data[1]);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
+        printf("expected And_Mask %d, got %" PRIu16 ": ", 0x00F2, tx->data[0]);
+        printf("expected Or_Mask %d, got %" PRIu16 ": ", 0x0025, tx->data[1]);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                maskWriteRegisterRsp, sizeof(maskWriteRegisterRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, maskWriteRegisterRsp,
+                            sizeof(maskWriteRegisterRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -2806,20 +2848,22 @@ static int ModbusParserTest14(void) {
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
 
+    FLOW_INITIALIZE(&f);
     f.protoctx  = (void *)&ssn;
     f.proto     = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    writeSingleRegisterReq, sizeof(writeSingleRegisterReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, writeSingleRegisterReq,
+                                sizeof(writeSingleRegisterReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2830,24 +2874,25 @@ static int ModbusParserTest14(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 6) || (tx->write.address != 0x0001) || (tx->data[0] != 0x0003)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
-        printf("expected write address %" PRIu8 ", got %" PRIu8 ": ", 0x01, tx->write.address);
-        printf("expected data %" PRIu8 ", got %" PRIu8 ": ", 0x03, tx->data[0]);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
+        printf("expected write address %d, got %" PRIu16 ": ", 0x01, tx->write.address);
+        printf("expected data %d, got %" PRIu16 ": ", 0x03, tx->data[0]);
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                writeSingleRegisterRsp, sizeof(writeSingleRegisterRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, writeSingleRegisterRsp,
+                            sizeof(writeSingleRegisterRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -2906,16 +2951,16 @@ static int ModbusParserTest15(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                    invalidMaskWriteRegisterReq,
-                                    sizeof(invalidMaskWriteRegisterReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER, invalidMaskWriteRegisterReq,
+                                sizeof(invalidMaskWriteRegisterReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -2926,7 +2971,7 @@ static int ModbusParserTest15(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if (tx->function != 22) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
         goto end;
     }
 
@@ -2938,18 +2983,19 @@ static int ModbusParserTest15(void) {
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                maskWriteRegisterRsp, sizeof(maskWriteRegisterRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, maskWriteRegisterRsp,
+                            sizeof(maskWriteRegisterRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -3015,15 +3061,17 @@ static int ModbusParserTest16(void) {
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
-                                invalidWriteSingleRegisterReq, sizeof(invalidWriteSingleRegisterReq));
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                                STREAM_TOSERVER,
+                                invalidWriteSingleRegisterReq,
+                                sizeof(invalidWriteSingleRegisterReq));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     ModbusState    *modbus_state = f.alstate;
     if (modbus_state == NULL) {
@@ -3034,8 +3082,8 @@ static int ModbusParserTest16(void) {
     ModbusTransaction *tx = ModbusGetTx(modbus_state, 0);
 
     if ((tx->function != 6) || (tx->write.address != 0x0001)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 16, tx->function);
-        printf("expected write address %" PRIu8 ", got %" PRIu8 ": ", 0x01, tx->write.address);
+        printf("expected function %d, got %" PRIu8 ": ", 16, tx->function);
+        printf("expected write address %d, got %" PRIu16 ": ", 0x01, tx->write.address);
         goto end;
     }
 
@@ -3047,18 +3095,19 @@ static int ModbusParserTest16(void) {
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
-                                writeSingleRegisterRsp, sizeof(writeSingleRegisterRsp));
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS,
+                            STREAM_TOCLIENT, writeSingleRegisterRsp,
+                            sizeof(writeSingleRegisterRsp));
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     if (modbus_state->transaction_max !=1) {
-        printf("expected transaction_max %" PRIu8 ", got %" PRIu64 ": ", 1, modbus_state->transaction_max);
+        printf("expected transaction_max %d, got %" PRIu64 ": ", 1, modbus_state->transaction_max);
         goto end;
     }
 
@@ -3076,6 +3125,111 @@ end:
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
     return result;
+}
+
+/** \test Checks if stream_depth is correct */
+static int ModbusParserTest17(void) {
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    Flow f;
+    TcpSession ssn;
+
+    FAIL_IF(alp_tctx == NULL);
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx  = (void *)&ssn;
+    f.proto     = IPPROTO_TCP;
+
+    StreamTcpInitConfig(TRUE);
+
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
+                                readCoilsReq, sizeof(readCoilsReq));
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(f.alstate == NULL);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
+                            readCoilsRsp, sizeof(readCoilsRsp));
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    PASS;
+}
+
+/*/ \test Checks if stream depth is correct over 2 TCP packets */
+static int ModbusParserTest18(void) {
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    Flow f;
+    TcpSession ssn;
+
+    uint32_t    input_len = sizeof(readCoilsReq), part2_len = 3;
+    uint8_t     *input = readCoilsReq;
+
+    FAIL_IF(alp_tctx == NULL);
+
+    memset(&f, 0, sizeof(f));
+    memset(&ssn, 0, sizeof(ssn));
+
+    FLOW_INITIALIZE(&f);
+    f.protoctx  = (void *)&ssn;
+    f.proto     = IPPROTO_TCP;
+
+    StreamTcpInitConfig(TRUE);
+
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
+                                input, input_len - part2_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOSERVER,
+                            input, input_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    FAIL_IF(f.alstate == NULL);
+
+    input_len = sizeof(readCoilsRsp);
+    part2_len = 10;
+    input = readCoilsRsp;
+
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
+                            input, input_len - part2_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_MODBUS, STREAM_TOCLIENT,
+                            input, input_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
+
+    FAIL_IF(((TcpSession *)(f.protoctx))->reassembly_depth != MODBUS_CONFIG_DEFAULT_STREAM_DEPTH);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
+    PASS;
 }
 #endif /* UNITTESTS */
 
@@ -3113,5 +3267,9 @@ void ModbusParserRegisterTests(void) {
                    ModbusParserTest15);
     UtRegisterTest("ModbusParserTest16 - Modbus invalid Write single register request",
                    ModbusParserTest16);
+    UtRegisterTest("ModbusParserTest17 - Modbus stream depth",
+                   ModbusParserTest17);
+    UtRegisterTest("ModbusParserTest18 - Modbus stream depth in 2 TCP packets",
+                   ModbusParserTest18);
 #endif /* UNITTESTS */
 }

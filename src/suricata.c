@@ -73,38 +73,6 @@
 #include "conf.h"
 #include "conf-yaml-loader.h"
 
-#include "alert-fastlog.h"
-#include "alert-unified2-alert.h"
-#include "alert-debuglog.h"
-#include "alert-prelude.h"
-#include "alert-syslog.h"
-#include "output-json-alert.h"
-
-#include "output-json-flow.h"
-#include "output-json-netflow.h"
-#include "log-droplog.h"
-#include "output-json-drop.h"
-#include "log-httplog.h"
-#include "output-json-http.h"
-#include "log-dnslog.h"
-#include "output-json-dns.h"
-#include "log-tlslog.h"
-#include "log-tlsstore.h"
-#include "output-json-tls.h"
-#include "output-json-ssh.h"
-#include "log-pcap.h"
-#include "log-file.h"
-#include "output-json-file.h"
-#include "output-json-smtp.h"
-#include "output-json-stats.h"
-#include "log-filestore.h"
-#include "log-tcp-data.h"
-#include "log-stats.h"
-
-#include "output-json.h"
-
-#include "output-json-template.h"
-
 #include "stream-tcp.h"
 
 #include "source-nfq.h"
@@ -153,6 +121,8 @@
 #include "app-layer-smtp.h"
 #include "app-layer-smb.h"
 #include "app-layer-modbus.h"
+#include "app-layer-enip.h"
+#include "app-layer-dnp3.h"
 
 #include "util-decode-der.h"
 #include "util-radix-tree.h"
@@ -186,13 +156,6 @@
 #include "reputation.h"
 
 #include "output.h"
-#include "output-lua.h"
-
-#include "output-packet.h"
-#include "output-tx.h"
-#include "output-file.h"
-#include "output-filedata.h"
-#include "output-streaming.h"
 
 #include "util-privs.h"
 
@@ -206,6 +169,8 @@
 #include "util-mpm-hs.h"
 #include "util-storage.h"
 #include "host-storage.h"
+
+#include "util-lua.h"
 
 /*
  * we put this here, because we only use it here in main.
@@ -303,7 +268,11 @@ static void SignalHandlerSigterm(/*@unused@*/ int sig)
  */
 static void SignalHandlerSigusr2(int sig)
 {
-    sigusr2_count = 1;
+    if (sigusr2_count < 16) {
+        sigusr2_count++;
+    } else {
+        SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Too many USR2 signals pending, ignoring new ones!");
+    }
 }
 
 /**
@@ -367,17 +336,12 @@ void GlobalInits()
     CreateLowercaseTable();
 }
 
-/* XXX hack: make sure threads can stop the engine by calling this
-   function. Purpose: pcap file mode needs to be able to tell the
-   engine the file eof is reached. */
+/** \brief make sure threads can stop the engine by calling this
+ *  function. Purpose: pcap file mode needs to be able to tell the
+ *  engine the file eof is reached. */
 void EngineStop(void)
 {
     suricata_ctl_flags |= SURICATA_STOP;
-}
-
-void EngineKill(void)
-{
-    suricata_ctl_flags |= SURICATA_KILL;
 }
 
 /**
@@ -391,14 +355,14 @@ void EngineDone(void)
     suricata_ctl_flags |= SURICATA_DONE;
 }
 
-static int SetBpfString(int optind, char *argv[])
+static int SetBpfString(int argc, char *argv[])
 {
     char *bpf_filter = NULL;
     uint32_t bpf_len = 0;
     int tmpindex = 0;
 
     /* attempt to parse remaining args as bpf filter */
-    tmpindex = optind;
+    tmpindex = argc;
     while(argv[tmpindex] != NULL) {
         bpf_len+=strlen(argv[tmpindex]) + 1;
         tmpindex++;
@@ -872,69 +836,14 @@ void RegisterAllModules()
     /* respond-reject */
     TmModuleRespondRejectRegister();
 
-    TmModuleLuaLogRegister();
-    /* fast log */
-    TmModuleAlertFastLogRegister();
-    /* debug log */
-    TmModuleAlertDebugLogRegister();
-    /* prelue log */
-    TmModuleAlertPreludeRegister();
-    /* syslog log */
-    TmModuleAlertSyslogRegister();
-    /* unified2 log */
-    TmModuleUnified2AlertRegister();
-    /* drop log */
-    TmModuleLogDropLogRegister();
-    TmModuleJsonDropLogRegister();
-    /* json log */
-    TmModuleOutputJsonRegister();
-    /* email logs */
-    TmModuleJsonSmtpLogRegister();
-    /* http log */
-    TmModuleLogHttpLogRegister();
-    TmModuleJsonHttpLogRegister();
-    /* tls log */
-    TmModuleLogTlsLogRegister();
-    TmModuleJsonTlsLogRegister();
-    TmModuleLogTlsStoreRegister();
-    /* ssh */
-    TmModuleJsonSshLogRegister();
-    /* pcap log */
-    TmModulePcapLogRegister();
-    /* file log */
-    TmModuleLogFileLogRegister();
-    TmModuleJsonFileLogRegister();
-    TmModuleLogFilestoreRegister();
-    /* dns log */
-    TmModuleLogDnsLogRegister();
-    TmModuleJsonDnsLogRegister();
-    /* tcp streaming data */
-    TmModuleLogTcpDataLogRegister();
-    /* log stats */
-    TmModuleLogStatsLogRegister();
-
-    TmModuleJsonAlertLogRegister();
-    /* flow/netflow */
-    TmModuleJsonFlowLogRegister();
-    TmModuleJsonNetFlowLogRegister();
-    /* json stats */
-    TmModuleJsonStatsLogRegister();
-
-    /* Template JSON logger. */
-    TmModuleJsonTemplateLogRegister();
-
     /* log api */
-    TmModulePacketLoggerRegister();
-    TmModuleTxLoggerRegister();
-    TmModuleFileLoggerRegister();
-    TmModuleFiledataLoggerRegister();
-    TmModuleStreamingLoggerRegister();
+    TmModuleLoggerRegister();
     TmModuleStatsLoggerRegister();
+
     TmModuleDebugList();
     /* nflog */
     TmModuleReceiveNFLOGRegister();
     TmModuleDecodeNFLOGRegister();
-
 }
 
 static TmEcode LoadYamlConfig(SCInstance *suri)
@@ -952,12 +861,12 @@ static TmEcode LoadYamlConfig(SCInstance *suri)
     SCReturnInt(TM_ECODE_OK);
 }
 
-static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
+static TmEcode ParseInterfacesList(int runmode, char *pcap_dev)
 {
     SCEnter();
 
     /* run the selected runmode */
-    if (run_mode == RUNMODE_PCAP_DEV) {
+    if (runmode == RUNMODE_PCAP_DEV) {
         if (strlen(pcap_dev) == 0) {
             int ret = LiveBuildDeviceList("pcap");
             if (ret == 0) {
@@ -966,7 +875,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
             }
         }
 #ifdef HAVE_MPIPE
-    } else if (run_mode == RUNMODE_TILERA_MPIPE) {
+    } else if (runmode == RUNMODE_TILERA_MPIPE) {
         if (strlen(pcap_dev)) {
             if (ConfSetFinal("mpipe.single_mpipe_dev", pcap_dev) != 1) {
                 fprintf(stderr, "ERROR: Failed to set mpipe.single_mpipe_dev\n");
@@ -980,7 +889,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
             }
         }
 #endif
-    } else if (run_mode == RUNMODE_PFRING) {
+    } else if (runmode == RUNMODE_PFRING) {
         /* FIXME add backward compat support */
         /* iface has been set on command line */
         if (strlen(pcap_dev)) {
@@ -993,7 +902,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
             LiveBuildDeviceList("pfring");
         }
 #ifdef HAVE_AF_PACKET
-    } else if (run_mode == RUNMODE_AFP_DEV) {
+    } else if (runmode == RUNMODE_AFP_DEV) {
         /* iface has been set on command line */
         if (strlen(pcap_dev)) {
             if (ConfSetFinal("af-packet.live-interface", pcap_dev) != 1) {
@@ -1013,7 +922,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
         }
 #endif
 #ifdef HAVE_NETMAP
-    } else if (run_mode == RUNMODE_NETMAP) {
+    } else if (runmode == RUNMODE_NETMAP) {
         /* iface has been set on command line */
         if (strlen(pcap_dev)) {
             if (ConfSetFinal("netmap.live-interface", pcap_dev) != 1) {
@@ -1033,7 +942,7 @@ static TmEcode ParseInterfacesList(int run_mode, char *pcap_dev)
         }
 #endif
 #ifdef HAVE_NFLOG
-    } else if (run_mode == RUNMODE_NFLOG) {
+    } else if (runmode == RUNMODE_NFLOG) {
         int ret = LiveBuildDeviceListCustom("nflog", "group");
         if (ret == 0) {
             SCLogError(SC_ERR_INITIALIZATION, "No group found in config for nflog");
@@ -1120,21 +1029,21 @@ static void SCPrintElapsedTime(SCInstance *suri)
     SCLogInfo("time elapsed %.3fs", (float)milliseconds/(float)1000);
 }
 
-static int ParseCommandLineAfpacket(SCInstance *suri, const char *optarg)
+static int ParseCommandLineAfpacket(SCInstance *suri, const char *in_arg)
 {
 #ifdef HAVE_AF_PACKET
     if (suri->run_mode == RUNMODE_UNKNOWN) {
         suri->run_mode = RUNMODE_AFP_DEV;
-        if (optarg) {
-            LiveRegisterDevice(optarg);
+        if (in_arg) {
+            LiveRegisterDevice(in_arg);
             memset(suri->pcap_dev, 0, sizeof(suri->pcap_dev));
-            strlcpy(suri->pcap_dev, optarg, sizeof(suri->pcap_dev));
+            strlcpy(suri->pcap_dev, in_arg, sizeof(suri->pcap_dev));
         }
     } else if (suri->run_mode == RUNMODE_AFP_DEV) {
         SCLogWarning(SC_WARN_PCAP_MULTI_DEV_EXPERIMENTAL, "using "
                 "multiple devices to get packets is experimental.");
-        if (optarg) {
-            LiveRegisterDevice(optarg);
+        if (in_arg) {
+            LiveRegisterDevice(in_arg);
         } else {
             SCLogInfo("Multiple af-packet option without interface on each is useless");
         }
@@ -1153,31 +1062,31 @@ static int ParseCommandLineAfpacket(SCInstance *suri, const char *optarg)
 #endif
 }
 
-static int ParseCommandLinePcapLive(SCInstance *suri, const char *optarg)
+static int ParseCommandLinePcapLive(SCInstance *suri, const char *in_arg)
 {
     memset(suri->pcap_dev, 0, sizeof(suri->pcap_dev));
 
-    if (optarg != NULL) {
+    if (in_arg != NULL) {
         /* some windows shells require escaping of the \ in \Device. Otherwise
          * the backslashes are stripped. We put them back here. */
-        if (strlen(optarg) > 9 && strncmp(optarg, "DeviceNPF", 9) == 0) {
-            snprintf(suri->pcap_dev, sizeof(suri->pcap_dev), "\\Device\\NPF%s", optarg+9);
+        if (strlen(in_arg) > 9 && strncmp(in_arg, "DeviceNPF", 9) == 0) {
+            snprintf(suri->pcap_dev, sizeof(suri->pcap_dev), "\\Device\\NPF%s", in_arg+9);
         } else {
-            strlcpy(suri->pcap_dev, optarg, sizeof(suri->pcap_dev));
+            strlcpy(suri->pcap_dev, in_arg, sizeof(suri->pcap_dev));
             PcapTranslateIPToDevice(suri->pcap_dev, sizeof(suri->pcap_dev));
         }
 
-        if (strcmp(suri->pcap_dev, optarg) != 0) {
-            SCLogInfo("translated %s to pcap device %s", optarg, suri->pcap_dev);
+        if (strcmp(suri->pcap_dev, in_arg) != 0) {
+            SCLogInfo("translated %s to pcap device %s", in_arg, suri->pcap_dev);
         } else if (strlen(suri->pcap_dev) > 0 && isdigit((unsigned char)suri->pcap_dev[0])) {
-            SCLogError(SC_ERR_PCAP_TRANSLATE, "failed to find a pcap device for IP %s", optarg);
+            SCLogError(SC_ERR_PCAP_TRANSLATE, "failed to find a pcap device for IP %s", in_arg);
             return TM_ECODE_FAILED;
         }
     }
 
     if (suri->run_mode == RUNMODE_UNKNOWN) {
         suri->run_mode = RUNMODE_PCAP_DEV;
-        if (optarg) {
+        if (in_arg) {
             LiveRegisterDevice(suri->pcap_dev);
         }
     } else if (suri->run_mode == RUNMODE_PCAP_DEV) {
@@ -1234,7 +1143,8 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
         {"netmap", optional_argument, 0, 0},
         {"pcap", optional_argument, 0, 0},
         {"simulate-ips", 0, 0 , 0},
-        {"afl-rules", required_argument, 0 , 0},
+
+        /* AFL app-layer options. */
         {"afl-http-request", required_argument, 0 , 0},
         {"afl-http", required_argument, 0 , 0},
         {"afl-tls-request", required_argument, 0 , 0},
@@ -1251,10 +1161,18 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
         {"afl-smb", required_argument, 0 , 0},
         {"afl-modbus-request", required_argument, 0 , 0},
         {"afl-modbus", required_argument, 0 , 0},
+        {"afl-enip-request", required_argument, 0 , 0},
+        {"afl-enip", required_argument, 0 , 0},
         {"afl-mime", required_argument, 0 , 0},
+        {"afl-dnp3-request", required_argument, 0, 0},
+        {"afl-dnp3", required_argument, 0, 0},
 
+        /* Other AFL options. */
+        {"afl-rules", required_argument, 0 , 0},
+        {"afl-mime", required_argument, 0 , 0},
         {"afl-decoder-ppp", required_argument, 0 , 0},
         {"afl-der", required_argument, 0, 0},
+
 #ifdef BUILD_UNIX_SOCKET
         {"unix-socket", optional_argument, 0, 0},
 #endif
@@ -1521,6 +1439,24 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
                 AppLayerParserSetup();
                 RegisterModbusParsers();
                 exit(AppLayerParserFromFile(ALPROTO_MODBUS, optarg));
+            } else if(strcmp((long_opts[option_index]).name, "afl-enip-request") == 0) {
+                //printf("arg: //%s\n", optarg);
+                AppLayerParserSetup();
+                RegisterENIPTCPParsers();
+                exit(AppLayerParserRequestFromFile(ALPROTO_ENIP, optarg));
+            } else if(strcmp((long_opts[option_index]).name, "afl-enip") == 0) {
+                //printf("arg: //%s\n", optarg);
+                AppLayerParserSetup();
+                RegisterENIPTCPParsers();
+                exit(AppLayerParserFromFile(ALPROTO_ENIP, optarg));
+            } else if(strcmp((long_opts[option_index]).name, "afl-dnp3-request") == 0) {
+                AppLayerParserSetup();
+                RegisterDNP3Parsers();
+                exit(AppLayerParserRequestFromFile(ALPROTO_DNP3, optarg));
+            } else if(strcmp((long_opts[option_index]).name, "afl-dnp3") == 0) {
+                AppLayerParserSetup();
+                RegisterDNP3Parsers();
+                exit(AppLayerParserFromFile(ALPROTO_DNP3, optarg));
 #endif
 #ifdef AFLFUZZ_MIME
             } else if(strcmp((long_opts[option_index]).name, "afl-mime") == 0) {
@@ -2287,6 +2223,13 @@ static int PostConfLoadedSetup(SCInstance *suri)
 {
     char *hostmode = NULL;
 
+    /* do this as early as possible #1577 #1955 */
+#ifdef HAVE_LUAJIT
+    if (LuajitSetupStatesPool() != 0) {
+        SCReturnInt(TM_ECODE_FAILED);
+    }
+#endif
+
     /* load the pattern matchers */
     MpmTableSetup();
 #ifdef __SC_CUDA_SUPPORT__
@@ -2294,6 +2237,25 @@ static int PostConfLoadedSetup(SCInstance *suri)
 #endif
     SpmTableSetup();
 
+    int disable_offloading;
+    if (ConfGetBool("capture.disable-offloading", &disable_offloading) == 0)
+        disable_offloading = 1;
+    if (disable_offloading) {
+        LiveSetOffloadDisable();
+    } else {
+        LiveSetOffloadWarn();
+    }
+
+    if (suri->checksum_validation == -1) {
+        char *cv = NULL;
+        if (ConfGet("capture.checksum-validation", &cv) == 1) {
+            if (strcmp(cv, "none") == 0) {
+                suri->checksum_validation = 0;
+            } else if (strcmp(cv, "all") == 0) {
+                suri->checksum_validation = 1;
+            }
+        }
+    }
     switch (suri->checksum_validation) {
         case 0:
             ConfSet("stream.checksum-validation", "0");
@@ -2410,13 +2372,9 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
     AppLayerHtpNeedFileInspection();
 
-    DetectEngineRegisterAppInspectionEngines();
-
     StorageFinalize();
 
     TmModuleRunInit();
-
-    PcapLogProfileSetup();
 
     if (MayDaemonize(suri) != TM_ECODE_OK)
         SCReturnInt(TM_ECODE_FAILED);
@@ -2427,7 +2385,7 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
 #ifdef HAVE_NSS
     if (suri->run_mode != RUNMODE_CONF_TEST) {
-        /* init NSS for md5 */
+        /* init NSS for hashing */
         PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 0);
         NSS_NoDB_Init(NULL);
     }
@@ -2475,7 +2433,6 @@ int main(int argc, char **argv)
     /* By default use IDS mode, but if nfq or ipfw
      * are specified, IPS mode will overwrite this */
     EngineModeSetIDS();
-
 
 #ifdef OS_WIN32
     /* service initialization */
@@ -2615,9 +2572,7 @@ int main(int argc, char **argv)
     /* In Unix socket runmode, Flow manager is started on demand */
     if (suri.run_mode != RUNMODE_UNIX_SOCKET) {
         /* Spawn the unix socket manager thread */
-        int unix_socket = 0;
-        if (ConfGetBool("unix-command.enabled", &unix_socket) != 1)
-            unix_socket = 0;
+        int unix_socket = ConfUnixSocketIsEnable();
         if (unix_socket == 1) {
             UnixManagerThreadSpawn(0);
 #ifdef BUILD_UNIX_SOCKET
@@ -2667,13 +2622,11 @@ int main(int argc, char **argv)
 
     int engine_retval = EXIT_SUCCESS;
     while(1) {
-        if (sigterm_count) {
-            suricata_ctl_flags |= SURICATA_KILL;
-        } else if (sigint_count) {
+        if (sigterm_count || sigint_count) {
             suricata_ctl_flags |= SURICATA_STOP;
         }
 
-        if (suricata_ctl_flags & (SURICATA_KILL | SURICATA_STOP)) {
+        if (suricata_ctl_flags & SURICATA_STOP) {
             SCLogNotice("Signal Received.  Stopping engine.");
             break;
         }
@@ -2838,7 +2791,9 @@ int main(int argc, char **argv)
     CudaHandlerFreeProfiles();
 #endif
     ConfDeInit();
-
+#ifdef HAVE_LUAJIT
+    LuajitFreeStatesPool();
+#endif
     SCLogDeInitLogModule();
     DetectParseFreeRegexes();
     exit(engine_retval);

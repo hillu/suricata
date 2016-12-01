@@ -112,9 +112,11 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	alert-prelude.$(OBJEXT) alert-syslog.$(OBJEXT) \
 	alert-unified2-alert.$(OBJEXT) app-layer.$(OBJEXT) \
 	app-layer-dcerpc.$(OBJEXT) app-layer-dcerpc-udp.$(OBJEXT) \
-	app-layer-detect-proto.$(OBJEXT) \
+	app-layer-detect-proto.$(OBJEXT) app-layer-dnp3.$(OBJEXT) \
+	app-layer-dnp3-objects.$(OBJEXT) \
 	app-layer-dns-common.$(OBJEXT) app-layer-dns-tcp.$(OBJEXT) \
-	app-layer-dns-udp.$(OBJEXT) app-layer-events.$(OBJEXT) \
+	app-layer-dns-udp.$(OBJEXT) app-layer-enip.$(OBJEXT) \
+	app-layer-enip-common.$(OBJEXT) app-layer-events.$(OBJEXT) \
 	app-layer-ftp.$(OBJEXT) app-layer-htp-body.$(OBJEXT) \
 	app-layer-htp.$(OBJEXT) app-layer-htp-file.$(OBJEXT) \
 	app-layer-htp-libhtp.$(OBJEXT) app-layer-htp-mem.$(OBJEXT) \
@@ -142,32 +144,36 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-app-layer-protocol.$(OBJEXT) detect-asn1.$(OBJEXT) \
 	detect-base64-data.$(OBJEXT) detect-base64-decode.$(OBJEXT) \
 	detect-byte-extract.$(OBJEXT) detect-bytejump.$(OBJEXT) \
-	detect-bytetest.$(OBJEXT) detect.$(OBJEXT) \
-	detect-classtype.$(OBJEXT) detect-content.$(OBJEXT) \
-	detect-csum.$(OBJEXT) detect-dce-iface.$(OBJEXT) \
-	detect-dce-opnum.$(OBJEXT) detect-dce-stub-data.$(OBJEXT) \
-	detect-depth.$(OBJEXT) detect-detection-filter.$(OBJEXT) \
-	detect-distance.$(OBJEXT) detect-dns-query.$(OBJEXT) \
-	detect-tls-sni.$(OBJEXT) detect-dsize.$(OBJEXT) \
+	detect-bytetest.$(OBJEXT) detect-bypass.$(OBJEXT) \
+	detect.$(OBJEXT) detect-classtype.$(OBJEXT) \
+	detect-content.$(OBJEXT) detect-csum.$(OBJEXT) \
+	detect-dce-iface.$(OBJEXT) detect-dce-opnum.$(OBJEXT) \
+	detect-dce-stub-data.$(OBJEXT) detect-depth.$(OBJEXT) \
+	detect-detection-filter.$(OBJEXT) detect-distance.$(OBJEXT) \
+	detect-dnp3.$(OBJEXT) detect-dns-query.$(OBJEXT) \
+	detect-tls-sni.$(OBJEXT) detect-tls-cert-issuer.$(OBJEXT) \
+	detect-tls-cert-subject.$(OBJEXT) detect-dsize.$(OBJEXT) \
 	detect-engine-address.$(OBJEXT) \
 	detect-engine-address-ipv4.$(OBJEXT) \
 	detect-engine-address-ipv6.$(OBJEXT) \
 	detect-engine-alert.$(OBJEXT) detect-engine-analyzer.$(OBJEXT) \
-	detect-engine-apt-event.$(OBJEXT) detect-engine.$(OBJEXT) \
+	detect-engine.$(OBJEXT) \
 	detect-engine-content-inspection.$(OBJEXT) \
 	detect-engine-dcepayload.$(OBJEXT) detect-engine-dns.$(OBJEXT) \
 	detect-engine-tls.$(OBJEXT) detect-engine-modbus.$(OBJEXT) \
-	detect-engine-event.$(OBJEXT) detect-engine-file.$(OBJEXT) \
+	detect-engine-enip.$(OBJEXT) detect-engine-event.$(OBJEXT) \
+	detect-engine-file.$(OBJEXT) \
 	detect-engine-filedata-smtp.$(OBJEXT) \
 	detect-engine-hcbd.$(OBJEXT) detect-engine-hcd.$(OBJEXT) \
 	detect-engine-hhd.$(OBJEXT) detect-engine-hhhd.$(OBJEXT) \
 	detect-engine-hmd.$(OBJEXT) detect-engine-hrhd.$(OBJEXT) \
 	detect-engine-hrhhd.$(OBJEXT) detect-engine-hrud.$(OBJEXT) \
-	detect-engine-hrl.$(OBJEXT) detect-engine-hsbd.$(OBJEXT) \
-	detect-engine-hscd.$(OBJEXT) detect-engine-hsmd.$(OBJEXT) \
-	detect-engine-hua.$(OBJEXT) detect-engine-iponly.$(OBJEXT) \
-	detect-engine-loader.$(OBJEXT) detect-engine-mpm.$(OBJEXT) \
-	detect-engine-payload.$(OBJEXT) detect-engine-port.$(OBJEXT) \
+	detect-engine-hsbd.$(OBJEXT) detect-engine-hscd.$(OBJEXT) \
+	detect-engine-hsmd.$(OBJEXT) detect-engine-hua.$(OBJEXT) \
+	detect-engine-iponly.$(OBJEXT) detect-engine-loader.$(OBJEXT) \
+	detect-engine-mpm.$(OBJEXT) detect-engine-payload.$(OBJEXT) \
+	detect-engine-port.$(OBJEXT) detect-engine-prefilter.$(OBJEXT) \
+	detect-engine-prefilter-common.$(OBJEXT) \
 	detect-engine-proto.$(OBJEXT) detect-engine-profile.$(OBJEXT) \
 	detect-engine-siggroup.$(OBJEXT) \
 	detect-engine-sigorder.$(OBJEXT) detect-engine-state.$(OBJEXT) \
@@ -175,7 +181,8 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-engine-threshold.$(OBJEXT) detect-engine-uri.$(OBJEXT) \
 	detect-fast-pattern.$(OBJEXT) detect-file-data.$(OBJEXT) \
 	detect-fileext.$(OBJEXT) detect-filemagic.$(OBJEXT) \
-	detect-filemd5.$(OBJEXT) detect-filename.$(OBJEXT) \
+	detect-filemd5.$(OBJEXT) detect-filesha1.$(OBJEXT) \
+	detect-filesha256.$(OBJEXT) detect-filename.$(OBJEXT) \
 	detect-filesize.$(OBJEXT) detect-filestore.$(OBJEXT) \
 	detect-flags.$(OBJEXT) detect-flowbits.$(OBJEXT) \
 	detect-flow.$(OBJEXT) detect-flowint.$(OBJEXT) \
@@ -187,6 +194,8 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-http-hh.$(OBJEXT) detect-http-hrh.$(OBJEXT) \
 	detect-http-method.$(OBJEXT) detect-http-raw-header.$(OBJEXT) \
 	detect-http-raw-uri.$(OBJEXT) \
+	detect-http-request-line.$(OBJEXT) \
+	detect-http-response-line.$(OBJEXT) \
 	detect-http-server-body.$(OBJEXT) \
 	detect-http-stat-code.$(OBJEXT) detect-http-stat-msg.$(OBJEXT) \
 	detect-http-ua.$(OBJEXT) detect-http-uri.$(OBJEXT) \
@@ -201,36 +210,39 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-nocase.$(OBJEXT) detect-offset.$(OBJEXT) \
 	detect-parse.$(OBJEXT) detect-pcre.$(OBJEXT) \
 	detect-pkt-data.$(OBJEXT) detect-pktvar.$(OBJEXT) \
-	detect-priority.$(OBJEXT) detect-rawbytes.$(OBJEXT) \
-	detect-reference.$(OBJEXT) detect-replace.$(OBJEXT) \
-	detect-rev.$(OBJEXT) detect-rpc.$(OBJEXT) \
-	detect-sameip.$(OBJEXT) detect-seq.$(OBJEXT) \
-	detect-sid.$(OBJEXT) detect-ssh-proto-version.$(OBJEXT) \
+	detect-prefilter.$(OBJEXT) detect-priority.$(OBJEXT) \
+	detect-rawbytes.$(OBJEXT) detect-reference.$(OBJEXT) \
+	detect-replace.$(OBJEXT) detect-rev.$(OBJEXT) \
+	detect-rpc.$(OBJEXT) detect-sameip.$(OBJEXT) \
+	detect-seq.$(OBJEXT) detect-sid.$(OBJEXT) \
+	detect-ssh-proto-version.$(OBJEXT) \
 	detect-ssh-software-version.$(OBJEXT) \
 	detect-ssl-state.$(OBJEXT) detect-ssl-version.$(OBJEXT) \
 	detect-stream_size.$(OBJEXT) detect-tag.$(OBJEXT) \
 	detect-template.$(OBJEXT) detect-template-buffer.$(OBJEXT) \
 	detect-threshold.$(OBJEXT) detect-tls.$(OBJEXT) \
+	detect-tls-cert-validity.$(OBJEXT) \
 	detect-tls-version.$(OBJEXT) detect-tos.$(OBJEXT) \
 	detect-ttl.$(OBJEXT) detect-uricontent.$(OBJEXT) \
 	detect-urilen.$(OBJEXT) detect-window.$(OBJEXT) \
 	detect-within.$(OBJEXT) detect-modbus.$(OBJEXT) \
-	detect-xbits.$(OBJEXT) flow-bit.$(OBJEXT) flow.$(OBJEXT) \
-	flow-hash.$(OBJEXT) flow-manager.$(OBJEXT) \
-	flow-queue.$(OBJEXT) flow-storage.$(OBJEXT) \
-	flow-timeout.$(OBJEXT) flow-util.$(OBJEXT) flow-var.$(OBJEXT) \
-	flow-worker.$(OBJEXT) host.$(OBJEXT) host-bit.$(OBJEXT) \
-	host-queue.$(OBJEXT) host-storage.$(OBJEXT) \
-	host-timeout.$(OBJEXT) ippair.$(OBJEXT) ippair-bit.$(OBJEXT) \
-	ippair-queue.$(OBJEXT) ippair-storage.$(OBJEXT) \
-	ippair-timeout.$(OBJEXT) log-dnslog.$(OBJEXT) \
-	log-droplog.$(OBJEXT) log-file.$(OBJEXT) \
+	detect-xbits.$(OBJEXT) detect-cipservice.$(OBJEXT) \
+	flow-bit.$(OBJEXT) flow.$(OBJEXT) flow-hash.$(OBJEXT) \
+	flow-manager.$(OBJEXT) flow-queue.$(OBJEXT) \
+	flow-storage.$(OBJEXT) flow-timeout.$(OBJEXT) \
+	flow-util.$(OBJEXT) flow-var.$(OBJEXT) flow-worker.$(OBJEXT) \
+	host.$(OBJEXT) host-bit.$(OBJEXT) host-queue.$(OBJEXT) \
+	host-storage.$(OBJEXT) host-timeout.$(OBJEXT) ippair.$(OBJEXT) \
+	ippair-bit.$(OBJEXT) ippair-queue.$(OBJEXT) \
+	ippair-storage.$(OBJEXT) ippair-timeout.$(OBJEXT) \
+	log-dnslog.$(OBJEXT) log-droplog.$(OBJEXT) log-file.$(OBJEXT) \
 	log-filestore.$(OBJEXT) log-httplog.$(OBJEXT) \
 	log-pcap.$(OBJEXT) log-stats.$(OBJEXT) log-tcp-data.$(OBJEXT) \
 	log-tlslog.$(OBJEXT) log-tlsstore.$(OBJEXT) output.$(OBJEXT) \
 	output-file.$(OBJEXT) output-filedata.$(OBJEXT) \
 	output-flow.$(OBJEXT) output-json-alert.$(OBJEXT) \
-	output-json-dns.$(OBJEXT) output-json-drop.$(OBJEXT) \
+	output-json-dns.$(OBJEXT) output-json-dnp3.$(OBJEXT) \
+	output-json-dnp3-objects.$(OBJEXT) output-json-drop.$(OBJEXT) \
 	output-json-email-common.$(OBJEXT) output-json-file.$(OBJEXT) \
 	output-json-flow.$(OBJEXT) output-json-netflow.$(OBJEXT) \
 	output-json-http.$(OBJEXT) output-json-smtp.$(OBJEXT) \
@@ -275,15 +287,17 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-debug.$(OBJEXT) util-debug-filters.$(OBJEXT) \
 	util-decode-asn1.$(OBJEXT) util-decode-der.$(OBJEXT) \
 	util-decode-der-get.$(OBJEXT) util-decode-mime.$(OBJEXT) \
-	util-device.$(OBJEXT) util-enum.$(OBJEXT) util-error.$(OBJEXT) \
-	util-file.$(OBJEXT) util-fix_checksum.$(OBJEXT) \
-	util-fmemopen.$(OBJEXT) util-hash.$(OBJEXT) \
-	util-hashlist.$(OBJEXT) util-hash-lookup3.$(OBJEXT) \
-	util-host-os-info.$(OBJEXT) util-host-info.$(OBJEXT) \
-	util-hyperscan.$(OBJEXT) util-ioctl.$(OBJEXT) \
-	util-ip.$(OBJEXT) util-logopenfile.$(OBJEXT) \
-	util-logopenfile-tile.$(OBJEXT) util-lua.$(OBJEXT) \
-	util-lua-common.$(OBJEXT) util-lua-dns.$(OBJEXT) \
+	util-detect-file-hash.$(OBJEXT) util-device.$(OBJEXT) \
+	util-enum.$(OBJEXT) util-error.$(OBJEXT) util-file.$(OBJEXT) \
+	util-fix_checksum.$(OBJEXT) util-fmemopen.$(OBJEXT) \
+	util-hash.$(OBJEXT) util-hashlist.$(OBJEXT) \
+	util-hash-lookup3.$(OBJEXT) util-host-os-info.$(OBJEXT) \
+	util-host-info.$(OBJEXT) util-hyperscan.$(OBJEXT) \
+	util-ioctl.$(OBJEXT) util-ip.$(OBJEXT) \
+	util-logopenfile.$(OBJEXT) util-logopenfile-tile.$(OBJEXT) \
+	util-lua.$(OBJEXT) util-luajit.$(OBJEXT) \
+	util-lua-common.$(OBJEXT) util-lua-dnp3.$(OBJEXT) \
+	util-lua-dnp3-objects.$(OBJEXT) util-lua-dns.$(OBJEXT) \
 	util-lua-http.$(OBJEXT) util-lua-tls.$(OBJEXT) \
 	util-lua-ssh.$(OBJEXT) util-lua-smtp.$(OBJEXT) \
 	util-magic.$(OBJEXT) util-memcmp.$(OBJEXT) \
@@ -292,9 +306,10 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-mpm-ac-tile.$(OBJEXT) util-mpm-ac-tile-small.$(OBJEXT) \
 	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) util-pages.$(OBJEXT) \
 	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
-	util-pool-thread.$(OBJEXT) util-print.$(OBJEXT) \
-	util-privs.$(OBJEXT) util-profiling.$(OBJEXT) \
-	util-profiling-locks.$(OBJEXT) util-profiling-rules.$(OBJEXT) \
+	util-pool-thread.$(OBJEXT) util-prefilter.$(OBJEXT) \
+	util-print.$(OBJEXT) util-privs.$(OBJEXT) \
+	util-profiling.$(OBJEXT) util-profiling-locks.$(OBJEXT) \
+	util-profiling-rules.$(OBJEXT) \
 	util-profiling-keywords.$(OBJEXT) \
 	util-profiling-rulegroups.$(OBJEXT) util-proto-name.$(OBJEXT) \
 	util-radix-tree.$(OBJEXT) util-random.$(OBJEXT) \
@@ -420,8 +435,10 @@ HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
+HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_SPHINXBUILD = @HAVE_SPHINXBUILD@
 HAVE_WGET = @HAVE_WGET@
 HTP_DIR = @HTP_DIR@
 HTP_LDADD = @HTP_LDADD@
@@ -541,6 +558,8 @@ libhs_CFLAGS = @libhs_CFLAGS@
 libhs_LIBS = @libhs_LIBS@
 libhtp_CFLAGS = @libhtp_CFLAGS@
 libhtp_LIBS = @libhtp_LIBS@
+libnetfilter_queue_CFLAGS = @libnetfilter_queue_CFLAGS@
+libnetfilter_queue_LIBS = @libnetfilter_queue_LIBS@
 libnspr_CFLAGS = @libnspr_CFLAGS@
 libnspr_LIBS = @libnspr_LIBS@
 libnss_CFLAGS = @libnss_CFLAGS@
@@ -585,9 +604,13 @@ app-layer.c app-layer.h \
 app-layer-dcerpc.c app-layer-dcerpc.h \
 app-layer-dcerpc-udp.c app-layer-dcerpc-udp.h \
 app-layer-detect-proto.c app-layer-detect-proto.h \
+app-layer-dnp3.c app-layer-dnp3.h \
+app-layer-dnp3-objects.c app-layer-dnp3-objects.h \
 app-layer-dns-common.c app-layer-dns-common.h \
 app-layer-dns-tcp.c app-layer-dns-tcp.h \
 app-layer-dns-udp.c app-layer-dns-udp.h \
+app-layer-enip.c app-layer-enip.h \
+app-layer-enip-common.c app-layer-enip-common.h \
 app-layer-events.c app-layer-events.h \
 app-layer-ftp.c app-layer-ftp.h \
 app-layer-htp-body.c app-layer-htp-body.h \
@@ -645,6 +668,7 @@ detect-base64-decode.c detect-base64-decode.h \
 detect-byte-extract.c detect-byte-extract.h \
 detect-bytejump.c detect-bytejump.h \
 detect-bytetest.c detect-bytetest.h \
+detect-bypass.c detect-bypass.h \
 detect.c detect.h \
 detect-classtype.c detect-classtype.h \
 detect-content.c detect-content.h \
@@ -655,21 +679,24 @@ detect-dce-stub-data.c detect-dce-stub-data.h \
 detect-depth.c detect-depth.h \
 detect-detection-filter.c detect-detection-filter.h \
 detect-distance.c detect-distance.h \
+detect-dnp3.c detect-dnp3.h \
 detect-dns-query.c detect-dns-query.h \
 detect-tls-sni.c detect-tls-sni.h \
+detect-tls-cert-issuer.c detect-tls-cert-issuer.h \
+detect-tls-cert-subject.c detect-tls-cert-subject.h \
 detect-dsize.c detect-dsize.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
 detect-engine-address-ipv6.c detect-engine-address-ipv6.h \
 detect-engine-alert.c detect-engine-alert.h \
 detect-engine-analyzer.c detect-engine-analyzer.h \
-detect-engine-apt-event.c detect-engine-apt-event.h \
 detect-engine.c detect-engine.h \
 detect-engine-content-inspection.c detect-engine-content-inspection.h \
 detect-engine-dcepayload.c detect-engine-dcepayload.h \
 detect-engine-dns.c detect-engine-dns.h \
 detect-engine-tls.c detect-engine-tls.h \
 detect-engine-modbus.c detect-engine-modbus.h \
+detect-engine-enip.c detect-engine-enip.h \
 detect-engine-event.c detect-engine-event.h \
 detect-engine-file.c detect-engine-file.h \
 detect-engine-filedata-smtp.c detect-engine-filedata-smtp.h \
@@ -681,7 +708,6 @@ detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hrhd.c detect-engine-hrhd.h \
 detect-engine-hrhhd.c detect-engine-hrhhd.h \
 detect-engine-hrud.c detect-engine-hrud.h \
-detect-engine-hrl.c detect-engine-hrl.h \
 detect-engine-hsbd.c detect-engine-hsbd.h \
 detect-engine-hscd.c detect-engine-hscd.h \
 detect-engine-hsmd.c detect-engine-hsmd.h \
@@ -691,6 +717,8 @@ detect-engine-loader.c detect-engine-loader.h \
 detect-engine-mpm.c detect-engine-mpm.h \
 detect-engine-payload.c detect-engine-payload.h \
 detect-engine-port.c detect-engine-port.h \
+detect-engine-prefilter.c detect-engine-prefilter.h \
+detect-engine-prefilter-common.c detect-engine-prefilter-common.h \
 detect-engine-proto.c detect-engine-proto.h \
 detect-engine-profile.c detect-engine-profile.h \
 detect-engine-siggroup.c detect-engine-siggroup.h \
@@ -705,6 +733,8 @@ detect-file-data.c detect-file-data.h \
 detect-fileext.c detect-fileext.h \
 detect-filemagic.c detect-filemagic.h \
 detect-filemd5.c detect-filemd5.h \
+detect-filesha1.c detect-filesha1.h \
+detect-filesha256.c detect-filesha256.h \
 detect-filename.c detect-filename.h \
 detect-filesize.c detect-filesize.h \
 detect-filestore.c detect-filestore.h \
@@ -727,6 +757,8 @@ detect-http-hrh.c detect-http-hrh.h \
 detect-http-method.c detect-http-method.h \
 detect-http-raw-header.c detect-http-raw-header.h \
 detect-http-raw-uri.c detect-http-raw-uri.h \
+detect-http-request-line.c detect-http-request-line.h \
+detect-http-response-line.c detect-http-response-line.h \
 detect-http-server-body.c detect-http-server-body.h \
 detect-http-stat-code.c detect-http-stat-code.h \
 detect-http-stat-msg.c detect-http-stat-msg.h \
@@ -754,6 +786,7 @@ detect-parse.c detect-parse.h \
 detect-pcre.c detect-pcre.h \
 detect-pkt-data.c detect-pkt-data.h \
 detect-pktvar.c detect-pktvar.h \
+detect-prefilter.c detect-prefilter.h \
 detect-priority.c detect-priority.h \
 detect-rawbytes.c detect-rawbytes.h \
 detect-reference.c detect-reference.h \
@@ -773,6 +806,7 @@ detect-template.c detect-template.h \
 detect-template-buffer.c detect-template-buffer.h \
 detect-threshold.c detect-threshold.h \
 detect-tls.c detect-tls.h \
+detect-tls-cert-validity.c detect-tls-cert-validity.h \
 detect-tls-version.c detect-tls-version.h \
 detect-tos.c detect-tos.h \
 detect-ttl.c detect-ttl.h \
@@ -782,6 +816,7 @@ detect-window.c detect-window.h \
 detect-within.c detect-within.h \
 detect-modbus.c detect-modbus.h \
 detect-xbits.c detect-xbits.h \
+detect-cipservice.c detect-cipservice.h \
 flow-bit.c flow-bit.h \
 flow.c flow.h \
 flow-hash.c flow-hash.h \
@@ -818,6 +853,8 @@ output-filedata.c output-filedata.h \
 output-flow.c output-flow.h \
 output-json-alert.c output-json-alert.h \
 output-json-dns.c output-json-dns.h \
+output-json-dnp3.c output-json-dnp3.h \
+output-json-dnp3-objects.c output-json-dnp3-objects.h \
 output-json-drop.c output-json-drop.h \
 output-json-email-common.c output-json-email-common.h \
 output-json-file.c output-json-file.h \
@@ -911,6 +948,7 @@ util-decode-asn1.c util-decode-asn1.h \
 util-decode-der.c util-decode-der.h \
 util-decode-der-get.c util-decode-der-get.h \
 util-decode-mime.c util-decode-mime.h \
+util-detect-file-hash.c util-detect-file-hash.h \
 util-device.c util-device.h \
 util-enum.c util-enum.h \
 util-error.c util-error.h \
@@ -928,7 +966,10 @@ util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
 util-logopenfile-tile.h util-logopenfile-tile.c \
 util-lua.c util-lua.h \
+util-luajit.c util-luajit.h \
 util-lua-common.c util-lua-common.h \
+util-lua-dnp3.c util-lua-dnp3.h \
+util-lua-dnp3-objects.c util-lua-dnp3-objects.h \
 util-lua-dns.c util-lua-dns.h \
 util-lua-http.c util-lua-http.h \
 util-lua-tls.c util-lua-tls.h \
@@ -952,6 +993,7 @@ util-path.c util-path.h \
 util-pidfile.c util-pidfile.h \
 util-pool.c util-pool.h \
 util-pool-thread.c util-pool-thread.h \
+util-prefilter.c util-prefilter.h \
 util-print.c util-print.h \
 util-privs.c util-privs.h \
 util-profiling.c util-profiling.h \
@@ -1125,9 +1167,13 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dcerpc-udp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dcerpc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-detect-proto.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dnp3-objects.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dnp3.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dns-common.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dns-tcp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-dns-udp.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-enip-common.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-enip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-events.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-ftp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/app-layer-htp-body.Po@am__quote@
@@ -1183,9 +1229,11 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-asn1.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-base64-data.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-base64-decode.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bypass.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-byte-extract.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytejump.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-bytetest.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-cipservice.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-classtype.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-content.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-csum.Po@am__quote@
@@ -1195,6 +1243,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-depth.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-detection-filter.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-distance.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-dnp3.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-dns-query.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-dsize.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-address-ipv4.Po@am__quote@
@@ -1202,10 +1251,10 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-address.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-alert.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-analyzer.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-apt-event.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-content-inspection.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-dcepayload.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-dns.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-enip.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-event.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-file.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-filedata-smtp.Po@am__quote@
@@ -1216,7 +1265,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hmd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrhhd.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hrud.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hsbd.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-hscd.Po@am__quote@
@@ -1228,6 +1276,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-mpm.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-payload.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-port.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-prefilter-common.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-prefilter.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-profile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-proto.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-siggroup.Po@am__quote@
@@ -1245,6 +1295,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filemagic.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filemd5.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filename.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filesha1.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filesha256.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filesize.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-filestore.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-flags.Po@am__quote@
@@ -1266,6 +1318,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-method.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-raw-header.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-raw-uri.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-request-line.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-response-line.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-server-body.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-stat-code.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-http-stat-msg.Po@am__quote@
@@ -1294,6 +1348,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pcre.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pkt-data.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-pktvar.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-prefilter.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-priority.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-rawbytes.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-reference.Po@am__quote@
@@ -1312,6 +1367,9 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-template-buffer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-threshold.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-cert-issuer.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-cert-subject.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-cert-validity.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-sni.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls-version.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-tls.Po@am__quote@
@@ -1357,6 +1415,8 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-filedata.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-flow.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-alert.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-dnp3-objects.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-dnp3.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-dns.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-drop.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/output-json-email-common.Po@am__quote@
@@ -1452,6 +1512,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-der-get.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-der.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-decode-mime.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-detect-file-hash.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-device.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-enum.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-error.Po@am__quote@
@@ -1469,12 +1530,15 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-logopenfile-tile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-logopenfile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-common.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-dnp3-objects.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-dnp3.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-dns.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-http.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-smtp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-ssh.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-lua.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-luajit.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-magic.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-memcmp.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-memrchr.Po@am__quote@
@@ -1490,6 +1554,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pidfile.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pool-thread.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pool.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-prefilter.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-print.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-privs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-profiling-keywords.Po@am__quote@

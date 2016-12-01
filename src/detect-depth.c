@@ -37,6 +37,7 @@
 #include "flow-var.h"
 #include "app-layer.h"
 
+#include "util-byte.h"
 #include "util-debug.h"
 
 static int DetectDepthSetup (DetectEngineCtx *, Signature *, char *);
@@ -45,7 +46,7 @@ void DetectDepthRegister (void)
 {
     sigmatch_table[DETECT_DEPTH].name = "depth";
     sigmatch_table[DETECT_DEPTH].desc = "designate how many bytes from the beginning of the payload will be checked";
-    sigmatch_table[DETECT_DEPTH].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Depth";
+    sigmatch_table[DETECT_DEPTH].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#depth";
     sigmatch_table[DETECT_DEPTH].Match = NULL;
     sigmatch_table[DETECT_DEPTH].Setup = DetectDepthSetup;
     sigmatch_table[DETECT_DEPTH].Free  = NULL;
@@ -137,11 +138,10 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
         cd->depth = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
         cd->flags |= DETECT_CONTENT_DEPTH_BE;
     } else {
-        cd->depth = (uint32_t)atoi(str);
-        if (cd->depth < cd->content_len) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "depth - %"PRIu16
-                       " smaller than content length - %"PRIu32,
-                       cd->depth, cd->content_len);
+        if (ByteExtractStringUint16(&cd->depth, 0, 0, str) != (int)strlen(str))
+        {
+            SCLogError(SC_ERR_INVALID_SIGNATURE,
+                      "invalid value for depth: %s", str);
             goto end;
         }
         /* Now update the real limit, as depth is relative to the offset */

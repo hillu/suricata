@@ -50,7 +50,7 @@ void DetectWithinRegister(void)
 {
     sigmatch_table[DETECT_WITHIN].name = "within";
     sigmatch_table[DETECT_WITHIN].desc = "indicate that this content match has to be within a certain distance of the previous content keyword match";
-    sigmatch_table[DETECT_WITHIN].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Within";
+    sigmatch_table[DETECT_WITHIN].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#within";
     sigmatch_table[DETECT_WITHIN].Match = NULL;
     sigmatch_table[DETECT_WITHIN].Setup = DetectWithinSetup;
     sigmatch_table[DETECT_WITHIN].Free  = NULL;
@@ -170,15 +170,15 @@ static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *within
         goto end;
     }
     if (prev_pm->type == DETECT_CONTENT) {
-        DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
-        if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
+        DetectContentData *prev_cd = (DetectContentData *)prev_pm->ctx;
+        if (prev_cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "previous keyword "
                        "has a fast_pattern:only; set. Can't "
                        "have relative keywords around a fast_pattern "
                        "only content");
             goto end;
         }
-        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        prev_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
     } else if (prev_pm->type == DETECT_PCRE) {
         DetectPcreData *pd = (DetectPcreData *)prev_pm->ctx;
         pd->flags |= DETECT_PCRE_RELATIVE_NEXT;

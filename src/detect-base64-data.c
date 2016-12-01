@@ -31,7 +31,7 @@ void DetectBase64DataRegister(void)
     sigmatch_table[DETECT_BASE64_DATA].desc =
         "Content match base64 decoded data.";
     sigmatch_table[DETECT_BASE64_DATA].url =
-        "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#base64_data";
+        DOC_URL DOC_VERSION "/rules/payload-keywords.html#base64-data";
     sigmatch_table[DETECT_BASE64_DATA].Setup = DetectBase64DataSetup;
     sigmatch_table[DETECT_BASE64_DATA].RegisterTests =
         DetectBase64DataRegisterTests;
@@ -77,7 +77,7 @@ int DetectBase64DataDoMatch(DetectEngineCtx *de_ctx,
         return DetectEngineContentInspection(de_ctx, det_ctx, s,
             s->sm_lists[DETECT_SM_LIST_BASE64_DATA], f, det_ctx->base64_decoded,
             det_ctx->base64_decoded_len, 0,
-            DETECT_ENGINE_CONTENT_INSPECTION_MODE_BASE64, NULL);
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
     }
 
     return 0;

@@ -300,7 +300,7 @@ TmEcode ReceiveIPFWLoop(ThreadVars *tv, void *data, void *slot)
 
         PacketCopyData(p, pkt, pktlen);
         SCLogDebug("Packet info: pkt_len: %" PRIu32 " (pkt %02x, pkt_data %02x)",
-                   GET_PKT_LEN(p), *pkt, GET_PKT_DATA(p));
+                   GET_PKT_LEN(p), *pkt, *(GET_PKT_DATA(p)));
 
         if (TmThreadsSlotProcessPkt(tv, ((TmSlot *) slot)->slot_next, p)
                 != TM_ECODE_OK) {
@@ -515,7 +515,9 @@ TmEcode DecodeIPFWThreadDeinit(ThreadVars *tv, void *data)
 TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p)
 {
     uint32_t verdict;
+#if 0
     struct pollfd IPFWpoll;
+#endif
     IPFWQueueVars *nq = NULL;
 
     SCEnter();
@@ -531,8 +533,10 @@ TmEcode IPFWSetVerdict(ThreadVars *tv, IPFWThreadVars *ptv, Packet *p)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
+#if 0
     IPFWpoll.fd = nq->fd;
     IPFWpoll.events = POLLWRNORM;
+#endif
 
     if (PACKET_TEST_ACTION(p, ACTION_DROP)) {
         verdict = IPFW_DROP;

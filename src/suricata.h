@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "3.1.3"
+#define PROG_VER "3.2"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -85,11 +85,17 @@
 #define DEFAULT_PID_BASENAME "suricata.pid"
 #define DEFAULT_PID_FILENAME DEFAULT_PID_DIR DEFAULT_PID_BASENAME
 
+#define DOC_URL "http://suricata.readthedocs.io/en/"
+
+#if defined RELEASE
+#define DOC_VERSION PROG_VER
+#else
+#define DOC_VERSION "latest"
+#endif
+
 /* runtime engine control flags */
 #define SURICATA_STOP    (1 << 0)   /**< gracefully stop the engine: process all
                                      outstanding packets first */
-#define SURICATA_KILL    (1 << 1)   /**< shut down asap, discarding outstanding
-                                     packets. */
 #define SURICATA_DONE    (1 << 2)   /**< packets capture ended */
 
 /* Engine stage/status*/
@@ -181,7 +187,6 @@ uint8_t g_u8_lowercasetable[256];
 #define u8_tolower(c) tolower((uint8_t)(c))
 
 void EngineStop(void);
-void EngineKill(void);
 void EngineDone(void);
 
 int RunmodeIsUnittests(void);
