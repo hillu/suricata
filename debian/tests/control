@@ -13,7 +13,7 @@ Test-Command: suricatasc -c "capture-mode"
 Depends: @
 Restrictions: needs-root, isolation-container
 
-Test-Command: suricatasc -c "dump-counters"
+Test-Command: sleep 10 && suricatasc -c "dump-counters"
 Depends: @
 Restrictions: needs-root, isolation-container
 
