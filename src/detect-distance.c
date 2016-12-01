@@ -52,7 +52,7 @@ void DetectDistanceRegister(void)
 {
     sigmatch_table[DETECT_DISTANCE].name = "distance";
     sigmatch_table[DETECT_DISTANCE].desc = "indicates a relation between this content keyword and the content preceding it";
-    sigmatch_table[DETECT_DISTANCE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Distance";
+    sigmatch_table[DETECT_DISTANCE].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#distance";
     sigmatch_table[DETECT_DISTANCE].Match = NULL;
     sigmatch_table[DETECT_DISTANCE].Setup = DetectDistanceSetup;
     sigmatch_table[DETECT_DISTANCE].Free  = NULL;
@@ -155,15 +155,15 @@ static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
         goto end;
     }
     if (prev_pm->type == DETECT_CONTENT) {
-        DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
-        if (cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
+        DetectContentData *prev_cd = (DetectContentData *)prev_pm->ctx;
+        if (prev_cd->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "previous keyword "
                        "has a fast_pattern:only; set. Can't "
                        "have relative keywords around a fast_pattern "
                        "only content");
             goto end;
         }
-        cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        prev_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
     } else if (prev_pm->type == DETECT_PCRE) {
         DetectPcreData *pd = (DetectPcreData *)prev_pm->ctx;
         pd->flags |= DETECT_PCRE_RELATIVE_NEXT;

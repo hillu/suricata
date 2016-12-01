@@ -53,6 +53,7 @@
 #include "app-layer-htp.h"
 #include "detect-http-uri.h"
 #include "detect-uricontent.h"
+#include "detect-engine-uri.h"
 #include "stream-tcp.h"
 
 int DetectHttpUriSetup (DetectEngineCtx *, Signature *, char *);
@@ -65,16 +66,23 @@ void DetectHttpUriRegister (void)
 {
     sigmatch_table[DETECT_AL_HTTP_URI].name = "http_uri";
     sigmatch_table[DETECT_AL_HTTP_URI].desc = "content modifier to match specifically and only on the HTTP uri-buffer";
-    sigmatch_table[DETECT_AL_HTTP_URI].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_uri-and-http_raw_uri";
+    sigmatch_table[DETECT_AL_HTTP_URI].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_uri-and-http_raw-uri";
     sigmatch_table[DETECT_AL_HTTP_URI].Match = NULL;
     sigmatch_table[DETECT_AL_HTTP_URI].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_AL_HTTP_URI].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_AL_HTTP_URI].Setup = DetectHttpUriSetup;
     sigmatch_table[DETECT_AL_HTTP_URI].Free  = NULL;
     sigmatch_table[DETECT_AL_HTTP_URI].RegisterTests = DetectHttpUriRegisterTests;
 
     sigmatch_table[DETECT_AL_HTTP_URI].flags |= SIGMATCH_NOOPT;
     sigmatch_table[DETECT_AL_HTTP_URI].flags |= SIGMATCH_PAYLOAD;
+
+    DetectMpmAppLayerRegister("http_uri", SIG_FLAG_TOSERVER,
+            DETECT_SM_LIST_UMATCH, 2,
+            PrefilterTxUriRegister);
+
+    DetectAppLayerInspectEngineRegister(ALPROTO_HTTP, SIG_FLAG_TOSERVER,
+            DETECT_SM_LIST_UMATCH,
+            DetectEngineInspectHttpUri);
 }
 
 

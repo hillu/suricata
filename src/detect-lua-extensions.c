@@ -69,8 +69,9 @@
 #include "util-lua-tls.h"
 #include "util-lua-ssh.h"
 #include "util-lua-smtp.h"
+#include "util-lua-dnp3.h"
 
-static const char luaext_key_ld[] = "suricata:luajitdata";
+static const char luaext_key_ld[] = "suricata:luadata";
 static const char luaext_key_det_ctx[] = "suricata:det_ctx";
 
 static int LuaGetFlowvar(lua_State *luastate)
@@ -80,9 +81,8 @@ static int LuaGetFlowvar(lua_State *luastate)
     Flow *f;
     FlowVar *fv;
     DetectLuaData *ld;
-    int flow_lock = 0;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -94,7 +94,7 @@ static int LuaGetFlowvar(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -120,15 +120,8 @@ static int LuaGetFlowvar(lua_State *luastate)
         return 2;
     }
 
-    /* lookup var */
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_RDLOCK(f);
-
     fv = FlowVarGet(f, idx);
     if (fv == NULL) {
-        if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-            FLOWLOCK_UNLOCK(f);
-
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow var");
         return 2;
@@ -136,9 +129,6 @@ static int LuaGetFlowvar(lua_State *luastate)
 
     LuaPushStringBuffer(luastate, (const uint8_t *)fv->data.fv_str.value,
             (size_t)fv->data.fv_str.value_len);
-
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_UNLOCK(f);
 
     return 1;
 
@@ -154,9 +144,8 @@ int LuaSetFlowvar(lua_State *luastate)
     uint8_t *buffer;
     DetectEngineThreadCtx *det_ctx;
     DetectLuaData *ld;
-    int flow_lock = 0;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -179,7 +168,7 @@ int LuaSetFlowvar(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -239,10 +228,7 @@ int LuaSetFlowvar(lua_State *luastate)
     memcpy(buffer, str, len);
     buffer[len] = '\0';
 
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FlowVarAddStr(f, idx, buffer, len);
-    else
-        FlowVarAddStrNoLock(f, idx, buffer, len);
+    FlowVarAddStr(f, idx, buffer, len);
 
     //SCLogInfo("stored:");
     //PrintRawDataFp(stdout,buffer,len);
@@ -256,10 +242,9 @@ static int LuaGetFlowint(lua_State *luastate)
     Flow *f;
     FlowVar *fv;
     DetectLuaData *ld;
-    int flow_lock = 0;
     uint32_t number;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -271,7 +256,7 @@ static int LuaGetFlowint(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -301,23 +286,14 @@ static int LuaGetFlowint(lua_State *luastate)
     }
 
     /* lookup var */
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_RDLOCK(f);
-
     fv = FlowVarGet(f, idx);
     if (fv == NULL) {
         SCLogDebug("fv NULL");
-        if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-            FLOWLOCK_UNLOCK(f);
-
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow var");
         return 2;
     }
     number = fv->data.fv_int.value;
-
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_UNLOCK(f);
 
     /* return value through luastate, as a luanumber */
     lua_pushnumber(luastate, (lua_Number)number);
@@ -334,11 +310,10 @@ int LuaSetFlowint(lua_State *luastate)
     Flow *f;
     DetectEngineThreadCtx *det_ctx;
     DetectLuaData *ld;
-    int flow_lock = 0;
     uint32_t number;
     lua_Number luanumber;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -361,7 +336,7 @@ int LuaSetFlowint(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -401,10 +376,7 @@ int LuaSetFlowint(lua_State *luastate)
         return 2;
     }
 
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FlowVarAddInt(f, idx, number);
-    else
-        FlowVarAddIntNoLock(f, idx, number);
+    FlowVarAddInt(f, idx, number);
 
     SCLogDebug("stored flow:%p idx:%u value:%u", f, idx, number);
     return 0;
@@ -417,10 +389,9 @@ static int LuaIncrFlowint(lua_State *luastate)
     Flow *f;
     FlowVar *fv;
     DetectLuaData *ld;
-    int flow_lock = 0;
     uint32_t number;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -432,7 +403,7 @@ static int LuaIncrFlowint(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -462,9 +433,6 @@ static int LuaIncrFlowint(lua_State *luastate)
     }
 
     /* lookup var */
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_RDLOCK(f);
-
     fv = FlowVarGet(f, idx);
     if (fv == NULL) {
         number = 1;
@@ -474,9 +442,6 @@ static int LuaIncrFlowint(lua_State *luastate)
             number++;
     }
     FlowVarAddIntNoLock(f, idx, number);
-
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_UNLOCK(f);
 
     /* return value through luastate, as a luanumber */
     lua_pushnumber(luastate, (lua_Number)number);
@@ -493,10 +458,9 @@ static int LuaDecrFlowint(lua_State *luastate)
     Flow *f;
     FlowVar *fv;
     DetectLuaData *ld;
-    int flow_lock = 0;
     uint32_t number;
 
-    /* need luajit data for id -> idx conversion */
+    /* need lua data for id -> idx conversion */
     lua_pushlightuserdata(luastate, (void *)&luaext_key_ld);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
     ld = lua_touserdata(luastate, -1);
@@ -508,7 +472,7 @@ static int LuaDecrFlowint(lua_State *luastate)
     }
 
     /* need flow and lock hint */
-    f = LuaStateGetFlow(luastate, &flow_lock);
+    f = LuaStateGetFlow(luastate);
     if (f == NULL) {
         lua_pushnil(luastate);
         lua_pushstring(luastate, "no flow");
@@ -538,9 +502,6 @@ static int LuaDecrFlowint(lua_State *luastate)
     }
 
     /* lookup var */
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_RDLOCK(f);
-
     fv = FlowVarGet(f, idx);
     if (fv == NULL) {
         number = 0;
@@ -551,9 +512,6 @@ static int LuaDecrFlowint(lua_State *luastate)
     }
     FlowVarAddIntNoLock(f, idx, number);
 
-    if (flow_lock == LUA_FLOW_NOT_LOCKED_BY_PARENT)
-        FLOWLOCK_UNLOCK(f);
-
     /* return value through luastate, as a luanumber */
     lua_pushnumber(luastate, (lua_Number)number);
     SCLogDebug("decremented flow:%p idx:%u value:%u", f, idx, number);
@@ -563,11 +521,11 @@ static int LuaDecrFlowint(lua_State *luastate)
 }
 
 void LuaExtensionsMatchSetup(lua_State *lua_state, DetectLuaData *ld, DetectEngineThreadCtx *det_ctx,
-        Flow *f, int flow_locked, Packet *p, uint8_t flags)
+        Flow *f, Packet *p, uint8_t flags)
 {
     SCLogDebug("det_ctx %p, f %p", det_ctx, f);
 
-    /* luajit keyword data */
+    /* lua keyword data */
     lua_pushlightuserdata(lua_state, (void *)&luaext_key_ld);
     lua_pushlightuserdata(lua_state, (void *)ld);
     lua_settable(lua_state, LUA_REGISTRYINDEX);
@@ -577,9 +535,9 @@ void LuaExtensionsMatchSetup(lua_State *lua_state, DetectLuaData *ld, DetectEngi
     lua_pushlightuserdata(lua_state, (void *)det_ctx);
     lua_settable(lua_state, LUA_REGISTRYINDEX);
 
-    LuaStateSetFlow(lua_state, f, flow_locked);
+    LuaStateSetFlow(lua_state, f);
 
-    if (det_ctx->tx_id_set && flow_locked == LUA_FLOW_LOCKED_BY_PARENT) {
+    if (det_ctx->tx_id_set) {
         if (f && f->alstate) {
             void *txptr = AppLayerParserGetTx(f->proto, f->alproto, f->alstate, det_ctx->tx_id);
             if (txptr) {
@@ -623,6 +581,7 @@ int LuaRegisterExtensions(lua_State *lua_state)
     LuaRegisterTlsFunctions(lua_state);
     LuaRegisterSshFunctions(lua_state);
     LuaRegisterSmtpFunctions(lua_state);
+    LuaRegisterDNP3Functions(lua_state);
     return 0;
 }
 

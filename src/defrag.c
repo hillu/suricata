@@ -294,6 +294,7 @@ Defrag4Reassemble(ThreadVars *tv, DefragTracker *tracker, Packet *p)
         goto error_remove_tracker;
     }
     PKT_SET_SRC(rp, PKT_SRC_DEFRAG);
+    rp->flags |= PKT_REBUILT_FRAGMENT;
     rp->recursion_level = p->recursion_level;
 
     int fragmentable_offset = 0;
@@ -705,11 +706,8 @@ DefragInsertFrag(ThreadVars *tv, DecodeThreadVars *dtv, DefragTracker *tracker, 
 
 insert:
     if (data_len - ltrim <= 0) {
-        if (af == AF_INET) {
-            ENGINE_SET_EVENT(p, IPV4_FRAG_TOO_LARGE);
-        } else {
-            ENGINE_SET_EVENT(p, IPV6_FRAG_TOO_LARGE);
-        }
+        /* Full packet has been trimmed due to the overlap policy. Overlap
+         * already set. */
         goto done;
     }
 

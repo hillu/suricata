@@ -88,10 +88,9 @@ void DetectPcreRegister (void)
 {
     sigmatch_table[DETECT_PCRE].name = "pcre";
     sigmatch_table[DETECT_PCRE].desc = "match on regular expression";
-    sigmatch_table[DETECT_PCRE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#Pcre-Perl-Compatible-Regular-Expressions";
+    sigmatch_table[DETECT_PCRE].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#pcre-perl-compatible-regular-expressions";
     sigmatch_table[DETECT_PCRE].Match = NULL;
     sigmatch_table[DETECT_PCRE].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_PCRE].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_PCRE].Setup = DetectPcreSetup;
     sigmatch_table[DETECT_PCRE].Free  = DetectPcreFree;
     sigmatch_table[DETECT_PCRE].RegisterTests  = DetectPcreRegisterTests;
@@ -818,15 +817,10 @@ static int DetectPcreParseTest01 (void)
     char *teststring = "/blah/7";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd != NULL) {
-        printf("expected NULL: got %p", pd);
-        result = 0;
-        DetectPcreFree(pd);
-    }
+    FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
     return result;
@@ -842,15 +836,11 @@ static int DetectPcreParseTest02 (void)
     char *teststring = "/blah/Ui$";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd != NULL) {
-        printf("expected NULL: got %p", pd);
-        result = 0;
-        DetectPcreFree(pd);
-    }
+    FAIL_IF_NOT_NULL(pd);
+
     DetectEngineCtxFree(de_ctx);
     return result;
 }
@@ -865,15 +855,11 @@ static int DetectPcreParseTest03 (void)
     char *teststring = "/blah/UNi";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd != NULL) {
-        printf("expected NULL: got %p", pd);
-        result = 0;
-        DetectPcreFree(pd);
-    }
+    FAIL_IF_NOT_NULL(pd);
+
     DetectEngineCtxFree(de_ctx);
     return result;
 }
@@ -888,14 +874,10 @@ static int DetectPcreParseTest04 (void)
     char *teststring = "/b\\\"lah/i";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -912,14 +894,10 @@ static int DetectPcreParseTest05 (void)
     char *teststring = "/b(l|a)h/";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -936,14 +914,10 @@ static int DetectPcreParseTest06 (void)
     char *teststring = "/b(l|a)h/smi";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -960,14 +934,10 @@ static int DetectPcreParseTest07 (void)
     char *teststring = "/blah/Ui";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -984,14 +954,10 @@ static int DetectPcreParseTest08 (void)
     char *teststring = "/b(l|a)h/O";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
@@ -1004,23 +970,18 @@ static int DetectPcreParseTest08 (void)
  */
 static int DetectPcreParseTest09 (void)
 {
-    int result = 1;
     DetectPcreData *pd = NULL;
     char *teststring = "/lala\\\\/";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return 0;
+    FAIL_IF_NULL(de_ctx);
 
     pd = DetectPcreParse(de_ctx, teststring, &list);
-    if (pd == NULL) {
-        printf("expected %p: got NULL", pd);
-        result = 0;
-    }
+    FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1029,30 +990,27 @@ static int DetectPcreParseTest09 (void)
 int DetectPcreParseTest10(void)
 {
     Signature *s = SigAlloc();
-    int result = 1;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
 
     s->alproto = ALPROTO_DCERPC;
 
-    result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
+    FAIL_IF_NOT(DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
+    FAIL_IF_NOT(s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
     SigFree(s);
 
     s = SigAlloc();
-    /* failure since we have no preceding content/pcre/bytejump */
-    result &= (DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    result &= (s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
+    FAIL_IF_NULL(s);
 
- end:
+    /* failure since we have no preceding content/pcre/bytejump */
+    FAIL_IF_NOT(DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
+    FAIL_IF_NOT(s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
+
     SigFree(s);
     DetectEngineCtxFree(de_ctx);
 
-    return result;
+    PASS;
 }
 
 /**
@@ -1061,13 +1019,11 @@ int DetectPcreParseTest10(void)
 int DetectPcreParseTest11(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 1;
     Signature *s = NULL;
     DetectPcreData *data = NULL;
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
@@ -1075,86 +1031,52 @@ int DetectPcreParseTest11(void)
                                "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                                "dce_stub_data; "
                                "pcre:/bamboo/R; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
-        result = 0;
-        goto end;
-    }
-    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
-    if (data->flags & DETECT_PCRE_RAWBYTES ||
-        !(data->flags & DETECT_PCRE_RELATIVE)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
+        !(data->flags & DETECT_PCRE_RELATIVE));
 
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                       "dce_stub_data; "
                       "pcre:/bamboo/R; sid:1;)");
-    if (s->next == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF_NULL(s->next);
     s = s->next;
-    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
-        result = 0;
-        goto end;
-    }
-    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
-    if (data->flags & DETECT_PCRE_RAWBYTES ||
-        !(data->flags & DETECT_PCRE_RELATIVE)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
+        !(data->flags & DETECT_PCRE_RELATIVE));
 
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
                       "dce_iface:3919286a-b10c-11d0-9ba8-00c04fd92ef5; "
                       "dce_stub_data; "
                       "pcre:/bamboo/RB; sid:1;)");
-    if (s->next == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(s->next == NULL);
     s = s->next;
-    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL) {
-        result = 0;
-        goto end;
-    }
-    result &= (s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
-    if (!(data->flags & DETECT_PCRE_RAWBYTES) ||
-        !(data->flags & DETECT_PCRE_RELATIVE)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(!(data->flags & DETECT_PCRE_RAWBYTES) ||
+        !(data->flags & DETECT_PCRE_RELATIVE));
 
     s->next = SigInit(de_ctx, "alert tcp any any -> any any "
                       "(msg:\"Testing bytejump_body\"; "
                       "content:\"one\"; pcre:/bamboo/; sid:1;)");
-    if (s->next == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(s->next == NULL);
     s = s->next;
-    if (s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL);
 
- end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    return result;
+    PASS;
 }
 
 /**
@@ -1164,47 +1086,31 @@ int DetectPcreParseTest11(void)
 static int DetectPcreParseTest12(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
     Signature *s = NULL;
     DetectPcreData *data = NULL;
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; pcre:/abc/R; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF (de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
-        printf("empty server body list: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
-        printf("last sm not pcre: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
 
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
-    if (data->flags & DETECT_PCRE_RAWBYTES ||
-        !(data->flags & DETECT_PCRE_RELATIVE)) {
-        printf("flags not right: ");
-        goto end;
-    }
+    FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
+        !(data->flags & DETECT_PCRE_RELATIVE));
 
-    result = 1;
- end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    return result;
+    PASS;
 }
 
 /**
@@ -1213,47 +1119,31 @@ static int DetectPcreParseTest12(void)
 static int DetectPcreParseTest13(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
     Signature *s = NULL;
     DetectPcreData *data = NULL;
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"abc\"; pcre:/def/R; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
-        printf("empty server body list: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
-        printf("last sm not pcre: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
 
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
-    if (data->flags & DETECT_PCRE_RAWBYTES ||
-        !(data->flags & DETECT_PCRE_RELATIVE)) {
-        printf("flags not right: ");
-        goto end;
-    }
+    FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
+        !(data->flags & DETECT_PCRE_RELATIVE));
 
-    result = 1;
- end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    return result;
+    PASS;
 }
 
 /**
@@ -1262,57 +1152,39 @@ static int DetectPcreParseTest13(void)
 static int DetectPcreParseTest14(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
     Signature *s = NULL;
     DetectPcreData *data = NULL;
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; pcre:/def/; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
-        printf("empty server body list: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE) {
-        printf("last sm not pcre: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
 
     data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
-    if (data->flags & DETECT_PCRE_RAWBYTES ||
-        data->flags & DETECT_PCRE_RELATIVE) {
-        printf("flags not right: ");
-        goto end;
-    }
+    FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
+        data->flags & DETECT_PCRE_RELATIVE);
 
-    result = 1;
- end:
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative method */
 int DetectPcreParseTest15(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1320,19 +1192,13 @@ int DetectPcreParseTest15(void)
                                "(msg:\"Testing pcre relative http_method\"; "
                                "content:\"GET\"; "
                                "http_method; pcre:\"/abc/RM\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 
@@ -1340,10 +1206,8 @@ int DetectPcreParseTest15(void)
 int DetectPcreParseTest16(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1351,29 +1215,21 @@ int DetectPcreParseTest16(void)
                                "(msg:\"Testing pcre relative http_cookie\"; "
                                "content:\"test\"; "
                                "http_cookie; pcre:\"/abc/RC\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative raw header */
 int DetectPcreParseTest17(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1381,29 +1237,21 @@ int DetectPcreParseTest17(void)
                                "(msg:\"Testing pcre relative http_raw_header\"; "
                                "flow:to_server; content:\"test\"; "
                                "http_raw_header; pcre:\"/abc/RD\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative header */
 int DetectPcreParseTest18(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1411,29 +1259,21 @@ int DetectPcreParseTest18(void)
                                "(msg:\"Testing pcre relative http_header\"; "
                                "content:\"test\"; "
                                "http_header; pcre:\"/abc/RH\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative client-body */
 int DetectPcreParseTest19(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1441,29 +1281,21 @@ int DetectPcreParseTest19(void)
                                "(msg:\"Testing pcre relativie http_client_body\"; "
                                "content:\"test\"; "
                                "http_client_body; pcre:\"/abc/RP\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative raw uri */
 int DetectPcreParseTest20(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1471,29 +1303,21 @@ int DetectPcreParseTest20(void)
                                "(msg:\"Testing http_raw_uri\"; "
                                "content:\"test\"; "
                                "http_raw_uri; pcre:\"/abc/RI\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative uricontent */
 int DetectPcreParseTest21(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1501,29 +1325,21 @@ int DetectPcreParseTest21(void)
                                "(msg:\"Testing pcre relative uricontent\"; "
                                "uricontent:\"test\"; "
                                "pcre:\"/abc/RU\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with pcre relative http_uri */
 int DetectPcreParseTest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1531,29 +1347,21 @@ int DetectPcreParseTest22(void)
                                "(msg:\"Testing pcre relative http_uri\"; "
                                "content:\"test\"; "
                                "http_uri; pcre:\"/abc/RU\"; sid:1;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list != NULL) {
-        result = 1;
-    } else {
-        printf("sig parse failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with inconsistent pcre relative  */
 int DetectPcreParseTest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
@@ -1561,134 +1369,96 @@ int DetectPcreParseTest23(void)
                                "(msg:\"Testing inconsistent pcre relative\"; "
                                "content:\"GET\"; "
                                "http_cookie; pcre:\"/abc/RM\"; sid:1;)");
+    FAIL_IF_NOT_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list == NULL) {
-        result = 1;
-    } else {
-        printf("sig parse shouldn't have failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with inconsistent pcre modifiers  */
 int DetectPcreParseTest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
                                "alert tcp any any -> any any "
                                "(msg:\"Testing inconsistent pcre modifiers\"; "
                                "pcre:\"/abc/UI\"; sid:1;)");
+    FAIL_IF_NOT_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list == NULL) {
-        result = 1;
-    } else {
-        printf("sig parse should have failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with inconsistent pcre modifiers  */
 int DetectPcreParseTest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
                                "alert tcp any any -> any any "
                                "(msg:\"Testing inconsistent pcre modifiers\"; "
                                "pcre:\"/abc/DH\"; sid:1;)");
+    FAIL_IF_NOT_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list == NULL) {
-        result = 1;
-    } else {
-        printf("sig parse should have failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Check a signature with inconsistent pcre modifiers  */
 static int DetectPcreParseTest26(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx,
                                "alert http any any -> any any "
                                "(msg:\"Testing inconsistent pcre modifiers\"; "
                                "pcre:\"/abc/F\"; sid:1;)");
+    FAIL_IF_NOT_NULL(de_ctx->sig_list);
 
-    if (de_ctx->sig_list == NULL) {
-        result = 1;
-    } else {
-        printf("sig parse should have failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /** \test Bug 1098 */
 static int DetectPcreParseTest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
 
     de_ctx->flags |= DE_QUIET;
     de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any 80 "
             "(content:\"baduricontent\"; http_raw_uri; "
             "pcre:\"/^[a-z]{5}\\.html/R\"; sid:2; rev:2;)");
+    FAIL_IF_NOT(de_ctx->sig_list == NULL);
 
-    if (de_ctx->sig_list == NULL) {
-        result = 1;
-    } else {
-        printf("sig parse should have failed: ");
-    }
-
- end:
     if (de_ctx != NULL)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 static int DetectPcreTestSig01(void)
@@ -1705,7 +1475,6 @@ static int DetectPcreTestSig01(void)
     Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
-    int result = 0;
     Flow f;
     AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
@@ -1728,36 +1497,24 @@ static int DetectPcreTestSig01(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
-    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; pcre:\"/^gEt/i\"; pcre:\"/\\/two\\//U; pcre:\"/GET \\/two\\//\"; pcre:\"/\\s+HTTP/R\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
+    de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; pcre:\"/^gEt/i\"; pcre:\"/\\/two\\//U\"; pcre:\"/GET \\/two\\//\"; pcre:\"/\\s+HTTP/R\"; sid:1;)");
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START, buf, buflen);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER | STREAM_START, buf, buflen);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1) == 1) {
-        result = 1;
-    }
+    FAIL_IF_NOT(PacketAlertCheck(p, 1) == 1);
 
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     SigGroupCleanup(de_ctx);
@@ -1771,7 +1528,7 @@ end:
     FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 static int DetectPcreTestSig02(void)
@@ -1788,7 +1545,6 @@ static int DetectPcreTestSig02(void)
     Flow f;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
-    int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
@@ -1803,25 +1559,18 @@ static int DetectPcreTestSig02(void)
     pcre_match_limit_recursion = 100;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; pcre:\"/two/O\"; sid:2;)");
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 2) == 1) {
-        result = 1;
-    }
+    FAIL_IF_NOT(PacketAlertCheck(p, 2) == 1);
 
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
@@ -1829,9 +1578,9 @@ static int DetectPcreTestSig02(void)
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
     FLOW_DESTROY(&f);
-end:
+
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -1850,42 +1599,32 @@ static int DetectPcreTestSig03(void)
     Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx;
-    int result = 1;
 
     memset(&th_v, 0, sizeof(th_v));
 
     p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"HTTP TEST\"; content:\"GET\"; pcre:!\"/two/\"; sid:1;)");
-    if (de_ctx->sig_list == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)){
-        printf("sid 1 matched even though it shouldn't have:");
-        result = 0;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-end:
+
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -1893,7 +1632,6 @@ end:
  */
 static int DetectPcreModifPTest04(void)
 {
-    int result = 0;
     uint8_t httpbuf1[] =
         "GET / HTTP/1.1\r\n"
         "Host: www.emergingthreats.net\r\n"
@@ -1949,59 +1687,37 @@ static int DetectPcreModifPTest04(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"Pcre modifier P\"; pcre:\"/DOCTYPE/P\"; "
                                    "sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     s->next = SigInit(de_ctx,"alert http any any -> any any (msg:\""
                           "Pcre modifier P (no match)\"; pcre:\"/blah/P\"; sid:2;)");
-    if (s->next == NULL) {
-        goto end;
-    }
+    FAIL_IF(s->next == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     HtpState *http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!(PacketAlertCheck(p, 1))) {
-        printf("sid 1 didn't match but should have: ");
-        goto end;
-    }
-    if (PacketAlertCheck(p, 2)) {
-        printf("sid 2 matched but shouldn't: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p, 1)));
+    FAIL_IF(PacketAlertCheck(p, 2));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
@@ -2011,7 +1727,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -2020,7 +1736,6 @@ end:
  */
 static int DetectPcreModifPTest05(void)
 {
-    int result = 0;
     uint8_t httpbuf1[] =
         "GET / HTTP/1.1\r\n"
         "Host: www.emergingthreats.net\r\n"
@@ -2084,85 +1799,51 @@ static int DetectPcreModifPTest05(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"Pcre modifier P\"; pcre:\"/DOC/P\"; "
                                    "sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     s->next = SigInit(de_ctx,"alert http any any -> any any (msg:\""
                           "Pcre modifier P (no match)\"; pcre:\"/DOCTYPE/P\"; sid:2;)");
-    if (s->next == NULL) {
-        goto end;
-    }
+    FAIL_IF(s->next == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect for p1 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
     HtpState *http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
-    if (PacketAlertCheck(p1, 1)) {
-        printf("sid 1 didn't match on p1 but should have: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p1, 1));
 
-    if (PacketAlertCheck(p1, 2)) {
-        printf("sid 2 did match on p1 but shouldn't have: ");
-        /* It's a partial match over 2 chunks*/
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p1, 2));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect for p2 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
 
-    if (!(PacketAlertCheck(p2, 1))) {
-        printf("sid 1 did match on p2 but should have: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p2, 1)));
 
-    if (!(PacketAlertCheck(p2, 2))) {
-        printf("sid 2 didn't match on p2 but should have: ");
-        /* It's a partial match over 2 chunks*/
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p2, 2)));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL) SigGroupCleanup(de_ctx);
@@ -2173,7 +1854,7 @@ end:
     FLOW_DESTROY(&f);
     UTHFreePackets(&p1, 1);
     UTHFreePackets(&p2, 1);
-    return result;
+    PASS;
 }
 
 int DetectPcreTestSig06()
@@ -2203,18 +1884,13 @@ int DetectPcreTestSig07()
                     "lalala\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
-    int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"pcre with an ending slash\"; pcre:\"/^(la)+$/\"; sid:1;)";
-    if (UTHPacketMatchSig(p, sig) == 0) {
-        result = 0;
-        goto end;
-    }
-    result = 1;
-end:
+    FAIL_IF(UTHPacketMatchSig(p, sig) == 0);
+
     if (p != NULL)
         UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test anchored pcre */
@@ -2225,18 +1901,13 @@ int DetectPcreTestSig08()
                     "lalala";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = UTHBuildPacket( buf, buflen, IPPROTO_TCP);
-    int result = 0;
 
     char sig[] = "alert tcp any any -> any any (msg:\"pcre with an ending slash\"; pcre:\"/^(la)+$/\"; sid:1;)";
-    if (UTHPacketMatchSig(p, sig) == 0) {
-        result = 0;
-        goto end;
-    }
-    result = 1;
-end:
+    FAIL_IF(UTHPacketMatchSig(p, sig) == 0);
+
     if (p != NULL)
         UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when cookie modifier is
@@ -2244,7 +1915,6 @@ end:
  */
 static int DetectPcreTestSig09(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummy\r\n\r\n";
@@ -2278,48 +1948,32 @@ static int DetectPcreTestSig09(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP cookie\"; pcre:\"/dummy/C\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 failed to match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2332,7 +1986,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when cookie modifier is
@@ -2340,7 +1994,6 @@ end:
  */
 static int DetectPcreTestSig10(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummoOOooooO\r\n\r\n";
@@ -2374,48 +2027,32 @@ static int DetectPcreTestSig10(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP cookie\"; pcre:!\"/dummy/C\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 should match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2428,7 +2065,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when method modifier is
@@ -2436,7 +2073,6 @@ end:
  */
 static int DetectPcreTestSig11(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummy\r\n\r\n";
@@ -2470,48 +2106,32 @@ static int DetectPcreTestSig11(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP method\"; pcre:\"/POST/M\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 failed to match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2524,7 +2144,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when method modifier is
@@ -2532,7 +2152,6 @@ end:
  */
 static int DetectPcreTestSig12(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "GET / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummoOOooooO\r\n\r\n";
@@ -2566,48 +2185,32 @@ static int DetectPcreTestSig12(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP method\"; pcre:!\"/POST/M\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 should match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2620,7 +2223,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when header modifier is
@@ -2628,7 +2231,6 @@ end:
  */
 static int DetectPcreTestSig13(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummy\r\n\r\n";
@@ -2662,48 +2264,32 @@ static int DetectPcreTestSig13(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP header\"; pcre:\"/User[-_]Agent[:]?\\sMozilla/H\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 failed to match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2716,7 +2302,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when header modifier is
@@ -2724,7 +2310,6 @@ end:
  */
 static int DetectPcreTestSig14(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "GET / HTTP/1.0\r\nUser-Agent: IEXPLORER/1.0\r\n"
         "Cookie: dummoOOooooO\r\n\r\n";
@@ -2758,48 +2343,32 @@ static int DetectPcreTestSig14(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert http any any -> any any (msg:"
                                    "\"HTTP header\"; pcre:!\"/User-Agent[:]?\\s+Mozilla/H\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 should match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2812,7 +2381,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when cookie and relative modifiers are
@@ -2820,7 +2389,6 @@ end:
  */
 static int DetectPcreTestSig15(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummy 1234\r\n\r\n";
@@ -2854,9 +2422,7 @@ static int DetectPcreTestSig15(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
@@ -2864,39 +2430,25 @@ static int DetectPcreTestSig15(void)
                                    "\"pcre relative HTTP cookie\"; content:\"dummy\";"
                                    " http_cookie; pcre:\"/1234/RC\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 failed to match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -2909,7 +2461,7 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Check the signature working to alert when method and relative modifiers are
@@ -2917,7 +2469,6 @@ end:
  */
 static int DetectPcreTestSig16(void)
 {
-    int result = 0;
     Flow f;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Mozilla/1.0\r\n"
         "Cookie: dummy 1234\r\n\r\n";
@@ -2951,9 +2502,7 @@ static int DetectPcreTestSig16(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
@@ -2961,39 +2510,25 @@ static int DetectPcreTestSig16(void)
                                    "\"pcre relative HTTP method\"; content:\"PO\";"
                                    " http_method; pcre:\"/ST/RM\"; "
                                    " sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 failed to match: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -3006,14 +2541,13 @@ end:
 
     StreamTcpFreeConfig(TRUE);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
 }
 
 /** \test Test tracking of body chunks per transactions (on requests)
  */
 static int DetectPcreTxBodyChunksTest01(void)
 {
-    int result = 0;
     Flow f;
     TcpSession ssn;
     Packet *p = NULL;
@@ -3053,115 +2587,75 @@ static int DetectPcreTxBodyChunksTest01(void)
 
     AppLayerHtpEnableRequestBodyCallback();
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER|STREAM_START, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER | STREAM_START, httpbuf1,
+                                httplen1);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
-    if (r != 0) {
-        printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
-    if (r != 0) {
-        printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
-    if (r != 0) {
-        printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf7, httplen7);
+    FAIL_IF(r != 0);
 
     /* Now we should have 2 transactions, each with it's own list
      * of request body chunks (let's test it) */
 
     HtpState *htp_state = f.alstate;
-    if (htp_state == NULL) {
-        printf("no http state: ");
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(htp_state == NULL);
 
     /* hardcoded check of the transactions and it's client body chunks */
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
-        printf("The http app layer doesn't have 2 transactions, but it should: ");
-        goto end;
-    }
+    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
 
     htp_tx_t *t1 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 0);
     htp_tx_t *t2 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 1);
 
     HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(t1);
-    if (htud == NULL) {
-        printf("No body data in t1 (it should be removed only when the tx is destroyed): ");
-        goto end;
-    }
+    FAIL_IF(htud == NULL);
 
     HtpBodyChunk *cur = htud->request_body.first;
-    if (htud->request_body.first == NULL) {
-        SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
-        goto end;
-    }
+    FAIL_IF(htud->request_body.first == NULL);
 
-    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body one!!", 10) != 1) {
-        SCLogDebug("Body data in t1 is not correctly set: ");
-        goto end;
-    }
+    FAIL_IF(StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body one!!", 10) != 1);
 
     htud = (HtpTxUserData *) htp_tx_get_user_data(t2);
 
     cur = htud->request_body.first;
-    if (htud->request_body.first == NULL) {
-        SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
-        goto end;
-    }
+    FAIL_IF(htud->request_body.first == NULL);
 
-    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body two!!", 10) != 1) {
-        SCLogDebug("Body data in t1 is not correctly set: ");
-        goto end;
-    }
+    FAIL_IF(StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body two!!", 10) != 1);
 
-
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test test pcre P modifier with multiple pipelined http transactions */
 static int DetectPcreTxBodyChunksTest02(void)
 {
-    int result = 0;
     Signature *s = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
     ThreadVars th_v;
@@ -3204,160 +2698,102 @@ static int DetectPcreTxBodyChunksTest02(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"POST\"; http_method; content:\"Mozilla\"; http_header; content:\"dummy\"; http_cookie; pcre:\"/one/P\"; sid:1; rev:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"GET\"; http_method; content:\"Firefox\"; http_header; content:\"dummy2\"; http_cookie; pcre:\"/two/P\"; sid:2; rev:1;)");
-    if (s == NULL) {
-        printf("sig2 parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted (2): ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("signature matched, but shouldn't have: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (!(PacketAlertCheck(p, 1))) {
-        printf("sig 1 didn't alert: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p, 1)));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
-    if (r != 0) {
-        printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted (5): ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
-    if (r != 0) {
-        printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if ((PacketAlertCheck(p, 1)) || (PacketAlertCheck(p, 2))) {
-        printf("sig 1 alerted (request 2, chunk 6): ");
-        goto end;
-    }
+    FAIL_IF((PacketAlertCheck(p, 1)) || (PacketAlertCheck(p, 2)));
     p->alerts.cnt = 0;
 
     SCLogDebug("sending data chunk 7");
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
-    if (r != 0) {
-        printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf7, httplen7);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (!(PacketAlertCheck(p, 2))) {
-        printf("signature 2 didn't match, but should have: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p, 2)));
     p->alerts.cnt = 0;
 
     HtpState *htp_state = f.alstate;
-    if (htp_state == NULL) {
-        printf("no http state: ");
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(htp_state == NULL);
 
     /* hardcoded check of the transactions and it's client body chunks */
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
-        printf("The http app layer doesn't have 2 transactions, but it should: ");
-        goto end;
-    }
+    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
 
     htp_tx_t *t1 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 0);
     htp_tx_t *t2 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 1);
@@ -3365,31 +2801,17 @@ static int DetectPcreTxBodyChunksTest02(void)
     HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(t1);
 
     HtpBodyChunk *cur = htud->request_body.first;
-    if (htud->request_body.first == NULL) {
-        SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
-        goto end;
-    }
+    FAIL_IF(htud->request_body.first == NULL);
 
-    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body one!!", 10) != 1) {
-        SCLogDebug("Body data in t1 is not correctly set: ");
-        goto end;
-    }
+    FAIL_IF(StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body one!!", 10) != 1);
 
     htud = (HtpTxUserData *) htp_tx_get_user_data(t2);
 
     cur = htud->request_body.first;
-    if (htud->request_body.first == NULL) {
-        SCLogDebug("No body data in t1 (it should be removed only when the tx is destroyed): ");
-        goto end;
-    }
+    FAIL_IF(htud->request_body.first == NULL);
 
-    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body two!!", 10) != 1) {
-        SCLogDebug("Body data in t1 is not correctly set: ");
-        goto end;
-    }
+    FAIL_IF(StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg, (uint8_t *)"Body two!!", 10) != 1);
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -3403,13 +2825,12 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test multiple http transactions and body chunks of request handling */
 static int DetectPcreTxBodyChunksTest03(void)
 {
-    int result = 0;
     Signature *s = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
     ThreadVars th_v;
@@ -3452,162 +2873,102 @@ static int DetectPcreTxBodyChunksTest03(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"POST\"; http_method; content:\"Mozilla\"; http_header; content:\"dummy\"; http_cookie; pcre:\"/one/P\"; sid:1; rev:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any (content:\"GET\"; http_method; content:\"Firefox\"; http_header; content:\"dummy2\"; http_cookie; pcre:\"/two/P\"; sid:2; rev:1;)");
-    if (s == NULL) {
-        printf("sig2 parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted (2): ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("signature matched, but shouldn't have: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (!(PacketAlertCheck(p, 1))) {
-        printf("sig 1 didn't alert: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p, 1)));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
-    if (r != 0) {
-        printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (PacketAlertCheck(p, 1)) {
-        printf("sig 1 alerted (5): ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1));
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
-    if (r != 0) {
-        printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if ((PacketAlertCheck(p, 1)) || (PacketAlertCheck(p, 2))) {
-        printf("sig 1 alerted (request 2, chunk 6): ");
-        goto end;
-    }
+    FAIL_IF((PacketAlertCheck(p, 1)) || (PacketAlertCheck(p, 2)));
     p->alerts.cnt = 0;
 
     SCLogDebug("sending data chunk 7");
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
-    if (r != 0) {
-        printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf7, httplen7);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (!(PacketAlertCheck(p, 2))) {
-        printf("signature 2 didn't match, but should have: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p, 2)));
     p->alerts.cnt = 0;
 
     HtpState *htp_state = f.alstate;
-    if (htp_state == NULL) {
-        printf("no http state: ");
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(htp_state == NULL);
 
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
-        printf("The http app layer doesn't have 2 transactions, but it should: ");
-        goto end;
-    }
+    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL) {
@@ -3621,7 +2982,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /**
@@ -3629,7 +2990,6 @@ end:
  */
 static int DetectPcreFlowvarCapture01(void)
 {
-    int result = 0;
     uint8_t uabuf1[] =
         "Mozilla/5.0 (X11; U; Linux i686; es-ES; rv:1.9.0.13) Gecko/2009080315 Ubuntu/8.10 (intrepid) Firefox/3.0.13";
     uint32_t ualen1 = sizeof(uabuf1) - 1; /* minus the \0 */
@@ -3674,71 +3034,47 @@ static int DetectPcreFlowvarCapture01(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
+    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
-        goto end;
-    }
+        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
     DetectPcreData *pd = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     HtpState *http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect for p1 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
-    if (!(PacketAlertCheck(p1, 1))) {
-        printf("sid 1 didn't match on p1 but should have: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p1, 1)));
 
     FlowVar *fv = FlowVarGet(&f, pd->capidx);
-    if (fv == NULL) {
-        printf("no flowvar: ");
-        goto end;
-    }
+    FAIL_IF(fv == NULL);
 
-    if (fv->data.fv_str.value_len != ualen1) {
-        printf("%u != %u: ", fv->data.fv_str.value_len, ualen1);
-        goto end;
-    }
+    FAIL_IF(fv->data.fv_str.value_len != ualen1);
 
     if (memcmp(fv->data.fv_str.value, uabuf1, ualen1) != 0) {
         PrintRawDataFp(stdout, fv->data.fv_str.value, fv->data.fv_str.value_len);
         PrintRawDataFp(stdout, uabuf1, ualen1);
 
         printf("buffer mismatch: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
@@ -3747,7 +3083,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p1, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -3755,7 +3091,6 @@ end:
  */
 static int DetectPcreFlowvarCapture02(void)
 {
-    int result = 0;
     uint8_t uabuf1[] =
         "Apache";
     uint32_t ualen1 = sizeof(uabuf1) - 1; /* minus the \0 */
@@ -3800,41 +3135,26 @@ static int DetectPcreFlowvarCapture02(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; priority:1; sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
+    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
-        goto end;
-    }
+        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
     DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; priority:3; sid:2;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
+    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
-        goto end;
-    }
+        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
     DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
-    if (pd1->capidx != pd2->capidx) {
-        printf("capidx mismatch, %u != %u: ", pd1->capidx, pd2->capidx);
-        goto end;
-    }
+    FAIL_IF(pd1->capidx != pd2->capidx);
 
     SCSigRegisterSignatureOrderingFuncs(de_ctx);
     SCSigOrderSignatures(de_ctx);
@@ -3842,40 +3162,28 @@ static int DetectPcreFlowvarCapture02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     HtpState *http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect for p1 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
-    if (!(PacketAlertCheck(p1, 1))) {
-        printf("sid 1 didn't match on p1 but should have: ");
-        goto end;
-    }
+    FAIL_IF(!(PacketAlertCheck(p1, 1)));
 
     FlowVar *fv = FlowVarGet(&f, pd1->capidx);
-    if (fv == NULL) {
-        printf("no flowvar: ");
-        goto end;
-    }
+    FAIL_IF(fv == NULL);
 
     if (fv->data.fv_str.value_len != ualen1) {
         PrintRawDataFp(stdout, fv->data.fv_str.value, fv->data.fv_str.value_len);
         PrintRawDataFp(stdout, uabuf1, ualen1);
         printf("%u != %u: ", fv->data.fv_str.value_len, ualen1);
-        goto end;
+        FAIL;
     }
 
     if (memcmp(fv->data.fv_str.value, uabuf1, ualen1) != 0) {
@@ -3883,11 +3191,9 @@ static int DetectPcreFlowvarCapture02(void)
         PrintRawDataFp(stdout, uabuf1, ualen1);
 
         printf("buffer mismatch: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
@@ -3896,7 +3202,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p1, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -3904,7 +3210,6 @@ end:
  */
 static int DetectPcreFlowvarCapture03(void)
 {
-    int result = 0;
     uint8_t httpbuf1[] =
         "GET / HTTP/1.1\r\n"
         "Host: www.emergingthreats.net\r\n"
@@ -3946,76 +3251,47 @@ static int DetectPcreFlowvarCapture03(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF(de_ctx == NULL);
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; content:\"xyz\"; http_header; priority:1; sid:1;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
+    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
-        goto end;
-    }
+        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
     DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; content:\"xyz\"; http_header; priority:3; sid:2;)");
-    if (s == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    FAIL_IF(s == NULL);
 
-    if (s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
+    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
         s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE) {
-        goto end;
-    }
+        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
     DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
 
-    if (pd1->capidx != pd2->capidx) {
-        printf("capidx mismatch, %u != %u: ", pd1->capidx, pd2->capidx);
-        goto end;
-    }
+    FAIL_IF(pd1->capidx != pd2->capidx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     HtpState *http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    FAIL_IF(http_state == NULL);
 
     /* do detect for p1 */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
 
-    if (PacketAlertCheck(p1, 1)) {
-        printf("sid 1 matched on p1 but shouldn't have: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p1, 1));
 
     FlowVar *fv = FlowVarGet(&f, pd1->capidx);
-    if (fv != NULL) {
-        printf("flowvar, shouldn't have one: ");
-        goto end;
-    }
+    FAIL_IF(fv != NULL);
 
-    result = 1;
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (de_ctx != NULL)
@@ -4024,7 +3300,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p1, 1);
-    return result;
+    PASS;
 }
 
 /**
@@ -4032,50 +3308,34 @@ end:
  */
 static int DetectPcreParseHttpHost(void)
 {
-    int result = 0;
     DetectPcreData *pd = NULL;
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
 
-    if (de_ctx == NULL) {
-        return 0;
-    }
+    FAIL_IF(de_ctx == NULL);
 
     pd = DetectPcreParse(de_ctx, "/domain\\.com/W", &list);
-    if (pd == NULL) {
-        goto end;
-    }
+    FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     list = DETECT_SM_LIST_NOTSET;
     pd = DetectPcreParse(de_ctx, "/dOmain\\.com/W", &list);
-    if (pd != NULL) {
-        DetectPcreFree(pd);
-        goto end;
-    }
+    FAIL_IF(pd != NULL);
 
     /* Uppercase meta characters are valid. */
     list = DETECT_SM_LIST_NOTSET;
     pd = DetectPcreParse(de_ctx, "/domain\\D+\\.com/W", &list);
-    if (pd == NULL) {
-        goto end;
-    }
+    FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     /* This should not parse as the first \ escapes the second \, then
      * we have a D. */
     list = DETECT_SM_LIST_NOTSET;
     pd = DetectPcreParse(de_ctx, "/\\\\Ddomain\\.com/W", &list);
-    if (pd != NULL) {
-        DetectPcreFree(pd);
-        goto end;
-    }
+    FAIL_IF(pd != NULL);
 
-    result = 1;
-
-end:
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 #endif /* UNITTESTS */

@@ -26,14 +26,16 @@
 
 #ifdef HAVE_LUA
 
+#include "util-luajit.h"
+
 typedef struct LuaStreamingBuffer_ {
     const uint8_t *data;
     uint32_t data_len;
     uint8_t flags;
 } LuaStreamingBuffer;
 
-#define LUA_FLOW_LOCKED_BY_PARENT       0
-#define LUA_FLOW_NOT_LOCKED_BY_PARENT   1
+lua_State *LuaGetState(void);
+void LuaReturnState(lua_State *s);
 
 /* gets */
 
@@ -45,13 +47,9 @@ void *LuaStateGetTX(lua_State *luastate);
 
 /** \brief get flow pointer from lua state
  *
- *  \param locked_by_parent[out] bool indicating if flow is locked
- *                          (LUA_FLOW_LOCKED_BY_PARENT) or unlocked
- *                          (LUA_FLOW_NOT_LOCKED_BY_PARENT)
- *
  *  \retval f flow poiner or NULL if it was not set
  */
-Flow *LuaStateGetFlow(lua_State *luastate, int *locked_by_parent);
+Flow *LuaStateGetFlow(lua_State *luastate);
 
 PacketAlert *LuaStateGetPacketAlert(lua_State *luastate);
 
@@ -70,11 +68,8 @@ void LuaStateSetTX(lua_State *luastate, void *tx);
 /** \brief set a flow pointer in the lua state
  *
  *  \param f flow pointer
- *  \param locked_by_parent bool indicating if flow is locked
- *                          (LUA_FLOW_LOCKED_BY_PARENT) or unlocked
- *                          (LUA_FLOW_NOT_LOCKED_BY_PARENT)
  */
-void LuaStateSetFlow(lua_State *luastate, Flow *f, int locked_by_parent);
+void LuaStateSetFlow(lua_State *luastate, Flow *f);
 
 void LuaStateSetPacketAlert(lua_State *luastate, PacketAlert *pa);
 
@@ -89,6 +84,8 @@ void LuaStateSetDirection(lua_State *luastate, int direction);
 void LuaPrintStack(lua_State *state);
 
 int LuaPushStringBuffer(lua_State *luastate, const uint8_t *input, size_t input_len);
+
+int LuaPushInteger(lua_State *luastate, lua_Integer n);
 
 #endif /* HAVE_LUA */
 

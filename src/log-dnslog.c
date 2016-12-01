@@ -170,7 +170,7 @@ static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p, Flow *f,
 {
     LogDnsLogThread *aft = (LogDnsLogThread *)data;
     DNSTransaction *dns_tx = (DNSTransaction *)tx;
-    SCLogDebug("pcap_cnt %ju", p->pcap_cnt);
+    SCLogDebug("pcap_cnt %"PRIu64, p->pcap_cnt);
     char timebuf[64];
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
@@ -344,18 +344,11 @@ static OutputCtx *LogDnsLogInitCtx(ConfNode *conf)
     return output_ctx;
 }
 
-void TmModuleLogDnsLogRegister (void)
+void LogDnsLogRegister (void)
 {
-    tmm_modules[TMM_LOGDNSLOG].name = MODULE_NAME;
-    tmm_modules[TMM_LOGDNSLOG].ThreadInit = LogDnsLogThreadInit;
-    tmm_modules[TMM_LOGDNSLOG].ThreadExitPrintStats = LogDnsLogExitPrintStats;
-    tmm_modules[TMM_LOGDNSLOG].ThreadDeinit = LogDnsLogThreadDeinit;
-    tmm_modules[TMM_LOGDNSLOG].RegisterTests = NULL;
-    tmm_modules[TMM_LOGDNSLOG].cap_flags = 0;
-    tmm_modules[TMM_LOGDNSLOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterTxModule(MODULE_NAME, "dns-log", LogDnsLogInitCtx,
-            ALPROTO_DNS, LogDnsLogger);
+    OutputRegisterTxModule(LOGGER_DNS, MODULE_NAME, "dns-log", LogDnsLogInitCtx,
+        ALPROTO_DNS, LogDnsLogger, LogDnsLogThreadInit, LogDnsLogThreadDeinit,
+        LogDnsLogExitPrintStats);
 
     /* enable the logger for the app layer */
     SCLogDebug("registered %s", MODULE_NAME);

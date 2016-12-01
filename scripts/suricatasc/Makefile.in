@@ -158,8 +158,10 @@ HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
+HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
 HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_SPHINXBUILD = @HAVE_SPHINXBUILD@
 HAVE_WGET = @HAVE_WGET@
 HTP_DIR = @HTP_DIR@
 HTP_LDADD = @HTP_LDADD@
@@ -279,6 +281,8 @@ libhs_CFLAGS = @libhs_CFLAGS@
 libhs_LIBS = @libhs_LIBS@
 libhtp_CFLAGS = @libhtp_CFLAGS@
 libhtp_LIBS = @libhtp_LIBS@
+libnetfilter_queue_CFLAGS = @libnetfilter_queue_CFLAGS@
+libnetfilter_queue_LIBS = @libnetfilter_queue_LIBS@
 libnspr_CFLAGS = @libnspr_CFLAGS@
 libnspr_LIBS = @libnspr_LIBS@
 libnss_CFLAGS = @libnss_CFLAGS@
@@ -419,9 +423,9 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
+@HAVE_PYTHON_FALSE@uninstall-local:
 @HAVE_PYTHON_FALSE@clean-local:
 @HAVE_PYTHON_FALSE@install-exec-local:
-@HAVE_PYTHON_FALSE@uninstall-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am

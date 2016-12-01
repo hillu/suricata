@@ -815,7 +815,7 @@ error:
  */
 static int DetectAddressParse2(const DetectEngineCtx *de_ctx,
         DetectAddressHead *gh, DetectAddressHead *ghn,
-        char *s, int negate, ResolvedVariablesList *var_list)
+        const char *s, int negate, ResolvedVariablesList *var_list)
 {
     size_t x = 0;
     size_t u = 0;
@@ -825,12 +825,6 @@ static int DetectAddressParse2(const DetectEngineCtx *de_ctx,
     char address[8196] = "";
     char *rule_var_address = NULL;
     char *temp_rule_var_address = NULL;
-
-    if (AddVariableToResolveList(var_list, s) == -1) {
-        SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Found a loop in a address "
-                   "groups declaration. This is likely a misconfiguration.");
-        goto error;
-    }
 
     SCLogDebug("s %s negate %s", s, negate ? "true" : "false");
 
@@ -996,6 +990,12 @@ static int DetectAddressParse2(const DetectEngineCtx *de_ctx,
             }
             x = 0;
 
+            if (AddVariableToResolveList(var_list, address) == -1) {
+                SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY, "Found a loop in a address "
+                    "groups declaration. This is likely a misconfiguration.");
+                goto error;
+            }
+
             if (d_set == 1) {
                 rule_var_address = SCRuleVarsGetConfVar(de_ctx, address,
                                                         SC_RULE_VARS_ADDRESS_GROUPS);
@@ -1023,6 +1023,8 @@ static int DetectAddressParse2(const DetectEngineCtx *de_ctx,
                 if (DetectAddressParse2(de_ctx, gh, ghn, temp_rule_var_address,
                                     (negate + n_set) % 2, var_list) < 0) {
                     SCLogDebug("DetectAddressParse2 hates us");
+                    if (temp_rule_var_address != rule_var_address)
+                        SCFree(temp_rule_var_address);
                     goto error;
                 }
                 d_set = 0;
@@ -1246,7 +1248,6 @@ int DetectAddressMergeNot(DetectAddressHead *gh, DetectAddressHead *ghn)
 #endif
     if (ghn->ipv4_head != NULL || ghn->ipv6_head != NULL) {
         int cnt = 0;
-        DetectAddress *ad;
         for (ad = ghn->ipv4_head; ad; ad = ad->next)
             cnt++;
 
@@ -1323,8 +1324,6 @@ int DetectAddressTestConfVars(void)
             goto error;
         }
 
-        CleanVariableResolveList(&var_list);
-
         if (DetectAddressIsCompleteIPSpace(ghn)) {
             SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,
                        "address var - \"%s\" has the complete IP space negated "
@@ -1345,6 +1344,98 @@ int DetectAddressTestConfVars(void)
     return -1;
 }
 
+#include "util-hash-lookup3.h"
+
+typedef struct DetectAddressMap_ {
+    char *string;
+    DetectAddressHead *address;
+} DetectAddressMap;
+
+static uint32_t DetectAddressMapHashFunc(HashListTable *ht, void *data, uint16_t datalen)
+{
+    const DetectAddressMap *map = (DetectAddressMap *)data;
+    uint32_t hash = 0;
+
+    hash = hashlittle_safe(map->string, strlen(map->string), 0);
+    hash %= ht->array_size;
+
+    return hash;
+}
+
+static char DetectAddressMapCompareFunc(void *data1, uint16_t len1, void *data2,
+                                        uint16_t len2)
+{
+    DetectAddressMap *map1 = (DetectAddressMap *)data1;
+    DetectAddressMap *map2 = (DetectAddressMap *)data2;
+
+
+    int r = (strcmp(map1->string, map2->string) == 0);
+    return r;
+}
+
+static void DetectAddressMapFreeFunc(void *data)
+{
+    DetectAddressMap *map = (DetectAddressMap *)data;
+    if (map != NULL) {
+        DetectAddressHeadFree(map->address);
+        SCFree(map->string);
+    }
+    SCFree(map);
+}
+
+int DetectAddressMapInit(DetectEngineCtx *de_ctx)
+{
+    de_ctx->address_table = HashListTableInit(4096, DetectAddressMapHashFunc,
+                                                    DetectAddressMapCompareFunc,
+                                                    DetectAddressMapFreeFunc);
+    if (de_ctx->address_table == NULL)
+        return -1;
+
+    return 0;
+}
+
+void DetectAddressMapFree(DetectEngineCtx *de_ctx)
+{
+    if (de_ctx->address_table == NULL)
+        return;
+
+    HashListTableFree(de_ctx->address_table);
+    de_ctx->address_table = NULL;
+    return;
+}
+
+int DetectAddressMapAdd(DetectEngineCtx *de_ctx, const char *string,
+                        DetectAddressHead *address)
+{
+    DetectAddressMap *map = SCCalloc(1, sizeof(*map));
+    if (map == NULL)
+        return -1;
+
+    map->string = SCStrdup(string);
+    if (map->string == NULL) {
+        SCFree(map);
+        return -1;
+    }
+    map->address = address;
+
+    BUG_ON(HashListTableAdd(de_ctx->address_table, (void *)map, 0) != 0);
+    return 0;
+}
+
+const DetectAddressHead *DetectAddressMapLookup(DetectEngineCtx *de_ctx,
+                                                const char *string)
+{
+    DetectAddressMap map = { (char *)string, NULL };
+
+    const DetectAddressMap *res = HashListTableLookup(de_ctx->address_table,
+            &map, 0);
+    if (res == NULL)
+        return NULL;
+    else {
+        return (const DetectAddressHead *)res->address;
+    }
+}
+
 /**
  * \brief Parses an address group sent as a character string and updates the
  *        DetectAddressHead sent as the argument with the relevant address
@@ -1358,7 +1449,7 @@ int DetectAddressTestConfVars(void)
  * \retval -1 On failure.
  */
 int DetectAddressParse(const DetectEngineCtx *de_ctx,
-                       DetectAddressHead *gh, char *str)
+                       DetectAddressHead *gh, const char *str)
 {
     int r;
     DetectAddressHead *ghn = NULL;
@@ -1399,6 +1490,31 @@ error:
     if (ghn != NULL)
         DetectAddressHeadFree(ghn);
     return -1;
+}
+
+const DetectAddressHead *DetectParseAddress(DetectEngineCtx *de_ctx,
+        const char *string)
+{
+    const DetectAddressHead *h = DetectAddressMapLookup(de_ctx, string);
+    if (h != NULL) {
+        SCLogDebug("found: %s :: %p", string, h);
+        return h;
+    }
+
+    SCLogDebug("%s not found", string);
+
+    DetectAddressHead *head = DetectAddressHeadInit();
+    if (head == NULL)
+        return NULL;
+
+    if (DetectAddressParse(de_ctx, head, string) == -1)
+    {
+        DetectAddressHeadFree(head);
+        return NULL;
+    }
+
+    DetectAddressMapAdd((DetectEngineCtx *)de_ctx, string, head);
+    return head;
 }
 
 /**
@@ -1778,7 +1894,7 @@ void DetectAddressPrint(DetectAddress *gr)
  * \retval g On success pointer to an DetectAddress if we find a match
  *           for the Address "a", in the DetectAddressHead "gh".
  */
-DetectAddress *DetectAddressLookupInHead(DetectAddressHead *gh, Address *a)
+DetectAddress *DetectAddressLookupInHead(const DetectAddressHead *gh, Address *a)
 {
     SCEnter();
 
@@ -3143,11 +3259,11 @@ int AddressTestAddressGroupSetup04(void)
             r = DetectAddressParse(NULL, gh, "1.2.3.3");
             if (r == 0 && gh->ipv4_head != prev_head &&
                 gh->ipv4_head != NULL && gh->ipv4_head->next == prev_head) {
-                DetectAddress *prev_head = gh->ipv4_head;
+                DetectAddress *ph = gh->ipv4_head;
 
                 r = DetectAddressParse(NULL, gh, "1.2.3.2");
-                if (r == 0 && gh->ipv4_head != prev_head &&
-                    gh->ipv4_head != NULL && gh->ipv4_head->next == prev_head) {
+                if (r == 0 && gh->ipv4_head != ph &&
+                    gh->ipv4_head != NULL && gh->ipv4_head->next == ph) {
                     result = 1;
                 }
             }
@@ -3171,11 +3287,11 @@ int AddressTestAddressGroupSetup05(void)
             r = DetectAddressParse(NULL, gh, "1.2.3.3");
             if (r == 0 && gh->ipv4_head == prev_head &&
                 gh->ipv4_head != NULL && gh->ipv4_head->next != prev_head) {
-                DetectAddress *prev_head = gh->ipv4_head;
+                DetectAddress *ph = gh->ipv4_head;
 
                 r = DetectAddressParse(NULL, gh, "1.2.3.4");
-                if (r == 0 && gh->ipv4_head == prev_head &&
-                    gh->ipv4_head != NULL && gh->ipv4_head->next != prev_head) {
+                if (r == 0 && gh->ipv4_head == ph &&
+                    gh->ipv4_head != NULL && gh->ipv4_head->next != ph) {
                     result = 1;
                 }
             }
@@ -3556,11 +3672,11 @@ int AddressTestAddressGroupSetup17(void)
             r = DetectAddressParse(NULL, gh, "2001::3");
             if (r == 0 && gh->ipv6_head != prev_head &&
                 gh->ipv6_head != NULL && gh->ipv6_head->next == prev_head) {
-                DetectAddress *prev_head = gh->ipv6_head;
+                DetectAddress *ph = gh->ipv6_head;
 
                 r = DetectAddressParse(NULL, gh, "2001::2");
-                if (r == 0 && gh->ipv6_head != prev_head &&
-                    gh->ipv6_head != NULL && gh->ipv6_head->next == prev_head) {
+                if (r == 0 && gh->ipv6_head != ph &&
+                    gh->ipv6_head != NULL && gh->ipv6_head->next == ph) {
                     result = 1;
                 }
             }
@@ -3584,11 +3700,11 @@ int AddressTestAddressGroupSetup18(void)
             r = DetectAddressParse(NULL, gh, "2001::3");
             if (r == 0 && gh->ipv6_head == prev_head &&
                 gh->ipv6_head != NULL && gh->ipv6_head->next != prev_head) {
-                DetectAddress *prev_head = gh->ipv6_head;
+                DetectAddress *ph = gh->ipv6_head;
 
                 r = DetectAddressParse(NULL, gh, "2001::4");
-                if (r == 0 && gh->ipv6_head == prev_head &&
-                    gh->ipv6_head != NULL && gh->ipv6_head->next != prev_head) {
+                if (r == 0 && gh->ipv6_head == ph &&
+                    gh->ipv6_head != NULL && gh->ipv6_head->next != ph) {
                     result = 1;
                 }
             }

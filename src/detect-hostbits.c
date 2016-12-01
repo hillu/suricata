@@ -77,7 +77,7 @@ void DetectHostbitsRegister (void)
 {
     sigmatch_table[DETECT_HOSTBITS].name = "hostbits";
     sigmatch_table[DETECT_HOSTBITS].desc = "operate on host flag";
-//    sigmatch_table[DETECT_HOSTBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#Flowbits";
+//    sigmatch_table[DETECT_HOSTBITS].url = DOC_URL DOC_VERSION "/rules/flow-keywords.html#flowbits";
     sigmatch_table[DETECT_HOSTBITS].Match = DetectHostbitMatch;
     sigmatch_table[DETECT_HOSTBITS].Setup = DetectHostbitSetup;
     sigmatch_table[DETECT_HOSTBITS].Free  = DetectHostbitFree;
@@ -547,8 +547,7 @@ static int HostBitsTestSig01(void)
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (unlikely(p == NULL))
-        return 0;
+    FAIL_IF_NULL(p);
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
@@ -577,19 +576,8 @@ static int HostBitsTestSig01(void)
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-    }
-
-    if (det_ctx != NULL) {
-        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    }
-
-    if (de_ctx != NULL) {
-        DetectEngineCtxFree(de_ctx);
-    }
-
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
     HostBitsTestShutdown();
 
     SCFree(p);
@@ -637,8 +625,6 @@ static int HostBitsTestSig02(void)
             "alert ip any any -> any any (hostbits:toggle,abc,dst; content:\"GET \"; sid:5;)");
     FAIL_IF_NULL(s);
 
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
     PASS;
 }

@@ -1,15 +1,54 @@
-3.1.3 -- 2016-11-01
+3.2 -- 2016-12-01
 
-Bug #1861: Suricata with multitenancy does not start in 3.1/3.1.1
-Bug #1889: Suricata doesn't error on missing semicolon
-Bug #1910: libhtp 0.5.23 (3.1.x)
-Bug #1912: http.memcap reached condition can lead to dead lock
-Bug #1913: af-packet fanout detection broken on Debian Jessie
-Bug #1933: unix-command socket created with last character missing (3.1.x)
-Bug #1934: make install-full does not install tls-events.rules (3.1.x)
-Bug #1941: Can't set fast_pattern on tls_sni content (3.1.x)
-Bug #1942: dns - back to back requests results in loss of response (3.1.x)
-Bug #1943: Check redis reply in non pipeline mode (3.1.x)
+Bug #1117: PCAP file count does not persist
+Bug #1577: luajit scripts load error
+Bug #1924: Windows dynamic DNS updates trigger 'DNS malformed request data' alerts
+Bug #1938: suricata: log handling issues
+Bug #1955: luajit script init failed
+Bug #1960: Error while parsing rule with PCRE keyword with semicolon
+Bug #1961: No error on missing semicolon between depth and classtype
+Bug #1965: dnp3/enip/cip keywords naming convention
+Bug #1966: af-packet fanout detection broken on Debian Jessie (master)
+
+3.2RC1 -- 2016-11-01
+
+Feature #1906: doc: install man page and ship pdf
+Feature #1916: lua: add an SCPacketTimestamp function
+Feature #1867: rule compatibility: flow:not_established not supported.
+Bug #1525: Use pkg-config for libnetfilter_queue
+Bug #1690: app-layer-proto negation issue
+Bug #1909: libhtp 0.5.23
+Bug #1914: file log always shows stored: no even if file is stored
+Bug #1917: nfq: bypass SEGV
+Bug #1919: filemd5: md5-list does not allow comments any more
+Bug #1923: dns - back to back requests results in loss of response
+Bug #1928: flow bypass leads to memory errors
+Bug #1931: multi-tenancy fails to start
+Bug #1932: make install-full does not install tls-events.rules
+Bug #1935: Check redis reply in non pipeline mode
+Bug #1936: Can't set fast_pattern on tls_sni content
+
+3.2beta1 -- 2016-10-03
+
+Feature #509: add SHA1 and SHA256 checksum support for files
+Feature #1231: ssl_state negation support
+Feature #1345: OOBE -3- disable NIC offloading by default
+Feature #1373: Allow different reassembly depth for filestore rules
+Feature #1495: EtherNet/IP and CIP support
+Feature #1583: tls: validity fields (notBefore and notAfter)
+Feature #1657: Per application layer stats
+Feature #1896: Reimplement tls.subject and tls.isserdn
+Feature #1903: tls: tls_cert_valid and tls_cert_expired keywords
+Feature #1907: http_request_line and http_response_line
+Optimization #1044: TLS buffers evaluated by fast_pattern matcher.
+Optimization #1277: Trigger second live rule-reload while first one is in progress
+Bug #312: incorrect parsing of rules with missing semi-colon for keywords
+Bug #712: wildcard matches on tls.subject
+Bug #1353: unix-command socket created with last character missing
+Bug #1486: invalid rule: parser err msg not descriptive enough
+Bug #1525: Use pkg-config for libnetfilter_queue
+Bug #1893: tls: src_ip and dest_ip reversed in TLS events for IPS vs IDS mode.
+Bug #1898: Inspection does not always stop when stream depth is reached
 
 3.1.2 -- 2016-09-06
 

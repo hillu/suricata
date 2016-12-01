@@ -95,40 +95,36 @@ void DetectTlsRegister (void)
 {
     sigmatch_table[DETECT_AL_TLS_SUBJECT].name = "tls.subject";
     sigmatch_table[DETECT_AL_TLS_SUBJECT].desc = "match TLS/SSL certificate Subject field";
-    sigmatch_table[DETECT_AL_TLS_SUBJECT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlssubject";
+    sigmatch_table[DETECT_AL_TLS_SUBJECT].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlssubject";
     sigmatch_table[DETECT_AL_TLS_SUBJECT].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].AppLayerMatch = DetectTlsSubjectMatch;
-    sigmatch_table[DETECT_AL_TLS_SUBJECT].alproto = ALPROTO_TLS;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].Setup = DetectTlsSubjectSetup;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].Free  = DetectTlsSubjectFree;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].RegisterTests = DetectTlsSubjectRegisterTests;
 
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].name = "tls.issuerdn";
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].desc = "match TLS/SSL certificate IssuerDN field";
-    sigmatch_table[DETECT_AL_TLS_ISSUERDN].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlsissuerdn";
+    sigmatch_table[DETECT_AL_TLS_ISSUERDN].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsissuerdn";
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].AppLayerMatch = DetectTlsIssuerDNMatch;
-    sigmatch_table[DETECT_AL_TLS_ISSUERDN].alproto = ALPROTO_TLS;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].Setup = DetectTlsIssuerDNSetup;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].Free  = DetectTlsIssuerDNFree;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].RegisterTests = DetectTlsIssuerDNRegisterTests;
 
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].name = "tls.fingerprint";
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].desc = "match TLS/SSL certificate SHA1 fingerprint";
-    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlsfingerprint";
+    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsfingerprint";
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].AppLayerMatch = DetectTlsFingerprintMatch;
-    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].alproto = ALPROTO_TLS;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Setup = DetectTlsFingerprintSetup;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Free  = DetectTlsFingerprintFree;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].RegisterTests = NULL;
 
     sigmatch_table[DETECT_AL_TLS_STORE].name = "tls.store";
     sigmatch_table[DETECT_AL_TLS_STORE].desc = "store TLS/SSL certificate on disk";
-    sigmatch_table[DETECT_AL_TLS_STORE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlsstore";
+    sigmatch_table[DETECT_AL_TLS_STORE].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsstore";
     sigmatch_table[DETECT_AL_TLS_STORE].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_STORE].AppLayerMatch = DetectTlsStoreMatch;
-    sigmatch_table[DETECT_AL_TLS_STORE].alproto = ALPROTO_TLS;
     sigmatch_table[DETECT_AL_TLS_STORE].Setup = DetectTlsStoreSetup;
     sigmatch_table[DETECT_AL_TLS_STORE].Free  = NULL;
     sigmatch_table[DETECT_AL_TLS_STORE].RegisterTests = NULL;
@@ -657,13 +653,20 @@ static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_
 
     int ret = 0;
 
-    if (ssl_state->server_connp.cert0_fingerprint != NULL) {
+    SSLStateConnp *connp = NULL;
+    if (flags & STREAM_TOSERVER) {
+        connp = &ssl_state->client_connp;
+    } else {
+        connp = &ssl_state->server_connp;
+    }
+
+    if (connp->cert0_fingerprint != NULL) {
         SCLogDebug("TLS: Fingerprint is [%s], looking for [%s]\n",
-                   ssl_state->server_connp.cert0_fingerprint,
+                   connp->cert0_fingerprint,
                    tls_data->fingerprint);
 
         if (tls_data->fingerprint &&
-            (strstr(ssl_state->server_connp.cert0_fingerprint,
+            (strstr(connp->cert0_fingerprint,
                     tls_data->fingerprint) != NULL)) {
             if (tls_data->flags & DETECT_CONTENT_NEGATED) {
                 ret = 0;

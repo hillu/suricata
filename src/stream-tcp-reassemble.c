@@ -45,6 +45,7 @@
 #include "util-host-os-info.h"
 #include "util-unittest-helper.h"
 #include "util-byte.h"
+#include "util-device.h"
 
 #include "stream-tcp.h"
 #include "stream-tcp-private.h"
@@ -1769,14 +1770,14 @@ int StreamTcpReassembleDepthReached(Packet *p)
  *
  *  \retval size Part of the size that fits in the depth, 0 if none
  */
-static uint32_t StreamTcpReassembleCheckDepth(TcpStream *stream,
+static uint32_t StreamTcpReassembleCheckDepth(TcpSession *ssn, TcpStream *stream,
         uint32_t seq, uint32_t size)
 {
     SCEnter();
 
     /* if the configured depth value is 0, it means there is no limit on
        reassembly depth. Otherwise carry on my boy ;) */
-    if (stream_config.reassembly_depth == 0) {
+    if (ssn->reassembly_depth == 0) {
         SCReturnUInt(size);
     }
 
@@ -1789,24 +1790,25 @@ static uint32_t StreamTcpReassembleCheckDepth(TcpStream *stream,
      * checking and just reject the rest of the packets including
      * retransmissions. Saves us the hassle of dealing with sequence
      * wraps as well */
-    if (SEQ_GEQ((StreamTcpReassembleGetRaBaseSeq(stream)+1),(stream->isn + stream_config.reassembly_depth))) {
+    if (SEQ_GEQ((StreamTcpReassembleGetRaBaseSeq(stream)+1),(stream->isn + ssn->reassembly_depth))) {
         stream->flags |= STREAMTCP_STREAM_FLAG_DEPTH_REACHED;
         SCReturnUInt(0);
     }
 
     SCLogDebug("full Depth not yet reached: %"PRIu32" <= %"PRIu32,
             (StreamTcpReassembleGetRaBaseSeq(stream)+1),
-            (stream->isn + stream_config.reassembly_depth));
+            (stream->isn + ssn->reassembly_depth));
 
-    if (SEQ_GEQ(seq, stream->isn) && SEQ_LT(seq, (stream->isn + stream_config.reassembly_depth))) {
+    if (SEQ_GEQ(seq, stream->isn) && SEQ_LT(seq, (stream->isn + ssn->reassembly_depth))) {
         /* packet (partly?) fits the depth window */
 
-        if (SEQ_LEQ((seq + size),(stream->isn + stream_config.reassembly_depth))) {
+        if (SEQ_LEQ((seq + size),(stream->isn + ssn->reassembly_depth))) {
             /* complete fit */
             SCReturnUInt(size);
         } else {
+            stream->flags |= STREAMTCP_STREAM_FLAG_DEPTH_REACHED;
             /* partial fit, return only what fits */
-            uint32_t part = (stream->isn + stream_config.reassembly_depth) - seq;
+            uint32_t part = (stream->isn + ssn->reassembly_depth) - seq;
 #if DEBUG
             BUG_ON(part > size);
 #else
@@ -1901,7 +1903,7 @@ int StreamTcpReassembleHandleSegmentHandleData(ThreadVars *tv, TcpReassemblyThre
 
     /* If we have reached the defined depth for either of the stream, then stop
        reassembling the TCP session */
-    uint32_t size = StreamTcpReassembleCheckDepth(stream, TCP_GET_SEQ(p), p->payload_len);
+    uint32_t size = StreamTcpReassembleCheckDepth(ssn, stream, TCP_GET_SEQ(p), p->payload_len);
     SCLogDebug("ssn %p: check depth returned %"PRIu32, ssn, size);
 
     if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED) {
@@ -5086,14 +5088,14 @@ static int StreamTcpTestMissedPacket (TcpReassemblyThreadCtx *ra_ctx,
         s = &ssn->client;
     }
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, ssn, s, p, &pq) == -1) {
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         SCFree(p);
         return -1;
     }
 
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     SCFree(p);
     return 0;
 }
@@ -6169,7 +6171,7 @@ static int StreamTcpReassembleTest38 (void)
     TcpStream *s = NULL;
     s = &ssn.server;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, &ssn, s, p, &pq) == -1) {
         printf("failed in segments reassembly, while processing toserver packet (1): ");
         goto end;
@@ -6203,7 +6205,7 @@ static int StreamTcpReassembleTest38 (void)
 end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     SCFree(p);
     return ret;
 }
@@ -6238,7 +6240,7 @@ static int StreamTcpReassembleTest39 (void)
     p->flow = &f;
     p->tcph = &tcph;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     int ret = 0;
 
     StreamTcpInitConfig(TRUE);
@@ -6259,8 +6261,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6286,8 +6286,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6314,8 +6312,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6343,8 +6339,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6373,8 +6367,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6414,8 +6406,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_UNKNOWN ||
         f.alproto_ts != ALPROTO_UNKNOWN ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6486,8 +6476,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_UNKNOWN ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6515,8 +6503,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6544,8 +6530,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6572,8 +6556,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6600,8 +6582,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6630,8 +6610,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6660,8 +6638,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6689,8 +6665,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6719,8 +6693,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6762,8 +6734,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6789,8 +6759,6 @@ static int StreamTcpReassembleTest39 (void)
         f.alproto != ALPROTO_HTTP ||
         f.alproto_ts != ALPROTO_HTTP ||
         f.alproto_tc != ALPROTO_HTTP ||
-        f.data_al_so_far[0] != 0 ||
-        f.data_al_so_far[1] != 0 ||
         ssn->flags & STREAMTCP_FLAG_APP_LAYER_DISABLED ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOSERVER) || !FLOW_IS_PP_DONE(&f, STREAM_TOSERVER) ||
         !FLOW_IS_PM_DONE(&f, STREAM_TOCLIENT) || FLOW_IS_PP_DONE(&f, STREAM_TOCLIENT) ||
@@ -6808,7 +6776,7 @@ end:
     StreamTcpSessionClear(p->flow->protoctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     return ret;
 }
 
@@ -6880,7 +6848,7 @@ static int StreamTcpReassembleTest40 (void)
     TcpStream *s = NULL;
     s = &ssn.client;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, &ssn, s, p, &pq) == -1) {
         printf("failed in segments reassembly, while processing toserver packet (1): ");
         goto end;
@@ -7010,7 +6978,7 @@ end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -7085,7 +7053,7 @@ static int StreamTcpReassembleTest43 (void)
     TcpStream *s = NULL;
     s = &ssn.server;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, &ssn, s, p, &pq) == -1) {
         printf("failed in segments reassembly, while processing toserver packet (1): ");
         goto end;
@@ -7181,7 +7149,7 @@ end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -7284,12 +7252,12 @@ static int StreamTcpReassembleTest45 (void)
     ssn.state = TCP_ESTABLISHED;
 
     /* set the default value of reassembly depth, as there is no config file */
-    stream_config.reassembly_depth = httplen1 + 1;
+    ssn.reassembly_depth = httplen1 + 1;
 
     TcpStream *s = NULL;
     s = &ssn.server;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, &ssn, s, p, &pq) == -1) {
         printf("failed in segments reassembly, while processing toclient packet: ");
         goto end;
@@ -7341,7 +7309,7 @@ end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -7408,7 +7376,7 @@ static int StreamTcpReassembleTest46 (void)
     TcpStream *s = NULL;
     s = &ssn.server;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     if (StreamTcpReassembleHandleSegment(&tv, ra_ctx, &ssn, s, p, &pq) == -1) {
         printf("failed in segments reassembly, while processing toclient packet\n");
         goto end;
@@ -7465,7 +7433,7 @@ end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -7522,7 +7490,7 @@ static int StreamTcpReassembleTest47 (void)
     TcpStream *s = NULL;
     uint8_t cnt = 0;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     for (cnt=0; cnt < httplen1; cnt++) {
         tcph.th_seq = htonl(ssn.client.isn + 1 + cnt);
         tcph.th_ack = htonl(572799782UL);
@@ -7565,7 +7533,7 @@ end:
     StreamTcpReassembleFreeThreadCtx(ra_ctx);
     StreamTcpFreeConfig(TRUE);
     SCFree(p);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -7597,7 +7565,7 @@ static int StreamTcpReassembleInlineTest01(void)
     p->tcph->th_seq = htonl(12);
     p->flow = &f;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -7629,7 +7597,7 @@ static int StreamTcpReassembleInlineTest01(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -7667,7 +7635,7 @@ static int StreamTcpReassembleInlineTest02(void)
     p->tcph->th_seq = htonl(12);
     p->flow = &f;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -7720,7 +7688,7 @@ static int StreamTcpReassembleInlineTest02(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -7762,7 +7730,7 @@ static int StreamTcpReassembleInlineTest03(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -7817,7 +7785,7 @@ static int StreamTcpReassembleInlineTest03(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -7859,7 +7827,7 @@ static int StreamTcpReassembleInlineTest04(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -7914,7 +7882,7 @@ static int StreamTcpReassembleInlineTest04(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -7950,7 +7918,7 @@ static int StreamTcpReassembleInlineTest05(void)
     p->tcph->th_seq = htonl(12);
     p->flow = &f;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -7989,7 +7957,7 @@ static int StreamTcpReassembleInlineTest05(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -8026,7 +7994,7 @@ static int StreamTcpReassembleInlineTest06(void)
     p->tcph->th_seq = htonl(12);
     p->flow = &f;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8088,7 +8056,7 @@ static int StreamTcpReassembleInlineTest06(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -8129,7 +8097,7 @@ static int StreamTcpReassembleInlineTest07(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8191,7 +8159,7 @@ static int StreamTcpReassembleInlineTest07(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -8235,7 +8203,7 @@ static int StreamTcpReassembleInlineTest08(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8305,7 +8273,7 @@ static int StreamTcpReassembleInlineTest08(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -8350,7 +8318,7 @@ static int StreamTcpReassembleInlineTest09(void)
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8425,7 +8393,7 @@ static int StreamTcpReassembleInlineTest09(void)
 
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
@@ -8473,7 +8441,7 @@ static int StreamTcpReassembleInlineTest10(void)
     p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
 
-    SCMutexLock(&f->m);
+    FLOWLOCK_WRLOCK(f);
     if (StreamTcpUTAddSegmentWithPayload(&tv, ra_ctx, &ssn.server,  2, stream_payload1, 2) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8518,7 +8486,7 @@ end:
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
     StreamTcpUTDeinit(ra_ctx);
-    SCMutexUnlock(&f->m);
+    FLOWLOCK_UNLOCK(f);
     UTHFreeFlow(f);
     return ret;
 }
@@ -8550,7 +8518,7 @@ static int StreamTcpReassembleInsertTest01(void)
     p->tcph->th_seq = htonl(12);
     p->flow = &f;
 
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     if (StreamTcpUTAddSegmentWithByte(&tv, ra_ctx, &ssn.client,  2, 'A', 5) == -1) {
         printf("failed to add segment 1: ");
         goto end;
@@ -8594,7 +8562,7 @@ static int StreamTcpReassembleInsertTest01(void)
     }
     ret = 1;
 end:
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
     StreamTcpUTClearSession(&ssn);
