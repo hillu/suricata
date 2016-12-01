@@ -1,3 +1,18 @@
+suricata (3.2-1) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * [04f5cc3] d/control: update suricata homepage to suricata-ids.org
+    (Closes: #844603)
+
+  [ Sascha Steinbiss ]
+  * [b1cd09c] d/t/control: add some time to settle in autopkgtest
+
+  [ Arturo Borrero Gonzalez ]
+  * [dde83f1] New upstream version 3.2
+  * [c55dda2] d/patches/debian-default-cfg.patch: refresh patch
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 01 Dec 2016 16:22:50 +0100
+
 suricata (3.1.3-3) unstable; urgency=medium
 
   * [e7a248d] d/tests/control: allow-stderr in the suricata-oinkmaster-updater
