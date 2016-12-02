@@ -1,3 +1,2 @@
 etc/suricata
-usr/lib/python*
 var/log/suricata

@@ -12,15 +12,22 @@ export DH_VERBOSE=1
 
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
 
-SURICATA_DESTDIR = $(CURDIR)/debian/suricata
+SURICATA_DESTDIR = $(CURDIR)/debian/build-tmp/suricata-no-hs
+SURICATA_HSDESTDIR = $(CURDIR)/debian/build-tmp/suricata-hs
 
 ARCH ?= $(shell dpkg --print-architecture)
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 
 LUAJIT_ARCHS = i386 amd64 powerpc mips armel armhf
+HYPERSCAN_ARCHS = i386 amd64 hurd-i386 kfreebsd-amd64 x32
 
 ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
 	ENABLE_LUAJIT="--enable-luajit"
+endif
+
+TARGETS = suricata-no-hs
+ifneq (,$(findstring $(ARCH),$(HYPERSCAN_ARCHS)))
+	TARGETS += suricata-with-hs
 endif
 
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \
@@ -31,19 +38,39 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 	--enable-geoip --enable-hiredis \
 	$(ENABLE_LUAJIT)
 
-override_dh_auto_install:
-	dh_auto_install
+suricata-no-hs:
+	dh_auto_configure -- $(CONFIGURE_ARGS)
+	dh_auto_build --parallel
+	make install DESTDIR=$(SURICATA_DESTDIR)
 	rm -rf $(SURICATA_DESTDIR)/usr/lib/python*;\
 	(cd scripts/suricatasc &&\
 		python -B setup.py install --install-layout=deb --prefix $(SURICATA_DESTDIR)/usr)
 	# clean upstream install documentation
-	rm -rf $(CURDIR)/debian/suricata/usr/share/doc/suricata/*
+	rm -rf $(SURICATA_DESTDIR)/usr/share/doc/suricata/*
+	make clean
+
+suricata-with-hs:
+	dh_auto_configure -- $(CONFIGURE_ARGS) --enable-libhs
+	dh_auto_build --parallel
+	make install DESTDIR=$(SURICATA_HSDESTDIR)
+	rm -rf $(SURICATA_HSDESTDIR)/usr/lib/python*;\
+	(cd scripts/suricatasc &&\
+		python -B setup.py install --install-layout=deb --prefix $(SURICATA_HSDESTDIR)/usr)
+	# clean upstream install documentation
+	rm -rf $(SURICATA_HSDESTDIR)/usr/share/doc/suricata/*
+	make clean
+
+override_dh_auto_clean:
+	rm -rf $(CURDIR)/debian/build-tmp
+	dh_auto_clean
 
 override_dh_auto_configure:
-	dh_auto_configure -- $(CONFIGURE_ARGS)
+	# done in individual targets
+
+override_dh_auto_build: $(TARGETS)
 
 override_dh_strip:
 	dh_strip --dbg-package=suricata-dbg
 
 %:
-	dh  $@ --parallel --with autotools-dev,autoreconf,python2
+	dh  $@ --with autotools-dev,autoreconf,python2

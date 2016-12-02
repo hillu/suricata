@@ -1,6 +1,10 @@
+#!/usr/bin/dh-exec --with-scripts=install-rename
+
 classification.config /etc/suricata
 reference.config /etc/suricata
 rules/*.rules /etc/suricata/rules
 suricata.yaml	/etc/suricata
 threshold.config /etc/suricata
-usr/bin/*
+debian/build-tmp/suricata-no-hs/usr/bin/suricata => /usr/bin/suricata.generic
+debian/build-tmp/suricata-no-hs/usr/bin/suricatasc usr/bin
+debian/build-tmp/suricata-no-hs/usr/lib/python* usr/lib

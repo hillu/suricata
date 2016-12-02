@@ -1,2 +1,3 @@
 reproducible.patch
 debian-default-cfg.patch
+optional-hyperscan.patch
