@@ -1,0 +1,76 @@
+Suricata for Debian
+-------------------
+
+The engine is an Open Source Next Generation Intrusion Detection and
+Prevention Tool, not intended to just replace or emulate the existing tools in
+the industry, but to bring new ideas and technologies to the field.
+
+To run the engine with default configuration on interface eth0 (in live mode),
+run the following command (as root):
+ suricata -c /etc/suricata/suricata.yaml -i eth0
+
+To run in live NFQUEUE mode, use (as root):
+ suricata -c /etc/suricata/suricata.yaml -q $QUEUE_ID
+
+You can also run suricata on a PCAP file:
+ suricata -c /etc/suricata/suricata.yaml -r file.pcap
+
+
+Daemon system integration
+-------------------------
+
+The suricata daemon comes preconfigured to run as a system daemon with systemd.
+
+You can start/stop the daemon with:
+ % sudo systemctl start suricata.service
+ % sudo systemctl stop suricata.service
+
+You should copy /lib/systemd/system/suricata.service to
+/etc/systemd/system/suricata.service and adapt the configuration to your needs.
+
+The sysvinit script and related files (/etc/init.d/suricata and
+/etc/default/suricata) will be eventually discarted at some point in the
+future. The /etc/default/suricata file is ignored by the default
+suricata.service file.
+
+By now, there is no integration between suricata and libsystemd (so, options
+like the watchdog are not supported).
+
+
+Updating Rules
+--------------
+
+The default configuration use the snort-rules-default package (with all rules loaded),
+and all logging modules activated.
+You should edit /etc/suricata/suricata.yaml and adjust it to fit your needs.
+
+Using rules from the snort-rules-default package will not provide up-to-date
+rules. The recommended method is to install oinkmaster, configure it to get
+Emerging Threats (ET), ET Pro or VRT rules.
+
+Edit ``/etc/oinkmaster.conf`` and use the following URL:
+
+ http://rules.emergingthreats.net/open/suricata/emerging.rules.tar.gz
+
+For more help, see
+https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule_Management_with_Oinkmaster
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 17 Nov 2011 22:58:00 +0100
+
+Using suricata-oinkmaster
+-------------------------
+
+The package 'suricata-oinkmaster' deploys a pre-configured system to allow
+easy auto-update of suricata rules daily using oinkmaster.
+
+There is a config file /etc/suricata/suricata-oinkmaster.conf which contains
+the oinkmaster configuration for the auto-update.
+Also, there is a cronjob at /etc/cron.daily/suricata-oinkmaster-updater which
+calls oinkmaster and the suricatasc to reload the rules.
+
+Of course, this requires:
+ * suricata daemon running
+ * network access to download rules
+ * suricatasc working (ie, suricata running with unix socket)
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org> July 2016

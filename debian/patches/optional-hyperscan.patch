@@ -1,0 +1,21 @@
+Description: enable optional hyperscan support
+ This patch allows one to disable and enable Hyperscan support independently of
+ libhyperscan presence.
+Author: Sascha Steinbiss <satta@debian.org>
+--- a/configure.ac
++++ b/configure.ac
+@@ -595,8 +595,12 @@
+   # libhs
+     enable_hyperscan="no"
+ 
+-    # Try pkg-config first:
+-    PKG_CHECK_MODULES([libhs], libhs,, [with_pkgconfig_libhs=no])
++    AC_ARG_ENABLE([libhs], AS_HELP_STRING([--enable-libhs], [try building with Hyperscan support]))
++    if test "x$enable_libhs" = "xyes"; then
++        # Try pkg-config first:
++        PKG_CHECK_MODULES([libhs], libhs,, [with_pkgconfig_libhs=no])
++    fi
++
+     if test "$with_pkgconfig_libhs" != "no"; then
+         CPPFLAGS="${CPPFLAGS} ${libhs_CFLAGS}"
+         LIBS="${LIBS} ${libhs_LIBS}"
