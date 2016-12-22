@@ -1,3 +1,16 @@
+suricata (3.2-2~exp1) experimental; urgency=medium
+
+  [ Sascha Steinbiss ]
+  * [8c7704d] suricata: add hyperscan support (Closes: #846143)
+
+  [ Arturo Borrero Gonzalez ]
+  * [209d2cf] suricata: add remaining hyperscan support
+
+  [ Sascha Steinbiss ]
+  * [ec9b28a] set +x bit on d/suricata-hyperscan.install
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 22 Dec 2016 09:01:29 +0100
+
 suricata (3.2-1) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
