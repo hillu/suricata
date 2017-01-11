@@ -12,13 +12,14 @@
 #                    match against a set of known attacks.
 ### END INIT INFO
 
+# Source function library.
 . /lib/lsb/init-functions
 
-# Source function library.
 if test -f /etc/default/suricata; then
 	. /etc/default/suricata
 else
-	echo "/etc/default/suricata is missing... bailing out!"
+	echo "/etc/default/suricata is missing... bailing out!" >&2
+	exit 1
 fi
 
 # We'll add up all the options above and use them
