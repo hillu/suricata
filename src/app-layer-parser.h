@@ -162,7 +162,7 @@ void AppLayerParserDestroyProtocolParserLocalStorage(uint8_t ipproto, AppProto a
 
 
 uint64_t AppLayerParserGetTransactionLogId(AppLayerParserState *pstate);
-void AppLayerParserSetTransactionLogId(AppLayerParserState *pstate);
+void AppLayerParserSetTransactionLogId(AppLayerParserState *pstate, uint64_t tx_id);
 void AppLayerParserSetTxLogged(uint8_t ipproto, AppProto alproto, void *alstate,
                                void *tx, uint32_t logger);
 int AppLayerParserGetTxLogged(uint8_t ipproto, AppProto alproto, void *alstate,
@@ -237,8 +237,8 @@ void AppLayerParserStatePrintDetails(AppLayerParserState *pstate);
 #endif
 
 #ifdef AFLFUZZ_APPLAYER
-int AppLayerParserRequestFromFile(AppProto alproto, char *filename);
-int AppLayerParserFromFile(AppProto alproto, char *filename);
+int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filename);
+int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename);
 #endif
 
 /***** Unittests *****/

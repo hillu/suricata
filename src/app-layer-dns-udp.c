@@ -314,7 +314,7 @@ static int DNSUDPResponseParse(Flow *f, void *dstate,
 
         tx->replied = 1;
     }
-    if (dns_state != NULL && f != NULL) {
+    if (f != NULL) {
         dns_state->last_resp = f->lastts;
     }
     SCReturnInt(1);
@@ -395,20 +395,23 @@ void RegisterDNSUDPParsers(void)
                                           ALPROTO_DNS,
                                           0, sizeof(DNSHeader),
                                           STREAM_TOSERVER,
-                                          DNSUdpProbingParser);
+                                          DNSUdpProbingParser,
+                                          NULL);
         } else {
             int have_cfg = AppLayerProtoDetectPPParseConfPorts("udp", IPPROTO_UDP,
                                                 proto_name, ALPROTO_DNS,
                                                 0, sizeof(DNSHeader),
-                                                DNSUdpProbingParser);
+                                                DNSUdpProbingParser, NULL);
             /* if we have no config, we enable the default port 53 */
             if (!have_cfg) {
+#ifndef AFLFUZZ_APPLAYER
                 SCLogWarning(SC_ERR_DNS_CONFIG, "no DNS UDP config found, "
                                                 "enabling DNS detection on "
                                                 "port 53.");
+#endif
                 AppLayerProtoDetectPPRegister(IPPROTO_UDP, "53",
                                    ALPROTO_DNS, 0, sizeof(DNSHeader),
-                                   STREAM_TOSERVER, DNSUdpProbingParser);
+                                   STREAM_TOSERVER, DNSUdpProbingParser, NULL);
             }
         }
     } else {

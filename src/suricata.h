@@ -71,7 +71,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "3.2"
+#define PROG_VER "3.2.1"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -169,7 +169,7 @@ typedef struct SCInstance_ {
 
 
 /* memset to zeros, and mutex init! */
-void GlobalInits();
+void GlobalsInitPreConfig();
 
 extern volatile uint8_t suricata_ctl_flags;
 
@@ -194,6 +194,10 @@ int RunmodeGetCurrent(void);
 int IsRuleReloadSet(int quiet);
 
 extern int run_mode;
+
+void PreRunInit(const int runmode);
+void PreRunPostPrivsDropInit(const int runmode);
+void PostRunDeinit(const int runmode, struct timeval *start_time);
 
 #endif /* __SURICATA_H__ */
 

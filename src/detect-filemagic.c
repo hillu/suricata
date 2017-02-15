@@ -54,6 +54,27 @@
 
 #include "conf.h"
 
+#ifndef HAVE_MAGIC
+
+static int DetectFilemagicSetupNoSupport (DetectEngineCtx *de_ctx, Signature *s, char *str)
+{
+    SCLogError(SC_ERR_NO_MAGIC_SUPPORT, "no libmagic support built in, needed for filemagic keyword");
+    return -1;
+}
+
+/**
+ * \brief Registration function for keyword: filemagic
+ */
+void DetectFilemagicRegister(void)
+{
+    sigmatch_table[DETECT_FILEMAGIC].name = "filemagic";
+    sigmatch_table[DETECT_FILEMAGIC].desc = "match on the information libmagic returns about a file";
+    sigmatch_table[DETECT_FILEMAGIC].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filemagic";
+    sigmatch_table[DETECT_FILEMAGIC].Setup = DetectFilemagicSetupNoSupport;
+}
+
+#else /* HAVE_MAGIC */
+
 static int DetectFilemagicMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
         uint8_t, File *, Signature *, SigMatch *);
 static int DetectFilemagicSetup (DetectEngineCtx *, Signature *, char *);
@@ -89,7 +110,7 @@ void DetectFilemagicRegister(void)
  */
 int FilemagicGlobalLookup(File *file)
 {
-    if (file == NULL || FileSize(file) == 0) {
+    if (file == NULL || FileDataSize(file) == 0) {
         SCReturnInt(-1);
     }
 
@@ -100,7 +121,7 @@ int FilemagicGlobalLookup(File *file)
     StreamingBufferGetData(file->sb,
                            &data, &data_len, &offset);
     if (offset == 0) {
-        if (FileSize(file) >= FILEMAGIC_MIN_SIZE) {
+        if (FileDataSize(file) >= FILEMAGIC_MIN_SIZE) {
             file->magic = MagicGlobalLookup(data, data_len);
         } else if (file->state >= FILE_STATE_CLOSED) {
             file->magic = MagicGlobalLookup(data, data_len);
@@ -120,7 +141,7 @@ int FilemagicGlobalLookup(File *file)
  */
 int FilemagicThreadLookup(magic_t *ctx, File *file)
 {
-    if (ctx == NULL || file == NULL || FileSize(file) == 0) {
+    if (ctx == NULL || file == NULL || FileDataSize(file) == 0) {
         SCReturnInt(-1);
     }
 
@@ -131,7 +152,7 @@ int FilemagicThreadLookup(magic_t *ctx, File *file)
     StreamingBufferGetData(file->sb,
                            &data, &data_len, &offset);
     if (offset == 0) {
-        if (FileSize(file) >= FILEMAGIC_MIN_SIZE) {
+        if (FileDataSize(file) >= FILEMAGIC_MIN_SIZE) {
             file->magic = MagicThreadLookup(ctx, data, data_len);
         } else if (file->state >= FILE_STATE_CLOSED) {
             file->magic = MagicThreadLookup(ctx, data, data_len);
@@ -453,3 +474,6 @@ void DetectFilemagicRegisterTests(void)
     UtRegisterTest("DetectFilemagicTestParse03", DetectFilemagicTestParse03);
 #endif /* UNITTESTS */
 }
+
+#endif /* HAVE_MAGIC */
+

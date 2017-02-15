@@ -127,20 +127,20 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	app-layer-ssh.$(OBJEXT) app-layer-ssl.$(OBJEXT) \
 	app-layer-tls-handshake.$(OBJEXT) conf.$(OBJEXT) \
 	conf-yaml-loader.$(OBJEXT) counters.$(OBJEXT) \
-	data-queue.$(OBJEXT) decode.$(OBJEXT) decode-erspan.$(OBJEXT) \
-	decode-ethernet.$(OBJEXT) decode-events.$(OBJEXT) \
-	decode-gre.$(OBJEXT) decode-icmpv4.$(OBJEXT) \
-	decode-icmpv6.$(OBJEXT) decode-ipv4.$(OBJEXT) \
-	decode-ipv6.$(OBJEXT) decode-null.$(OBJEXT) \
-	decode-ppp.$(OBJEXT) decode-pppoe.$(OBJEXT) \
-	decode-raw.$(OBJEXT) decode-sctp.$(OBJEXT) \
-	decode-sll.$(OBJEXT) decode-tcp.$(OBJEXT) \
-	decode-teredo.$(OBJEXT) decode-udp.$(OBJEXT) \
-	decode-vlan.$(OBJEXT) decode-mpls.$(OBJEXT) \
-	decode-template.$(OBJEXT) defrag-config.$(OBJEXT) \
-	defrag.$(OBJEXT) defrag-hash.$(OBJEXT) defrag-queue.$(OBJEXT) \
-	defrag-timeout.$(OBJEXT) detect-ack.$(OBJEXT) \
-	detect-app-layer-event.$(OBJEXT) \
+	data-queue.$(OBJEXT) decode.$(OBJEXT) decode-afl.$(OBJEXT) \
+	decode-erspan.$(OBJEXT) decode-ethernet.$(OBJEXT) \
+	decode-events.$(OBJEXT) decode-gre.$(OBJEXT) \
+	decode-icmpv4.$(OBJEXT) decode-icmpv6.$(OBJEXT) \
+	decode-ipv4.$(OBJEXT) decode-ipv6.$(OBJEXT) \
+	decode-null.$(OBJEXT) decode-ppp.$(OBJEXT) \
+	decode-pppoe.$(OBJEXT) decode-raw.$(OBJEXT) \
+	decode-sctp.$(OBJEXT) decode-sll.$(OBJEXT) \
+	decode-tcp.$(OBJEXT) decode-teredo.$(OBJEXT) \
+	decode-udp.$(OBJEXT) decode-vlan.$(OBJEXT) \
+	decode-mpls.$(OBJEXT) decode-template.$(OBJEXT) \
+	defrag-config.$(OBJEXT) defrag.$(OBJEXT) defrag-hash.$(OBJEXT) \
+	defrag-queue.$(OBJEXT) defrag-timeout.$(OBJEXT) \
+	detect-ack.$(OBJEXT) detect-app-layer-event.$(OBJEXT) \
 	detect-app-layer-protocol.$(OBJEXT) detect-asn1.$(OBJEXT) \
 	detect-base64-data.$(OBJEXT) detect-base64-decode.$(OBJEXT) \
 	detect-byte-extract.$(OBJEXT) detect-bytejump.$(OBJEXT) \
@@ -634,6 +634,7 @@ conf-yaml-loader.c conf-yaml-loader.h \
 counters.c counters.h \
 data-queue.c data-queue.h \
 decode.c decode.h \
+decode-afl.c \
 decode-erspan.c decode-erspan.h \
 decode-ethernet.c decode-ethernet.h \
 decode-events.c decode-events.h \
@@ -1197,6 +1198,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/conf.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/counters.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/data-queue.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-afl.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-erspan.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-ethernet.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/decode-events.Po@am__quote@

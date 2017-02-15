@@ -119,8 +119,10 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
     json_object_set_new(fjs, "filename", json_string(s));
     if (s != NULL)
         SCFree(s);
+#ifdef HAVE_MAGIC
     if (ff->magic)
         json_object_set_new(fjs, "magic", json_string((char *)ff->magic));
+#endif
     switch (ff->state) {
         case FILE_STATE_CLOSED:
             json_object_set_new(fjs, "state", json_string("CLOSED"));
@@ -169,7 +171,7 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
     if (ff->flags & FILE_STORED) {
         json_object_set_new(fjs, "file_id", json_integer(ff->file_id));
     }
-    json_object_set_new(fjs, "size", json_integer(FileSize(ff)));
+    json_object_set_new(fjs, "size", json_integer(FileTrackedSize(ff)));
     json_object_set_new(fjs, "tx_id", json_integer(ff->txid));
 
     /* originally just 'file', but due to bug 1127 naming it fileinfo */

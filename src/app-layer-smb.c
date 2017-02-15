@@ -678,6 +678,7 @@ static int32_t DataParser(void *smb_state, AppLayerParserState *pstate,
             sstate->bytesprocessed += parsed;
             sstate->bytecount.bytecountleft -= parsed;
             input_len -= parsed;
+            (void)input_len; /* for scan-build */
         }
     }
     SCReturnInt(parsed);
@@ -833,7 +834,9 @@ static uint32_t SMBParseByteCount(Flow *f, void *smb_state,
             sres = DataParser(sstate, pstate, input + parsed, input_len);
             if (sres != -1 && sres <= (int32_t)input_len) {
                 parsed += (uint32_t)sres;
+                (void)parsed; /* for scan-build */
                 input_len -= (uint32_t)sres;
+                (void)input_len; /* for scan-build */
             } else { /* Did not Validate as DCERPC over SMB */
                 while (sstate->bytecount.bytecountleft-- && input_len--) {
                     SCLogDebug("0x%02x bytecount %"PRIu16"/%"PRIu16" input_len %"PRIu32, *p,
@@ -1497,18 +1500,17 @@ static uint16_t SMBProbingParser(uint8_t *input, uint32_t ilen, uint32_t *offset
 
 static int SMBRegisterPatternsForProtocolDetection(void)
 {
-    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB,
-                                               "|ff|SMB", 8, 4, STREAM_TOSERVER) < 0)
-    {
-        return -1;
-    }
-    if (AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB2,
-                                               "|fe|SMB", 8, 4, STREAM_TOSERVER) < 0)
-    {
-        return -1;
-    }
+    int r = 0;
+    r |= AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB,
+            "|ff|SMB", 8, 4, STREAM_TOSERVER);
+    r |= AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB,
+            "|ff|SMB", 8, 4, STREAM_TOCLIENT);
 
-    return 0;
+    r |= AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB2,
+            "|fe|SMB", 8, 4, STREAM_TOSERVER);
+    r |= AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_SMB2,
+            "|fe|SMB", 8, 4, STREAM_TOCLIENT);
+    return r == 0 ? 0 : -1;
 }
 
 void RegisterSMBParsers(void)
@@ -1526,12 +1528,12 @@ void RegisterSMBParsers(void)
                                           ALPROTO_SMB,
                                           SMB_PROBING_PARSER_MIN_DEPTH, 0,
                                           STREAM_TOSERVER,
-                                          SMBProbingParser);
+                                          SMBProbingParser, SMBProbingParser);
         } else {
             AppLayerProtoDetectPPParseConfPorts("tcp", IPPROTO_TCP,
                                                 proto_name, ALPROTO_SMB,
                                                 SMB_PROBING_PARSER_MIN_DEPTH, 0,
-                                                SMBProbingParser);
+                                                SMBProbingParser, SMBProbingParser);
         }
 
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_SMB, STREAM_TOSERVER);
@@ -2217,7 +2219,7 @@ int SMBParserTest05(void)
                                   ALPROTO_SMB,
                                   SMB_PROBING_PARSER_MIN_DEPTH, 0,
                                   STREAM_TOSERVER,
-                                  SMBProbingParser);
+                                  SMBProbingParser, NULL);
 
     AppLayerProtoDetectPrepareState();
     alpd_tctx = AppLayerProtoDetectGetCtxThread();
@@ -2301,7 +2303,7 @@ int SMBParserTest06(void)
                    ALPROTO_SMB,
                    SMB_PROBING_PARSER_MIN_DEPTH, 0,
                    STREAM_TOSERVER,
-                   SMBProbingParser);
+                   SMBProbingParser, NULL);
 
     AppLayerProtoDetectPrepareState();
     alpd_tctx = AppLayerProtoDetectGetCtxThread();

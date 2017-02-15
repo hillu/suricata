@@ -67,6 +67,7 @@ SCEnumCharMap tls_decoder_event_table[ ] = {
     { "MULTIPLE_SNI_EXTENSIONS",     TLS_DECODER_EVENT_MULTIPLE_SNI_EXTENSIONS },
     { "INVALID_SNI_TYPE",            TLS_DECODER_EVENT_INVALID_SNI_TYPE },
     { "INVALID_SNI_LENGTH",          TLS_DECODER_EVENT_INVALID_SNI_LENGTH },
+    { "TOO_MANY_RECORDS_IN_PACKET",  TLS_DECODER_EVENT_TOO_MANY_RECORDS_IN_PACKET },
     /* certificate decoding messages */
     { "INVALID_CERTIFICATE",         TLS_DECODER_EVENT_INVALID_CERTIFICATE },
     { "CERTIFICATE_MISSING_ELEMENT", TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT },
@@ -130,6 +131,8 @@ SslConfig ssl_config;
 /* TLS heartbeat protocol types */
 #define TLS_HB_REQUEST                  1
 #define TLS_HB_RESPONSE                 2
+
+#define SSL_PACKET_MAX_RECORDS        255
 
 #define HAS_SPACE(n) ((uint32_t)((input) + (n) - (initial_input)) > (uint32_t)(input_len)) ?  0 : 1
 
@@ -232,6 +235,13 @@ int SSLGetAlstateProgress(void *tx, uint8_t direction)
         return TLS_HANDSHAKE_DONE;
     }
 
+    if (direction == STREAM_TOSERVER &&
+        (ssl_state->server_connp.cert0_subject != NULL ||
+         ssl_state->server_connp.cert0_issuerdn != NULL))
+    {
+        return TLS_STATE_CERT_READY;
+    }
+
     return TLS_STATE_IN_PROGRESS;
 }
 
@@ -275,8 +285,9 @@ static int TLSDecodeHandshakeHello(SSLState *ssl_state, uint8_t *input,
 
     input += compression_methods_length;
 
+    /* extensions are optional (RFC5246 section 7.4.1.2) */
     if (!(HAS_SPACE(2)))
-        goto invalid_length;
+        goto end;
 
     uint16_t extensions_len = input[0] << 8 | input[1];
     input += 2;
@@ -438,6 +449,7 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
                 ssl_state->curr_connp->trec_len = 0;
                 /* error, skip packet */
                 parsed += input_len;
+                (void)parsed; /* for scan-build */
                 ssl_state->curr_connp->bytes_processed += input_len;
                 return -1;
             }
@@ -1254,6 +1266,7 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
 
                 parsed += retval;
                 input_len -= retval;
+                (void)input_len; /* for scan-build */
 
                 if (ssl_state->curr_connp->bytes_processed ==
                         ssl_state->curr_connp->record_length +
@@ -1364,11 +1377,12 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
 
     /* if we have more than one record */
     while (input_len > 0) {
-        if (counter++ == 30) {
+        if (counter++ == SSL_PACKET_MAX_RECORDS) {
             SCLogDebug("Looks like we have looped quite a bit. Reset state "
                        "and get out of here");
             SSLParserReset(ssl_state);
-            SSLSetEvent(ssl_state, TLS_DECODER_EVENT_INVALID_SSL_RECORD);
+            SSLSetEvent(ssl_state,
+                        TLS_DECODER_EVENT_TOO_MANY_RECORDS_IN_PACKET);
             return -1;
         }
 
@@ -1761,12 +1775,12 @@ void RegisterSSLParsers(void)
                                           ALPROTO_TLS,
                                           0, 3,
                                           STREAM_TOSERVER,
-                                          SSLProbingParser);
+                                          SSLProbingParser, NULL);
         } else {
             AppLayerProtoDetectPPParseConfPorts("tcp", IPPROTO_TCP,
                                                 proto_name, ALPROTO_TLS,
                                                 0, 3,
-                                                SSLProbingParser);
+                                                SSLProbingParser, NULL);
         }
     } else {
         SCLogInfo("Protocol detection and parser disabled for %s protocol",
