@@ -6,7 +6,6 @@ Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>
 Build-Depends: autotools-dev,
                debhelper (>= 9),
                dh-autoreconf,
-               dh-exec,
                dh-systemd,
                libcap-ng-dev,
                libgeoip-dev,
@@ -55,17 +54,6 @@ Description: Next Generation Intrusion Detection and Prevention Tool
  cards.
  .
  This version has inline (NFQUEUE) support enabled.
-
-Package: suricata-hyperscan
-Architecture: linux-amd64 linux-i386 linux-x32
-Pre-Depends: dpkg (>= 1.15.7.2)
-Depends: ${misc:Depends}, ${shlibs:Depends}, suricata (=${binary:Version}), libhyperscan4
-Description: Next Generation Intrusion Detection and Prevention Tool, Hyperscan support
- Suricata is a network Intrusion Detection System (IDS). It is based on
- rules (and is fully compatible with snort rules) to detect a variety of
- attacks / probes by searching packet content.
- .
- This package adds Hyperscan support to an installed Suricata version.
 
 Package: suricata-oinkmaster
 Architecture: all

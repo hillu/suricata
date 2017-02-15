@@ -10,10 +10,8 @@
 # Uncomment this to turn on verbose mode.
 export DH_VERBOSE=1
 
+SURICATA_DESTDIR = $(CURDIR)/debian/suricata
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
-
-SURICATA_DESTDIR = $(CURDIR)/debian/build-tmp/suricata-no-hs
-SURICATA_HSDESTDIR = $(CURDIR)/debian/build-tmp/suricata-hs
 
 ARCH ?= $(shell dpkg --print-architecture)
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
@@ -25,9 +23,8 @@ ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
 	ENABLE_LUAJIT="--enable-luajit"
 endif
 
-TARGETS = suricata-no-hs
 ifneq (,$(findstring $(ARCH),$(HYPERSCAN_ARCHS)))
-	TARGETS += suricata-with-hs
+	ENABLE_HYPERSCAN="--enable-libhs"
 endif
 
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \
@@ -36,41 +33,22 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--disable-coccinelle \
 	--enable-geoip --enable-hiredis \
-	$(ENABLE_LUAJIT)
+	$(ENABLE_LUAJIT) \
+	$(ENABLE_HYPERSCAN)
 
-suricata-no-hs:
+override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
-	dh_auto_build --parallel
-	make install DESTDIR=$(SURICATA_DESTDIR)
+
+override_dh_auto_install:
+	dh_auto_install
 	rm -rf $(SURICATA_DESTDIR)/usr/lib/python*;\
 	(cd scripts/suricatasc &&\
 		python -B setup.py install --install-layout=deb --prefix $(SURICATA_DESTDIR)/usr)
 	# clean upstream install documentation
 	rm -rf $(SURICATA_DESTDIR)/usr/share/doc/suricata/*
-	make clean
-
-suricata-with-hs:
-	dh_auto_configure -- $(CONFIGURE_ARGS) --enable-libhs
-	dh_auto_build --parallel
-	make install DESTDIR=$(SURICATA_HSDESTDIR)
-	rm -rf $(SURICATA_HSDESTDIR)/usr/lib/python*;\
-	(cd scripts/suricatasc &&\
-		python -B setup.py install --install-layout=deb --prefix $(SURICATA_HSDESTDIR)/usr)
-	# clean upstream install documentation
-	rm -rf $(SURICATA_HSDESTDIR)/usr/share/doc/suricata/*
-	make clean
-
-override_dh_auto_clean:
-	rm -rf $(CURDIR)/debian/build-tmp
-	dh_auto_clean
-
-override_dh_auto_configure:
-	# done in individual targets
-
-override_dh_auto_build: $(TARGETS)
 
 override_dh_strip:
 	dh_strip --dbg-package=suricata-dbg
 
 %:
-	dh  $@ --with autotools-dev,autoreconf,python2
+	dh $@ --parallel --with autotools-dev,autoreconf,python2

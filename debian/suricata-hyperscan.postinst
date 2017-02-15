@@ -1,8 +1,0 @@
-#!/bin/sh
-set -e
-
-update-alternatives --install /usr/bin/suricata suricata /usr/bin/suricata.hyperscan 110
-
-#DEBHELPER#
-
-exit 0

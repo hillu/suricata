@@ -1,3 +1,0 @@
-#!/usr/bin/dh-exec --with-scripts=install-rename
-
-debian/build-tmp/suricata-hs/usr/bin/suricata => /usr/bin/suricata.hyperscan
