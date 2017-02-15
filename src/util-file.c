@@ -267,12 +267,12 @@ int FileMagicSize(void)
 }
 
 /**
- *  \brief get the size of the file
+ *  \brief get the size of the file data
  *
  *  This doesn't reflect how much of the file we have in memory, just the
- *  total size tracked so far.
+ *  total size of filedata so far.
  */
-uint64_t FileSize(const File *file)
+uint64_t FileDataSize(const File *file)
 {
     if (file != NULL && file->sb != NULL) {
         SCLogDebug("returning %"PRIu64,
@@ -283,10 +283,24 @@ uint64_t FileSize(const File *file)
     return 0;
 }
 
+/**
+ *  \brief get the size of the file
+ *
+ *  This doesn't reflect how much of the file we have in memory, just the
+ *  total size of file so far.
+ */
+uint64_t FileTrackedSize(const File *file)
+{
+    if (file != NULL) {
+        return file->size;
+    }
+    return 0;
+}
+
 static int FilePruneFile(File *file)
 {
     SCEnter();
-
+#ifdef HAVE_MAGIC
     if (!(file->flags & FILE_NOMAGIC)) {
         /* need magic but haven't set it yet, bail out */
         if (file->magic == NULL)
@@ -296,10 +310,10 @@ static int FilePruneFile(File *file)
     } else {
         SCLogDebug("file->flags & FILE_NOMAGIC == true");
     }
-
+#endif
     uint64_t left_edge = file->content_stored;
     if (file->flags & FILE_NOSTORE) {
-        left_edge = FileSize(file);
+        left_edge = FileDataSize(file);
     }
     if (file->flags & FILE_USE_DETECT) {
         left_edge = MIN(left_edge, file->content_inspected);
@@ -309,7 +323,7 @@ static int FilePruneFile(File *file)
         StreamingBufferSlideToOffset(file->sb, left_edge);
     }
 
-    if (left_edge != FileSize(file)) {
+    if (left_edge != FileDataSize(file)) {
         SCReturnInt(0);
     }
 
@@ -443,11 +457,11 @@ static void FileFree(File *ff)
 
     if (ff->name != NULL)
         SCFree(ff->name);
-
+#ifdef HAVE_MAGIC
     /* magic returned by libmagic is strdup'd by MagicLookup. */
     if (ff->magic != NULL)
         SCFree(ff->magic);
-
+#endif
     if (ff->sb != NULL) {
         StreamingBufferFree(ff->sb);
     }
@@ -516,7 +530,7 @@ static int FileStoreNoStoreCheck(File *ff)
 
     if (ff->flags & FILE_NOSTORE) {
         if (ff->state == FILE_STATE_OPENED &&
-            FileSize(ff) >= (uint64_t)FileMagicSize())
+            FileDataSize(ff) >= (uint64_t)FileMagicSize())
         {
             SCReturnInt(1);
         }
@@ -565,6 +579,8 @@ int FileAppendData(FileContainer *ffc, const uint8_t *data, uint32_t data_len)
         SCReturnInt(-1);
     }
 
+    ffc->tail->size += data_len;
+
     if (ffc->tail->state != FILE_STATE_OPENED) {
         if (ffc->tail->flags & FILE_NOSTORE) {
             SCReturnInt(-2);
@@ -574,19 +590,23 @@ int FileAppendData(FileContainer *ffc, const uint8_t *data, uint32_t data_len)
 
     if (FileStoreNoStoreCheck(ffc->tail) == 1) {
 #ifdef HAVE_NSS
+        int hash_done = 0;
         /* no storage but forced hashing */
         if (ffc->tail->md5_ctx) {
             HASH_Update(ffc->tail->md5_ctx, data, data_len);
-            SCReturnInt(0);
+            hash_done = 1;
         }
         if (ffc->tail->sha1_ctx) {
             HASH_Update(ffc->tail->sha1_ctx, data, data_len);
-            SCReturnInt(0);
+            hash_done = 1;
         }
         if (ffc->tail->sha256_ctx) {
             HASH_Update(ffc->tail->sha256_ctx, data, data_len);
-            SCReturnInt(0);
+            hash_done = 1;
         }
+
+        if (hash_done)
+            SCReturnInt(0);
 #endif
         if (g_file_force_tracking || (!(ffc->tail->flags & FILE_NOTRACK)))
             SCReturnInt(0);
@@ -695,11 +715,12 @@ File *FileOpenFile(FileContainer *ffc, const StreamingBufferConfig *sbcfg,
     FileContainerAdd(ffc, ff);
 
     if (data != NULL) {
+        ff->size += data_len;
         if (AppendData(ff, data, data_len) != 0) {
             ff->state = FILE_STATE_ERROR;
             SCReturnPtr(NULL, "File");
         }
-        SCLogDebug("file size is now %"PRIu64, FileSize(ff));
+        SCLogDebug("file size is now %"PRIu64, FileTrackedSize(ff));
     }
 
     SCReturnPtr(ff, "File");
@@ -719,6 +740,7 @@ static int FileCloseFilePtr(File *ff, const uint8_t *data,
     }
 
     if (data != NULL) {
+        ff->size += data_len;
         if (ff->flags & FILE_NOSTORE) {
 #ifdef HAVE_NSS
             /* no storage but hashing */
@@ -1026,7 +1048,7 @@ void FileDisableStoringForFile(File *ff)
     SCLogDebug("not storing this file");
     ff->flags |= FILE_NOSTORE;
 
-    if (ff->state == FILE_STATE_OPENED && FileSize(ff) >= (uint64_t)FileMagicSize()) {
+    if (ff->state == FILE_STATE_OPENED && FileDataSize(ff) >= (uint64_t)FileMagicSize()) {
         if (g_file_force_md5 == 0 && g_file_force_sha1 == 0 && g_file_force_sha256 == 0
                 && g_file_force_tracking == 0) {
             (void)FileCloseFilePtr(ff, NULL, 0,

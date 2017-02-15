@@ -248,6 +248,37 @@ static int LuaCallbackFlowTimeString(lua_State *luastate)
 }
 
 /** \internal
+ *  \brief fill lua stack with flow has alerts
+ *  \param luastate the lua state
+ *  \param flow flow
+ *  \retval cnt number of data items placed on the stack
+ *
+ *  Places alerts (bool)
+ */
+static int LuaCallbackHasAlertsPushToStackFromFlow(lua_State *luastate, const Flow *flow)
+{
+    lua_pushboolean(luastate, FlowHasAlerts(flow));
+
+    return 1;
+}
+
+/** \internal
+ *  \brief Wrapper for getting flow has alerts info into a lua script
+ *  \retval cnt number of items placed on the stack
+ */
+static int LuaCallbackFlowHasAlerts(lua_State *luastate)
+{
+    int r = 0;
+    Flow *flow = LuaStateGetFlow(luastate);
+    if (flow == NULL)
+        return LuaCallbackError(luastate, "internal error: no flow");
+
+    r = LuaCallbackHasAlertsPushToStackFromFlow(luastate, flow);
+
+    return r;
+}
+
+/** \internal
  *  \brief fill lua stack with header info
  *  \param luastate the lua state
  *  \param p packet
@@ -650,8 +681,14 @@ static int LuaCallbackFileInfoPushToStackFromFile(lua_State *luastate, const Fil
     lua_pushnumber(luastate, file->file_id);
     lua_pushnumber(luastate, file->txid);
     lua_pushlstring(luastate, (char *)file->name, file->name_len);
-    lua_pushnumber(luastate, FileSize(file));
-    lua_pushstring (luastate, file->magic);
+    lua_pushnumber(luastate, FileTrackedSize(file));
+    lua_pushstring (luastate,
+#ifdef HAVE_MAGIC
+                    file->magic
+#else
+                    "nomagic"
+#endif
+                    );
     lua_pushstring(luastate, md5ptr);
     lua_pushstring(luastate, sha1ptr);
     lua_pushstring(luastate, sha256ptr);
@@ -762,6 +799,8 @@ int LuaRegisterFunctions(lua_State *luastate)
     lua_setglobal(luastate, "SCFlowAppLayerProto");
     lua_pushcfunction(luastate, LuaCallbackStatsFlow);
     lua_setglobal(luastate, "SCFlowStats");
+    lua_pushcfunction(luastate, LuaCallbackFlowHasAlerts);
+    lua_setglobal(luastate, "SCFlowHasAlerts");
 
     lua_pushcfunction(luastate, LuaCallbackStreamingBuffer);
     lua_setglobal(luastate, "SCStreamingBuffer");

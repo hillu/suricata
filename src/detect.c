@@ -588,6 +588,11 @@ SigGroupHead *SigMatchSignaturesGetSgh(DetectEngineCtx *de_ctx, DetectEngineThre
      * the decoder events sgh we have. */
     if (p->proto == 0 && p->events.cnt > 0) {
         SCReturnPtr(de_ctx->decoder_event_sgh, "SigGroupHead");
+    } else if (p->proto == 0) {
+        if (!(PKT_IS_IPV4(p) || PKT_IS_IPV6(p))) {
+            /* not IP, so nothing to do */
+            SCReturnPtr(NULL, "SigGroupHead");
+        }
     }
 
     /* select the flow_gh */
@@ -953,7 +958,7 @@ DetectPostInspectFileFlagsUpdate(Flow *pflow, const SigGroupHead *sgh, uint8_t d
     if (sgh == NULL || sgh->filestore_cnt == 0) {
         FileDisableStoring(pflow, direction);
     }
-
+#ifdef HAVE_MAGIC
     /* see if this sgh requires us to consider file magic */
     if (!FileForceMagic() && (sgh == NULL ||
                 !(sgh->flags & SIG_GROUP_HEAD_HAVEFILEMAGIC)))
@@ -961,7 +966,7 @@ DetectPostInspectFileFlagsUpdate(Flow *pflow, const SigGroupHead *sgh, uint8_t d
         SCLogDebug("disabling magic for flow");
         FileDisableMagic(pflow, direction);
     }
-
+#endif
     /* see if this sgh requires us to consider file md5 */
     if (!FileForceMd5() && (sgh == NULL ||
                 !(sgh->flags & SIG_GROUP_HEAD_HAVEFILEMD5)))
@@ -1734,9 +1739,7 @@ TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQue
     }
 
     if (p->flow) {
-        det_ctx->flow_locked = 1;
         DetectFlow(tv, de_ctx, det_ctx, p);
-        det_ctx->flow_locked = 0;
     } else {
         DetectNoFlow(tv, de_ctx, det_ctx, p);
     }

@@ -67,7 +67,9 @@ typedef struct File_ {
     uint64_t txid;                  /**< tx this file is part of */
     uint32_t file_id;
     uint8_t *name;
+#ifdef HAVE_MAGIC
     char *magic;
+#endif
     struct File_ *next;
 #ifdef HAVE_NSS
     HASHContext *md5_ctx;
@@ -80,6 +82,7 @@ typedef struct File_ {
     uint64_t content_inspected;     /**< used in pruning if FILE_USE_DETECT
                                      *   flag is set */
     uint64_t content_stored;
+    uint64_t size;
 } File;
 
 typedef struct FileContainer_ {
@@ -211,7 +214,8 @@ void FileStoreFileById(FileContainer *fc, uint32_t);
 
 void FileTruncateAllOpenFiles(FileContainer *);
 
-uint64_t FileSize(const File *file);
+uint64_t FileDataSize(const File *file);
+uint64_t FileTrackedSize(const File *file);
 
 uint16_t FileFlowToFlags(const Flow *flow, uint8_t direction);
 

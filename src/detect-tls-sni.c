@@ -63,6 +63,7 @@ void DetectTlsSniRegister(void)
 {
     sigmatch_table[DETECT_AL_TLS_SNI].name = "tls_sni";
     sigmatch_table[DETECT_AL_TLS_SNI].desc = "content modifier to match specifically and only on the TLS SNI buffer";
+    sigmatch_table[DETECT_AL_TLS_SNI].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tls-sni";
     sigmatch_table[DETECT_AL_TLS_SNI].Match = NULL;
     sigmatch_table[DETECT_AL_TLS_SNI].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_TLS_SNI].Setup = DetectTlsSniSetup;
@@ -156,7 +157,7 @@ static int DetectTlsSniTest01(void)
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    de_ctx->mpm_matcher = DEFAULT_MPM;
+    de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert tls any any -> any any "
@@ -248,7 +249,7 @@ static int DetectTlsSniTest02(void)
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    de_ctx->mpm_matcher = DEFAULT_MPM;
+    de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert tls any any -> any any "

@@ -50,6 +50,7 @@ vars:
 default-rule-path: @e_sysconfdir@rules
 rule-files:
  - botcc.rules
+ # - botcc.portgrouped.rules
  - ciarmy.rules
  - compromised.rules
  - drop.rules
@@ -67,6 +68,7 @@ rule-files:
 # - emerging-icmp.rules
  - emerging-imap.rules
 # - emerging-inappropriate.rules
+# - emerging-info.rules
  - emerging-malware.rules
  - emerging-misc.rules
  - emerging-mobile_malware.rules
@@ -75,7 +77,8 @@ rule-files:
  - emerging-policy.rules
  - emerging-pop3.rules
  - emerging-rpc.rules
- - emerging-scada.rules
+# - emerging-scada.rules
+# - emerging-scada_special.rules
  - emerging-scan.rules
 # - emerging-shellcode.rules
  - emerging-smtp.rules
@@ -703,7 +706,7 @@ app-layer:
     smb:
       enabled: yes
       detection-ports:
-        dp: 139
+        dp: 139, 445
     # smb2 detection is disabled internally inside the engine.
     #smb2:
     #  enabled: yes
@@ -1217,7 +1220,9 @@ stream:
     #    prealloc: 512
     #  - size: 768
     #    prealloc: 1024
-    #  - size: 1448
+    # 'from_mtu' means that the size is mtu - 40,
+    # or 1460 if mtu couldn't be determined.
+    #  - size: from_mtu
     #    prealloc: 1024
     #  - size: 65535
     #    prealloc: 128

@@ -82,6 +82,8 @@
 #define HONOR_PASS_RULES_DISABLED       0
 #define HONOR_PASS_RULES_ENABLED        1
 
+#define PCAP_SNAPLEN                    262144
+
 SC_ATOMIC_DECLARE(uint32_t, thread_cnt);
 
 typedef struct PcapFileName_ {
@@ -317,7 +319,7 @@ static int PcapLogOpenHandles(PcapLogData *pl, const Packet *p)
 
     if (pl->pcap_dead_handle == NULL) {
         if ((pl->pcap_dead_handle = pcap_open_dead(p->datalink,
-                        -1)) == NULL) {
+                        PCAP_SNAPLEN)) == NULL) {
             SCLogDebug("Error opening dead pcap handle");
             return TM_ECODE_FAILED;
         }
@@ -669,6 +671,7 @@ static TmEcode PcapLogInitRingBuffer(PcapLogData *pl)
                     strerror(errno));
             }
             TAILQ_REMOVE(&pl->pcap_file_list, pf, next);
+            PcapFileNameFree(pf);
             pf = TAILQ_FIRST(&pl->pcap_file_list);
             pl->file_cnt--;
         }
@@ -959,7 +962,7 @@ static OutputCtx *PcapLogInitCtx(ConfNode *conf)
             timestamp_pattern, pcre_erroffset, pcre_errbuf);
     }
     pcre_timestamp_extra = pcre_study(pcre_timestamp_code, 0, &pcre_errbuf);
-    if (pcre_timestamp_extra == NULL) {
+    if (pcre_errbuf != NULL) {
         FatalError(SC_ERR_PCRE_STUDY, "Fail to study pcre: %s", pcre_errbuf);
     }
 

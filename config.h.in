@@ -90,6 +90,9 @@
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
+/* Define to 1 if you have the `hs_valid_platform' function. */
+#undef HAVE_HS_VALID_PLATFORM
+
 /* Assuming htp_config_set_response_decompression_layer_limit function in
    bundled libhtp */
 #undef HAVE_HTP_CONFIG_SET_RESPONSE_DECOMPRESSION_LAYER_LIMIT
@@ -221,6 +224,9 @@
 
 /* libluajit available */
 #undef HAVE_LUAJIT
+
+/* (Libmagic for file handling) */
+#undef HAVE_MAGIC
 
 /* Define to 1 if your system has a GNU libc compatible `malloc' function, and
    to 0 otherwise. */

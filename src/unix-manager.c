@@ -31,8 +31,8 @@
 
 #include "util-privs.h"
 #include "util-debug.h"
+#include "util-device.h"
 #include "util-signal.h"
-
 #include "util-buffer.h"
 
 #include <sys/un.h>
@@ -97,7 +97,7 @@ int UnixNew(UnixCommand * this)
     int len;
     int ret;
     int on = 1;
-    char *sockettarget = NULL;
+    char sockettarget[PATH_MAX];
     char *socketname;
 
     this->start_timestamp = time(NULL);
@@ -108,42 +108,39 @@ int UnixNew(UnixCommand * this)
     TAILQ_INIT(&this->tasks);
     TAILQ_INIT(&this->clients);
 
+    int check_dir = 0;
     if (ConfGet("unix-command.filename", &socketname) == 1) {
         if (PathIsAbsolute(socketname)) {
-            sockettarget = SCStrdup(socketname);
-            if (unlikely(sockettarget == NULL)) {
-                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-                return 0;
-            }
+            strlcpy(sockettarget, socketname, sizeof(sockettarget));
         } else {
-            int socketlen = strlen(SOCKET_PATH) + strlen(socketname) + 2;
-            sockettarget = SCMalloc(socketlen);
-            if (unlikely(sockettarget == NULL)) {
-                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-                return 0;
-            }
-            snprintf(sockettarget, socketlen, "%s/%s", SOCKET_PATH, socketname);
+            snprintf(sockettarget, sizeof(sockettarget), "%s/%s",
+                    SOCKET_PATH, socketname);
+            check_dir = 1;
+        }
+    } else {
+        strlcpy(sockettarget, SOCKET_TARGET, sizeof(sockettarget));
+        check_dir = 1;
+    }
+    SCLogInfo("Using unix socket file '%s'", sockettarget);
 
-            /* Create socket dir */
+    if (check_dir) {
+        struct stat stat_buf;
+        /* coverity[toctou] */
+        if (stat(SOCKET_PATH, &stat_buf) != 0) {
+            /* coverity[toctou] */
             ret = mkdir(SOCKET_PATH, S_IRWXU|S_IXGRP|S_IRGRP);
-            if ( ret != 0 ) {
+            if (ret != 0) {
                 int err = errno;
                 if (err != EEXIST) {
-                    SCFree(sockettarget);
-                    SCLogError(SC_ERR_OPENING_FILE,
-                            "Cannot create socket directory %s: %s", SOCKET_PATH, strerror(err));
+                    SCLogError(SC_ERR_INITIALIZATION,
+                            "Cannot create socket directory %s: %s",
+                            SOCKET_PATH, strerror(err));
                     return 0;
                 }
+            } else {
+                SCLogInfo("Created socket directory %s",
+                        SOCKET_PATH);
             }
-
-        }
-        SCLogInfo("Using unix socket file '%s'", sockettarget);
-    }
-    if (sockettarget == NULL) {
-        sockettarget = SCStrdup(SOCKET_TARGET);
-        if (unlikely(sockettarget == NULL)) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-            return 0;
         }
     }
 
@@ -162,7 +159,6 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_OPENING_FILE,
                      "Unix Socket: unable to create UNIX socket %s: %s",
                      addr.sun_path, strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
     this->select_max = this->socket + 1;
@@ -194,7 +190,6 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_INITIALIZATION,
                      "Unix socket: UNIX socket bind(%s) error: %s",
                      sockettarget, strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
 
@@ -203,10 +198,8 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_INITIALIZATION,
                      "Command server: UNIX socket listen() error: %s",
                      strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
-    SCFree(sockettarget);
     return 1;
 }
 
@@ -908,16 +901,18 @@ static TmEcode UnixManagerThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if (UnixNew(&command) == 0) {
         int failure_fatal = 0;
-        SCLogError(SC_ERR_INITIALIZATION,
-                   "Unable to create unix command socket");
         if (ConfGetBool("engine.init-failure-fatal", &failure_fatal) != 1) {
             SCLogDebug("ConfGetBool could not load the value.");
         }
         SCFree(utd);
         if (failure_fatal) {
+            SCLogError(SC_ERR_INITIALIZATION,
+                    "Unable to create unix command socket");
             exit(EXIT_FAILURE);
         } else {
-            return TM_ECODE_FAILED;
+            SCLogWarning(SC_ERR_INITIALIZATION,
+                    "Unable to create unix command socket");
+            return TM_ECODE_OK;
         }
     }
 
@@ -1016,6 +1011,19 @@ void UnixManagerThreadSpawn(int mode)
     return;
 }
 
+// TODO can't think of a good name
+void UnixManagerThreadSpawnNonRunmode(void)
+{
+    /* Spawn the unix socket manager thread */
+    int unix_socket = ConfUnixSocketIsEnable();
+    if (unix_socket == 1) {
+        UnixManagerThreadSpawn(0);
+        UnixManagerRegisterCommand("iface-stat", LiveDeviceIfaceStat, NULL,
+                UNIX_CMD_TAKE_ARGS);
+        UnixManagerRegisterCommand("iface-list", LiveDeviceIfaceList, NULL, 0);
+    }
+}
+
 /**
  * \brief Used to kill unix manager thread(s).
  *
@@ -1066,6 +1074,11 @@ void UnixManagerThreadSpawn(int mode)
 }
 
 void UnixSocketKillSocketThread(void)
+{
+    return;
+}
+
+void UnixManagerThreadSpawnNonRunmode(void)
 {
     return;
 }
