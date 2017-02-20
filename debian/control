@@ -36,8 +36,8 @@ Package: suricata
 Architecture: linux-any
 Pre-Depends: dpkg (>= 1.15.7.2)
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}, libhtp-0.5.23-1 (= ${binary:Version}), lsb-base (>= 3.0-6)
-Conflicts: libhtp1 (<< 0.5.16)
-Replaces: libhtp1 (<< 0.5.16)
+Conflicts: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
+Replaces: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
 Recommends: suricata-oinkmaster (=${binary:Version}), python, snort-rules-default
 Suggests: libtcmalloc-minimal4
 Description: Next Generation Intrusion Detection and Prevention Tool

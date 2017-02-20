@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# we do not need alternatives anymore
+if update-alternatives --quiet --query suricata 2> /dev/null; then
+    echo "Removing legacy alternatives for Hyperscan/non-Hyperscan versions"
+    update-alternatives --remove-all suricata
+fi
+
+#DEBHELPER#
+
+exit 0
