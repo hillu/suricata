@@ -6,6 +6,7 @@ SERVICE="suricata.service"
 ETC_SERVICE_FILE="/etc/systemd/system/${SERVICE}"
 LIB_SERVICE_FILE="/lib/systemd/system/${SERVICE}"
 CONFIG_FILE="/etc/suricata/suricata.yaml"
+IFACE=$(ip route show | awk '/default/ {print $5}')
 
 if [ ! -r "$LIB_SERVICE_FILE" ] ; then
 	: ERROR unable to read $LIB_SERVICE_FILE
@@ -39,7 +40,7 @@ classification-file: /etc/suricata/classification.config
 reference-config-file: /etc/suricata/reference.config
 default-log-dir: /var/log/suricata/
 af-packet:
-  - interface: lo
+  - interface: $IFACE
     cluster-id: 99
     cluster-type: cluster_flow
     defrag: yes
