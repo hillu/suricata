@@ -1,3 +1,14 @@
+suricata (3.2.1-1) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * Rebuild for unstable from 3.2.1-1~exp2 (experimental).
+
+  [ Sascha Steinbiss ]
+  * [d0c3629] detect valid interface in autopkgtest
+  * [2d3ae00] fix typo in service file
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 16 Mar 2017 09:04:03 +0100
+
 suricata (3.2.1-1~exp2) experimental; urgency=medium
 
   [ Sascha Steinbiss ]
