@@ -51,4 +51,4 @@ override_dh_strip:
 	dh_strip --dbg-package=suricata-dbg
 
 %:
-	dh $@ --parallel --with autotools-dev,autoreconf,python2
+	dh $@ --parallel --with autotools-dev,autoreconf,python2,systemd
