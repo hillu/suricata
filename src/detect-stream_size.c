@@ -44,8 +44,9 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectStreamSizeFree(void *);
 void DetectStreamSizeRegisterTests(void);
 
@@ -121,7 +122,8 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
 
     int ret = 0;
@@ -174,8 +176,7 @@ int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
  * \retval sd pointer to DetectStreamSizeData on success
  * \retval NULL on failure
  */
-
-DetectStreamSizeData *DetectStreamSizeParse (char *streamstr)
+static DetectStreamSizeData *DetectStreamSizeParse (const char *streamstr)
 {
 
     DetectStreamSizeData *sd = NULL;
@@ -285,7 +286,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *streamstr)
+static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, const char *streamstr)
 {
 
     DetectStreamSizeData *sd = NULL;

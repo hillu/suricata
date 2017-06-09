@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -16,15 +16,32 @@
  */
 
 /**
+ * \ingroup httplayer
+ *
+ * @{
+ */
+
+
+/**
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
+ *
+ * Implements the http_connection sticky buffer
  */
 
-#ifndef __TMQH_RINGBUFFER_H__
-#define __TMQH_RINGBUFFER_H__
+#define KEYWORD_NAME "http_connection"
+#define KEYWORD_DOC "http-keywords.html#http-connection"
+#define BUFFER_NAME "http_connection"
+#define BUFFER_DESC "http connection header"
+#define HEADER_NAME "Connection"
+#define KEYWORD_ID DETECT_AL_HTTP_HEADER_CONNECTION
+#define KEYWORD_TOSERVER 1
 
-void TmqhRingBufferRegister (void);
-void TmqhRingBufferDestroy (void);
+#include "detect-http-headers-stub.h"
+#include "detect-http-connection.h"
 
-#endif /* __TMQH_RINGBUFFER_H__ */
+void RegisterHttpHeadersConnection(void)
+{
+    DetectHttpHeadersRegisterStub();
+}

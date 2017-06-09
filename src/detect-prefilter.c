@@ -29,10 +29,10 @@
 #include "detect.h"
 #include "detect-parse.h"
 #include "detect-content.h"
-
+#include "detect-prefilter.h"
 #include "util-debug.h"
 
-static int DetectPrefilterSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectPrefilterSetup (DetectEngineCtx *, Signature *, const char *);
 
 void DetectPrefilterRegister(void)
 {
@@ -55,7 +55,7 @@ void DetectPrefilterRegister(void)
  *  \retval 0 ok
  *  \retval -1 failure
  */
-static int DetectPrefilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *nullstr)
+static int DetectPrefilterSetup (DetectEngineCtx *de_ctx, Signature *s, const char *nullstr)
 {
     SCEnter();
 
@@ -72,13 +72,13 @@ static int DetectPrefilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *nu
         goto end;
     }
 
-    sm = SigMatchGetLastSM(s);
+    sm = DetectGetLastSM(s);
     if (sm == NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "prefilter needs preceding match");
         goto end;
     }
 
-    s->prefilter_sm = sm;
+    s->init_data->prefilter_sm = sm;
     s->flags |= SIG_FLAG_PREFILTER;
 
     /* if the sig match is content, prefilter should act like

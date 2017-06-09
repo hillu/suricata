@@ -33,6 +33,9 @@
 #include "util-print.h"
 #include "conf.h"
 #include "util-profiling.h"
+#include "stream-tcp.h"
+#include "stream-tcp-inline.h"
+#include "stream-tcp-reassemble.h"
 
 typedef struct OutputLoggerThreadStore_ {
     void *thread_data;
@@ -92,6 +95,10 @@ int OutputRegisterStreamingLogger(LoggerId id, const char *name,
         t->next = op;
     }
 
+    if (op->type == STREAMING_TCP_DATA) {
+        stream_config.streaming_log_api = true;
+    }
+
     SCLogDebug("OutputRegisterStreamingLogger happy");
     return 0;
 }
@@ -104,7 +111,7 @@ typedef struct StreamerCallbackData_ {
     enum OutputStreamingType type;
 } StreamerCallbackData;
 
-int Streamer(void *cbdata, Flow *f, const uint8_t *data, uint32_t data_len, uint64_t tx_id, uint8_t flags)
+static int Streamer(void *cbdata, Flow *f, const uint8_t *data, uint32_t data_len, uint64_t tx_id, uint8_t flags)
 {
     StreamerCallbackData *streamer_cbdata = (StreamerCallbackData *)cbdata;
     BUG_ON(streamer_cbdata == NULL);
@@ -146,155 +153,146 @@ int Streamer(void *cbdata, Flow *f, const uint8_t *data, uint32_t data_len, uint
  *      - Invoke Streamer
  */
 
-int HttpBodyIterator(Flow *f, int close, void *cbdata, uint8_t iflags)
+static int HttpBodyIterator(Flow *f, int close, void *cbdata, uint8_t iflags)
 {
     SCLogDebug("called with %p, %d, %p, %02x", f, close, cbdata, iflags);
 
     HtpState *s = f->alstate;
-    if (s != NULL && s->conn != NULL) {
-        int tx_progress_done_value_ts =
-            AppLayerParserGetStateProgressCompletionStatus(ALPROTO_HTTP,
-                                                           STREAM_TOSERVER);
-        int tx_progress_done_value_tc =
-            AppLayerParserGetStateProgressCompletionStatus(ALPROTO_HTTP,
-                                                           STREAM_TOCLIENT);
+    if (s == NULL || s->conn == NULL) {
+        return 0;
+    }
 
-        // for each tx
-        uint64_t tx_id = 0;
-        uint64_t total_txs = AppLayerParserGetTxCnt(f->proto, f->alproto, f->alstate);
-        SCLogDebug("s->conn %p", s->conn);
-        for (tx_id = 0; tx_id < total_txs; tx_id++) { // TODO optimization store log tx
-            htp_tx_t *tx = AppLayerParserGetTx(f->proto, f->alproto, f->alstate, tx_id);
-            if (tx != NULL) {
-                int tx_done = 0;
-                int tx_logged = 0;
+    const int tx_progress_done_value_ts =
+        AppLayerParserGetStateProgressCompletionStatus(ALPROTO_HTTP,
+                STREAM_TOSERVER);
+    const int tx_progress_done_value_tc =
+        AppLayerParserGetStateProgressCompletionStatus(ALPROTO_HTTP,
+                STREAM_TOCLIENT);
+    const uint64_t total_txs = AppLayerParserGetTxCnt(f, f->alstate);
 
-                int tx_progress_ts = AppLayerParserGetStateProgress(
-                        IPPROTO_TCP, ALPROTO_HTTP, tx, FlowGetDisruptionFlags(f, STREAM_TOSERVER));
-                if (tx_progress_ts >= tx_progress_done_value_ts) {
-                    int tx_progress_tc = AppLayerParserGetStateProgress(
-                            IPPROTO_TCP, ALPROTO_HTTP, tx, FlowGetDisruptionFlags(f, STREAM_TOCLIENT));
-                    if (tx_progress_tc >= tx_progress_done_value_tc) {
-                        tx_done = 1;
-                    }
+    uint64_t tx_id = 0;
+    for (tx_id = 0; tx_id < total_txs; tx_id++) { // TODO optimization store log tx
+        htp_tx_t *tx = AppLayerParserGetTx(f->proto, f->alproto, f->alstate, tx_id);
+        if (tx == NULL) {
+            continue;
+        }
+
+        int tx_done = 0;
+        int tx_logged = 0;
+        int tx_progress_ts = AppLayerParserGetStateProgress(
+                IPPROTO_TCP, ALPROTO_HTTP, tx, FlowGetDisruptionFlags(f, STREAM_TOSERVER));
+        if (tx_progress_ts >= tx_progress_done_value_ts) {
+            int tx_progress_tc = AppLayerParserGetStateProgress(
+                    IPPROTO_TCP, ALPROTO_HTTP, tx, FlowGetDisruptionFlags(f, STREAM_TOCLIENT));
+            if (tx_progress_tc >= tx_progress_done_value_tc) {
+                tx_done = 1;
+            }
+        }
+
+        SCLogDebug("tx %p", tx);
+        HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
+        if (htud != NULL) {
+            SCLogDebug("htud %p", htud);
+            HtpBody *body = NULL;
+            if (iflags & OUTPUT_STREAMING_FLAG_TOSERVER)
+                body = &htud->request_body;
+            else if (iflags & OUTPUT_STREAMING_FLAG_TOCLIENT)
+                body = &htud->response_body;
+
+            if (body == NULL) {
+                SCLogDebug("no body");
+                goto next;
+            }
+            if (body->first == NULL) {
+                SCLogDebug("no body chunks");
+                goto next;
+            }
+            if (body->last->logged == 1) {
+                SCLogDebug("all logged already");
+                goto next;
+            }
+
+            // for each chunk
+            HtpBodyChunk *chunk = body->first;
+            for ( ; chunk != NULL; chunk = chunk->next) {
+                if (chunk->logged) {
+                    SCLogDebug("logged %d", chunk->logged);
+                    continue;
                 }
 
-                SCLogDebug("tx %p", tx);
-                HtpTxUserData *htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
-                if (htud != NULL) {
-                    SCLogDebug("htud %p", htud);
-                    HtpBody *body = NULL;
-                    if (iflags & OUTPUT_STREAMING_FLAG_TOCLIENT)
-                        body = &htud->request_body;
-                    else if (iflags & OUTPUT_STREAMING_FLAG_TOSERVER)
-                        body = &htud->response_body;
-
-                    if (body == NULL) {
-                        SCLogDebug("no body");
-                        goto next;
-                    }
-                    if (body->first == NULL) {
-                        SCLogDebug("no body chunks");
-                        goto next;
-                    }
-                    if (body->last->logged == 1) {
-                        SCLogDebug("all logged already");
-                        goto next;
-                    }
-
-                    // for each chunk
-                    HtpBodyChunk *chunk = body->first;
-                    for ( ; chunk != NULL; chunk = chunk->next) {
-                        if (chunk->logged) {
-                            SCLogDebug("logged %d", chunk->logged);
-                            continue;
-                        }
-
-                        uint8_t flags = iflags | OUTPUT_STREAMING_FLAG_TRANSACTION;
-                        if (chunk->sbseg.stream_offset == 0)
-                            flags |= OUTPUT_STREAMING_FLAG_OPEN;
-                        /* if we need to close and we're at the last segment in the list
-                         * we add the 'close' flag so the logger can close up. */
-                        if ((tx_done || close) && chunk->next == NULL) {
-                            flags |= OUTPUT_STREAMING_FLAG_CLOSE;
-                        }
-
-                        const uint8_t *data = NULL;
-                        uint32_t data_len = 0;
-                        StreamingBufferSegmentGetData(body->sb, &chunk->sbseg, &data, &data_len);
-
-                        // invoke Streamer
-                        Streamer(cbdata, f, data, data_len, tx_id, flags);
-                        //PrintRawDataFp(stdout, data, data_len);
-                        chunk->logged = 1;
-                        tx_logged = 1;
-                    }
-
-                  next:
-                    /* if we need to close we need to invoke the Streamer for sure. If we
-                     * logged no chunks, we call the Streamer with NULL data so it can
-                     * close up. */
-                    if (tx_logged == 0 && (close||tx_done)) {
-                        Streamer(cbdata, f, NULL, 0, tx_id,
-                                OUTPUT_STREAMING_FLAG_CLOSE|OUTPUT_STREAMING_FLAG_TRANSACTION);
-                    }
+                uint8_t flags = iflags | OUTPUT_STREAMING_FLAG_TRANSACTION;
+                if (chunk->sbseg.stream_offset == 0)
+                    flags |= OUTPUT_STREAMING_FLAG_OPEN;
+                /* if we need to close and we're at the last segment in the list
+                 * we add the 'close' flag so the logger can close up. */
+                if ((tx_done || close) && chunk->next == NULL) {
+                    flags |= OUTPUT_STREAMING_FLAG_CLOSE;
                 }
+
+                const uint8_t *data = NULL;
+                uint32_t data_len = 0;
+                StreamingBufferSegmentGetData(body->sb, &chunk->sbseg, &data, &data_len);
+
+                // invoke Streamer
+                Streamer(cbdata, f, data, data_len, tx_id, flags);
+                //PrintRawDataFp(stdout, data, data_len);
+                chunk->logged = 1;
+                tx_logged = 1;
+            }
+
+        next:
+            /* if we need to close we need to invoke the Streamer for sure. If we
+             * logged no chunks, we call the Streamer with NULL data so it can
+             * close up. */
+            if (tx_logged == 0 && (close||tx_done)) {
+                Streamer(cbdata, f, NULL, 0, tx_id,
+                         iflags|OUTPUT_STREAMING_FLAG_CLOSE|OUTPUT_STREAMING_FLAG_TRANSACTION);
             }
         }
     }
+    return 0;
+}
 
+struct StreamLogData {
+    uint8_t flags;
+    void *streamer_cbdata;
+    Flow *f;
+};
+
+static int StreamLogFunc(void *cb_data, const uint8_t *data, const uint32_t data_len)
+{
+    struct StreamLogData *log = cb_data;
+
+    Streamer(log->streamer_cbdata, log->f, data, data_len, 0, log->flags);
+
+    /* hack: unset open flag after first run */
+    log->flags &= ~OUTPUT_STREAMING_FLAG_OPEN;
 
     return 0;
 }
 
-int StreamIterator(Flow *f, TcpStream *stream, int close, void *cbdata, uint8_t iflags)
+static int TcpDataLogger (Flow *f, TcpSession *ssn, TcpStream *stream,
+        bool eof, uint8_t iflags, void *streamer_cbdata)
 {
-    SCLogDebug("called with %p, %d, %p, %02x", f, close, cbdata, iflags);
-    int logged = 0;
+    uint8_t flags = iflags;
+    uint64_t progress = STREAM_LOG_PROGRESS(stream);
 
-    /* optimization: don't iterate list if we've logged all,
-     * so check the last segment's flags */
-    if (stream->seg_list_tail != NULL &&
-        (!(stream->seg_list_tail->flags & SEGMENTTCP_FLAG_LOGAPI_PROCESSED)))
-    {
-        TcpSegment *seg = stream->seg_list;
-        while (seg) {
-            uint8_t flags = iflags;
+    if (progress == 0)
+        flags |= OUTPUT_STREAMING_FLAG_OPEN;
 
-            if (seg->flags & SEGMENTTCP_FLAG_LOGAPI_PROCESSED) {
-                seg = seg->next;
-                continue;
-            }
+    struct StreamLogData log_data = { flags, streamer_cbdata, f };
+    StreamReassembleLog(ssn, stream,
+            StreamLogFunc, &log_data,
+            progress, &progress, eof);
 
-            if (SEQ_GT(seg->seq + seg->payload_len, stream->last_ack)) {
-                SCLogDebug("seg not (fully) acked yet");
-                break;
-            }
-
-            if (seg->seq == stream->isn + 1)
-                flags |= OUTPUT_STREAMING_FLAG_OPEN;
-            /* if we need to close and we're at the last segment in the list
-             * we add the 'close' flag so the logger can close up. */
-            if (close && seg->next == NULL)
-                flags |= OUTPUT_STREAMING_FLAG_CLOSE;
-
-            Streamer(cbdata, f, seg->payload, (uint32_t)seg->payload_len, 0, flags);
-
-            seg->flags |= SEGMENTTCP_FLAG_LOGAPI_PROCESSED;
-
-            seg = seg->next;
-
-            logged = 1;
-        }
+    if (progress > STREAM_LOG_PROGRESS(stream)) {
+        uint32_t slide = progress - STREAM_LOG_PROGRESS(stream);
+        stream->log_progress_rel += slide;
     }
 
-    /* if we need to close we need to invoke the Streamer for sure. If we
-     * logged no segments, we call the Streamer with NULL data so it can
-     * close up. */
-    if (logged == 0 && close) {
-        Streamer(cbdata, f, NULL, 0, 0, OUTPUT_STREAMING_FLAG_CLOSE);
+    if (eof) {
+        Streamer(streamer_cbdata, f, NULL, 0, 0, flags|OUTPUT_STREAMING_FLAG_CLOSE);
     }
-
     return 0;
 }
 
@@ -325,10 +323,19 @@ static TmEcode OutputStreamingLog(ThreadVars *tv, Packet *p, void *thread_data)
         SCReturnInt(TM_ECODE_OK);
     }
 
-    if (p->flowflags & FLOW_PKT_TOCLIENT)
-        flags |= OUTPUT_STREAMING_FLAG_TOCLIENT;
-    else
-        flags |= OUTPUT_STREAMING_FLAG_TOSERVER;
+    if (!(StreamTcpInlineMode())) {
+        if (PKT_IS_TOCLIENT(p)) {
+            flags |= OUTPUT_STREAMING_FLAG_TOSERVER;
+        } else {
+            flags |= OUTPUT_STREAMING_FLAG_TOCLIENT;
+        }
+    } else {
+        if (PKT_IS_TOSERVER(p)) {
+            flags |= OUTPUT_STREAMING_FLAG_TOSERVER;
+        } else {
+            flags |= OUTPUT_STREAMING_FLAG_TOCLIENT;
+        }
+    }
 
     if (op_thread_data->loggers & (1<<STREAMING_TCP_DATA)) {
         TcpSession *ssn = f->protoctx;
@@ -338,9 +345,8 @@ static TmEcode OutputStreamingLog(ThreadVars *tv, Packet *p, void *thread_data)
             SCLogDebug("close ? %s", close ? "yes" : "no");
 
             TcpStream *stream = flags & OUTPUT_STREAMING_FLAG_TOSERVER ? &ssn->client : &ssn->server;
-
             streamer_cbdata.type = STREAMING_TCP_DATA;
-            StreamIterator(p->flow, stream, close, (void *)&streamer_cbdata, flags);
+            TcpDataLogger(f, ssn, stream, close, flags, (void *)&streamer_cbdata);
         }
     }
     if (op_thread_data->loggers & (1<<STREAMING_HTTP_BODIES)) {
@@ -363,7 +369,7 @@ static TmEcode OutputStreamingLog(ThreadVars *tv, Packet *p, void *thread_data)
 /** \brief thread init for the tx logger
  *  This will run the thread init functions for the individual registered
  *  loggers */
-static TmEcode OutputStreamingLogThreadInit(ThreadVars *tv, void *initdata, void **data) {
+static TmEcode OutputStreamingLogThreadInit(ThreadVars *tv, const void *initdata, void **data) {
     OutputLoggerThreadData *td = SCMalloc(sizeof(*td));
     if (td == NULL)
         return TM_ECODE_FAILED;

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2013 Open Information Security Foundation
+/* Copyright (C) 2007-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -33,8 +33,11 @@
 #include "detect-parse.h"
 #include "detect-engine-content-inspection.h"
 #include "detect-engine-prefilter.h"
+#include "detect-engine-state.h"
+#include "detect-engine-payload.h"
 
 #include "stream.h"
+#include "stream-tcp.h"
 
 #include "util-debug.h"
 #include "util-print.h"
@@ -45,35 +48,54 @@
 
 #include "util-mpm-ac.h"
 
+struct StreamMpmData {
+    DetectEngineThreadCtx *det_ctx;
+    const MpmCtx *mpm_ctx;
+};
+
+static int StreamMpmFunc(void *cb_data, const uint8_t *data, const uint32_t data_len)
+{
+    struct StreamMpmData *smd = cb_data;
+    if (data_len >= smd->mpm_ctx->minlen) {
+#ifdef DEBUG
+        smd->det_ctx->stream_mpm_cnt++;
+        smd->det_ctx->stream_mpm_size += data_len;
+#endif
+        (void)mpm_table[smd->mpm_ctx->mpm_type].Search(smd->mpm_ctx,
+                &smd->det_ctx->mtcs, &smd->det_ctx->pmq,
+                data, data_len);
+    }
+    return 0;
+}
+
 static void PrefilterPktStream(DetectEngineThreadCtx *det_ctx,
         Packet *p, const void *pectx)
 {
     SCEnter();
 
     const MpmCtx *mpm_ctx = (MpmCtx *)pectx;
-    const StreamMsg *smsg = det_ctx->smsg;
 
-    /* for established packets inspect any smsg we may have queued up */
-    if (p->flowflags & FLOW_PKT_ESTABLISHED) {
-        SCLogDebug("p->flowflags & FLOW_PKT_ESTABLISHED");
-
-        for ( ; smsg != NULL; smsg = smsg->next) {
-            if (smsg->data_len >= mpm_ctx->minlen) {
-                (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
-                        &det_ctx->mtcs, &det_ctx->pmq,
-                        smsg->data, smsg->data_len);
-            }
-        }
+    /* for established packets inspect any stream we may have queued up */
+    if (p->flags & PKT_DETECT_HAS_STREAMDATA) {
+        struct StreamMpmData stream_mpm_data = { det_ctx, mpm_ctx };
+        StreamReassembleRaw(p->flow->protoctx, p,
+                StreamMpmFunc, &stream_mpm_data,
+                &det_ctx->raw_stream_progress);
+        SCLogDebug("det_ctx->raw_stream_progress %"PRIu64,
+                det_ctx->raw_stream_progress);
     } else {
-        SCLogDebug("NOT p->flowflags & FLOW_PKT_ESTABLISHED");
+        SCLogDebug("NOT p->flags & PKT_DETECT_HAS_STREAMDATA");
     }
 
     /* packets that have not been added to the stream will be inspected
      * as if they are stream chunks */
-    if ((!(p->flags & PKT_NOPAYLOAD_INSPECTION)) &&
-         !(p->flags & PKT_STREAM_ADD))
+    if ((p->flags & (PKT_NOPAYLOAD_INSPECTION|PKT_STREAM_ADD)) == 0)
     {
         if (p->payload_len >= mpm_ctx->minlen) {
+#ifdef DEBUG
+            det_ctx->payload_mpm_cnt++;
+            det_ctx->payload_mpm_size += p->payload_len;
+#endif
             (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
                     &det_ctx->mtc, &det_ctx->pmq,
                     p->payload, p->payload_len);
@@ -129,76 +151,175 @@ int PrefilterPktPayloadRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
  *  \retval 1 match
  */
 int DetectEngineInspectPacketPayload(DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, Packet *p)
+        DetectEngineThreadCtx *det_ctx, const Signature *s, Flow *f, Packet *p)
 {
     SCEnter();
     int r = 0;
 
-    if (s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
+    if (s->sm_arrays[DETECT_SM_LIST_PMATCH] == NULL) {
         SCReturnInt(0);
     }
-
+#ifdef DEBUG
+    det_ctx->payload_persig_cnt++;
+    det_ctx->payload_persig_size += p->payload_len;
+#endif
     det_ctx->buffer_offset = 0;
     det_ctx->discontinue_matching = 0;
     det_ctx->inspection_recursion_counter = 0;
     det_ctx->replist = NULL;
-    //det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
 
-    r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH],
+    r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_arrays[DETECT_SM_LIST_PMATCH],
                                       f, p->payload, p->payload_len, 0,
                                       DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD, p);
-    //r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], p, f, p->payload, p->payload_len);
-    //det_ctx->flags &= ~DETECT_ENGINE_THREAD_CTX_INSPECTING_PACKET;
     if (r == 1) {
         SCReturnInt(1);
     }
     SCReturnInt(0);
 }
 
-/**
- *  \brief Do the content inspection & validation for a signature for a stream chunk
- *
- *  \param de_ctx Detection engine context
- *  \param det_ctx Detection engine thread context
- *  \param s Signature to inspect
- *  \param f flow (for pcre flowvar storage)
- *  \param payload ptr to the payload to inspect
- *  \param payload_len length of the payload
- *
- *  \retval 0 no match
- *  \retval 1 match
- *
- *  \todo we might also pass the packet to this function for the pktvar
- *        storage. Only, would that be right? We're not inspecting data
- *        from the current packet here.
- */
-int DetectEngineInspectStreamPayload(DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f,
-        uint8_t *payload, uint32_t payload_len)
+struct StreamContentInspectData {
+    DetectEngineCtx *de_ctx;
+    DetectEngineThreadCtx *det_ctx;
+    const Signature *s;
+    Flow *f;
+};
+
+static int StreamContentInspectFunc(void *cb_data, const uint8_t *data, const uint32_t data_len)
 {
     SCEnter();
     int r = 0;
+    struct StreamContentInspectData *smd = cb_data;
+#ifdef DEBUG
+    smd->det_ctx->stream_persig_cnt++;
+    smd->det_ctx->stream_persig_size += data_len;
+#endif
+    smd->det_ctx->buffer_offset = 0;
+    smd->det_ctx->discontinue_matching = 0;
+    smd->det_ctx->inspection_recursion_counter = 0;
 
-    if (s->sm_lists[DETECT_SM_LIST_PMATCH] == NULL) {
-        SCReturnInt(0);
-    }
-
-    det_ctx->buffer_offset = 0;
-    det_ctx->discontinue_matching = 0;
-    det_ctx->inspection_recursion_counter = 0;
-    //det_ctx->flags |= DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM;
-
-    r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH],
-                                      f, payload, payload_len, 0,
-                                      DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
-
-    //r = DoInspectPacketPayload(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_PMATCH], NULL, f, payload, payload_len);
-    //det_ctx->flags &= ~DETECT_ENGINE_THREAD_CTX_INSPECTING_STREAM;
+    r = DetectEngineContentInspection(smd->de_ctx, smd->det_ctx,
+            smd->s, smd->s->sm_arrays[DETECT_SM_LIST_PMATCH],
+            smd->f, (uint8_t *)data, data_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
     if (r == 1) {
         SCReturnInt(1);
     }
 
     SCReturnInt(0);
+}
+
+/**
+ *  \brief Do the content inspection & validation for a signature
+ *         on the raw stream
+ *
+ *  \param de_ctx Detection engine context
+ *  \param det_ctx Detection engine thread context
+ *  \param s Signature to inspect
+ *  \param f flow (for pcre flowvar storage)
+ *
+ *  \retval 0 no match
+ *  \retval 1 match
+ */
+int DetectEngineInspectStreamPayload(DetectEngineCtx *de_ctx,
+        DetectEngineThreadCtx *det_ctx, const Signature *s,
+        Flow *f, Packet *p)
+{
+    SCEnter();
+
+    uint64_t unused;
+    struct StreamContentInspectData inspect_data = { de_ctx, det_ctx, s, f };
+    int r = StreamReassembleRaw(f->protoctx, p,
+            StreamContentInspectFunc, &inspect_data,
+            &unused);
+    return r;
+}
+
+struct StreamContentInspectEngineData {
+    DetectEngineCtx *de_ctx;
+    DetectEngineThreadCtx *det_ctx;
+    const Signature *s;
+    const SigMatchData *smd;
+    Flow *f;
+};
+
+static int StreamContentInspectEngineFunc(void *cb_data, const uint8_t *data, const uint32_t data_len)
+{
+    SCEnter();
+    int r = 0;
+    struct StreamContentInspectEngineData *smd = cb_data;
+#ifdef DEBUG
+    smd->det_ctx->stream_persig_cnt++;
+    smd->det_ctx->stream_persig_size += data_len;
+#endif
+    smd->det_ctx->buffer_offset = 0;
+    smd->det_ctx->discontinue_matching = 0;
+    smd->det_ctx->inspection_recursion_counter = 0;
+
+    r = DetectEngineContentInspection(smd->de_ctx, smd->det_ctx,
+            smd->s, smd->smd,
+            smd->f, (uint8_t *)data, data_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
+    if (r == 1) {
+        SCReturnInt(1);
+    }
+
+    SCReturnInt(0);
+}
+
+/**
+ *  \brief inspect engine for stateful rules
+ *
+ *  Caches results as it may be called multiple times if we inspect
+ *  multiple transactions in one packet.
+ *
+ *  Returns "can't match" if depth is reached.
+ */
+int DetectEngineInspectStream(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
+{
+    Packet *p = det_ctx->p; /* TODO: get rid of this HACK */
+
+    if (det_ctx->stream_already_inspected)
+        return det_ctx->stream_last_result;
+
+    uint64_t unused;
+    struct StreamContentInspectEngineData inspect_data = { de_ctx, det_ctx, s, smd, f };
+    int match = StreamReassembleRaw(f->protoctx, p,
+            StreamContentInspectEngineFunc, &inspect_data,
+            &unused);
+
+    bool is_last = false;
+    TcpSession *ssn = f->protoctx;
+    if (flags & STREAM_TOSERVER) {
+        TcpStream *stream = &ssn->client;
+        if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED)
+            is_last = true;
+    } else {
+        TcpStream *stream = &ssn->server;
+        if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED)
+            is_last = true;
+    }
+
+    SCLogDebug("%s ran stream for sid %u on packet %"PRIu64" and we %s",
+            is_last? "LAST:" : "normal:", s->id, p->pcap_cnt,
+            match ? "matched" : "didn't match");
+    det_ctx->stream_already_inspected = true;
+
+    if (match) {
+        det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_MATCH;
+        return DETECT_ENGINE_INSPECT_SIG_MATCH;
+    } else {
+        if (is_last) {
+            det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
+            //SCLogNotice("last, so DETECT_ENGINE_INSPECT_SIG_CANT_MATCH");
+            return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
+        }
+        /* TODO maybe we can set 'CANT_MATCH' for EOF too? */
+        det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
+        return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
+    }
 }
 
 #ifdef UNITTESTS

@@ -1,8 +1,7 @@
 Lua Output
 ==========
 
-Note: this page new Lua scripting available for outputs. It will be
-available in 2.1.
+Lua scripts can be used to generate output from Suricata.
 
 Script structure
 ----------------
@@ -147,6 +146,17 @@ flow
       return needs
   end
 
+SCFlowTimestamps
+~~~~~~~~~~~~~~~~
+
+Get timestamps (seconds and microseconds) of the first and the last packet from
+the flow.
+
+::
+
+  startts, lastts = SCFlowTimestamps()
+  startts_s, lastts_s, startts_us, lastts_us = SCFlowTimestamps()
+
 SCFlowTimeString
 ~~~~~~~~~~~~~~~~
 
@@ -164,7 +174,7 @@ SCFlowTuple
 SCFlowAppLayerProto
 ~~~~~~~~~~~~~~~~~~~
 
-Get alproto as string from the flow. If alproto is not (yet) known, it
+Get alprotos as string from the flow. If a alproto is not (yet) known, it
 returns "unknown".
 
 Example:
@@ -177,6 +187,12 @@ Example:
           print (alproto)
       end
   end
+
+Returns 5 values: <alproto> <alproto_ts> <alproto_tc> <alproto_orig> <alproto_expect>
+
+Orig and expect are used when changing and upgrading protocols. In a SMTP STARTTLS
+case, orig would normally be set to "smtp" and expect to "tls".
+
 
 SCFlowHasAlerts
 ~~~~~~~~~~~~~~~
@@ -202,6 +218,25 @@ Gets the packet and byte counts per flow.
 ::
 
   tscnt, tsbytes, tccnt, tcbytes = SCFlowStats()
+
+SCFlowId
+~~~~~~~~
+
+Gets the flow id.
+
+::
+
+    id = SCFlowId()
+
+Note that simply printing 'id' will likely result in printing a scientific
+notation. To avoid that, simply do:
+
+::
+
+    id = SCFlowId()
+    idstr = string.format("%.0f",id)
+    print ("Flow ID: " .. idstr .. "\n")
+
 
 http
 ----
@@ -456,6 +491,22 @@ Example:
       end
   end
 
+
+TlsGetCertSerial
+~~~~~~~~~~~~~~~~
+
+Get TLS certificate serial number through TlsGetCertSerial.
+
+Example:
+
+::
+
+  function log (args)
+      serial = TlsGetCertSerial()
+      if serial then
+          -- do something
+      end
+  end
 
 SSH
 ---

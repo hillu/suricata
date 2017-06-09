@@ -62,17 +62,18 @@ static int DetectTlsValidityMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *
                                    const SigMatchCtx *);
 
 static time_t DateStringToEpoch (char *);
-static DetectTlsValidityData *DetectTlsValidityParse (char *);
-static int DetectTlsExpiredSetup (DetectEngineCtx *, Signature *s, char *str);
-static int DetectTlsValidSetup (DetectEngineCtx *, Signature *s, char *str);
-static int DetectTlsNotBeforeSetup (DetectEngineCtx *, Signature *s, char *str);
-static int DetectTlsNotAfterSetup (DetectEngineCtx *, Signature *s, char *str);
-static int DetectTlsValiditySetup (DetectEngineCtx *, Signature *s, char *str, uint8_t);
-void TlsNotBeforeRegisterTests(void);
-void TlsNotAfterRegisterTests(void);
-void TlsExpiredRegisterTests(void);
-void TlsValidRegisterTests(void);
+static DetectTlsValidityData *DetectTlsValidityParse (const char *);
+static int DetectTlsExpiredSetup (DetectEngineCtx *, Signature *s, const char *str);
+static int DetectTlsValidSetup (DetectEngineCtx *, Signature *s, const char *str);
+static int DetectTlsNotBeforeSetup (DetectEngineCtx *, Signature *s, const char *str);
+static int DetectTlsNotAfterSetup (DetectEngineCtx *, Signature *s, const char *str);
+static int DetectTlsValiditySetup (DetectEngineCtx *, Signature *s, const char *str, uint8_t);
+static void TlsNotBeforeRegisterTests(void);
+static void TlsNotAfterRegisterTests(void);
+static void TlsExpiredRegisterTests(void);
+static void TlsValidRegisterTests(void);
 static void DetectTlsValidityFree(void *);
+static int g_tls_validity_buffer_id = 0;
 
 /**
  * \brief Registration function for tls validity keywords.
@@ -119,9 +120,11 @@ void DetectTlsValidityRegister (void)
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_TLS, SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_TLSVALIDITY_MATCH,
+    DetectAppLayerInspectEngineRegister("tls_validity",
+            ALPROTO_TLS, SIG_FLAG_TOCLIENT, TLS_STATE_CERT_READY,
             DetectEngineInspectTlsValidity);
+
+    g_tls_validity_buffer_id = DetectBufferTypeGetByName("tls_validity");
 }
 
 /**
@@ -229,7 +232,7 @@ static time_t DateStringToEpoch (char *string)
 {
     int r = 0;
     struct tm tm;
-    char *patterns[] = {
+    const char *patterns[] = {
             /* ISO 8601 */
             "%Y-%m",
             "%Y-%m-%d",
@@ -284,7 +287,7 @@ static time_t DateStringToEpoch (char *string)
  * \retval dd pointer to DetectTlsValidityData on success.
  * \retval NULL on failure.
  */
-static DetectTlsValidityData *DetectTlsValidityParse (char *rawstr)
+static DetectTlsValidityData *DetectTlsValidityParse (const char *rawstr)
 {
     DetectTlsValidityData *dd = NULL;
 #define MAX_SUBSTRINGS 30
@@ -411,12 +414,15 @@ error:
  * \retval -1 on Failure.
  */
 static int DetectTlsExpiredSetup (DetectEngineCtx *de_ctx, Signature *s,
-                                  char *rawstr)
+                                  const char *rawstr)
 {
     DetectTlsValidityData *dd = NULL;
     SigMatch *sm = NULL;
 
     SCLogDebug("\'%s\'", rawstr);
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     dd = SCCalloc(1, sizeof(DetectTlsValidityData));
     if (dd == NULL) {
@@ -430,12 +436,6 @@ static int DetectTlsExpiredSetup (DetectEngineCtx *de_ctx, Signature *s,
     if (sm == NULL)
         goto error;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS,
-                   "rule contains conflicting keywords.");
-        goto error;
-    }
-
     dd->mode = DETECT_TLS_VALIDITY_EX;
     dd->type = DETECT_TLS_TYPE_NOTAFTER;
     dd->epoch = 0;
@@ -444,11 +444,7 @@ static int DetectTlsExpiredSetup (DetectEngineCtx *de_ctx, Signature *s,
     sm->type = DETECT_AL_TLS_EXPIRED;
     sm->ctx = (void *)dd;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_TLSVALIDITY_MATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_validity_buffer_id);
     return 0;
 
 error:
@@ -469,12 +465,15 @@ error:
  * \retval -1 on Failure.
  */
 static int DetectTlsValidSetup (DetectEngineCtx *de_ctx, Signature *s,
-                                  char *rawstr)
+                                const char *rawstr)
 {
     DetectTlsValidityData *dd = NULL;
     SigMatch *sm = NULL;
 
     SCLogDebug("\'%s\'", rawstr);
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     dd = SCCalloc(1, sizeof(DetectTlsValidityData));
     if (dd == NULL) {
@@ -488,12 +487,6 @@ static int DetectTlsValidSetup (DetectEngineCtx *de_ctx, Signature *s,
     if (sm == NULL)
         goto error;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS,
-                   "rule contains conflicting keywords.");
-        goto error;
-    }
-
     dd->mode = DETECT_TLS_VALIDITY_VA;
     dd->type = DETECT_TLS_TYPE_NOTAFTER;
     dd->epoch = 0;
@@ -502,11 +495,7 @@ static int DetectTlsValidSetup (DetectEngineCtx *de_ctx, Signature *s,
     sm->type = DETECT_AL_TLS_VALID;
     sm->ctx = (void *)dd;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_TLSVALIDITY_MATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_validity_buffer_id);
     return 0;
 
 error:
@@ -527,7 +516,7 @@ error:
  * \retval -1 on Failure.
  */
 static int DetectTlsNotBeforeSetup (DetectEngineCtx *de_ctx, Signature *s,
-                                    char *rawstr)
+                                    const char *rawstr)
 {
     uint8_t type = DETECT_TLS_TYPE_NOTBEFORE;
     int r = DetectTlsValiditySetup(de_ctx, s, rawstr, type);
@@ -546,7 +535,7 @@ static int DetectTlsNotBeforeSetup (DetectEngineCtx *de_ctx, Signature *s,
  * \retval -1 on Failure.
  */
 static int DetectTlsNotAfterSetup (DetectEngineCtx *de_ctx, Signature *s,
-                                    char *rawstr)
+                                   const char *rawstr)
 {
     uint8_t type = DETECT_TLS_TYPE_NOTAFTER;
     int r = DetectTlsValiditySetup(de_ctx, s, rawstr, type);
@@ -566,12 +555,15 @@ static int DetectTlsNotAfterSetup (DetectEngineCtx *de_ctx, Signature *s,
  * \retval -1 on Failure.
  */
 static int DetectTlsValiditySetup (DetectEngineCtx *de_ctx, Signature *s,
-                                   char *rawstr, uint8_t type)
+                                   const char *rawstr, uint8_t type)
 {
     DetectTlsValidityData *dd = NULL;
     SigMatch *sm = NULL;
 
     SCLogDebug("\'%s\'", rawstr);
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     dd = DetectTlsValidityParse(rawstr);
     if (dd == NULL) {
@@ -584,12 +576,6 @@ static int DetectTlsValiditySetup (DetectEngineCtx *de_ctx, Signature *s,
     sm = SigMatchAlloc();
     if (sm == NULL)
         goto error;
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS,
-                   "rule contains conflicting keywords.");
-        goto error;
-    }
 
     if (type == DETECT_TLS_TYPE_NOTBEFORE) {
         dd->type = DETECT_TLS_TYPE_NOTBEFORE;
@@ -605,11 +591,7 @@ static int DetectTlsValiditySetup (DetectEngineCtx *de_ctx, Signature *s,
 
     sm->ctx = (void *)dd;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_TLSVALIDITY_MATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_validity_buffer_id);
     return 0;
 
 error:
@@ -640,7 +622,7 @@ void DetectTlsValidityFree(void *de_ptr)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse01 (void)
+static int ValidityTestParse01 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("1430000000");
@@ -656,7 +638,7 @@ int ValidityTestParse01 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse02 (void)
+static int ValidityTestParse02 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse(">1430000000");
@@ -672,7 +654,7 @@ int ValidityTestParse02 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse03 (void)
+static int ValidityTestParse03 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("<1430000000");
@@ -688,7 +670,7 @@ int ValidityTestParse03 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse04 (void)
+static int ValidityTestParse04 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("1430000000<>1470000000");
@@ -705,7 +687,7 @@ int ValidityTestParse04 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse05 (void)
+static int ValidityTestParse05 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("A");
@@ -719,7 +701,7 @@ int ValidityTestParse05 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse06 (void)
+static int ValidityTestParse06 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse(">1430000000<>1470000000");
@@ -733,7 +715,7 @@ int ValidityTestParse06 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse07 (void)
+static int ValidityTestParse07 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("1430000000<>");
@@ -747,7 +729,7 @@ int ValidityTestParse07 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse08 (void)
+static int ValidityTestParse08 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("<>1430000000");
@@ -761,7 +743,7 @@ int ValidityTestParse08 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse09 (void)
+static int ValidityTestParse09 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("");
@@ -775,7 +757,7 @@ int ValidityTestParse09 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse10 (void)
+static int ValidityTestParse10 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse(" ");
@@ -789,7 +771,7 @@ int ValidityTestParse10 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse11 (void)
+static int ValidityTestParse11 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("1490000000<>1430000000");
@@ -803,7 +785,7 @@ int ValidityTestParse11 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse12 (void)
+static int ValidityTestParse12 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("1430000000 <> 1490000000");
@@ -820,7 +802,7 @@ int ValidityTestParse12 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse13 (void)
+static int ValidityTestParse13 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("> 1430000000 ");
@@ -836,7 +818,7 @@ int ValidityTestParse13 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse14 (void)
+static int ValidityTestParse14 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("<   1490000000 ");
@@ -852,7 +834,7 @@ int ValidityTestParse14 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse15 (void)
+static int ValidityTestParse15 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("   1490000000 ");
@@ -868,7 +850,7 @@ int ValidityTestParse15 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse16 (void)
+static int ValidityTestParse16 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10");
@@ -884,7 +866,7 @@ int ValidityTestParse16 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse17 (void)
+static int ValidityTestParse17 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse(">2015-10-22");
@@ -900,7 +882,7 @@ int ValidityTestParse17 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse18 (void)
+static int ValidityTestParse18 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("<2015-10-22 23");
@@ -916,7 +898,7 @@ int ValidityTestParse18 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse19 (void)
+static int ValidityTestParse19 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10-22 23:59");
@@ -932,7 +914,7 @@ int ValidityTestParse19 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse20 (void)
+static int ValidityTestParse20 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10-22 23:59:59");
@@ -948,7 +930,7 @@ int ValidityTestParse20 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse21 (void)
+static int ValidityTestParse21 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10-22T23");
@@ -964,7 +946,7 @@ int ValidityTestParse21 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse22 (void)
+static int ValidityTestParse22 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10-22T23:59");
@@ -980,7 +962,7 @@ int ValidityTestParse22 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestParse23 (void)
+static int ValidityTestParse23 (void)
 {
     DetectTlsValidityData *dd = NULL;
     dd = DetectTlsValidityParse("2015-10-22T23:59:59");
@@ -996,7 +978,7 @@ int ValidityTestParse23 (void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidityTestDetect01(void)
+static int ValidityTestDetect01(void)
 {
     /* client hello */
     uint8_t client_hello[] = {
@@ -1314,7 +1296,7 @@ int ValidityTestDetect01(void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ExpiredTestDetect01(void)
+static int ExpiredTestDetect01(void)
 {
     /* client hello */
     uint8_t client_hello[] = {
@@ -1636,7 +1618,7 @@ int ExpiredTestDetect01(void)
  * \retval 1 on success.
  * \retval 0 on failure.
  */
-int ValidTestDetect01(void)
+static int ValidTestDetect01(void)
 {
     /* client hello */
     uint8_t client_hello[] = {

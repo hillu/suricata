@@ -20,7 +20,9 @@ app-layer-dnp3.c app-layer-dnp3.h \
 app-layer-dnp3-objects.c app-layer-dnp3-objects.h \
 app-layer-dns-common.c app-layer-dns-common.h \
 app-layer-dns-tcp.c app-layer-dns-tcp.h \
+app-layer-dns-tcp-rust.c app-layer-dns-tcp-rust.h \
 app-layer-dns-udp.c app-layer-dns-udp.h \
+app-layer-dns-udp-rust.c app-layer-dns-udp-rust.h \
 app-layer-enip.c app-layer-enip.h \
 app-layer-enip-common.c app-layer-enip-common.h \
 app-layer-events.c app-layer-events.h \
@@ -37,6 +39,7 @@ app-layer-protos.c app-layer-protos.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smtp.c app-layer-smtp.h \
+app-layer-nfs3.c app-layer-nfs3.h \
 app-layer-template.c app-layer-template.h \
 app-layer-ssh.c app-layer-ssh.h \
 app-layer-ssl.c app-layer-ssl.h \
@@ -97,6 +100,7 @@ detect-dns-query.c detect-dns-query.h \
 detect-tls-sni.c detect-tls-sni.h \
 detect-tls-cert-issuer.c detect-tls-cert-issuer.h \
 detect-tls-cert-subject.c detect-tls-cert-subject.h \
+detect-tls-cert-serial.c detect-tls-cert-serial.h \
 detect-dsize.c detect-dsize.h \
 detect-engine-address.c detect-engine-address.h \
 detect-engine-address-ipv4.c detect-engine-address-ipv4.h \
@@ -115,7 +119,6 @@ detect-engine-file.c detect-engine-file.h \
 detect-engine-filedata-smtp.c detect-engine-filedata-smtp.h \
 detect-engine-hcbd.c detect-engine-hcbd.h \
 detect-engine-hcd.c detect-engine-hcd.h \
-detect-engine-hhd.c detect-engine-hhd.h \
 detect-engine-hhhd.c detect-engine-hhhd.h \
 detect-engine-hmd.c detect-engine-hmd.h \
 detect-engine-hrhd.c detect-engine-hrhd.h \
@@ -143,6 +146,7 @@ detect-engine-threshold.c detect-engine-threshold.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-fast-pattern.c detect-fast-pattern.h \
 detect-file-data.c detect-file-data.h \
+detect-file-hash-common.c detect-file-hash-common.h \
 detect-fileext.c detect-fileext.h \
 detect-filemagic.c detect-filemagic.h \
 detect-filemd5.c detect-filemd5.h \
@@ -162,17 +166,29 @@ detect-ftpbounce.c detect-ftpbounce.h \
 detect-geoip.c detect-geoip.h \
 detect-gid.c detect-gid.h \
 detect-hostbits.c detect-hostbits.h \
+detect-http-accept.c detect-http-accept.h \
+detect-http-accept-enc.c detect-http-accept-enc.h \
+detect-http-accept-lang.c detect-http-accept-lang.h \
 detect-http-client-body.c detect-http-client-body.h \
+detect-http-connection.c detect-http-connection.h \
+detect-http-content-len.c detect-http-content-len.h \
+detect-http-content-type.c detect-http-content-type.h \
 detect-http-cookie.c detect-http-cookie.h \
 detect-http-header.c detect-http-header.h \
+detect-http-headers.c detect-http-headers.h detect-http-headers-stub.h \
+detect-http-header-common.c detect-http-header-common.h \
+detect-http-header-names.c detect-http-header-names.h \
 detect-http-hh.c detect-http-hh.h \
 detect-http-hrh.c detect-http-hrh.h \
 detect-http-method.c detect-http-method.h \
+detect-http-protocol.c detect-http-protocol.h \
 detect-http-raw-header.c detect-http-raw-header.h \
 detect-http-raw-uri.c detect-http-raw-uri.h \
+detect-http-referer.c detect-http-referer.h \
 detect-http-request-line.c detect-http-request-line.h \
 detect-http-response-line.c detect-http-response-line.h \
 detect-http-server-body.c detect-http-server-body.h \
+detect-http-start.c detect-http-start.h \
 detect-http-stat-code.c detect-http-stat-code.h \
 detect-http-stat-msg.c detect-http-stat-msg.h \
 detect-http-ua.c detect-http-ua.h \
@@ -192,6 +208,7 @@ detect-lua-extensions.c detect-lua-extensions.h \
 detect-mark.c detect-mark.h \
 detect-metadata.c detect-metadata.h \
 detect-msg.c detect-msg.h \
+detect-nfs3-procedure.c detect-nfs3-procedure.h \
 detect-noalert.c detect-noalert.h \
 detect-nocase.c detect-nocase.h \
 detect-offset.c detect-offset.h \
@@ -209,7 +226,9 @@ detect-rpc.c detect-rpc.h \
 detect-sameip.c detect-sameip.h \
 detect-seq.c detect-seq.h \
 detect-sid.c detect-sid.h \
+detect-ssh-proto.c detect-ssh-proto.h \
 detect-ssh-proto-version.c detect-ssh-proto-version.h \
+detect-ssh-software.c detect-ssh-software.h \
 detect-ssh-software-version.c detect-ssh-software-version.h \
 detect-ssl-state.c detect-ssl-state.h \
 detect-ssl-version.c detect-ssl-version.h \
@@ -254,6 +273,7 @@ log-dnslog.c log-dnslog.h \
 log-droplog.c log-droplog.h \
 log-file.c log-file.h \
 log-filestore.c log-filestore.h \
+log-cf-common.c log-cf-common.h \
 log-httplog.c log-httplog.h \
 log-pcap.c log-pcap.h \
 log-stats.c log-stats.h \
@@ -278,7 +298,9 @@ output-json-smtp.c output-json-smtp.h \
 output-json-ssh.c output-json-ssh.h \
 output-json-stats.c output-json-stats.h \
 output-json-tls.c output-json-tls.h \
+output-json-nfs3.c output-json-nfs3.h \
 output-json-template.c output-json-template.h \
+output-json-vars.c output-json-vars.h \
 output-lua.c output-lua.h \
 output-packet.c output-packet.h \
 output-stats.c output-stats.h \
@@ -305,6 +327,7 @@ runmode-unittests.c runmode-unittests.h \
 runmode-unix-socket.c runmode-unix-socket.h \
 runmode-tile.c runmode-tile.h \
 runmodes.c runmodes.h \
+rust.h \
 source-af-packet.c source-af-packet.h \
 source-erf-dag.c source-erf-dag.h \
 source-erf-file.c source-erf-file.h \
@@ -320,6 +343,7 @@ source-pfring.c source-pfring.h \
 stream.c stream.h \
 stream-tcp.c stream-tcp.h stream-tcp-private.h \
 stream-tcp-inline.c stream-tcp-inline.h \
+stream-tcp-list.c stream-tcp-list.h \
 stream-tcp-reassemble.c stream-tcp-reassemble.h \
 stream-tcp-sack.c stream-tcp-sack.h \
 stream-tcp-util.c stream-tcp-util.h \
@@ -330,7 +354,6 @@ tm-modules.c tm-modules.h \
 tmqh-flow.c tmqh-flow.h \
 tmqh-nfq.c tmqh-nfq.h \
 tmqh-packetpool.c tmqh-packetpool.h \
-tmqh-ringbuffer.c tmqh-ringbuffer.h \
 tmqh-simple.c tmqh-simple.h \
 tm-queuehandlers.c tm-queuehandlers.h \
 tm-queues.c tm-queues.h \
@@ -361,7 +384,6 @@ util-decode-asn1.c util-decode-asn1.h \
 util-decode-der.c util-decode-der.h \
 util-decode-der-get.c util-decode-der-get.h \
 util-decode-mime.c util-decode-mime.h \
-util-detect-file-hash.c util-detect-file-hash.h \
 util-device.c util-device.h \
 util-enum.c util-enum.h \
 util-error.c util-error.h \
@@ -378,6 +400,7 @@ util-ioctl.h util-ioctl.c \
 util-ip.h util-ip.c \
 util-logopenfile.h util-logopenfile.c \
 util-logopenfile-tile.h util-logopenfile-tile.c \
+util-log-redis.h util-log-redis.c \
 util-lua.c util-lua.h \
 util-luajit.c util-luajit.h \
 util-lua-common.c util-lua-common.h \
@@ -418,7 +441,6 @@ util-proto-name.c util-proto-name.h \
 util-radix-tree.c util-radix-tree.h \
 util-random.c util-random.h \
 util-reference-config.c util-reference-config.h \
-util-ringbuffer.c util-ringbuffer.h \
 util-rohash.c util-rohash.h \
 util-rule-vars.c util-rule-vars.h \
 util-runmodes.c util-runmodes.h \
@@ -446,14 +468,18 @@ win32-misc.c win32-misc.h \
 win32-service.c win32-service.h \
 win32-syslog.h
 
-EXTRA_DIST = util-mpm-ac-cuda-kernel.cu ptxdump.py
+EXTRA_DIST = util-mpm-ac-cuda-kernel.cu ptxdump.py tests
 
 # set the include path found by configure
 AM_CPPFLAGS = $(all_includes)
 
 # the library search path.
 suricata_LDFLAGS = $(all_libraries) ${SECLDFLAGS}
-suricata_LDADD = $(HTP_LDADD)
+suricata_LDADD = $(HTP_LDADD) $(RUST_LDADD)
+
+if HAVE_RUST
+suricata_DEPENDENCIES = $(RUST_SURICATA_LIB)
+endif
 
 # Rules to build CUDA ptx modules
 if BUILD_CUDA
@@ -508,7 +534,14 @@ CLEANFILES = $(PTXS) cuda-ptxdump.h
 endif
 
 # default CFLAGS
-AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS} ${SECCFLAGS} ${PCAP_CFLAGS} -Wall -Wno-unused-parameter -std=gnu99 -DLOCAL_STATE_DIR=\"$(localstatedir)\"
+AM_CFLAGS = ${OPTIMIZATION_CFLAGS} ${GCC_CFLAGS} ${CLANG_CFLAGS}            \
+    ${SECCFLAGS} ${PCAP_CFLAGS} -DLOCAL_STATE_DIR=\"$(localstatedir)\"      \
+    -std=gnu99                                                              \
+    -Wall -Wno-unused-parameter -Wmissing-prototypes -Wmissing-declarations \
+    -Wstrict-prototypes -Wwrite-strings -Wbad-function-cast                 \
+    -Wformat-security -Wno-format-nonliteral -Wmissing-format-attribute     \
+    -funsigned-char
+
 # different flags for different cases
 if DEBUG
 AM_CFLAGS += -ggdb -O0

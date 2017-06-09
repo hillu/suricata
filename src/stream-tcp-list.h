@@ -19,27 +19,17 @@
  * \file
  *
  * \author Victor Julien <victor@inliniac.net>
- * \author Duarte Silva <duarte.silva@serializing.me>
- *
  */
 
-#ifndef __UTIL_DETECT_FILE_HASH_H__
-#define __UTIL_DETECT_FILE_HASH_H__
+#ifndef __STREAM_TCP_LIST_H__
+#define __STREAM_TCP_LIST_H__
 
-#include "util-rohash.h"
+#include "stream-tcp-private.h"
 
-typedef struct DetectFileHashData_ {
-    ROHashTable *hash;
-    int negated;
-} DetectFileHashData;
+void PrintList(TcpSegment *);
 
-/* prototypes */
-int ReadHashString(uint8_t *, char *, char *, int, uint16_t);
-int LoadHashTable(ROHashTable *, char *, char *, int, uint32_t);
+#ifdef UNITTESTS
+void StreamTcpListRegisterTests(void);
+#endif
 
-int DetectFileHashMatch(ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t,
-        File *, Signature *, SigMatch *);
-int DetectFileHashSetup(DetectEngineCtx *, Signature *, char *, uint32_t);
-void DetectFileHashFree(void *);
-
-#endif /* __UTIL_DETECT_FILE_HASH_H__ */
+#endif /* __STREAM_TCP_LIST_H__ */

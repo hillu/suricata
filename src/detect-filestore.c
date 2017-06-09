@@ -60,10 +60,11 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 static int DetectFilestoreMatch (ThreadVars *, DetectEngineThreadCtx *,
-        Flow *, uint8_t, File *, Signature *, SigMatch *);
-static int DetectFilestoreSetup (DetectEngineCtx *, Signature *, char *);
+        Flow *, uint8_t, File *, const Signature *, const SigMatchCtx *);
+static int DetectFilestoreSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFilestoreFree(void *);
 static void DetectFilestoreRegisterTests(void);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for keyword: filestore
@@ -80,12 +81,14 @@ void DetectFilestoreRegister(void)
     sigmatch_table[DETECT_FILESTORE].flags = SIGMATCH_OPTIONAL_OPT;
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 }
 
 /**
  *  \brief apply the post match filestore with options
  */
-static int FilestorePostMatchWithOptions(Packet *p, Flow *f, DetectFilestoreData *filestore, FileContainer *fc,
+static int FilestorePostMatchWithOptions(Packet *p, Flow *f, const DetectFilestoreData *filestore, FileContainer *fc,
         uint16_t file_id, uint16_t tx_id)
 {
     if (filestore == NULL) {
@@ -180,7 +183,7 @@ static int FilestorePostMatchWithOptions(Packet *p, Flow *f, DetectFilestoreData
  *  When we are sure all parts of the signature matched, we run this function
  *  to finalize the filestore.
  */
-int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s)
+int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, const Signature *s)
 {
     uint8_t flags = 0;
 
@@ -190,7 +193,7 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
         SCReturnInt(0);
     }
 
-    if (s->filestore_sm == NULL || p->flow == NULL) {
+    if ((s->filestore_ctx == NULL && !(s->flags & SIG_FLAG_FILESTORE)) || p->flow == NULL) {
 #ifndef DEBUG
         SCReturnInt(0);
 #else
@@ -211,17 +214,16 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
                                                 p->flow->alstate, flags);
 
     /* filestore for single files only */
-    if (s->filestore_sm->ctx == NULL) {
+    if (s->filestore_ctx == NULL) {
         uint16_t u;
         for (u = 0; u < det_ctx->filestore_cnt; u++) {
             FileStoreFileById(ffc, det_ctx->filestore[u].file_id);
         }
     } else {
-        DetectFilestoreData *filestore = (DetectFilestoreData *)s->filestore_sm->ctx;
         uint16_t u;
 
         for (u = 0; u < det_ctx->filestore_cnt; u++) {
-            FilestorePostMatchWithOptions(p, p->flow, filestore, ffc,
+            FilestorePostMatchWithOptions(p, p->flow, s->filestore_ctx, ffc,
                     det_ctx->filestore[u].file_id, det_ctx->filestore[u].tx_id);
         }
     }
@@ -247,7 +249,7 @@ int DetectFilestorePostMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Pack
  *       needs to be put behind a api.
  */
 static int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-        uint8_t flags, File *file, Signature *s, SigMatch *m)
+        uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     uint16_t file_id = 0;
 
@@ -260,7 +262,7 @@ static int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, 
     /* file can be NULL when a rule with filestore scope > file
      * matches. */
     if (file != NULL) {
-        file_id = file->file_id;
+        file_id = file->file_store_id;
     }
 
     det_ctx->filestore[det_ctx->filestore_cnt].file_id = file_id;
@@ -285,7 +287,7 @@ static int DetectFilestoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, 
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFilestoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFilestoreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     SCEnter();
 
@@ -402,8 +404,8 @@ static int DetectFilestoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *st
         AppLayerHtpNeedFileInspection();
     }
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
-    s->filestore_sm = sm;
+    SigMatchAppendSMToList(s, sm, g_file_match_list_id);
+    s->filestore_ctx = (const DetectFilestoreData *)sm->ctx;
 
     s->flags |= SIG_FLAG_FILESTORE;
     return 0;

@@ -1,6 +1,5 @@
-    AC_INIT(suricata, 3.2.1)
+    AC_INIT(suricata, 4.0.0-beta1)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
-    m4_ifndef([AS_VERSION_COMPARE], [AC_DEFUN([AS_VERSION_COMPARE],[])])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
     AC_CONFIG_MACRO_DIR(m4)
@@ -10,7 +9,7 @@
     AC_LANG_C
     AC_PROG_CC_C99
     AC_PROG_LIBTOOL
-    PKG_PROG_PKG_CONFIG(0.21) # 0.21 is the CentOS 5.11 version
+    PKG_PROG_PKG_CONFIG
 
     dnl Taken from https://llvm.org/svn/llvm-project/llvm/trunk/autoconf/configure.ac
     dnl check if we compile using clang or gcc. On some systems the gcc binary is
@@ -58,9 +57,6 @@
             if test "$gccvernum" -ge "400"; then
                 dnl gcc 4.0 or later
                 GCC_CFLAGS="-Wextra -Werror-implicit-function-declaration"
-                # remove optimization options that break our code
-                # VJ 2010/06/27: no-tree-pre added. It breaks ringbuffers code.
-                GCC_CFLAGS="$GCC_CFLAGS -fno-tree-pre"
             else
                 GCC_CFLAGS="-W"
             fi
@@ -127,13 +123,14 @@
     AC_CHECK_HEADERS([arpa/inet.h assert.h ctype.h errno.h fcntl.h inttypes.h])
     AC_CHECK_HEADERS([getopt.h])
     AC_CHECK_HEADERS([limits.h netdb.h netinet/in.h poll.h sched.h signal.h])
-    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h string.h strings.h sys/ioctl.h])
+    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h stdbool.h string.h strings.h sys/ioctl.h])
     AC_CHECK_HEADERS([syslog.h sys/prctl.h sys/socket.h sys/stat.h sys/syscall.h])
     AC_CHECK_HEADERS([sys/time.h time.h unistd.h])
     AC_CHECK_HEADERS([sys/ioctl.h linux/if_ether.h linux/if_packet.h linux/filter.h])
     AC_CHECK_HEADERS([linux/ethtool.h linux/sockios.h])
     AC_CHECK_HEADER(glob.h,,[AC_ERROR(glob.h not found ...)])
     AC_CHECK_HEADERS([dirent.h fnmatch.h])
+    AC_CHECK_HEADERS([sys/resource.h])
 
     AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h linux/if_arp.h], [], [],
     [[#ifdef HAVE_SYS_SOCKET_H
@@ -142,7 +139,7 @@
         #endif
     ]])
 
-    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h w32api/wtypes.h], [], [],
+    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h w32api/wtypes.h wincrypt.h], [], [],
                     [[
                         #ifndef _X86_
                         #define _X86_
@@ -170,7 +167,7 @@
     # Checks for library functions.
     AC_FUNC_MALLOC
     AC_FUNC_REALLOC
-    AC_CHECK_FUNCS([gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul memchr memrchr])
+    AC_CHECK_FUNCS([gettimeofday memset strcasecmp strchr strdup strerror strncasecmp strtol strtoul memchr memrchr clock_gettime])
 
     OCFLAGS=$CFLAGS
     CFLAGS=""
@@ -218,6 +215,7 @@
             ;;
         *-*-linux*)
             #for now do nothing
+	    RUST_LDADD="-ldl -lrt -lm"
             ;;
         *-*-mingw32*)
             CFLAGS="${CFLAGS} -DOS_WIN32"
@@ -553,10 +551,24 @@
         [ pcre_jit_available=yes ], [ pcre_jit_available=no ]
         )
 
-    # bug 1693, libpcre 8.35 is broken and debian jessie is still using that
-    if test "$libpcre_buggy_found" = "yes"; then
-        pcre_jit_available="no, libpcre 8.35 blacklisted"
-    fi
+    case $host in
+        *powerpc64*)
+            PKG_CHECK_MODULES(LIBPCREVERSION, [libpcre = 8.39],[libpcre_ppc64_buggy_found1="yes"],[libprce_ppc64_buggy_found1="no"])
+            PKG_CHECK_MODULES(LIBPCREVERSION, [libpcre = 8.40],[libpcre_ppc64_buggy_found2="yes"],[libprce_ppc64_buggy_found2="no"])
+
+            if test "$libprce_ppc64_buggy_found1" = "yes" || test "$libprce_ppc64_buggy_found2"; then
+                # on powerpc64, both gcc and clang lead to SIGILL in
+                # unittests when jit is enabled.
+                pcre_jit_available="no, pcre 8.39/8.40 jit disabled for powerpc64"
+            fi
+        ;;
+        *)
+            # bug 1693, libpcre 8.35 is broken and debian jessie is still using that
+            if test "$libpcre_buggy_found" = "yes"; then
+                pcre_jit_available="no, libpcre 8.35 blacklisted"
+            fi
+        ;;
+    esac
 
     if test "x$pcre_jit_available" = "xyes"; then
        AC_MSG_RESULT(yes)
@@ -811,45 +823,28 @@
     fi
 
     # enable support for NFQUEUE
-    AS_IF([test "x$enable_nfqueue" = "xyes"], [
+    if test "x$enable_nfqueue" = "xyes"; then
         AC_DEFINE_UNQUOTED([NFQ],[1],[Enable Linux Netfilter NFQUEUE support for inline IDP])
 
-  #libnetfilter_queue
-    AC_ARG_WITH(libnetfilter_queue_includes,
+      #libnetfilter_queue
+        AC_ARG_WITH(libnetfilter_queue_includes,
             [  --with-libnetfilter_queue-includes=DIR  libnetfilter_queue include directory],
             [with_libnetfilter_queue_includes="$withval"],[with_libnetfilter_queue_includes=no])
-    AC_ARG_WITH(libnetfilter_queue_libraries,
+        AC_ARG_WITH(libnetfilter_queue_libraries,
             [  --with-libnetfilter_queue-libraries=DIR    libnetfilter_queue library directory],
             [with_libnetfilter_queue_libraries="$withval"],[with_libnetfilter_queue_libraries="no"])
 
-    if test "$with_libnetfilter_queue_includes" != "no"; then
-        CPPFLAGS="${CPPFLAGS} -I${with_libnetfilter_queue_includes}"
-    fi
-
-    AC_CHECK_HEADER(libnetfilter_queue/libnetfilter_queue.h,,[AC_ERROR(libnetfilter_queue/libnetfilter_queue.h not found ...)])
-
-    if test "$with_libnetfilter_queue_libraries" != "no"; then
-        LDFLAGS="${LDFLAGS}  -L${with_libnetfilter_queue_libraries}"
-    fi
-
-    #LDFLAGS="${LDFLAGS} -lnetfilter_queue"
-
-    NFQ=""
-    case $host in
-    *-*-mingw32*)
-        AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",-lws2_32)
-
-        AC_ARG_WITH(netfilterforwin_includes,
-            [  --with-netfilterforwin-includes=DIR  netfilterforwin include directory],
-            [with_netfilterforwin_includes="$withval"],[with_netfilterforwin_includes=no])
-
-        if test "$with_netfilterforwin_includes" != "no"; then
-            CPPFLAGS="${CPPFLAGS} -I${with_netfilterforwin_includes}"
-        else
-            CPPFLAGS="${CPPFLAGS} -I../../netfilterforwin"
+        if test "$with_libnetfilter_queue_includes" != "no"; then
+            CPPFLAGS="${CPPFLAGS} -I${with_libnetfilter_queue_includes}"
         fi
-        ;;
-    *)
+
+        AC_CHECK_HEADER(libnetfilter_queue/libnetfilter_queue.h,,[AC_ERROR(libnetfilter_queue/libnetfilter_queue.h not found ...)])
+
+        if test "$with_libnetfilter_queue_libraries" != "no"; then
+            LDFLAGS="${LDFLAGS}  -L${with_libnetfilter_queue_libraries}"
+        fi
+
+        NFQ=""
         AC_CHECK_LIB(netfilter_queue, nfq_open,, NFQ="no",)
         AC_CHECK_LIB([netfilter_queue], [nfq_set_queue_maxlen],AC_DEFINE_UNQUOTED([HAVE_NFQ_MAXLEN],[1],[Found queue max length support in netfilter_queue]) ,,[-lnfnetlink])
         AC_CHECK_LIB([netfilter_queue], [nfq_set_verdict2],AC_DEFINE_UNQUOTED([HAVE_NFQ_SET_VERDICT2],[1],[Found nfq_set_verdict2 function in netfilter_queue]) ,,[-lnfnetlink])
@@ -867,12 +862,12 @@
         AC_COMPILE_IFELSE(
             [AC_LANG_PROGRAM(
                 [
-                #include <stdio.h>
-                #include <libnetfilter_queue/libnetfilter_queue.h>
+                    #include <stdio.h>
+                    #include <libnetfilter_queue/libnetfilter_queue.h>
                 ],
                 [
-                char *pktdata;
-                nfq_get_payload(NULL, &pktdata);
+                    char *pktdata;
+                    nfq_get_payload(NULL, &pktdata);
                 ])],
             [libnetfilter_queue_nfq_get_payload_signed="yes"],
             [libnetfilter_queue_nfq_get_payload_signed="no"])
@@ -881,20 +876,18 @@
             AC_DEFINE([NFQ_GET_PAYLOAD_SIGNED], [1], [For signed version of nfq_get_payload])
         fi
         CFLAGS="${STORECFLAGS}"
-    ;;
-    esac
 
-    if test "$NFQ" = "no"; then
-        echo
-        echo "   ERROR!  libnetfilter_queue library not found, go get it"
-        echo "   from www.netfilter.org."
-        echo "   we automatically append libnetfilter_queue/ when searching"
-        echo "   for headers etc. when the --with-libnfq-includes directive"
-        echo "   is used"
-        echo
-        exit 1
+        if test "$NFQ" = "no"; then
+            echo
+            echo "   ERROR!  libnetfilter_queue library not found, go get it"
+            echo "   from www.netfilter.org."
+            echo "   we automatically append libnetfilter_queue/ when searching"
+            echo "   for headers etc. when the --with-libnfq-includes directive"
+            echo "   is used"
+            echo
+            exit 1
+        fi
     fi
-  ])
 
   # libnetfilter_log
     AC_ARG_WITH(libnetfilter_log_includes,
@@ -1104,17 +1097,22 @@
     #see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
     TMPLIBS="${LIBS}"
     AC_CHECK_LIB(pcap, pcap_activate,, LPCAPVTEST="no")
-    if test "$LPCAPVTEST" != "no"; then
-        AC_PATH_PROG(HAVE_PCAP_CONFIG, pcap-config, "no")
-        if test "$HAVE_PCAP_CONFIG" = "no" -o "$cross_compiling" = "yes"; then
-            AC_DEFINE([LIBPCAP_VERSION_MAJOR],[1],(libpcap version 1.0+))
-        else
-            PCAP_CFLAGS="$(pcap-config --defines) $(pcap-config --cflags)"
-            AC_SUBST(PCAP_CFLAGS)
-            AC_DEFINE([LIBPCAP_VERSION_MAJOR],[1],(libpcap version 1.0+))
-        fi
+    if test "$LPCAPVTEST" = "no"; then
+        echo
+        echo "   ERROR!  libpcap library too old, need at least 1+, "
+        echo "   go get it from http://www.tcpdump.org or your distribution:"
+        echo
+        echo "   Ubuntu: apt-get install libpcap-dev"
+        echo "   Fedora: yum install libpcap-devel"
+        echo
+        exit 1
+    fi
+    AC_PATH_PROG(HAVE_PCAP_CONFIG, pcap-config, "no")
+    if test "$HAVE_PCAP_CONFIG" = "no" -o "$cross_compiling" = "yes"; then
+        AC_MSG_RESULT(no pcap-config is use)
     else
-        AC_DEFINE([LIBPCAP_VERSION_MAJOR],[0],(libpcap version 0.x))
+        PCAP_CFLAGS="$(pcap-config --defines) $(pcap-config --cflags)"
+        AC_SUBST(PCAP_CFLAGS)
     fi
     LIBS="${TMPLIBS}"
 
@@ -1794,6 +1792,8 @@
         fi
     fi
 
+    AM_CONDITIONAL([HAVE_LUA], [test "x$enable_lua" != "xno"])
+
   # libgeoip
     AC_ARG_ENABLE(geoip,
 	        AS_HELP_STRING([--enable-geoip],[Enable GeoIP support]),
@@ -1843,6 +1843,14 @@
         LDFLAGS="${LDFLAGS} -pie"
     fi
 
+#libevent includes and libraries
+    AC_ARG_WITH(libevent_includes,
+            [  --with-libevent-includes=DIR  libevent include directory],
+            [with_libevent_includes="$withval"],[with_libevent_includes="no"])
+    AC_ARG_WITH(libevent_libraries,
+            [  --with-libevent-libraries=DIR    libevent library directory],
+            [with_libevent_libraries="$withval"],[with_libevent_libraries="no"])
+
 # libhiredis
     AC_ARG_ENABLE(hiredis,
 	        AS_HELP_STRING([--enable-hiredis],[Enable Redis support]),
@@ -1855,6 +1863,7 @@
             [  --with-libhiredis-libraries=DIR    libhiredis library directory],
             [with_libhiredis_libraries="$withval"],[with_libhiredis_libraries="no"])
 
+    enable_hiredis_async="no"
     if test "$enable_hiredis" = "yes"; then
         if test "$with_libhiredis_includes" != "no"; then
             CPPFLAGS="${CPPFLAGS} -I${with_libhiredis_includes}"
@@ -1881,6 +1890,47 @@
         if test "$HIREDIS" = "yes"; then
             AC_DEFINE([HAVE_LIBHIREDIS],[1],[libhiredis available])
             enable_hiredis="yes"
+            #
+            # Check if async adapters and libevent is installed
+            #
+            AC_CHECK_HEADER("hiredis/adapters/libevent.h",HIREDIS_LIBEVENT_ADAPTER="yes",HIREDIS_LIBEVENT_ADAPTER="no")
+            if test "$HIREDIS_LIBEVENT_ADAPTER" = "yes"; then
+                #Look for libevent headers
+                if test "$with_libevent_includes" != "no"; then
+                    CPPFLAGS="${CPPFLAGS} -I${with_libevent_includes}"
+                fi
+                AC_CHECK_HEADER("event.h",LIBEVENT="yes",LIBEVENT="no")
+                if test "$LIBEVENT" = "yes"; then
+                    if test "$with_libevent_libraries" != "no"; then
+                        LDFLAGS="${LDFLAGS}  -L${with_libevent_libraries}"
+                    fi
+                    AC_CHECK_LIB(event, event_base_free,, HAVE_LIBEVENT="no")
+                    AC_CHECK_LIB(event_pthreads, evthread_use_pthreads,, HAVE_LIBEVENT_PTHREADS="no")
+                fi
+                if test "$HAVE_LIBEVENT" = "no" -o test "$HAVE_LIBEVENT_PTHREADS" = "no" ; then
+                    if test "$HAVE_LIBEVENT" = "no"; then
+                        echo
+                        echo "  Async mode for redis output will not be available."
+                        echo "  To enable it install libevent"
+                        echo
+                        echo "   Ubuntu: apt-get install libevent-dev"
+                        echo "   Fedora: dnf install event-devel"
+                        echo "   RHEL/CentOS: yum install event-devel"
+                        echo
+                   fi
+                   if test "$HAVE_LIBEVENT_PTHREADS" = "no"; then
+                        echo
+                        echo "  Async mode for redis output will not be available."
+                        echo "  To enable it install libevent with pthreads support"
+                        echo
+                        echo "   Ubuntu: apt-get install libevent-pthreads-2.0-5"
+                        echo
+                   fi
+                else
+                    AC_DEFINE([HAVE_LIBEVENT],[1],[libevent available])
+                    enable_hiredis_async="yes"
+                fi
+            fi
         fi
     fi
 
@@ -1914,6 +1964,71 @@
        enable_pdflatex=no
     fi
     AM_CONDITIONAL([HAVE_PDFLATEX], [test "x$enable_pdflatex" != "xno"])
+
+# Cargo/Rust.
+    dnl enable_rust="no"
+    dnl AC_ARG_ENABLE(rust, AS_HELP_STRING([--enable-rust], [Enable Rust]),
+    dnl     [enable_rust="$enableval"], [enable_rust=no])
+    AC_ARG_ENABLE([rust], AS_HELP_STRING([--enable-rust], [Enable Experimental Rust support]))
+
+    rust_vendor_comment="# "
+    have_rust_vendor="no"
+
+    if test "x$enable_rust" != "xyes"; then
+      enable_rust="no"
+    else
+      AC_PATH_PROG(HAVE_CARGO, cargo, "no")
+      AC_PATH_PROG(HAVE_RUSTC, rustc, "no")
+
+      # Deal with the case where Rust was requested but rustc or cargo
+      # cannot be found.
+      if test "x$HAVE_CARGO" = "xno"; then
+        echo ""
+        echo "   ERROR! Rust support requested but cargo not found."
+        echo ""
+        exit 1
+      fi
+      if test "x$HAVE_RUST" = "xno"; then
+        echo ""
+        echo "   ERROR! Rust support requested but rustc not found."
+        echo ""
+        exit 1
+      fi
+
+      if test "x$HAVE_CARGO" != "xno"; then
+        if test "x$HAVE_RUSTC" != "xno"; then
+          enable_rust="yes"
+          AC_DEFINE([HAVE_RUST],[1],[Enable Rust language])
+          if test "x$enable_debug" = "xyes"; then
+            RUST_SURICATA_LIB="../rust/target/debug/libsuricata.a"
+          else
+            RUST_SURICATA_LIB="../rust/target/release/libsuricata.a"
+          fi
+          RUST_LDADD="${RUST_SURICATA_LIB} ${RUST_LDADD}"
+          CFLAGS="${CFLAGS} -I../rust/gen/c-headers"
+          AC_SUBST(RUST_SURICATA_LIB)
+          AC_SUBST(RUST_LDADD)
+          AC_CHECK_FILES([$srcdir/rust/vendor], [have_rust_vendor="yes"])
+          if test "x$have_rust_vendor" = "xyes"; then
+	        rust_vendor_comment=""
+          fi
+        fi
+      fi
+    fi
+
+    AM_CONDITIONAL([HAVE_RUST], [test "x$enable_rust" = "xyes"])
+    AC_SUBST(rust_vendor_comment)
+    AM_CONDITIONAL([HAVE_RUST_VENDOR], [test "x$have_rust_vendor" = "xyes"])
+
+    if test "x$enable_rust" = "xyes"; then
+      AC_PATH_PROG(HAVE_CARGO_VENDOR, cargo-vendor, "no")
+      if test "x$HAVE_CARGO_VENDOR" = "xno"; then
+        echo "   Warning: cargo-vendor not found, but it is only required"
+        echo "       for building the distribution"
+        echo "   To install: cargo install cargo-vendor"
+      fi
+    fi
+    AM_CONDITIONAL([HAVE_CARGO_VENDOR], [test "x$HAVE_CARGO_VENDOR" != "xno"])
 
 # get revision
     if test -f ./revision; then
@@ -1992,8 +2107,9 @@ EXPAND_VARIABLE(localstatedir, CONFIGURE_LOCALSTATEDIR)
 AC_SUBST(CONFIGURE_PREFIX)
 AC_SUBST(CONFIGURE_SYSCONDIR)
 AC_SUBST(CONFIGURE_LOCALSTATEDIR)
+AC_SUBST(PACKAGE_VERSION)
 
-AC_OUTPUT(Makefile src/Makefile qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile doc/userguide/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile contrib/tile_pcie_logd/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
+AC_OUTPUT(Makefile src/Makefile rust/Makefile rust/Cargo.toml rust/.cargo/config qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile doc/userguide/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile contrib/tile_pcie_logd/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
 
 SURICATA_BUILD_CONF="Suricata Configuration:
   AF_PACKET support:                       ${enable_af_packet}
@@ -2013,6 +2129,7 @@ SURICATA_BUILD_CONF="Suricata Configuration:
   libnspr support:                         ${enable_nspr}
   libjansson support:                      ${enable_jansson}
   hiredis support:                         ${enable_hiredis}
+  hiredis async with libevent:             ${enable_hiredis_async}
   Prelude support:                         ${enable_prelude}
   PCRE jit:                                ${pcre_jit_available}
   LUA support:                             ${enable_lua}
@@ -2023,6 +2140,8 @@ SURICATA_BUILD_CONF="Suricata Configuration:
   CUDA enabled:                            ${enable_cuda}
   Hyperscan support:                       ${enable_hyperscan}
   Libnet support:                          ${enable_libnet}
+
+  Rust support (experimental):             ${enable_rust}
 
   Suricatasc install:                      ${enable_python}
 

@@ -84,8 +84,8 @@ AppLayerCounterNames applayer_counter_names[FLOW_PROTO_APPLAYER_MAX][ALPROTO_MAX
 /* counter id's. Used that runtime. */
 AppLayerCounters applayer_counters[FLOW_PROTO_APPLAYER_MAX][ALPROTO_MAX];
 
-void AppLayerSetupCounters();
-void AppLayerDeSetupCounters();
+void AppLayerSetupCounters(void);
+void AppLayerDeSetupCounters(void);
 
 /***** L7 layer dispatchers *****/
 
@@ -145,6 +145,7 @@ static void DisableAppLayer(ThreadVars *tv, Flow *f, Packet *p)
 {
     SCLogDebug("disable app layer for flow %p alproto %u ts %u tc %u",
             f, f->alproto, f->alproto_ts, f->alproto_tc);
+    FlowCleanupAppLayer(f);
     StreamTcpDisableAppLayer(f);
     TcpSession *ssn = f->protoctx;
     ssn->data_first_seen_dir = APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER;
@@ -259,58 +260,29 @@ failure:
     return;
 }
 
-/** \todo modifying p this way seems too hacky */
 static int TCPProtoDetectTriggerOpposingSide(ThreadVars *tv,
         TcpReassemblyThreadCtx *ra_ctx,
-        Packet *p, TcpSession *ssn, TcpStream *stream,
-        uint8_t flags)
+        Packet *p, TcpSession *ssn, TcpStream *stream)
 {
     TcpStream *opposing_stream = NULL;
     if (stream == &ssn->client) {
         opposing_stream = &ssn->server;
-        if (StreamTcpInlineMode()) {
-            p->flowflags &= ~FLOW_PKT_TOSERVER;
-            p->flowflags |= FLOW_PKT_TOCLIENT;
-        } else {
-            p->flowflags &= ~FLOW_PKT_TOCLIENT;
-            p->flowflags |= FLOW_PKT_TOSERVER;
-        }
     } else {
         opposing_stream = &ssn->client;
-        if (StreamTcpInlineMode()) {
-            p->flowflags &= ~FLOW_PKT_TOCLIENT;
-            p->flowflags |= FLOW_PKT_TOSERVER;
-        } else {
-            p->flowflags &= ~FLOW_PKT_TOSERVER;
-            p->flowflags |= FLOW_PKT_TOCLIENT;
-        }
     }
 
-    int ret = 0;
     /* if the opposing side is not going to work, then
      * we just have to give up. */
-    if (opposing_stream->flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)
-        ret = -1;
-    else
-        ret = StreamTcpReassembleAppLayer(tv, ra_ctx, ssn,
-                opposing_stream, p);
-    if (stream == &ssn->client) {
-        if (StreamTcpInlineMode()) {
-            p->flowflags &= ~FLOW_PKT_TOCLIENT;
-            p->flowflags |= FLOW_PKT_TOSERVER;
-        } else {
-            p->flowflags &= ~FLOW_PKT_TOSERVER;
-            p->flowflags |= FLOW_PKT_TOCLIENT;
-        }
-    } else {
-        if (StreamTcpInlineMode()) {
-            p->flowflags &= ~FLOW_PKT_TOSERVER;
-            p->flowflags |= FLOW_PKT_TOCLIENT;
-        } else {
-            p->flowflags &= ~FLOW_PKT_TOCLIENT;
-            p->flowflags |= FLOW_PKT_TOSERVER;
-        }
+    if (opposing_stream->flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) {
+        SCLogDebug("opposing dir has STREAMTCP_STREAM_FLAG_NOREASSEMBLY set");
+        return -1;
     }
+
+    enum StreamUpdateDir dir = StreamTcpInlineMode() ?
+                                                UPDATE_DIR_OPPOSING :
+                                                UPDATE_DIR_PACKET;
+    int ret = StreamTcpReassembleAppLayer(tv, ra_ctx, ssn,
+            opposing_stream, p, dir);
     return ret;
 }
 
@@ -370,7 +342,7 @@ static int TCPProtoDetect(ThreadVars *tv,
 
         StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
         TcpSessionSetReassemblyDepth(ssn,
-                AppLayerParserGetStreamDepth(f->proto, f->alproto));
+                AppLayerParserGetStreamDepth(f));
         FlagPacketFlow(p, f, flags);
 
         /* account flow if we have both sides */
@@ -388,8 +360,11 @@ static int TCPProtoDetect(ThreadVars *tv,
         if ((ssn->data_first_seen_dir & (STREAM_TOSERVER | STREAM_TOCLIENT)) &&
                 !(flags & ssn->data_first_seen_dir))
         {
+            SCLogDebug("protocol %s needs first data in other direction",
+                    AppProtoToString(*alproto));
+
             if (TCPProtoDetectTriggerOpposingSide(tv, ra_ctx,
-                p, ssn, stream, flags) != 0)
+                        p, ssn, stream) != 0)
             {
                 DisableAppLayer(tv, f, p);
                 goto failure;
@@ -521,7 +496,7 @@ static int TCPProtoDetect(ThreadVars *tv,
                         APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION);
                 StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
                 TcpSessionSetReassemblyDepth(ssn,
-                        AppLayerParserGetStreamDepth(f->proto, f->alproto));
+                        AppLayerParserGetStreamDepth(f));
                 *alproto = ALPROTO_FAILED;
                 FlagPacketFlow(p, f, flags);
 
@@ -559,7 +534,6 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
 
     AppLayerThreadCtx *app_tctx = ra_ctx->app_tctx;
     AppProto alproto;
-    uint8_t dir;
     int r = 0;
 
     SCLogDebug("data_len %u flags %02X", data_len, flags);
@@ -570,10 +544,8 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
 
     if (flags & STREAM_TOSERVER) {
         alproto = f->alproto_ts;
-        dir = 0;
     } else {
         alproto = f->alproto_tc;
-        dir = 1;
     }
 
     /* if we don't know the proto yet and we have received a stream
@@ -582,7 +554,6 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
      * only run the proto detection once. */
     if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_GAP)) {
         StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
-        StreamTcpSetSessionNoReassemblyFlag(ssn, dir);
         SCLogDebug("ALPROTO_UNKNOWN flow %p, due to GAP in stream start", f);
 
     } else if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_START)) {
@@ -590,6 +561,31 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
         if (TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream,
                            data, data_len, flags) != 0) {
             goto failure;
+        }
+    } else if (alproto != ALPROTO_UNKNOWN && FlowChangeProto(f)) {
+        f->alproto_orig = f->alproto;
+        SCLogDebug("protocol change, old %s", AppProtoToString(f->alproto_orig));
+        AppLayerProtoDetectReset(f);
+        /* rerun protocol detection */
+        if (TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream,
+                           data, data_len, flags) != 0) {
+            SCLogDebug("proto detect failure");
+            goto failure;
+        }
+        SCLogDebug("protocol change, old %s, new %s",
+                AppProtoToString(f->alproto_orig), AppProtoToString(f->alproto));
+
+        if (f->alproto_expect != ALPROTO_UNKNOWN &&
+                f->alproto != f->alproto_expect)
+        {
+            AppLayerDecoderEventsSetEventRaw(&p->app_layer_events,
+                                             APPLAYER_UNEXPECTED_PROTOCOL);
+
+            if (f->alproto_expect == ALPROTO_TLS && f->alproto != ALPROTO_TLS) {
+                AppLayerDecoderEventsSetEventRaw(&p->app_layer_events,
+                        APPLAYER_NO_TLS_AFTER_STARTTLS);
+
+            }
         }
     } else {
         SCLogDebug("stream data (len %" PRIu32 " alproto "
@@ -610,8 +606,6 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
             r = AppLayerParserParse(tv, app_tctx->alp_tctx, f, f->alproto,
                                     flags, data, data_len);
             PACKET_PROFILING_APP_END(app_tctx, f->alproto);
-        } else {
-            SCLogDebug(" smsg not start, but no l7 data? Weird");
         }
     }
 
@@ -703,10 +697,10 @@ AppProto AppLayerGetProtoByName(char *alproto_name)
     SCReturnCT(r, "AppProto");
 }
 
-char *AppLayerGetProtoName(AppProto alproto)
+const char *AppLayerGetProtoName(AppProto alproto)
 {
     SCEnter();
-    char * r = AppLayerProtoDetectGetProtoName(alproto);
+    const char * r = AppLayerProtoDetectGetProtoName(alproto);
     SCReturnCT(r, "char *");
 }
 

@@ -53,9 +53,8 @@
 #define LOG_STATS_THREADS (1<<1)
 #define LOG_STATS_NULLS   (1<<2)
 
-TmEcode LogStatsLogThreadInit(ThreadVars *, void *, void **);
+TmEcode LogStatsLogThreadInit(ThreadVars *, const void *, void **);
 TmEcode LogStatsLogThreadDeinit(ThreadVars *, void *);
-void LogStatsLogExitPrintStats(ThreadVars *, void *);
 static void LogStatsLogDeInitCtx(OutputCtx *);
 
 typedef struct LogStatsFileCtx_ {
@@ -68,7 +67,7 @@ typedef struct LogStatsLogThread_ {
     MemBuffer *buffer;
 } LogStatsLogThread;
 
-int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
+static int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
 {
     SCEnter();
     LogStatsLogThread *aft = (LogStatsLogThread *)thread_data;
@@ -81,7 +80,8 @@ int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
     tms = SCLocalTime(tval.tv_sec, &local_tm);
 
     /* Calculate the Engine uptime */
-    int up_time = (int)difftime(tval.tv_sec, st->start_time);
+    double up_time_d = difftime(tval.tv_sec, st->start_time);
+    int up_time = (int)up_time_d; // ignoring risk of overflow here
     int sec = up_time % 60;     // Seconds in a minute
     int in_min = up_time / 60;
     int min = in_min % 60;      // Minutes in a hour
@@ -156,17 +156,15 @@ int LogStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *st)
         }
     }
 
-    SCMutexLock(&aft->statslog_ctx->file_ctx->fp_mutex);
     aft->statslog_ctx->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
         MEMBUFFER_OFFSET(aft->buffer), aft->statslog_ctx->file_ctx);
-    SCMutexUnlock(&aft->statslog_ctx->file_ctx->fp_mutex);
 
     MemBufferReset(aft->buffer);
 
     SCReturnInt(0);
 }
 
-TmEcode LogStatsLogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode LogStatsLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogStatsLogThread *aft = SCMalloc(sizeof(LogStatsLogThread));
     if (unlikely(aft == NULL))
@@ -208,19 +206,11 @@ TmEcode LogStatsLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void LogStatsLogExitPrintStats(ThreadVars *tv, void *data)
-{
-    LogStatsLogThread *aft = (LogStatsLogThread *)data;
-    if (aft == NULL) {
-        return;
-    }
-}
-
 /** \brief Create a new http log LogFileCtx.
  *  \param conf Pointer to ConfNode containing this loggers configuration.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-OutputCtx *LogStatsLogInitCtx(ConfNode *conf)
+static OutputCtx *LogStatsLogInitCtx(ConfNode *conf)
 {
     LogFileCtx *file_ctx = LogFileNewCtx();
     if (file_ctx == NULL) {
@@ -298,5 +288,5 @@ void LogStatsLogRegister (void)
 {
     OutputRegisterStatsModule(LOGGER_STATS, MODULE_NAME, "stats",
         LogStatsLogInitCtx, LogStatsLogger, LogStatsLogThreadInit,
-        LogStatsLogThreadDeinit, LogStatsLogExitPrintStats);
+        LogStatsLogThreadDeinit, NULL);
 }

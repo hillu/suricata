@@ -49,9 +49,10 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectDsizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectDsizeSetup (DetectEngineCtx *, Signature *s, char *str);
-void DsizeRegisterTests(void);
+static int DetectDsizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectDsizeSetup (DetectEngineCtx *, Signature *s, const char *str);
+static void DsizeRegisterTests(void);
 static void DetectDsizeFree(void *);
 
 static int PrefilterSetupDsize(SigGroupHead *sgh);
@@ -105,7 +106,8 @@ DsizeMatch(const uint16_t psize, const uint8_t mode,
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+    const Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
     int ret = 0;
@@ -132,7 +134,7 @@ int DetectDsizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
  * \retval dd pointer to DetectDsizeData on success
  * \retval NULL on failure
  */
-DetectDsizeData *DetectDsizeParse (char *rawstr)
+static DetectDsizeData *DetectDsizeParse (const char *rawstr)
 {
     DetectDsizeData *dd = NULL;
 #define MAX_SUBSTRINGS 30
@@ -249,14 +251,12 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     DetectDsizeData *dd = NULL;
     SigMatch *sm = NULL;
 
-    if (SigMatchGetLastSMFromLists(s, 2,
-                                   DETECT_DSIZE,
-                                   s->sm_lists_tail[DETECT_SM_LIST_MATCH]) != NULL) {
+    if (DetectGetLastSMFromLists(s, DETECT_DSIZE, -1)) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Can't use 2 or more dsizes in "
                    "the same sig.  Invalidating signature.");
         goto error;
@@ -290,8 +290,8 @@ static int DetectDsizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
     s->flags |= SIG_FLAG_DSIZE;
 
-    if (s->dsize_sm == NULL) {
-        s->dsize_sm = sm;
+    if (s->init_data->dsize_sm == NULL) {
+        s->init_data->dsize_sm = sm;
     }
 
     return 0;
@@ -364,7 +364,7 @@ static int PrefilterSetupDsize(SigGroupHead *sgh)
 static _Bool PrefilterDsizeIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_DSIZE:
                 return TRUE;
@@ -386,7 +386,7 @@ static _Bool PrefilterDsizeIsPrefilterable(const Signature *s)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse01 (void)
+static int DsizeTestParse01 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("1");
@@ -404,7 +404,7 @@ int DsizeTestParse01 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse02 (void)
+static int DsizeTestParse02 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse(">10");
@@ -422,7 +422,7 @@ int DsizeTestParse02 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse03 (void)
+static int DsizeTestParse03 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("<100");
@@ -440,7 +440,7 @@ int DsizeTestParse03 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse04 (void)
+static int DsizeTestParse04 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("1<>2");
@@ -458,7 +458,7 @@ int DsizeTestParse04 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse05 (void)
+static int DsizeTestParse05 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -479,7 +479,7 @@ int DsizeTestParse05 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse06 (void)
+static int DsizeTestParse06 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -500,7 +500,7 @@ int DsizeTestParse06 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse07 (void)
+static int DsizeTestParse07 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -521,7 +521,7 @@ int DsizeTestParse07 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse08 (void)
+static int DsizeTestParse08 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -542,7 +542,7 @@ int DsizeTestParse08 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse09 (void)
+static int DsizeTestParse09 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("A");
@@ -560,7 +560,7 @@ int DsizeTestParse09 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse10 (void)
+static int DsizeTestParse10 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse(">10<>10");
@@ -578,7 +578,7 @@ int DsizeTestParse10 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse11 (void)
+static int DsizeTestParse11 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("<>10");
@@ -596,7 +596,7 @@ int DsizeTestParse11 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse12 (void)
+static int DsizeTestParse12 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("1<>");
@@ -614,7 +614,7 @@ int DsizeTestParse12 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse13 (void)
+static int DsizeTestParse13 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -635,7 +635,7 @@ int DsizeTestParse13 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse14 (void)
+static int DsizeTestParse14 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("");
@@ -653,7 +653,7 @@ int DsizeTestParse14 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse15 (void)
+static int DsizeTestParse15 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse(" ");
@@ -671,7 +671,7 @@ int DsizeTestParse15 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse16 (void)
+static int DsizeTestParse16 (void)
 {
     DetectDsizeData *dd = NULL;
     dd = DetectDsizeParse("2<>1");
@@ -689,7 +689,7 @@ int DsizeTestParse16 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse17 (void)
+static int DsizeTestParse17 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -710,7 +710,7 @@ int DsizeTestParse17 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse18 (void)
+static int DsizeTestParse18 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -731,7 +731,7 @@ int DsizeTestParse18 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse19 (void)
+static int DsizeTestParse19 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -752,7 +752,7 @@ int DsizeTestParse19 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DsizeTestParse20 (void)
+static int DsizeTestParse20 (void)
 {
     int result = 0;
     DetectDsizeData *dd = NULL;
@@ -772,7 +772,7 @@ int DsizeTestParse20 (void)
  *       dsize keyword by creating 2 rules and matching a crafted packet
  *       against them. Only the first one shall trigger.
  */
-int DetectDsizeIcmpv6Test01 (void)
+static int DetectDsizeIcmpv6Test01 (void)
 {
     int result = 0;
 
@@ -864,7 +864,7 @@ end:
 /**
  * \brief this function registers unit tests for dsize
  */
-void DsizeRegisterTests(void)
+static void DsizeRegisterTests(void)
 {
 #ifdef UNITTESTS
     UtRegisterTest("DsizeTestParse01", DsizeTestParse01);

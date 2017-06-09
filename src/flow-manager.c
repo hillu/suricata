@@ -136,7 +136,6 @@ void FlowDisableFlowManagerThread(void)
     return;
 #endif
     ThreadVars *tv = NULL;
-    int cnt = 0;
 
     /* wake up threads */
     uint32_t u;
@@ -144,25 +143,37 @@ void FlowDisableFlowManagerThread(void)
         SCCtrlCondSignal(&flow_manager_ctrl_cond);
 
     SCMutexLock(&tv_root_lock);
-
     /* flow manager thread(s) is/are a part of mgmt threads */
     tv = tv_root[TVT_MGMT];
-
     while (tv != NULL)
     {
         if (strncasecmp(tv->name, thread_name_flow_mgr,
             strlen(thread_name_flow_mgr)) == 0)
         {
             TmThreadsSetFlag(tv, THV_KILL);
-            cnt++;
+        }
+        tv = tv->next;
+    }
+    SCMutexUnlock(&tv_root_lock);
 
-            /* value in seconds */
-#define THREAD_KILL_MAX_WAIT_TIME 60
-            /* value in microseconds */
-#define WAIT_TIME 100
+    double total_wait_time = 0;
+    /* value in seconds */
+    #define THREAD_KILL_MAX_WAIT_TIME 60
+    /* value in microseconds */
+    #define WAIT_TIME 100
 
-            double total_wait_time = 0;
-            while (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
+again:
+    SCMutexLock(&tv_root_lock);
+
+    tv = tv_root[TVT_MGMT];
+    while (tv != NULL)
+    {
+        if (strncasecmp(tv->name, thread_name_flow_mgr,
+            strlen(thread_name_flow_mgr)) == 0)
+        {
+            if (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
+                SCMutexUnlock(&tv_root_lock);
+
                 usleep(WAIT_TIME);
                 total_wait_time += WAIT_TIME / 1000000.0;
                 if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
@@ -171,6 +182,7 @@ void FlowDisableFlowManagerThread(void)
                             "Killing engine", tv->name);
                     exit(EXIT_FAILURE);
                 }
+                goto again;
             }
         }
         tv = tv->next;
@@ -577,7 +589,7 @@ typedef struct FlowManagerThreadData_ {
 
 } FlowManagerThreadData;
 
-static TmEcode FlowManagerThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode FlowManagerThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     FlowManagerThreadData *ftd = SCCalloc(1, sizeof(FlowManagerThreadData));
     if (ftd == NULL)
@@ -847,7 +859,7 @@ typedef struct FlowRecyclerThreadData_ {
     void *output_thread_data;
 } FlowRecyclerThreadData;
 
-static TmEcode FlowRecyclerThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode FlowRecyclerThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     FlowRecyclerThreadData *ftd = SCCalloc(1, sizeof(FlowRecyclerThreadData));
     if (ftd == NULL)
@@ -951,7 +963,7 @@ static TmEcode FlowRecycler(ThreadVars *th_v, void *thread_data)
     return TM_ECODE_OK;
 }
 
-int FlowRecyclerReadyToShutdown(void)
+static int FlowRecyclerReadyToShutdown(void)
 {
     uint32_t len = 0;
     FQLOCK_LOCK(&flow_recycle_q);
@@ -1038,10 +1050,8 @@ void FlowDisableFlowRecyclerThread(void)
         SCCtrlCondSignal(&flow_recycler_ctrl_cond);
 
     SCMutexLock(&tv_root_lock);
-
     /* flow recycler thread(s) is/are a part of mgmt threads */
     tv = tv_root[TVT_MGMT];
-
     while (tv != NULL)
     {
         if (strncasecmp(tv->name, thread_name_flow_rec,
@@ -1049,22 +1059,36 @@ void FlowDisableFlowRecyclerThread(void)
         {
             TmThreadsSetFlag(tv, THV_KILL);
             cnt++;
+        }
+        tv = tv->next;
+    }
+    SCMutexUnlock(&tv_root_lock);
 
-            /* value in seconds */
+    double total_wait_time = 0;
+    /* value in seconds */
 #define THREAD_KILL_MAX_WAIT_TIME 60
-            /* value in microseconds */
+    /* value in microseconds */
 #define WAIT_TIME 100
 
-            double total_wait_time = 0;
-            while (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
-                usleep(WAIT_TIME);
-                total_wait_time += WAIT_TIME / 1000000.0;
+again:
+    SCMutexLock(&tv_root_lock);
+    tv = tv_root[TVT_MGMT];
+    while (tv != NULL)
+    {
+        if (strncasecmp(tv->name, thread_name_flow_rec,
+            strlen(thread_name_flow_rec)) == 0)
+        {
+            if (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
                 if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
                     SCLogError(SC_ERR_FATAL, "Engine unable to "
                             "disable detect thread - \"%s\".  "
                             "Killing engine", tv->name);
                     exit(EXIT_FAILURE);
                 }
+                SCMutexUnlock(&tv_root_lock);
+                usleep(WAIT_TIME);
+                total_wait_time += WAIT_TIME / 1000000.0;
+                goto again;
             }
         }
         tv = tv->next;
@@ -1176,7 +1200,6 @@ static int FlowMgrTest02 (void)
     struct timeval ts;
     TcpSegment seg;
     TcpStream client;
-    uint8_t payload[3] = {0x41, 0x41, 0x41};
 
     FlowQueueInit(&flow_spare_q);
 
@@ -1192,8 +1215,7 @@ static int FlowMgrTest02 (void)
     f.flags |= FLOW_TIMEOUT_REASSEMBLY_DONE;
 
     TimeGet(&ts);
-    seg.payload = payload;
-    seg.payload_len = 3;
+    TCP_SEG_LEN(&seg) = 3;
     seg.next = NULL;
     seg.prev = NULL;
     client.seg_list = &seg;
@@ -1284,7 +1306,6 @@ static int FlowMgrTest04 (void)
     struct timeval ts;
     TcpSegment seg;
     TcpStream client;
-    uint8_t payload[3] = {0x41, 0x41, 0x41};
 
     FlowQueueInit(&flow_spare_q);
 
@@ -1300,8 +1321,7 @@ static int FlowMgrTest04 (void)
     f.flags |= FLOW_TIMEOUT_REASSEMBLY_DONE;
 
     TimeGet(&ts);
-    seg.payload = payload;
-    seg.payload_len = 3;
+    TCP_SEG_LEN(&seg) = 3;
     seg.next = NULL;
     seg.prev = NULL;
     client.seg_list = &seg;

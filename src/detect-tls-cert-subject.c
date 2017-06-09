@@ -35,6 +35,7 @@
 #include "detect-engine-tls.h"
 #include "detect-content.h"
 #include "detect-pcre.h"
+#include "detect-tls-cert-subject.h"
 
 #include "flow.h"
 #include "flow-util.h"
@@ -53,11 +54,12 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-static int DetectTlsSubjectSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectTlsSubjectSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectTlsSubjectRegisterTests(void);
+static int g_tls_cert_subject_buffer_id = 0;
 
 /**
- * \brief Registration function for keyword: tls_cert_issuer
+ * \brief Registration function for keyword: tls_cert_subject
  */
 void DetectTlsSubjectRegister(void)
 {
@@ -65,22 +67,20 @@ void DetectTlsSubjectRegister(void)
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].desc = "content modifier to match specifically and only on the TLS cert subject buffer";
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tls-cert-subject";
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].Setup = DetectTlsSubjectSetup;
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].Free  = NULL;
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].RegisterTests = DetectTlsSubjectRegisterTests;
 
     sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_TLS_CERT_SUBJECT].flags |= SIGMATCH_PAYLOAD;
 
-    DetectMpmAppLayerRegister("tls_cert_subject", SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_TLSSUBJECT_MATCH, 2,
+    DetectAppLayerMpmRegister("tls_cert_subject", SIG_FLAG_TOCLIENT, 2,
             PrefilterTxTlsSubjectRegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_TLS, SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_TLSSUBJECT_MATCH,
+    DetectAppLayerInspectEngineRegister("tls_cert_subject",
+            ALPROTO_TLS, SIG_FLAG_TOCLIENT, TLS_STATE_CERT_READY,
             DetectEngineInspectTlsSubject);
 
+    g_tls_cert_subject_buffer_id = DetectBufferTypeGetByName("tls_cert_subject");
 }
 
 /**
@@ -92,9 +92,9 @@ void DetectTlsSubjectRegister(void)
  *
  * \retval 0       On success
  */
-static int DetectTlsSubjectSetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsSubjectSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    s->list = DETECT_SM_LIST_TLSSUBJECT_MATCH;
+    s->init_data->list = g_tls_cert_subject_buffer_id;
     s->alproto = ALPROTO_TLS;
     return 0;
 }
@@ -123,7 +123,7 @@ static int DetectTlsSubjectTest01(void)
     sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_MATCH];
     FAIL_IF_NOT_NULL(sm);
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_TLSSUBJECT_MATCH];
+    sm = de_ctx->sig_list->sm_lists[g_tls_cert_subject_buffer_id];
     FAIL_IF_NULL(sm);
 
     FAIL_IF(sm->type != DETECT_CONTENT);

@@ -43,8 +43,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIcmpSeqMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectIcmpSeqSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectIcmpSeqMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectIcmpSeqSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectIcmpSeqRegisterTests(void);
 void DetectIcmpSeqFree(void *);
 static int PrefilterSetupIcmpSeq(SigGroupHead *sgh);
@@ -131,7 +132,8 @@ static inline _Bool GetIcmpSeq(Packet *p, uint16_t *seq)
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectIcmpSeqMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectIcmpSeqMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     uint16_t seqn;
 
@@ -153,7 +155,7 @@ int DetectIcmpSeqMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p
  * \retval iseq pointer to DetectIcmpSeqData on success
  * \retval NULL on failure
  */
-DetectIcmpSeqData *DetectIcmpSeqParse (char *icmpseqstr)
+static DetectIcmpSeqData *DetectIcmpSeqParse (const char *icmpseqstr)
 {
     DetectIcmpSeqData *iseq = NULL;
     char *substr[3] = {NULL, NULL, NULL};
@@ -229,7 +231,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectIcmpSeqSetup (DetectEngineCtx *de_ctx, Signature *s, char *icmpseqstr)
+static int DetectIcmpSeqSetup (DetectEngineCtx *de_ctx, Signature *s, const char *icmpseqstr)
 {
     DetectIcmpSeqData *iseq = NULL;
     SigMatch *sm = NULL;
@@ -311,7 +313,7 @@ static int PrefilterSetupIcmpSeq(SigGroupHead *sgh)
 static _Bool PrefilterIcmpSeqIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_ICMP_SEQ:
                 return TRUE;
@@ -327,7 +329,7 @@ static _Bool PrefilterIcmpSeqIsPrefilterable(const Signature *s)
 /**
  * \test DetectIcmpSeqParseTest01 is a test for setting a valid icmp_seq value
  */
-int DetectIcmpSeqParseTest01 (void)
+static int DetectIcmpSeqParseTest01 (void)
 {
     DetectIcmpSeqData *iseq = NULL;
     iseq = DetectIcmpSeqParse("300");
@@ -342,7 +344,7 @@ int DetectIcmpSeqParseTest01 (void)
  * \test DetectIcmpSeqParseTest02 is a test for setting a valid icmp_seq value
  *       with spaces all around
  */
-int DetectIcmpSeqParseTest02 (void)
+static int DetectIcmpSeqParseTest02 (void)
 {
     DetectIcmpSeqData *iseq = NULL;
     iseq = DetectIcmpSeqParse("  300  ");
@@ -356,7 +358,7 @@ int DetectIcmpSeqParseTest02 (void)
 /**
  * \test DetectIcmpSeqParseTest03 is a test for setting an invalid icmp_seq value
  */
-int DetectIcmpSeqParseTest03 (void)
+static int DetectIcmpSeqParseTest03 (void)
 {
     DetectIcmpSeqData *iseq = NULL;
     iseq = DetectIcmpSeqParse("badc");
@@ -372,7 +374,7 @@ int DetectIcmpSeqParseTest03 (void)
  *       icmp_seq keyword by creating 2 rules and matching a crafted packet
  *       against them. Only the first one shall trigger.
  */
-int DetectIcmpSeqMatchTest01 (void)
+static int DetectIcmpSeqMatchTest01 (void)
 {
     int result = 0;
     Packet *p = NULL;

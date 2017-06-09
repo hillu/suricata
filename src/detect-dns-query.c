@@ -58,8 +58,9 @@
 
 #include "util-unittest-helper.h"
 
-static int DetectDnsQuerySetup (DetectEngineCtx *, Signature *, char *);
+static int DetectDnsQuerySetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectDnsQueryRegisterTests(void);
+static int g_dns_query_buffer_id = 0;
 
 /**
  * \brief Registration function for keyword: dns_query
@@ -69,29 +70,36 @@ void DetectDnsQueryRegister (void)
     sigmatch_table[DETECT_AL_DNS_QUERY].name = "dns_query";
     sigmatch_table[DETECT_AL_DNS_QUERY].desc = "content modifier to match specifically and only on the DNS query-buffer";
     sigmatch_table[DETECT_AL_DNS_QUERY].Match = NULL;
-    sigmatch_table[DETECT_AL_DNS_QUERY].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_DNS_QUERY].Setup = DetectDnsQuerySetup;
     sigmatch_table[DETECT_AL_DNS_QUERY].Free  = NULL;
     sigmatch_table[DETECT_AL_DNS_QUERY].RegisterTests = DetectDnsQueryRegisterTests;
 
     sigmatch_table[DETECT_AL_DNS_QUERY].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_DNS_QUERY].flags |= SIGMATCH_PAYLOAD;
 
-    DetectMpmAppLayerRegister("dns_query", SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_DNSQUERYNAME_MATCH, 2,
+    DetectAppLayerMpmRegister("dns_query", SIG_FLAG_TOSERVER, 2,
             PrefilterTxDnsQueryRegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_DNS, SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_DNSQUERYNAME_MATCH,
+    DetectAppLayerInspectEngineRegister("dns_query",
+            ALPROTO_DNS, SIG_FLAG_TOSERVER, 1,
             DetectEngineInspectDnsQueryName);
 
+    DetectBufferTypeSetDescriptionByName("dns_query",
+            "dns request query");
+
+    g_dns_query_buffer_id = DetectBufferTypeGetByName("dns_query");
+
     /* register these generic engines from here for now */
-    DetectAppLayerInspectEngineRegister(ALPROTO_DNS, SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_DNSREQUEST_MATCH,
+    DetectAppLayerInspectEngineRegister("dns_request",
+            ALPROTO_DNS, SIG_FLAG_TOSERVER, 1,
             DetectEngineInspectDnsRequest);
-    DetectAppLayerInspectEngineRegister(ALPROTO_DNS, SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_DNSRESPONSE_MATCH,
+    DetectAppLayerInspectEngineRegister("dns_response",
+            ALPROTO_DNS, SIG_FLAG_TOCLIENT, 1,
             DetectEngineInspectDnsResponse);
+
+    DetectBufferTypeSetDescriptionByName("dns_request",
+            "dns requests");
+    DetectBufferTypeSetDescriptionByName("dns_response",
+            "dns responses");
 }
 
 
@@ -106,14 +114,16 @@ void DetectDnsQueryRegister (void)
  * \retval -1 On failure
  */
 
-static int DetectDnsQuerySetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectDnsQuerySetup(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    s->list = DETECT_SM_LIST_DNSQUERYNAME_MATCH;
+    s->init_data->list = g_dns_query_buffer_id;
     s->alproto = ALPROTO_DNS;
     return 0;
 }
 
 #ifdef UNITTESTS
+#include "detect-isdataat.h"
+
 /** \test simple google.com query matching */
 static int DetectDnsQueryTest01(void)
 {
@@ -123,7 +133,6 @@ static int DetectDnsQueryTest01(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x63, 0x6F, 0x6D, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p = NULL;
@@ -150,18 +159,14 @@ static int DetectDnsQueryTest01(void)
     f.alproto = ALPROTO_DNS;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google\"; nocase; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -172,27 +177,21 @@ static int DetectDnsQueryTest01(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
     if (!(PacketAlertCheck(p, 1))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -204,7 +203,7 @@ end:
 
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test multi tx google.(com|net) query matching */
@@ -239,7 +238,6 @@ static int DetectDnsQueryTest02(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x6E, 0x65, 0x74, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p1 = NULL, *p2 = NULL, *p3 = NULL;
@@ -283,24 +281,18 @@ static int DetectDnsQueryTest02(void)
     p3->pcap_cnt = 3;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google.com\"; nocase; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google.net\"; nocase; sid:2;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -311,26 +303,23 @@ static int DetectDnsQueryTest02(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p1);
 
     if (!(PacketAlertCheck(p1, 1))) {
         printf("(p1) sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p1, 2)) {
         printf("(p1) sig 2 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -339,7 +328,7 @@ static int DetectDnsQueryTest02(void)
     if (r != 0) {
         printf("toserver client 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -348,11 +337,11 @@ static int DetectDnsQueryTest02(void)
 
     if (PacketAlertCheck(p2, 1)) {
         printf("(p2) sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p2, 2)) {
         printf("(p2) sig 2 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -361,7 +350,7 @@ static int DetectDnsQueryTest02(void)
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -370,16 +359,13 @@ static int DetectDnsQueryTest02(void)
 
     if (PacketAlertCheck(p3, 1)) {
         printf("(p3) sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (!(PacketAlertCheck(p3, 2))) {
         printf("(p3) sig 2 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -393,7 +379,7 @@ end:
     UTHFreePacket(p1);
     UTHFreePacket(p2);
     UTHFreePacket(p3);
-    return result;
+    PASS;
 }
 
 /** \test simple google.com query matching (TCP) */
@@ -406,7 +392,6 @@ static int DetectDnsQueryTest03(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x63, 0x6F, 0x6D, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p = NULL;
@@ -438,18 +423,14 @@ static int DetectDnsQueryTest03(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "content:\"google\"; nocase; dns_query; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -460,27 +441,21 @@ static int DetectDnsQueryTest03(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
     if (!(PacketAlertCheck(p, 1))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -493,7 +468,7 @@ end:
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test simple google.com query matching (TCP splicing) */
@@ -506,7 +481,6 @@ static int DetectDnsQueryTest04(void)
     uint8_t buf2[] = {  0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x63, 0x6F, 0x6D, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p1 = NULL, *p2 = NULL;
@@ -545,18 +519,14 @@ static int DetectDnsQueryTest04(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google\"; nocase; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -567,31 +537,28 @@ static int DetectDnsQueryTest04(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p1);
 
     if (PacketAlertCheck(p1, 1)) {
         printf("sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_DNS, STREAM_TOSERVER,
                             buf2, sizeof(buf2));
     if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
+        printf("toserver chunk 1 returned %" PRId32 ", expected 0\n", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -600,12 +567,9 @@ static int DetectDnsQueryTest04(void)
 
     if (!(PacketAlertCheck(p2, 1))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -619,7 +583,7 @@ end:
     FLOW_DESTROY(&f);
     UTHFreePacket(p1);
     UTHFreePacket(p2);
-    return result;
+    PASS;
 }
 
 /** \test simple google.com query matching (TCP splicing) */
@@ -658,7 +622,6 @@ static int DetectDnsQueryTest05(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x6E, 0x65, 0x74, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p1 = NULL, *p2 = NULL, *p3 = NULL, *p4 = NULL;
@@ -711,24 +674,18 @@ static int DetectDnsQueryTest05(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google.com\"; nocase; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google.net\"; nocase; sid:2;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -739,26 +696,23 @@ static int DetectDnsQueryTest05(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p1);
 
     if (PacketAlertCheck(p1, 1)) {
         printf("(p1) sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p1, 2)) {
         printf("(p1) sig 2 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -767,7 +721,7 @@ static int DetectDnsQueryTest05(void)
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -776,11 +730,11 @@ static int DetectDnsQueryTest05(void)
 
     if (!(PacketAlertCheck(p2, 1))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p2, 2)) {
         printf("(p2) sig 2 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -789,7 +743,7 @@ static int DetectDnsQueryTest05(void)
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -798,11 +752,11 @@ static int DetectDnsQueryTest05(void)
 
     if (PacketAlertCheck(p3, 1)) {
         printf("sig 1 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p3, 2)) {
         printf("(p3) sig 2 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -811,7 +765,7 @@ static int DetectDnsQueryTest05(void)
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -820,16 +774,13 @@ static int DetectDnsQueryTest05(void)
 
     if (PacketAlertCheck(p4, 1)) {
         printf("(p4) sig 1 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (!(PacketAlertCheck(p4, 2))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -845,7 +796,7 @@ end:
     UTHFreePacket(p2);
     UTHFreePacket(p3);
     UTHFreePacket(p4);
-    return result;
+    PASS;
 }
 
 /** \test simple google.com query matching, pcre */
@@ -857,7 +808,6 @@ static int DetectDnsQueryTest06(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x63, 0x6F, 0x6D, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p = NULL;
@@ -884,9 +834,7 @@ static int DetectDnsQueryTest06(void)
     f.alproto = ALPROTO_DNS;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
@@ -894,17 +842,12 @@ static int DetectDnsQueryTest06(void)
                               "(msg:\"Test dns_query option\"; "
                               "dns_query; content:\"google\"; nocase; "
                               "pcre:\"/google\\.com$/i\"; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                                       "(msg:\"Test dns_query option\"; "
                                       "dns_query; content:\"google\"; nocase; "
                                       "pcre:\"/^\\.[a-z]{2,3}$/iR\"; sid:2;)");
-    if (s == NULL) {
-        goto end;
-    }
-
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -915,31 +858,25 @@ static int DetectDnsQueryTest06(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
 
     if (!(PacketAlertCheck(p, 1))) {
         printf("sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
     if (!(PacketAlertCheck(p, 2))) {
         printf("sig 2 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
-    result = 1;
-
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -951,7 +888,7 @@ end:
 
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /** \test multi tx google.(com|net) query matching +
@@ -987,7 +924,6 @@ static int DetectDnsQueryTest07(void)
                         0x06, 0x67, 0x6F, 0x6F, 0x67, 0x6C,
                         0x65, 0x03, 0x6E, 0x65, 0x74, 0x00,
                         0x00, 0x10, 0x00, 0x01, };
-    int result = 0;
     Flow f;
     DNSState *dns_state = NULL;
     Packet *p1 = NULL, *p2 = NULL, *p3 = NULL;
@@ -1031,30 +967,22 @@ static int DetectDnsQueryTest07(void)
     p3->pcap_cnt = 3;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->mpm_matcher = mpm_default_matcher;
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                                    "(msg:\"Test dns_query option\"; "
                                    "dns_query; content:\"google.com\"; nocase; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                                    "(msg:\"Test dns_query option\"; "
                                    "dns_query; content:\"google.net\"; nocase; sid:2;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
     s = DetectEngineAppendSig(de_ctx, "alert dns any any -> any any "
                                    "(msg:\"Test Z flag event\"; "
                                    "app-layer-event:dns.z_flag_set; sid:3;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
@@ -1065,35 +993,32 @@ static int DetectDnsQueryTest07(void)
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
     dns_state = f.alstate;
-    if (dns_state == NULL) {
-        printf("no dns state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(dns_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p1);
 
     if (!(PacketAlertCheck(p1, 1))) {
         printf("(p1) sig 1 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p1, 2)) {
         printf("(p1) sig 2 did alert, but it should not have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_DNS, STREAM_TOCLIENT,
                             buf2, sizeof(buf2));
     if (r != -1) {
-        printf("toserver client 1 returned %" PRId32 ", expected 0: ", r);
+        printf("toserver client 1 returned %" PRId32 ", expected -1\n", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -1102,15 +1027,15 @@ static int DetectDnsQueryTest07(void)
 
     if (PacketAlertCheck(p2, 1)) {
         printf("(p2) sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (PacketAlertCheck(p2, 2)) {
         printf("(p2) sig 2 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (!(PacketAlertCheck(p2, 3))) {
         printf("(p2) sig 3 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
 
     FLOWLOCK_WRLOCK(&f);
@@ -1119,7 +1044,7 @@ static int DetectDnsQueryTest07(void)
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         FLOWLOCK_UNLOCK(&f);
-        goto end;
+        FAIL;
     }
     FLOWLOCK_UNLOCK(&f);
 
@@ -1128,11 +1053,11 @@ static int DetectDnsQueryTest07(void)
 
     if (PacketAlertCheck(p3, 1)) {
         printf("(p3) sig 1 alerted, but it should not have: ");
-        goto end;
+        FAIL;
     }
     if (!(PacketAlertCheck(p3, 2))) {
         printf("(p3) sig 2 didn't alert, but it should have: ");
-        goto end;
+        FAIL;
     }
     /** \todo should not alert, bug #839
     if (PacketAlertCheck(p3, 3)) {
@@ -1140,9 +1065,7 @@ static int DetectDnsQueryTest07(void)
         goto end;
     }
     */
-    result = 1;
 
-end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     if (det_ctx != NULL)
@@ -1156,7 +1079,32 @@ end:
     UTHFreePacket(p1);
     UTHFreePacket(p2);
     UTHFreePacket(p3);
-    return result;
+    PASS;
+}
+
+static int DetectDnsQueryIsdataatParseTest(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert dns any any -> any any ("
+            "dns_query; content:\"one\"; "
+            "isdataat:!4,relative; sid:1;)");
+    FAIL_IF_NULL(s);
+
+    SigMatch *sm = s->init_data->smlists_tail[g_dns_query_buffer_id];
+    FAIL_IF_NULL(sm);
+    FAIL_IF_NOT(sm->type == DETECT_ISDATAAT);
+
+    DetectIsdataatData *data = (DetectIsdataatData *)sm->ctx;
+    FAIL_IF_NOT(data->flags & ISDATAAT_RELATIVE);
+    FAIL_IF_NOT(data->flags & ISDATAAT_NEGATED);
+    FAIL_IF(data->flags & ISDATAAT_RAWBYTES);
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 
 #endif
@@ -1174,5 +1122,8 @@ static void DetectDnsQueryRegisterTests(void)
     UtRegisterTest("DetectDnsQueryTest06 -- pcre", DetectDnsQueryTest06);
     UtRegisterTest("DetectDnsQueryTest07 -- app layer event",
                    DetectDnsQueryTest07);
+
+    UtRegisterTest("DetectDnsQueryIsdataatParseTest",
+            DetectDnsQueryIsdataatParseTest);
 #endif
 }
