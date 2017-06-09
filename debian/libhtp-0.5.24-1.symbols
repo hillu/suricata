@@ -1,4 +1,4 @@
-libhtp-0.5.23.so.1 libhtp-0.5.23-1 #MINVER#
+libhtp-0.5.24.so.1 libhtp-0.5.24-1 #MINVER#
  bstr_add@Base 3.1.3
  bstr_add_c@Base 3.1.3
  bstr_add_c_noex@Base 3.1.3
