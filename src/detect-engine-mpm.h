@@ -57,8 +57,6 @@ void DetectEngineThreadCtxInfo(ThreadVars *, DetectEngineThreadCtx *);
 TmEcode DetectEngineThreadCtxInit(ThreadVars *, void *, void **);
 TmEcode DetectEngineThreadCtxDeinit(ThreadVars *, void *);
 
-void DbgPrintSearchStats();
-
 int SignatureHasPacketContent(const Signature *);
 int SignatureHasStreamContent(const Signature *);
 
@@ -83,14 +81,13 @@ int DetectSetFastPatternAndItsId(DetectEngineCtx *de_ctx);
 /** \brief register an app layer keyword for mpm
  *  \param name keyword name
  *  \param direction SIG_FLAG_TOSERVER or SIG_FLAG_TOCLIENT
- *  \param sm_list list that contains the keyword's sigmatches
  *  \param PrefilterRegister Prefilter api registration function
  *
  *  \note direction must be set to either toserver or toclient.
  *        If both are needed, register the keyword twice.
  */
-void DetectMpmAppLayerRegister(const char *name,
-        int direction, int sm_list, int priority,
+void DetectAppLayerMpmRegister(const char *name,
+        int direction, int priority,
         int (*PrefilterRegister)(SigGroupHead *sgh, MpmCtx *mpm_ctx));
 
 #endif /* __DETECT_ENGINE_MPM_H__ */

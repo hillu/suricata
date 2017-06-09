@@ -47,6 +47,7 @@
 #define FILE_STORED     BIT_U16(11)
 #define FILE_NOTRACK    BIT_U16(12) /**< track size of file */
 #define FILE_USE_DETECT BIT_U16(13) /**< use content_inspected tracker */
+#define FILE_USE_TRACKID    BIT_U16(14) /**< File::file_track_id field is in use */
 
 typedef enum FileState_ {
     FILE_STATE_NONE = 0,    /**< no state */
@@ -65,7 +66,11 @@ typedef struct File_ {
     int16_t state;
     StreamingBuffer *sb;
     uint64_t txid;                  /**< tx this file is part of */
-    uint32_t file_id;
+    uint32_t file_track_id;         /**< id used by protocol parser. Optional
+                                     *   only used if FILE_USE_TRACKID flag set */
+    uint32_t file_store_id;         /**< id used in store file name file.<id> */
+    int fd;                         /**< file descriptor for filestore, not
+                                        open if equal to -1 */
     uint8_t *name;
 #ifdef HAVE_MAGIC
     char *magic;
@@ -90,7 +95,7 @@ typedef struct FileContainer_ {
     File *tail;
 } FileContainer;
 
-FileContainer *FileContainerAlloc();
+FileContainer *FileContainerAlloc(void);
 void FileContainerFree(FileContainer *);
 
 void FileContainerRecycle(FileContainer *);
@@ -120,6 +125,9 @@ void FileContainerAdd(FileContainer *, File *);
 File *FileOpenFile(FileContainer *, const StreamingBufferConfig *,
         const uint8_t *name, uint16_t name_len,
         const uint8_t *data, uint32_t data_len, uint16_t flags);
+File *FileOpenFileWithId(FileContainer *, const StreamingBufferConfig *,
+        uint32_t track_id, const uint8_t *name, uint16_t name_len,
+        const uint8_t *data, uint32_t data_len, uint16_t flags);
 
 /**
  *  \brief Close a File
@@ -134,6 +142,8 @@ File *FileOpenFile(FileContainer *, const StreamingBufferConfig *,
  */
 int FileCloseFile(FileContainer *, const uint8_t *data, uint32_t data_len,
         uint16_t flags);
+int FileCloseFileById(FileContainer *, uint32_t track_id,
+        const uint8_t *data, uint32_t data_len, uint16_t flags);
 
 /**
  *  \brief Store a chunk of file data in the flow. The open "flowfile"
@@ -147,6 +157,8 @@ int FileCloseFile(FileContainer *, const uint8_t *data, uint32_t data_len,
  *  \retval -1 error
  */
 int FileAppendData(FileContainer *, const uint8_t *data, uint32_t data_len);
+int FileAppendDataById(FileContainer *, uint32_t track_id,
+        const uint8_t *data, uint32_t data_len);
 
 /**
  *  \brief Tag a file for storing
@@ -162,6 +174,7 @@ int FileStore(File *);
  *  \param txid the tx id
  */
 int FileSetTx(File *, uint64_t txid);
+void FileContainerSetTx(FileContainer *ffc, uint64_t tx_id);
 
 /**
  *  \brief disable file storage for a flow

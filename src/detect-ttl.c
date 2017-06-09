@@ -43,8 +43,9 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectTtlMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectTtlSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectTtlMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTtlSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectTtlFree (void *);
 void DetectTtlRegisterTests (void);
 
@@ -99,7 +100,8 @@ static inline int TtlMatch(const uint8_t pttl, const uint8_t mode,
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
 
     if (PKT_IS_PSEUDOPKT(p))
@@ -128,9 +130,8 @@ int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
  * \retval NULL on failure
  */
 
-DetectTtlData *DetectTtlParse (char *ttlstr)
+static DetectTtlData *DetectTtlParse (const char *ttlstr)
 {
-
     DetectTtlData *ttld = NULL;
     char *arg1 = NULL;
     char *arg2 = NULL;
@@ -271,9 +272,8 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, char *ttlstr)
+static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, const char *ttlstr)
 {
-
     DetectTtlData *ttld = NULL;
     SigMatch *sm = NULL;
 
@@ -371,7 +371,7 @@ static int PrefilterSetupTtl(SigGroupHead *sgh)
 static _Bool PrefilterTtlIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_TTL:
                 return TRUE;
@@ -390,7 +390,7 @@ static _Bool PrefilterTtlIsPrefilterable(const Signature *s)
  *
  */
 
-static int DetectTtlInitTest(DetectEngineCtx **de_ctx, Signature **sig, DetectTtlData **ttld, char *str)
+static int DetectTtlInitTest(DetectEngineCtx **de_ctx, Signature **sig, DetectTtlData **ttld, const char *str)
 {
     char fullstr[1024];
     int result = 0;

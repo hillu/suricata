@@ -41,9 +41,10 @@
 
 #include "util-debug.h"
 #include "detect-pcre.h"
+#include "detect-within.h"
 #include "util-unittest.h"
 
-static int DetectWithinSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectWithinSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectWithinRegisterTests(void);
 
 void DetectWithinRegister(void)
@@ -55,8 +56,6 @@ void DetectWithinRegister(void)
     sigmatch_table[DETECT_WITHIN].Setup = DetectWithinSetup;
     sigmatch_table[DETECT_WITHIN].Free  = NULL;
     sigmatch_table[DETECT_WITHIN].RegisterTests = DetectWithinRegisterTests;
-
-    sigmatch_table[DETECT_WITHIN].flags |= SIGMATCH_PAYLOAD;
 }
 
 /** \brief Setup within pattern (content/uricontent) modifier.
@@ -66,54 +65,19 @@ void DetectWithinRegister(void)
  *  \retval 0 ok
  *  \retval -1 error, sig needs to be invalidated
  */
-static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *withinstr)
+static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, const char *withinstr)
 {
-    char *str = withinstr;
-    char dubbed = 0;
+    const char *str = withinstr;
     SigMatch *pm = NULL;
     int ret = -1;
 
-    /* Strip leading and trailing "s. */
-    if (withinstr[0] == '\"') {
-        str = SCStrdup(withinstr+1);
-        if (unlikely(str == NULL))
-            goto end;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        dubbed = 1;
-    }
-
-    /* retrive the sm to apply the depth against */
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        pm = SigMatchGetLastSMFromLists(s, 2, DETECT_CONTENT, s->sm_lists_tail[s->list]);
-    } else {
-        pm =  SigMatchGetLastSMFromLists(s, 28,
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
-    }
+    /* retrieve the sm to apply the within against */
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "within needs "
-                   "preceding content, uricontent option, http_client_body, "
-                   "http_server_body, http_header option, http_raw_header option, "
-                   "http_method option, http_cookie, http_raw_uri, "
-                   "http_stat_msg, http_stat_code, http_user_agent or "
-                   "file_data/dce_stub_data sticky buffer option");
+                   "preceding content option");
         goto end;
     }
-
 
     /* verify other conditions */
     DetectContentData *cd = (DetectContentData *)pm->ctx;
@@ -162,9 +126,8 @@ static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *within
     /* these are the only ones against which we set a flag.  We have other
      * relative keywords like byttest, isdataat, bytejump, but we don't
      * set a flag against them */
-    SigMatch *prev_pm = SigMatchGetLastSMFromLists(s, 4,
-                                                   DETECT_CONTENT, pm->prev,
-                                                   DETECT_PCRE, pm->prev);
+    SigMatch *prev_pm = DetectGetLastSMByListPtr(s, pm->prev,
+            DETECT_CONTENT, DETECT_PCRE, -1);
     if (prev_pm == NULL) {
         ret = 0;
         goto end;
@@ -178,7 +141,7 @@ static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *within
                        "only content");
             goto end;
         }
-        prev_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        prev_cd->flags |= DETECT_CONTENT_WITHIN_NEXT;
     } else if (prev_pm->type == DETECT_PCRE) {
         DetectPcreData *pd = (DetectPcreData *)prev_pm->ctx;
         pd->flags |= DETECT_PCRE_RELATIVE_NEXT;
@@ -186,8 +149,6 @@ static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *within
 
     ret = 0;
  end:
-    if (dubbed)
-        SCFree(str);
     return ret;
 }
 
@@ -199,7 +160,7 @@ static int DetectWithinSetup(DetectEngineCtx *de_ctx, Signature *s, char *within
  * \test DetectWithinTestPacket01 is a test to check matches of
  * within, if the previous keyword is pcre (bug 145)
  */
-int DetectWithinTestPacket01 (void)
+static int DetectWithinTestPacket01 (void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *)"GET /AllWorkAndNoPlayMakesWillADullBoy HTTP/1.0"
@@ -227,7 +188,7 @@ end:
 }
 
 
-int DetectWithinTestPacket02 (void)
+static int DetectWithinTestPacket02 (void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *)"Zero Five Ten Fourteen";

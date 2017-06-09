@@ -25,7 +25,8 @@
 
 #include "suricata-common.h"
 
-#include "util-detect-file-hash.h"
+#include "detect-engine.h"
+#include "detect-file-hash-common.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
@@ -33,7 +34,7 @@
 
 #ifndef HAVE_NSS
 
-static int DetectFileSha256SetupNoSupport (DetectEngineCtx *a, Signature *b, char *c)
+static int DetectFileSha256SetupNoSupport (DetectEngineCtx *a, Signature *b, const char *c)
 {
     SCLogError(SC_ERR_NO_SHA256_SUPPORT, "no SHA-256 calculation support built in, needed for filesha256 keyword");
     return -1;
@@ -57,8 +58,9 @@ void DetectFileSha256Register(void)
 
 #else /* HAVE_NSS */
 
-static int DetectFileSha256Setup (DetectEngineCtx *, Signature *, char *);
+static int DetectFileSha256Setup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFileSha256RegisterTests(void);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for keyword: filesha256
@@ -72,6 +74,8 @@ void DetectFileSha256Register(void)
     sigmatch_table[DETECT_FILESHA256].Setup = DetectFileSha256Setup;
     sigmatch_table[DETECT_FILESHA256].Free  = DetectFileHashFree;
     sigmatch_table[DETECT_FILESHA256].RegisterTests = DetectFileSha256RegisterTests;
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 
     SCLogDebug("registering filesha256 rule option");
     return;
@@ -88,13 +92,13 @@ void DetectFileSha256Register(void)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFileSha256Setup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFileSha256Setup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILESHA256);
+    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILESHA256, g_file_match_list_id);
 }
 
 #ifdef UNITTESTS
-static int SHA256MatchLookupString(ROHashTable *hash, char *string)
+static int SHA256MatchLookupString(ROHashTable *hash, const char *string)
 {
     uint8_t sha256[32];
     if (ReadHashString(sha256, string, "file", 88, 64) == 1) {

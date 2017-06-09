@@ -188,6 +188,9 @@ typedef struct HtpBody_ {
 /** Now the Body Chunks will be stored per transaction, at
   * the tx user data */
 typedef struct HtpTxUserData_ {
+    /** flags to track which mpm has run */
+    uint64_t mpm_ids;
+
     /* Body of the request (if any) */
     uint8_t request_body_init;
     uint8_t response_body_init;
@@ -228,7 +231,6 @@ typedef struct HtpTxUserData_ {
 } HtpTxUserData;
 
 typedef struct HtpState_ {
-
     /* Connection parser structure for each connection */
     htp_connp_t *connp;
     /* Connection structure for each connection */
@@ -262,10 +264,6 @@ void HTPParserRegisterTests(void);
 void HTPAtExitPrintStats(void);
 void HTPFreeConfig(void);
 
-htp_tx_t *HTPTransactionMain(const HtpState *);
-
-int HTPCallbackRequestBodyData(htp_tx_data_t *);
-int HtpTransactionGetLoggableId(Flow *);
 void HtpBodyPrint(HtpBody *);
 void HtpBodyFree(HtpBody *);
 /* To free the state from unittests using app-layer-htp */

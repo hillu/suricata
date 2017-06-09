@@ -71,7 +71,7 @@ typedef struct PcapThreadVars_
     /* thread specific bpf */
     struct bpf_program filter;
     /* ptr to string from config */
-    char *bpf_filter;
+    const char *bpf_filter;
 
     time_t last_stats_dump;
 
@@ -99,18 +99,15 @@ typedef struct PcapThreadVars_
 
     ChecksumValidationMode checksum_mode;
 
-#if LIBPCAP_VERSION_MAJOR == 0
-    char iface[PCAP_IFACE_NAME_LENGTH];
-#endif
     LiveDevice *livedev;
 } PcapThreadVars;
 
-TmEcode ReceivePcapThreadInit(ThreadVars *, void *, void **);
+TmEcode ReceivePcapThreadInit(ThreadVars *, const void *, void **);
 void ReceivePcapThreadExitStats(ThreadVars *, void *);
 TmEcode ReceivePcapThreadDeinit(ThreadVars *, void *);
 TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot);
 
-TmEcode DecodePcapThreadInit(ThreadVars *, void *, void **);
+TmEcode DecodePcapThreadInit(ThreadVars *, const void *, void **);
 TmEcode DecodePcapThreadDeinit(ThreadVars *tv, void *data);
 TmEcode DecodePcap(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
@@ -163,8 +160,6 @@ static inline void PcapDumpCounters(PcapThreadVars *ptv)
     }
 }
 
-
-#if LIBPCAP_VERSION_MAJOR == 1
 static int PcapTryReopen(PcapThreadVars *ptv)
 {
     int pcap_activate_r;
@@ -176,41 +171,7 @@ static int PcapTryReopen(PcapThreadVars *ptv)
     }
     /* set bpf filter if we have one */
     if (ptv->bpf_filter != NULL) {
-        if(pcap_compile(ptv->pcap_handle,&ptv->filter,ptv->bpf_filter,1,0) < 0) {
-            SCLogError(SC_ERR_BPF,"bpf compilation error %s",pcap_geterr(ptv->pcap_handle));
-            return -1;
-        }
-
-        if(pcap_setfilter(ptv->pcap_handle,&ptv->filter) < 0) {
-            SCLogError(SC_ERR_BPF,"could not set bpf filter %s",pcap_geterr(ptv->pcap_handle));
-            return -1;
-        }
-    }
-
-    SCLogInfo("Recovering interface listening");
-    ptv->pcap_state = PCAP_STATE_UP;
-    return 0;
-}
-#else /* implied LIBPCAP_VERSION_MAJOR == 0 */
-static int PcapTryReopen(PcapThreadVars *ptv)
-{
-    char errbuf[PCAP_ERRBUF_SIZE] = "";
-
-    ptv->pcap_state = PCAP_STATE_DOWN;
-    pcap_close(ptv->pcap_handle);
-
-    ptv->pcap_handle = pcap_open_live((char *)ptv->iface, ptv->pcap_snaplen,
-            LIBPCAP_PROMISC, LIBPCAP_COPYWAIT, errbuf);
-    if (ptv->pcap_handle == NULL) {
-        SCLogError(SC_ERR_PCAP_OPEN_LIVE, "Problem creating pcap handler for live mode, error %s", errbuf);
-        return -1;
-    }
-
-    /* set bpf filter if we have one */
-    if (ptv->bpf_filter != NULL) {
-        SCLogInfo("using bpf-filter \"%s\"", ptv->bpf_filter);
-
-        if(pcap_compile(ptv->pcap_handle,&ptv->filter,ptv->bpf_filter,1,0) < 0) {
+        if(pcap_compile(ptv->pcap_handle,&ptv->filter,(char *)ptv->bpf_filter,1,0) < 0) {
             SCLogError(SC_ERR_BPF,"bpf compilation error %s",pcap_geterr(ptv->pcap_handle));
             return -1;
         }
@@ -226,9 +187,7 @@ static int PcapTryReopen(PcapThreadVars *ptv)
     return 0;
 }
 
-#endif
-
-void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt)
+static void PcapCallbackLoop(char *user, struct pcap_pkthdr *h, u_char *pkt)
 {
     SCEnter();
 
@@ -366,11 +325,10 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
  *
  * \todo Create a general pcap setup function.
  */
-#if LIBPCAP_VERSION_MAJOR == 1
-TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode ReceivePcapThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     SCEnter();
-    PcapIfaceConfig *pcapconfig = initdata;
+    PcapIfaceConfig *pcapconfig = (PcapIfaceConfig *)initdata;
 
     if (initdata == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "initdata == NULL");
@@ -495,7 +453,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
 
         ptv->bpf_filter = pcapconfig->bpf_filter;
 
-        if (pcap_compile(ptv->pcap_handle,&ptv->filter,ptv->bpf_filter,1,0) < 0) {
+        if (pcap_compile(ptv->pcap_handle,&ptv->filter,(char *)ptv->bpf_filter,1,0) < 0) {
             SCLogError(SC_ERR_BPF, "bpf compilation error %s", pcap_geterr(ptv->pcap_handle));
 
             SCMutexUnlock(&pcap_bpf_compile_lock);
@@ -533,110 +491,6 @@ TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
     *data = (void *)ptv;
     SCReturnInt(TM_ECODE_OK);
 }
-#else /* implied LIBPCAP_VERSION_MAJOR == 0 */
-TmEcode ReceivePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
-{
-    SCEnter();
-    PcapIfaceConfig *pcapconfig = initdata;
-
-    if (initdata == NULL) {
-        SCLogError(SC_ERR_INVALID_ARGUMENT, "initdata == NULL");
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-
-    PcapThreadVars *ptv = SCMalloc(sizeof(PcapThreadVars));
-    if (unlikely(ptv == NULL)) {
-        pcapconfig->DerefFunc(pcapconfig);
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-    memset(ptv, 0, sizeof(PcapThreadVars));
-
-    ptv->tv = tv;
-
-    ptv->livedev = LiveGetDevice(pcapconfig->iface);
-    if (ptv->livedev == NULL) {
-        SCLogError(SC_ERR_INVALID_VALUE, "Unable to find Live device");
-        SCFree(ptv);
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-
-    SCLogInfo("using interface %s", pcapconfig->iface);
-    if (strlen(pcapconfig->iface) > PCAP_IFACE_NAME_LENGTH) {
-        SCFree(ptv);
-        /* Dereference config */
-        pcapconfig->DerefFunc(pcapconfig);
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-    strlcpy(ptv->iface, pcapconfig->iface, PCAP_IFACE_NAME_LENGTH);
-
-    if (pcapconfig->snaplen == 0) {
-        /* We try to set snaplen from MTU value */
-        ptv->pcap_snaplen = GetIfaceMaxPacketSize(pcapconfig->iface);
-        /* be conservative with old pcap lib to mimic old tcpdump behavior
-           when MTU was not available. */
-        if (ptv->pcap_snaplen <= 0)
-            ptv->pcap_snaplen = LIBPCAP_SNAPLEN;
-    } else {
-        ptv->pcap_snaplen = pcapconfig->snaplen;
-    }
-
-    char errbuf[PCAP_ERRBUF_SIZE] = "";
-    ptv->pcap_handle = pcap_open_live(ptv->iface, ptv->pcap_snaplen,
-                                        LIBPCAP_PROMISC, LIBPCAP_COPYWAIT, errbuf);
-    if (ptv->pcap_handle == NULL) {
-        SCLogError(SC_ERR_PCAP_OPEN_LIVE, "Problem creating pcap handler for live mode, error %s", errbuf);
-        SCFree(ptv);
-        /* Dereference config */
-        pcapconfig->DerefFunc(pcapconfig);
-        SCReturnInt(TM_ECODE_FAILED);
-    }
-
-    /* set bpf filter if we have one */
-    if (pcapconfig->bpf_filter) {
-        SCMutexLock(&pcap_bpf_compile_lock);
-
-        ptv->bpf_filter = pcapconfig->bpf_filter;
-        SCLogInfo("using bpf-filter \"%s\"", ptv->bpf_filter);
-
-        if(pcap_compile(ptv->pcap_handle,&ptv->filter, ptv->bpf_filter,1,0) < 0) {
-            SCLogError(SC_ERR_BPF,"bpf compilation error %s",pcap_geterr(ptv->pcap_handle));
-
-            SCMutexUnlock(&pcap_bpf_compile_lock);
-            SCFree(ptv);
-            /* Dereference config */
-            pcapconfig->DerefFunc(pcapconfig);
-            return TM_ECODE_FAILED;
-        }
-
-        if(pcap_setfilter(ptv->pcap_handle,&ptv->filter) < 0) {
-            SCLogError(SC_ERR_BPF,"could not set bpf filter %s",pcap_geterr(ptv->pcap_handle));
-
-            SCMutexUnlock(&pcap_bpf_compile_lock);
-            SCFree(ptv);
-            /* Dereference config */
-            pcapconfig->DerefFunc(pcapconfig);
-            return TM_ECODE_FAILED;
-        }
-
-        SCMutexUnlock(&pcap_bpf_compile_lock);
-    }
-
-    ptv->datalink = pcap_datalink(ptv->pcap_handle);
-
-    ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
-            ptv->tv);
-    ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
-            ptv->tv);
-    ptv->capture_kernel_ifdrops = StatsRegisterCounter("capture.kernel_ifdrops",
-            ptv->tv);
-
-    *data = (void *)ptv;
-
-    /* Dereference config */
-    pcapconfig->DerefFunc(pcapconfig);
-    SCReturnInt(TM_ECODE_OK);
-}
-#endif /* LIBPCAP_VERSION_MAJOR */
 
 /**
  * \brief This function prints stats to the screen at exit.
@@ -736,7 +590,7 @@ TmEcode DecodePcap(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode DecodePcapThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode DecodePcapThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     SCEnter();
     DecodeThreadVars *dtv = NULL;

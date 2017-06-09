@@ -1583,7 +1583,7 @@ void RegisterDNP3Parsers(void)
 {
     SCEnter();
 
-    char *proto_name = "dnp3";
+    const char *proto_name = "dnp3";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name))
     {
@@ -2081,7 +2081,7 @@ static int DNP3ProbingParserTest(void)
 /**
  * \test Test a basic request/response.
  */
-int DNP3ParserTestRequestResponse(void)
+static int DNP3ParserTestRequestResponse(void)
 {
     DNP3State *state = NULL;
 
@@ -2123,6 +2123,7 @@ int DNP3ParserTestRequestResponse(void)
 
     flow.protoctx = (void *)&ssn;
     flow.proto = IPPROTO_TCP;
+    flow.alproto = ALPROTO_DNP3;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2154,7 +2155,6 @@ int DNP3ParserTestRequestResponse(void)
     AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&flow);
-    DNP3StateFree(state);
     PASS;
 }
 
@@ -2191,6 +2191,7 @@ static int DNP3ParserTestUnsolicitedResponseConfirm(void)
 
     flow.protoctx = (void *)&ssn;
     flow.proto = IPPROTO_TCP;
+    flow.alproto = ALPROTO_DNP3;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2224,14 +2225,13 @@ static int DNP3ParserTestUnsolicitedResponseConfirm(void)
     AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&flow);
-    DNP3StateFree(state);
     PASS;
 }
 
 /**
  * \test Test flood state.
  */
-int DNP3ParserTestFlooded(void)
+static int DNP3ParserTestFlooded(void)
 {
     DNP3State *state = NULL;
 
@@ -2258,6 +2258,7 @@ int DNP3ParserTestFlooded(void)
 
     flow.protoctx = (void *)&ssn;
     flow.proto = IPPROTO_TCP;
+    flow.alproto = ALPROTO_DNP3;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2304,7 +2305,6 @@ int DNP3ParserTestFlooded(void)
     AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&flow);
-    DNP3StateFree(state);
     PASS;
 }
 
@@ -2365,6 +2365,7 @@ static int DNP3ParserTestPartialFrame(void)
     memset(&ssn, 0, sizeof(ssn));
     flow.protoctx = (void *)&ssn;
     flow.proto = IPPROTO_TCP;
+    flow.alproto = ALPROTO_DNP3;
     StreamTcpInitConfig(TRUE);
 
     /* Pass in the first partial frame. */
@@ -2437,7 +2438,6 @@ static int DNP3ParserTestPartialFrame(void)
     AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&flow);
-    DNP3StateFree(state);
     PASS;
 }
 
@@ -2478,6 +2478,7 @@ static int DNP3ParserTestMultiFrame(void)
     memset(&ssn, 0, sizeof(ssn));
     flow.protoctx = (void *)&ssn;
     flow.proto = IPPROTO_TCP;
+    flow.alproto = ALPROTO_DNP3;
     StreamTcpInitConfig(TRUE);
 
     SCMutexLock(&flow.m);
@@ -2493,7 +2494,6 @@ static int DNP3ParserTestMultiFrame(void)
     AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&flow);
-    DNP3StateFree(state);
     PASS;
 }
 

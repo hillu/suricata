@@ -55,8 +55,10 @@
 #include "detect-engine-hrud.h"
 #include "stream-tcp.h"
 
-static int DetectHttpRawUriSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectHttpRawUriSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectHttpRawUriRegisterTests(void);
+static void DetectHttpRawUriSetupCallback(Signature *s);
+static int g_http_raw_uri_buffer_id = 0;
 
 /**
  * \brief Registration function for keyword http_raw_uri.
@@ -67,22 +69,25 @@ void DetectHttpRawUriRegister(void)
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].desc = "content modifier to match on HTTP uri";
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_uri-and-http_raw-uri";
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_RAW_URI].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].Setup = DetectHttpRawUriSetup;
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].Free = NULL;
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].RegisterTests = DetectHttpRawUriRegisterTests;
     sigmatch_table[DETECT_AL_HTTP_RAW_URI].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_HTTP_RAW_URI].flags |= SIGMATCH_PAYLOAD;
 
-    DetectMpmAppLayerRegister("http_raw_uri", SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_HRUDMATCH, 2,
+    DetectAppLayerMpmRegister("http_raw_uri", SIG_FLAG_TOSERVER, 2,
             PrefilterTxRawUriRegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_HTTP, SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_HRUDMATCH,
+    DetectAppLayerInspectEngineRegister("http_raw_uri",
+            ALPROTO_HTTP, SIG_FLAG_TOSERVER, HTP_REQUEST_LINE,
             DetectEngineInspectHttpRawUri);
 
-    return;
+    DetectBufferTypeSetDescriptionByName("http_raw_uri",
+            "raw http uri");
+
+    DetectBufferTypeRegisterSetupCallback("http_raw_uri",
+            DetectHttpRawUriSetupCallback);
+
+    g_http_raw_uri_buffer_id = DetectBufferTypeGetByName("http_raw_uri");
 }
 
 /**
@@ -95,15 +100,19 @@ void DetectHttpRawUriRegister(void)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-static int DetectHttpRawUriSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectHttpRawUriSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_RAW_URI,
-                                                  DETECT_SM_LIST_HRUDMATCH,
-                                                  ALPROTO_HTTP,
-                                                  NULL);
+                                                  g_http_raw_uri_buffer_id,
+                                                  ALPROTO_HTTP);
 }
 
+static void DetectHttpRawUriSetupCallback(Signature *s)
+{
+    SCLogDebug("callback invoked by %u", s->id);
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
+}
 
 /******************************** UNITESTS **********************************/
 
@@ -115,7 +124,7 @@ static int DetectHttpRawUriSetup(DetectEngineCtx *de_ctx, Signature *s, char *ar
  * \test Checks if a http_raw_uri is registered in a Signature, if content is not
  *       specified in the signature.
  */
-int DetectHttpRawUriTest01(void)
+static int DetectHttpRawUriTest01(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -139,7 +148,7 @@ end:
  * \test Checks if a http_raw_uri is registered in a Signature, if some parameter
  *       is specified with http_raw_uri in the signature.
  */
-int DetectHttpRawUriTest02(void)
+static int DetectHttpRawUriTest02(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -163,7 +172,7 @@ end:
 /**
  * \test Checks if a http_raw_uri is registered in a Signature.
  */
-int DetectHttpRawUriTest03(void)
+static int DetectHttpRawUriTest03(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -184,7 +193,7 @@ int DetectHttpRawUriTest03(void)
         goto end;
     }
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id];
     if (sm == NULL) {
         printf("no sigmatch(es): ");
         goto end;
@@ -211,7 +220,7 @@ end:
  * \test Checks if a http_raw_uri is registered in a Signature, when rawbytes is
  *       also specified in the signature.
  */
-int DetectHttpRawUriTest04(void)
+static int DetectHttpRawUriTest04(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -239,7 +248,7 @@ int DetectHttpRawUriTest04(void)
  * \test Checks if a http_raw_uri is successfully converted to a rawuricontent.
  *
  */
-int DetectHttpRawUriTest05(void)
+static int DetectHttpRawUriTest05(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     Signature *s = NULL;
@@ -256,19 +265,19 @@ int DetectHttpRawUriTest05(void)
         printf("sig failed to parse\n");
         goto end;
     }
-    if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL)
+    if (s->sm_lists[g_http_raw_uri_buffer_id] == NULL)
         goto end;
-    if (s->sm_lists[DETECT_SM_LIST_HRUDMATCH]->type != DETECT_CONTENT) {
+    if (s->sm_lists[g_http_raw_uri_buffer_id]->type != DETECT_CONTENT) {
         printf("wrong type\n");
         goto end;
     }
 
-    char *str = "we are testing http_raw_uri keyword";
+    const char *str = "we are testing http_raw_uri keyword";
     int uricomp = memcmp((const char *)
-                         ((DetectContentData*)s->sm_lists[DETECT_SM_LIST_HRUDMATCH]->ctx)->content,
+                         ((DetectContentData*)s->sm_lists[g_http_raw_uri_buffer_id]->ctx)->content,
                          str,
                          strlen(str) - 1);
-    int urilen = ((DetectContentData*)s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx)->content_len;
+    int urilen = ((DetectContentData*)s->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx)->content_len;
     if (uricomp != 0 ||
         urilen != strlen("we are testing http_raw_uri keyword")) {
         printf("sig failed to parse, content not setup properly\n");
@@ -284,7 +293,7 @@ end:
     return result;
 }
 
-int DetectHttpRawUriTest12(void)
+static int DetectHttpRawUriTest12(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -306,15 +315,15 @@ int DetectHttpRawUriTest12(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *ud1 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     DetectContentData *ud2 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(ud1->content, "one", ud1->content_len) != 0 ||
         ud2->flags != DETECT_CONTENT_DISTANCE ||
@@ -331,7 +340,7 @@ int DetectHttpRawUriTest12(void)
     return result;
 }
 
-int DetectHttpRawUriTest13(void)
+static int DetectHttpRawUriTest13(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -353,15 +362,15 @@ int DetectHttpRawUriTest13(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *ud1 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     DetectContentData *ud2 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(ud1->content, "one", ud1->content_len) != 0 ||
         ud2->flags != DETECT_CONTENT_WITHIN ||
@@ -378,7 +387,7 @@ int DetectHttpRawUriTest13(void)
     return result;
 }
 
-int DetectHttpRawUriTest14(void)
+static int DetectHttpRawUriTest14(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -402,7 +411,7 @@ int DetectHttpRawUriTest14(void)
     return result;
 }
 
-int DetectHttpRawUriTest15(void)
+static int DetectHttpRawUriTest15(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -426,7 +435,7 @@ int DetectHttpRawUriTest15(void)
     return result;
 }
 
-int DetectHttpRawUriTest16(void)
+static int DetectHttpRawUriTest16(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -450,7 +459,7 @@ int DetectHttpRawUriTest16(void)
     return result;
 }
 
-int DetectHttpRawUriTest17(void)
+static int DetectHttpRawUriTest17(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -472,15 +481,15 @@ int DetectHttpRawUriTest17(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *ud1 =
-      (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+      (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     DetectContentData *ud2 =
-      (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+      (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(ud1->content, "one", ud1->content_len) != 0 ||
         ud2->flags != DETECT_CONTENT_DISTANCE ||
@@ -497,7 +506,7 @@ int DetectHttpRawUriTest17(void)
     return result;
 }
 
-int DetectHttpRawUriTest18(void)
+static int DetectHttpRawUriTest18(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -520,15 +529,15 @@ int DetectHttpRawUriTest18(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *ud1 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     DetectContentData *ud2 =
-        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+        (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(ud1->content, "one", ud1->content_len) != 0 ||
         ud2->flags != DETECT_CONTENT_WITHIN ||

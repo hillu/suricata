@@ -28,7 +28,7 @@
 #include "detect.h"
 #include "detect-parse.h"
 
-#include "util-detect-file-hash.h"
+#include "detect-file-hash-common.h"
 
 #include "app-layer-htp.h"
 
@@ -46,7 +46,7 @@
  * \retval -1 the hexadecimal string is invalid
  * \retval 1 the hexadecimal string was read successfully
  */
-int ReadHashString(uint8_t *hash, char *string, char *filename, int line_no,
+int ReadHashString(uint8_t *hash, const char *string, const char *filename, int line_no,
         uint16_t expected_len)
 {
     if (strlen(string) != expected_len) {
@@ -86,7 +86,7 @@ int ReadHashString(uint8_t *hash, char *string, char *filename, int line_no,
  * \retval -1 failed to load the hash into the hash table
  * \retval 1 successfully loaded the has into the hash table
  */
-int LoadHashTable(ROHashTable *hash_table, char *string, char *filename,
+int LoadHashTable(ROHashTable *hash_table, const char *string, const char *filename,
         int line_no, uint32_t type)
 {
     /* allocate the maximum size a hash can have (in this case is SHA256, 32 bytes) */
@@ -147,19 +147,11 @@ static int HashMatchHashTable(ROHashTable *hash_table, uint8_t *hash,
  * \retval 1 match
  */
 int DetectFileHashMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
+        Flow *f, uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
     int ret = 0;
-    DetectFileHashData *filehash = (DetectFileHashData *)m->ctx;
-
-    if (file->txid < det_ctx->tx_id) {
-        SCReturnInt(0);
-    }
-
-    if (file->txid > det_ctx->tx_id) {
-        SCReturnInt(0);
-    }
+    DetectFileHashData *filehash = (DetectFileHashData *)m;
 
     if (file->state != FILE_STATE_CLOSED) {
         SCReturnInt(0);
@@ -206,7 +198,7 @@ static const char *hexcodes = "ABCDEFabcdef0123456789";
  * \retval NULL on failure
  */
 static DetectFileHashData *DetectFileHashParse (const DetectEngineCtx *de_ctx,
-        char *str, uint32_t type)
+        const char *str, uint32_t type)
 {
     DetectFileHashData *filehash = NULL;
     FILE *fp = NULL;
@@ -302,8 +294,8 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectFileHashSetup (DetectEngineCtx *de_ctx, Signature *s, char *str,
-        uint32_t type)
+int DetectFileHashSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str,
+        uint32_t type, int list)
 {
     DetectFileHashData *filehash = NULL;
     SigMatch *sm = NULL;
@@ -321,7 +313,7 @@ int DetectFileHashSetup (DetectEngineCtx *de_ctx, Signature *s, char *str,
     sm->type = type;
     sm->ctx = (void *)filehash;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
+    SigMatchAppendSMToList(s, sm, list);
 
     s->file_flags |= FILE_SIG_NEED_FILE;
 

@@ -154,7 +154,7 @@ typedef struct AppLayerProtoDetectCtx_ {
     /* Indicates the protocols that have registered themselves
      * for protocol detection.  This table is independent of the
      * ipproto. */
-    char *alproto_names[ALPROTO_MAX];
+    const char *alproto_names[ALPROTO_MAX];
 } AppLayerProtoDetectCtx;
 
 /**
@@ -334,52 +334,51 @@ static AppProto AppLayerProtoDetectPPGetProto(Flow *f,
     uint32_t *alproto_masks;
     uint32_t mask = 0;
 
+    const uint16_t dp = f->protodetect_dp ? f->protodetect_dp : f->dp;
+    const uint16_t sp = f->sp;
+
     if (direction & STREAM_TOSERVER) {
         /* first try the destination port */
-        pp_port_dp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, f->dp);
+        pp_port_dp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, dp);
         alproto_masks = &f->probing_parser_toserver_alproto_masks;
         if (pp_port_dp != NULL) {
-            SCLogDebug("toserver - Probing parser found for destination port %"PRIu16, f->dp);
+            SCLogDebug("toserver - Probing parser found for destination port %"PRIu16, dp);
 
             /* found based on destination port, so use dp registration */
             pe1 = pp_port_dp->dp;
         } else {
-            SCLogDebug("toserver - No probing parser registered for dest port %"PRIu16,
-                       f->dp);
+            SCLogDebug("toserver - No probing parser registered for dest port %"PRIu16, dp);
         }
 
-        pp_port_sp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, f->sp);
+        pp_port_sp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, sp);
         if (pp_port_sp != NULL) {
-            SCLogDebug("toserver - Probing parser found for source port %"PRIu16, f->sp);
+            SCLogDebug("toserver - Probing parser found for source port %"PRIu16, sp);
 
             /* found based on source port, so use sp registration */
             pe2 = pp_port_sp->sp;
         } else {
-            SCLogDebug("toserver - No probing parser registered for source port %"PRIu16,
-                    f->sp);
+            SCLogDebug("toserver - No probing parser registered for source port %"PRIu16, sp);
         }
     } else {
         /* first try the destination port */
-        pp_port_dp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, f->dp);
+        pp_port_dp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, dp);
         alproto_masks = &f->probing_parser_toclient_alproto_masks;
         if (pp_port_dp != NULL) {
-            SCLogDebug("toclient - Probing parser found for destination port %"PRIu16, f->dp);
+            SCLogDebug("toclient - Probing parser found for destination port %"PRIu16, dp);
 
             /* found based on destination port, so use dp registration */
             pe1 = pp_port_dp->dp;
         } else {
-            SCLogDebug("toclient - No probing parser registered for dest port %"PRIu16,
-                       f->dp);
+            SCLogDebug("toclient - No probing parser registered for dest port %"PRIu16, dp);
         }
 
-        pp_port_sp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, f->sp);
+        pp_port_sp = AppLayerProtoDetectGetProbingParsers(alpd_ctx.ctx_pp, ipproto, sp);
         if (pp_port_sp != NULL) {
-            SCLogDebug("toclient - Probing parser found for source port %"PRIu16, f->sp);
+            SCLogDebug("toclient - Probing parser found for source port %"PRIu16, sp);
 
             pe2 = pp_port_sp->sp;
         } else {
-            SCLogDebug("toclient - No probing parser registered for source port %"PRIu16,
-                        f->sp);
+            SCLogDebug("toclient - No probing parser registered for source port %"PRIu16, sp);
         }
     }
 
@@ -636,7 +635,8 @@ AppLayerProtoDetectProbingParserElementDuplicate(AppLayerProtoDetectProbingParse
     SCReturnPtr(new_pe, "AppLayerProtoDetectProbingParserElement");
 }
 
-void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp)
+#ifdef DEBUG
+static void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp)
 {
     SCEnter();
 
@@ -696,6 +696,8 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
                         printf("            alproto: ALPROTO_MODBUS\n");
                     else if (pp_pe->alproto == ALPROTO_ENIP)
                         printf("            alproto: ALPROTO_ENIP\n");
+                    else if (pp_pe->alproto == ALPROTO_NFS3)
+                        printf("            alproto: ALPROTO_NFS3\n");
                     else if (pp_pe->alproto == ALPROTO_TEMPLATE)
                         printf("            alproto: ALPROTO_TEMPLATE\n");
                     else if (pp_pe->alproto == ALPROTO_DNP3)
@@ -753,6 +755,8 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
                     printf("            alproto: ALPROTO_MODBUS\n");
                 else if (pp_pe->alproto == ALPROTO_ENIP)
                     printf("            alproto: ALPROTO_ENIP\n");
+                else if (pp_pe->alproto == ALPROTO_NFS3)
+                    printf("            alproto: ALPROTO_NFS3\n");
                 else if (pp_pe->alproto == ALPROTO_TEMPLATE)
                     printf("            alproto: ALPROTO_TEMPLATE\n");
                 else if (pp_pe->alproto == ALPROTO_DNP3)
@@ -772,6 +776,7 @@ void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingParser *pp
 
     SCReturn;
 }
+#endif
 
 static void AppLayerProtoDetectProbingParserElementAppend(AppLayerProtoDetectProbingParserElement **head_pe,
                                                           AppLayerProtoDetectProbingParserElement *new_pe)
@@ -1244,7 +1249,7 @@ static int AppLayerProtoDetectPMAddSignature(AppLayerProtoDetectPMCtx *ctx, Dete
 }
 
 static int AppLayerProtoDetectPMRegisterPattern(uint8_t ipproto, AppProto alproto,
-                                                char *pattern,
+                                                const char *pattern,
                                                 uint16_t depth, uint16_t offset,
                                                 uint8_t direction,
                                                 uint8_t is_cs)
@@ -1324,7 +1329,7 @@ AppProto AppLayerProtoDetectGetProto(AppLayerProtoDetectThreadCtx *tctx,
         alproto = AppLayerProtoDetectPPGetProto(f, buf, buflen, ipproto, direction);
 
  end:
-    SCReturnCT(alproto, "AppProto");
+    SCReturnUInt(alproto);
 }
 
 static void AppLayerProtoDetectFreeProbingParsers(AppLayerProtoDetectProbingParser *pp)
@@ -1393,7 +1398,7 @@ int AppLayerProtoDetectPrepareState(void)
  *  \param direction STREAM_TOSERVER or STREAM_TOCLIENT for dp or sp
  */
 void AppLayerProtoDetectPPRegister(uint8_t ipproto,
-                                   char *portstr,
+                                   const char *portstr,
                                    AppProto alproto,
                                    uint16_t min_depth, uint16_t max_depth,
                                    uint8_t direction,
@@ -1505,7 +1510,7 @@ int AppLayerProtoDetectPPParseConfPorts(const char *ipproto_name,
 /***** PM registration *****/
 
 int AppLayerProtoDetectPMRegisterPatternCS(uint8_t ipproto, AppProto alproto,
-                                           char *pattern,
+                                           const char *pattern,
                                            uint16_t depth, uint16_t offset,
                                            uint8_t direction)
 {
@@ -1520,7 +1525,7 @@ int AppLayerProtoDetectPMRegisterPatternCS(uint8_t ipproto, AppProto alproto,
 }
 
 int AppLayerProtoDetectPMRegisterPatternCI(uint8_t ipproto, AppProto alproto,
-                                           char *pattern,
+                                           const char *pattern,
                                            uint16_t depth, uint16_t offset,
                                            uint8_t direction)
 {
@@ -1598,7 +1603,7 @@ int AppLayerProtoDetectDeSetup(void)
     SCReturnInt(0);
 }
 
-void AppLayerProtoDetectRegisterProtocol(AppProto alproto, char *alproto_name)
+void AppLayerProtoDetectRegisterProtocol(AppProto alproto, const char *alproto_name)
 {
     SCEnter();
 
@@ -1610,6 +1615,58 @@ void AppLayerProtoDetectRegisterProtocol(AppProto alproto, char *alproto_name)
     goto end;
  end:
     SCReturn;
+}
+
+/** \brief request applayer to wrap up this protocol and rerun protocol
+ *         detection.
+ *
+ *  When this is called, the old session is reset unconditionally. A
+ *  'detect/log' flush packet is generated for both direction before
+ *  the reset, so allow for final detection and logging.
+ *
+ *  \param f flow to act on
+ *  \param dp destination port to use in protocol detection. Set to 443
+ *            for start tls, set to the HTTP uri port for CONNECT and
+ *            set to 0 to not use it.
+ *  \param expect_proto expected protocol. AppLayer event will be set if
+ *                      detected protocol differs from this.
+ */
+void AppLayerRequestProtocolChange(Flow *f, uint16_t dp, AppProto expect_proto)
+{
+    FlowSetChangeProtoFlag(f);
+    f->protodetect_dp = dp;
+    f->alproto_expect = expect_proto;
+}
+
+/** \brief request applayer to wrap up this protocol and rerun protocol
+ *         detection with expectation of TLS. Used by STARTTLS.
+ *
+ *  Sets detection port to 443 to make port based TLS detection work for
+ *  SMTP, FTP etc as well.
+ *
+ *  \param f flow to act on
+ */
+void AppLayerRequestProtocolTLSUpgrade(Flow *f)
+{
+    AppLayerRequestProtocolChange(f, 443, ALPROTO_TLS);
+}
+
+void AppLayerProtoDetectReset(Flow *f)
+{
+    FlowUnsetChangeProtoFlag(f);
+    FLOW_RESET_PM_DONE(f, STREAM_TOSERVER);
+    FLOW_RESET_PM_DONE(f, STREAM_TOCLIENT);
+    FLOW_RESET_PP_DONE(f, STREAM_TOSERVER);
+    FLOW_RESET_PP_DONE(f, STREAM_TOCLIENT);
+    f->probing_parser_toserver_alproto_masks = 0;
+    f->probing_parser_toclient_alproto_masks = 0;
+
+    AppLayerParserStateCleanup(f, f->alstate, f->alparser);
+    f->alstate = NULL;
+    f->alparser = NULL;
+    f->alproto    = ALPROTO_UNKNOWN;
+    f->alproto_ts = ALPROTO_UNKNOWN;
+    f->alproto_tc = ALPROTO_UNKNOWN;
 }
 
 int AppLayerProtoDetectConfProtoDetectionEnabled(const char *ipproto,
@@ -1770,7 +1827,7 @@ void AppLayerProtoDetectSupportedIpprotos(AppProto alproto, uint8_t *ipprotos)
     SCReturn;
 }
 
-AppProto AppLayerProtoDetectGetProtoByName(char *alproto_name)
+AppProto AppLayerProtoDetectGetProtoByName(const char *alproto_name)
 {
     SCEnter();
 
@@ -1787,7 +1844,7 @@ AppProto AppLayerProtoDetectGetProtoByName(char *alproto_name)
     SCReturnCT(ALPROTO_UNKNOWN, "AppProto");
 }
 
-char *AppLayerProtoDetectGetProtoName(AppProto alproto)
+const char *AppLayerProtoDetectGetProtoName(AppProto alproto)
 {
     return alpd_ctx.alproto_names[alproto];
 }
@@ -1830,12 +1887,12 @@ void AppLayerProtoDetectUnittestCtxRestore(void)
     SCReturn;
 }
 
-int AppLayerProtoDetectTest01(void)
+static int AppLayerProtoDetectTest01(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
-    char *buf;
+    const char *buf;
     int r = 0;
 
     buf = "HTTP";
@@ -1863,15 +1920,14 @@ int AppLayerProtoDetectTest01(void)
     return r;
 }
 
-int AppLayerProtoDetectTest02(void)
+static int AppLayerProtoDetectTest02(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
-    char *buf;
     int r = 0;
 
-    buf = "HTTP";
+    const char *buf = "HTTP";
     AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_HTTP, buf, 4, 0, STREAM_TOCLIENT);
     buf = "ftp";
     AppLayerProtoDetectPMRegisterPatternCS(IPPROTO_TCP, ALPROTO_FTP, buf, 4, 0, STREAM_TOCLIENT);
@@ -1912,13 +1968,13 @@ int AppLayerProtoDetectTest02(void)
     return r;
 }
 
-int AppLayerProtoDetectTest03(void)
+static int AppLayerProtoDetectTest03(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n";
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -1987,13 +2043,13 @@ int AppLayerProtoDetectTest03(void)
     return r;
 }
 
-int AppLayerProtoDetectTest04(void)
+static int AppLayerProtoDetectTest04(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n";
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2056,13 +2112,13 @@ int AppLayerProtoDetectTest04(void)
     return r;
 }
 
-int AppLayerProtoDetectTest05(void)
+static int AppLayerProtoDetectTest05(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
     uint8_t l7data[] = "HTTP/1.1 200 OK\r\nServer: Apache/1.0\r\n\r\n<HTML><BODY>Blahblah</BODY></HTML>";
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2131,13 +2187,13 @@ int AppLayerProtoDetectTest05(void)
     return r;
 }
 
-int AppLayerProtoDetectTest06(void)
+static int AppLayerProtoDetectTest06(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
     uint8_t l7data[] = "220 Welcome to the OISF FTP server\r\n";
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2204,13 +2260,13 @@ int AppLayerProtoDetectTest06(void)
     return r;
 }
 
-int AppLayerProtoDetectTest07(void)
+static int AppLayerProtoDetectTest07(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
 
     uint8_t l7data[] = "220 Welcome to the OISF HTTP/FTP server\r\n";
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2273,7 +2329,7 @@ int AppLayerProtoDetectTest07(void)
     return r;
 }
 
-int AppLayerProtoDetectTest08(void)
+static int AppLayerProtoDetectTest08(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2298,7 +2354,7 @@ int AppLayerProtoDetectTest08(void)
         0x20, 0x4c, 0x4d, 0x20, 0x30, 0x2e, 0x31, 0x32,
         0x00
     };
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2361,7 +2417,7 @@ int AppLayerProtoDetectTest08(void)
     return r;
 }
 
-int AppLayerProtoDetectTest09(void)
+static int AppLayerProtoDetectTest09(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2382,7 +2438,7 @@ int AppLayerProtoDetectTest09(void)
         0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x02, 0x02
     };
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2445,7 +2501,7 @@ int AppLayerProtoDetectTest09(void)
     return r;
 }
 
-int AppLayerProtoDetectTest10(void)
+static int AppLayerProtoDetectTest10(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2461,7 +2517,7 @@ int AppLayerProtoDetectTest10(void)
         0xeb, 0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00,
         0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00
     };
-    char *buf;
+    const char *buf;
     int r = 0;
     Flow f;
     AppProto pm_results[ALPROTO_MAX];
@@ -2528,7 +2584,7 @@ int AppLayerProtoDetectTest10(void)
  * \test Why we still get http for connect... obviously because
  *       we also match on the reply, duh
  */
-int AppLayerProtoDetectTest11(void)
+static int AppLayerProtoDetectTest11(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2627,7 +2683,7 @@ int AppLayerProtoDetectTest11(void)
 /**
  * \test AlpProtoSignature test
  */
-int AppLayerProtoDetectTest12(void)
+static int AppLayerProtoDetectTest12(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2678,7 +2734,7 @@ int AppLayerProtoDetectTest12(void)
  * \test What about if we add some sigs only for udp but call for tcp?
  *       It should not detect any proto
  */
-int AppLayerProtoDetectTest13(void)
+static int AppLayerProtoDetectTest13(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2769,7 +2825,7 @@ int AppLayerProtoDetectTest13(void)
  *       It should detect ALPROTO_HTTP (over udp). This is just a check
  *       to ensure that TCP/UDP differences work correctly.
  */
-int AppLayerProtoDetectTest14(void)
+static int AppLayerProtoDetectTest14(void)
 {
     AppLayerProtoDetectUnittestCtxBackup();
     AppLayerProtoDetectSetup();
@@ -2856,7 +2912,7 @@ int AppLayerProtoDetectTest14(void)
 }
 
 typedef struct AppLayerProtoDetectPPTestDataElement_ {
-    char *alproto_name;
+    const char *alproto_name;
     AppProto alproto;
     uint16_t port;
     uint32_t alproto_mask;
@@ -3679,110 +3735,6 @@ static int AppLayerProtoDetectTest19(void)
     return result;
 }
 
-/** \test test if the engine detect the proto and match with it
- *        and also against a content option */
-static int AppLayerProtoDetectTest20(void)
-{
-    int result = 0;
-    Flow *f = NULL;
-    uint8_t http_buf1[] = "POST /one HTTP/1.0\r\n"
-        "User-Agent: Mozilla/1.0\r\n"
-        "Cookie: hellocatch\r\n\r\n";
-    uint32_t http_buf1_len = sizeof(http_buf1) - 1;
-    TcpSession ssn;
-    Packet *p = NULL;
-    Signature *s = NULL;
-    ThreadVars tv;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    DetectEngineCtx *de_ctx = NULL;
-    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
-
-    memset(&tv, 0, sizeof(ThreadVars));
-    memset(&ssn, 0, sizeof(TcpSession));
-
-    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
-
-    f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 80);
-    if (f == NULL)
-        goto end;
-    f->protoctx = &ssn;
-    p->flow = f;
-    p->flowflags |= FLOW_PKT_TOSERVER;
-    p->flowflags |= FLOW_PKT_ESTABLISHED;
-    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f->alproto = ALPROTO_HTTP;
-    f->proto = IPPROTO_TCP;
-    p->flags |= PKT_STREAM_ADD;
-    p->flags |= PKT_STREAM_EOF;
-
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
-
-    StreamTcpInitConfig(TRUE);
-
-    StreamMsg *stream_msg = StreamMsgGetFromPool();
-    if (stream_msg == NULL) {
-        printf("no stream_msg: ");
-        goto end;
-    }
-
-    memcpy(stream_msg->data, http_buf1, http_buf1_len);
-    stream_msg->data_len = http_buf1_len;
-
-    ssn.toserver_smsg_head = stream_msg;
-    ssn.toserver_smsg_tail = stream_msg;
-
-    de_ctx->flags |= DE_QUIET;
-
-    s = de_ctx->sig_list = SigInit(de_ctx, "alert http any any -> any any "
-                                   "(msg:\"Test content option\"; "
-                                   "content:\"one\"; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    SigGroupBuild(de_ctx);
-    DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
-
-    FLOWLOCK_WRLOCK(f);
-    int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
-                                STREAM_TOSERVER, http_buf1, http_buf1_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        FLOWLOCK_UNLOCK(f);
-        goto end;
-    }
-    FLOWLOCK_UNLOCK(f);
-
-    /* do detect */
-    SigMatchSignatures(&tv, de_ctx, det_ctx, p);
-
-    if (!PacketAlertCheck(p, 1)) {
-        printf("sig 1 didn't alert, but it should: ");
-        goto end;
-    }
-
-    result = 1;
-
- end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
-    if (det_ctx != NULL)
-        DetectEngineThreadCtxDeinit(&tv, det_ctx);
-    if (de_ctx != NULL)
-        SigGroupCleanup(de_ctx);
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
-
-    StreamTcpFreeConfig(TRUE);
-    UTHFreePackets(&p, 1);
-    UTHFreeFlow(f);
-    return result;
-}
-
-
 void AppLayerProtoDetectUnittestsRegister(void)
 {
     SCEnter();
@@ -3806,7 +3758,6 @@ void AppLayerProtoDetectUnittestsRegister(void)
     UtRegisterTest("AppLayerProtoDetectTest17", AppLayerProtoDetectTest17);
     UtRegisterTest("AppLayerProtoDetectTest18", AppLayerProtoDetectTest18);
     UtRegisterTest("AppLayerProtoDetectTest19", AppLayerProtoDetectTest19);
-    UtRegisterTest("AppLayerProtoDetectTest20", AppLayerProtoDetectTest20);
 
     SCReturn;
 }

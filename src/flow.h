@@ -93,6 +93,8 @@ typedef struct AppLayerParserState_ AppLayerParserState;
 #define FLOW_PROTO_DETECT_TS_DONE       BIT_U32(20)
 #define FLOW_PROTO_DETECT_TC_DONE       BIT_U32(21)
 
+/** Indicate that alproto detection for flow should be done again */
+#define FLOW_CHANGE_PROTO               BIT_U32(22)
 
 /* File flags */
 
@@ -362,6 +364,10 @@ typedef struct Flow_
     uint16_t file_flags;    /**< file tracking/extraction flags */
     /* coccinelle: Flow:file_flags:FLOWFILE_ */
 
+    /** destination port to be used in protocol detection. This is meant
+     *  for use with STARTTLS and HTTP CONNECT detection */
+    uint16_t protodetect_dp; /**< 0 if not used */
+
 #ifdef FLOWLOCK_RWLOCK
     SCRWLock r;
 #elif defined FLOWLOCK_MUTEX
@@ -384,25 +390,26 @@ typedef struct Flow_
     AppProto alproto_ts;
     AppProto alproto_tc;
 
-    /** detection engine ctx id used to inspect this flow. Set at initial
+    /** original application level protocol. Used to indicate the previous
+       protocol when changing to another protocol , e.g. with STARTTLS. */
+    AppProto alproto_orig;
+    /** expected app protocol: used in protocol change/upgrade like in
+     *  STARTTLS. */
+    AppProto alproto_expect;
+
+    /** detection engine ctx version used to inspect this flow. Set at initial
      *  inspection. If it doesn't match the currently in use de_ctx, the
-     *  de_state and stored sgh ptrs are reset. */
-    uint32_t de_ctx_id;
+     *  stored sgh ptrs are reset. */
+    uint32_t de_ctx_version;
 
     /** Thread ID for the stream/detect portion of this flow */
     FlowThreadId thread_id;
-
-    /** detect state 'alversion' inspected for both directions */
-    uint8_t detect_alversion[2];
 
     /** application level storage ptrs.
      *
      */
     AppLayerParserState *alparser;     /**< parser internal state */
     void *alstate;      /**< application layer state */
-
-    /** detection engine state */
-    struct DetectEngineStateFlow_ *de_state;
 
     /** toclient sgh for this flow. Only use when FLOW_SGH_TOCLIENT flow flag
      *  has been set. */
@@ -461,6 +468,9 @@ void FlowShutdown(void);
 void FlowSetIPOnlyFlag(Flow *, int);
 void FlowSetHasAlertsFlag(Flow *);
 int FlowHasAlerts(const Flow *);
+void FlowSetChangeProtoFlag(Flow *);
+void FlowUnsetChangeProtoFlag(Flow *);
+int FlowChangeProto(Flow *);
 
 void FlowRegisterTests (void);
 int FlowSetProtoTimeout(uint8_t ,uint32_t ,uint32_t ,uint32_t);
@@ -569,9 +579,13 @@ static inline void FlowDeReference(Flow **d)
  */
 static inline int64_t FlowGetId(const Flow *f)
 {
-    return (int64_t)f->flow_hash << 31 |
+    int64_t id = (int64_t)f->flow_hash << 31 |
         (int64_t)(f->startts.tv_sec & 0x0000FFFF) << 16 |
         (int64_t)(f->startts.tv_usec & 0x0000FFFF);
+    /* reduce to 51 bits as Javascript and even JSON often seem to
+     * max out there. */
+    id &= 0x7ffffffffffffLL;
+    return id;
 }
 
 int FlowClearMemory(Flow *,uint8_t );

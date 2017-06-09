@@ -44,6 +44,7 @@
 #include "app-layer-protos.h"
 #include "app-layer-parser.h"
 #include "app-layer-htp.h"
+#include "app-layer-htp-body.h"
 
 #include "util-spm.h"
 #include "util-debug.h"
@@ -93,37 +94,25 @@ int HtpBodyAppendChunk(const HTPCfgDir *hcfg, HtpBody *body,
             SCReturnInt(-1);
     }
 
+    /* New chunk */
+    bd = (HtpBodyChunk *)HTPCalloc(1, sizeof(HtpBodyChunk));
+    if (bd == NULL) {
+        SCReturnInt(-1);
+    }
+
+    if (StreamingBufferAppend(body->sb, &bd->sbseg, data, len) != 0) {
+        HTPFree(bd, sizeof(HtpBodyChunk));
+        SCReturnInt(-1);
+    }
+
     if (body->first == NULL) {
-        /* New chunk */
-        bd = (HtpBodyChunk *)HTPCalloc(1, sizeof(HtpBodyChunk));
-        if (bd == NULL) {
-            SCReturnInt(-1);
-        }
-
-        if (StreamingBufferAppend(body->sb, &bd->sbseg, data, len) != 0) {
-            HTPFree(bd, sizeof(HtpBodyChunk));
-            SCReturnInt(-1);
-        }
-
         body->first = body->last = bd;
-
-        body->content_len_so_far = len;
     } else {
-        bd = (HtpBodyChunk *)HTPCalloc(1, sizeof(HtpBodyChunk));
-        if (bd == NULL) {
-            SCReturnInt(-1);
-        }
-
-        if (StreamingBufferAppend(body->sb, &bd->sbseg, data, len) != 0) {
-            HTPFree(bd, sizeof(HtpBodyChunk));
-            SCReturnInt(-1);
-        }
-
         body->last->next = bd;
         body->last = bd;
-
-        body->content_len_so_far += len;
     }
+    body->content_len_so_far += len;
+
     SCLogDebug("body %p", body);
 
     SCReturnInt(0);

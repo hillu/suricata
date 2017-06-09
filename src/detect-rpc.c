@@ -48,8 +48,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-int DetectRpcSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectRpcSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectRpcRegisterTests(void);
 void DetectRpcFree(void *);
 
@@ -86,7 +87,8 @@ void DetectRpcRegister (void)
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     /* PrintRawDataFp(stdout, p->payload, p->payload_len); */
     const DetectRpcData *rd = (const DetectRpcData *)ctx;
@@ -140,7 +142,7 @@ int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
  * \retval rd pointer to DetectRpcData on success
  * \retval NULL on failure
  */
-DetectRpcData *DetectRpcParse (char *rpcstr)
+static DetectRpcData *DetectRpcParse (const char *rpcstr)
 {
     DetectRpcData *rd = NULL;
     char *args[3] = {NULL,NULL,NULL};
@@ -252,7 +254,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, char *rpcstr)
+int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rpcstr)
 {
     DetectRpcData *rd = NULL;
     SigMatch *sm = NULL;
@@ -303,7 +305,7 @@ void DetectRpcFree(void *ptr)
  * \test DetectRpcTestParse01 is a test to make sure that we return "something"
  *  when given valid rpc opt
  */
-int DetectRpcTestParse01 (void)
+static int DetectRpcTestParse01 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -319,7 +321,7 @@ int DetectRpcTestParse01 (void)
 /**
  * \test DetectRpcTestParse02 is a test for setting the established rpc opt
  */
-int DetectRpcTestParse02 (void)
+static int DetectRpcTestParse02 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -344,7 +346,7 @@ int DetectRpcTestParse02 (void)
  * \test DetectRpcTestParse03 is a test for checking the wildcards
  * and not specified fields
  */
-int DetectRpcTestParse03 (void)
+static int DetectRpcTestParse03 (void)
 {
     int result = 1;
     DetectRpcData *rd = NULL;
@@ -423,7 +425,7 @@ int DetectRpcTestParse03 (void)
 /**
  * \test DetectRpcTestParse04 is a test for check the discarding of empty options
  */
-int DetectRpcTestParse04 (void)
+static int DetectRpcTestParse04 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -441,7 +443,7 @@ int DetectRpcTestParse04 (void)
 /**
  * \test DetectRpcTestParse05 is a test for check invalid values
  */
-int DetectRpcTestParse05 (void)
+static int DetectRpcTestParse05 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;

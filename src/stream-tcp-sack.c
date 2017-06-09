@@ -30,7 +30,7 @@
 #include "util-unittest.h"
 
 #ifdef DEBUG
-void StreamTcpSackPrintList(TcpStream *stream)
+static void StreamTcpSackPrintList(TcpStream *stream)
 {
     StreamTcpSackRecord *rec = stream->sack_head;
     for (; rec != NULL; rec = rec->next) {
@@ -271,13 +271,12 @@ int StreamTcpSackUpdatePacket(TcpStream *stream, Packet *p)
             goto next;
         }
 
-        /** \todo need a metric to a check for a right edge limit */
-/*
-        if (SEQ_GT(ntohl(sack_rec->re), stream->next_seq)) {
-            SCLogDebug("record beyond next_seq %u", stream->next_seq);
+        if (SEQ_GT(ntohl(sack_rec->re), stream->next_win)) {
+            SCLogDebug("record %u:%u beyond next_win %u",
+                    ntohl(sack_rec->le), ntohl(sack_rec->re), stream->next_win);
             goto next;
         }
-*/
+
         if (SEQ_GEQ(ntohl(sack_rec->le), ntohl(sack_rec->re))) {
             SCLogDebug("invalid record: le >= re");
             goto next;

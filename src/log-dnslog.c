@@ -96,10 +96,8 @@ static void LogQuery(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dst
             " [**] %s [**] %s:%" PRIu16 " -> %s:%" PRIu16 "\n",
             record, srcip, sp, dstip, dp);
 
-    SCMutexLock(&hlog->file_ctx->fp_mutex);
     hlog->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
         MEMBUFFER_OFFSET(aft->buffer), hlog->file_ctx);
-    SCMutexUnlock(&hlog->file_ctx->fp_mutex);
 }
 
 static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSAnswerEntry *entry)
@@ -159,15 +157,17 @@ static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *ds
             " [**] %s:%" PRIu16 " -> %s:%" PRIu16 "\n",
             srcip, sp, dstip, dp);
 
-    SCMutexLock(&hlog->file_ctx->fp_mutex);
     hlog->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
         MEMBUFFER_OFFSET(aft->buffer), hlog->file_ctx);
-    SCMutexUnlock(&hlog->file_ctx->fp_mutex);
 }
 
 static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p,
     Flow *f, void *state, void *tx, uint64_t tx_id, uint8_t direction)
 {
+#ifdef HAVE_RUST
+    SCLogNotice("LogDnsLogger not implemented for Rust DNS.");
+    return 0;
+#endif
     LogDnsLogThread *aft = (LogDnsLogThread *)data;
     DNSTransaction *dns_tx = (DNSTransaction *)tx;
     SCLogDebug("pcap_cnt %"PRIu64, p->pcap_cnt);
@@ -253,7 +253,7 @@ static int LogDnsResponseLogger(ThreadVars *tv, void *data, const Packet *p,
     return LogDnsLogger(tv, data, p, f, state, tx, tx_id, STREAM_TOCLIENT);
 }
 
-static TmEcode LogDnsLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode LogDnsLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogDnsLogThread *aft = SCMalloc(sizeof(LogDnsLogThread));
     if (unlikely(aft == NULL))

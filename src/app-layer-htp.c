@@ -77,6 +77,7 @@
 #include "decode-events.h"
 
 #include "util-memcmp.h"
+#include "util-random.h"
 
 //#define PRINT
 
@@ -233,7 +234,7 @@ static int HTPLookupPersonality(const char *str)
     return -1;
 }
 
-void HTPSetEvent(HtpState *s, HtpTxUserData *htud, uint8_t e)
+static void HTPSetEvent(HtpState *s, HtpTxUserData *htud, uint8_t e)
 {
     SCLogDebug("setting event %u", e);
 
@@ -446,7 +447,7 @@ void AppLayerHtpEnableResponseBodyCallback(void)
  *
  * \initonly
  */
-void AppLayerHtpNeedMultipartHeader(void)
+static void AppLayerHtpNeedMultipartHeader(void)
 {
     SCEnter();
     AppLayerHtpEnableRequestBodyCallback();
@@ -474,7 +475,7 @@ void AppLayerHtpNeedFileInspection(void)
 
 /* below error messages updated up to libhtp 0.5.7 (git 379632278b38b9a792183694a4febb9e0dbd1e7a) */
 struct {
-    char *msg;
+    const char *msg;
     int  de;
 } htp_errors[] = {
     { "GZip decompressor: inflateInit2 failed", HTTP_DECODER_EVENT_GZIP_DECOMPRESSION_FAILED},
@@ -495,7 +496,7 @@ struct {
 };
 
 struct {
-    char *msg;
+    const char *msg;
     int  de;
 } htp_warnings[] = {
     { "GZip decompressor:", HTTP_DECODER_EVENT_GZIP_DECOMPRESSION_FAILED},
@@ -1200,7 +1201,7 @@ static void HtpRequestBodySetupBoundary(HtpTxUserData *htud,
     memcpy(boundary + 2, htud->boundary, htud->boundary_len);
 }
 
-int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud, void *tx,
+static int HtpRequestBodyHandleMultipart(HtpState *hstate, HtpTxUserData *htud, void *tx,
         const uint8_t *chunks_buffer, uint32_t chunks_buffer_len)
 {
     int result = 0;
@@ -1497,7 +1498,7 @@ end:
 
 /** \brief setup things for put request
  *  \todo really needed? */
-int HtpRequestBodySetupPUT(htp_tx_data_t *d, HtpTxUserData *htud)
+static int HtpRequestBodySetupPUT(htp_tx_data_t *d, HtpTxUserData *htud)
 {
 //    if (d->tx->parsed_uri == NULL || d->tx->parsed_uri->path == NULL) {
 //        return -1;
@@ -1616,7 +1617,7 @@ end:
     return -1;
 }
 
-int HtpResponseBodyHandle(HtpState *hstate, HtpTxUserData *htud,
+static int HtpResponseBodyHandle(HtpState *hstate, HtpTxUserData *htud,
         htp_tx_t *tx, uint8_t *data, uint32_t data_len)
 {
     SCEnter();
@@ -1691,7 +1692,7 @@ end:
  * \param d pointer to the htp_tx_data_t structure (a chunk from htp lib)
  * \retval int HTP_OK if all goes well
  */
-int HTPCallbackRequestBodyData(htp_tx_data_t *d)
+static int HTPCallbackRequestBodyData(htp_tx_data_t *d)
 {
     SCEnter();
 
@@ -1808,7 +1809,7 @@ end:
  * \param d pointer to the htp_tx_data_t structure (a chunk from htp lib)
  * \retval int HTP_OK if all goes well
  */
-int HTPCallbackResponseBodyData(htp_tx_data_t *d)
+static int HTPCallbackResponseBodyData(htp_tx_data_t *d)
 {
     SCEnter();
 
@@ -1973,7 +1974,7 @@ static int HTPCallbackRequest(htp_tx_t *tx)
 
     /* request done, do raw reassembly now to inspect state and stream
      * at the same time. */
-    AppLayerParserTriggerRawStreamReassembly(hstate->f);
+    AppLayerParserTriggerRawStreamReassembly(hstate->f, STREAM_TOSERVER);
     SCReturnInt(HTP_OK);
 }
 
@@ -2009,7 +2010,26 @@ static int HTPCallbackResponse(htp_tx_t *tx)
 
     /* response done, do raw reassembly now to inspect state and stream
      * at the same time. */
-    AppLayerParserTriggerRawStreamReassembly(hstate->f);
+    AppLayerParserTriggerRawStreamReassembly(hstate->f, STREAM_TOCLIENT);
+
+    /* handle HTTP CONNECT */
+    if (tx->request_method_number == HTP_M_CONNECT) {
+        /* any 2XX status response implies that the connection will become
+           a tunnel immediately after this packet (RFC 7230, 3.3.3). */
+        if ((tx->response_status_number >= 200) &&
+                (tx->response_status_number < 300) &&
+                (hstate->transaction_cnt == 1)) {
+            uint16_t dp = 0;
+            if (tx->request_port_number != -1) {
+                dp = (uint16_t)tx->request_port_number;
+            }
+            // both ALPROTO_HTTP and ALPROTO_TLS are normal options
+            AppLayerRequestProtocolChange(hstate->f, dp, ALPROTO_UNKNOWN);
+            tx->request_progress = HTP_REQUEST_COMPLETE;
+            tx->response_progress = HTP_RESPONSE_COMPLETE;
+        }
+    }
+
     SCReturnInt(HTP_OK);
 }
 
@@ -2148,11 +2168,12 @@ static void HTPConfigSetDefaultsPhase1(HTPCfgRec *cfg_prec)
     cfg_prec->request.inspect_window = HTP_CONFIG_DEFAULT_REQUEST_INSPECT_WINDOW;
     cfg_prec->response.inspect_min_size = HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_MIN_SIZE;
     cfg_prec->response.inspect_window = HTP_CONFIG_DEFAULT_RESPONSE_INSPECT_WINDOW;
-#ifndef AFLFUZZ_NO_RANDOM
-    cfg_prec->randomize = HTP_CONFIG_DEFAULT_RANDOMIZE;
-#else
-    cfg_prec->randomize = 0;
-#endif
+
+    if (!g_disable_randomness) {
+        cfg_prec->randomize = HTP_CONFIG_DEFAULT_RANDOMIZE;
+    } else {
+        cfg_prec->randomize = 0;
+    }
     cfg_prec->randomize_range = HTP_CONFIG_DEFAULT_RANDOMIZE_RANGE;
 
     htp_config_register_request_header_data(cfg_prec->cfg, HTPCallbackRequestHeaderData);
@@ -2193,18 +2214,21 @@ static void HTPConfigSetDefaultsPhase1(HTPCfgRec *cfg_prec)
  * before the callback set by Phase2() is called.  We need this, since
  * the callback in Phase2() generates the normalized uri which utilizes
  * the query and path. */
-static void HTPConfigSetDefaultsPhase2(char *name, HTPCfgRec *cfg_prec)
+static void HTPConfigSetDefaultsPhase2(const char *name, HTPCfgRec *cfg_prec)
 {
     /* randomize inspection size if needed */
     if (cfg_prec->randomize) {
         int rdrange = cfg_prec->randomize_range;
 
+        long int r = RandomGet();
         cfg_prec->request.inspect_min_size +=
             (int) (cfg_prec->request.inspect_min_size *
-                   (random() * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+                   (r * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+
+        r = RandomGet();
         cfg_prec->request.inspect_window +=
             (int) (cfg_prec->request.inspect_window *
-                   (random() * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+                   (r * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
         SCLogConfig("'%s' server has 'request-body-minimal-inspect-size' set to"
                   " %d and 'request-body-inspect-window' set to %d after"
                   " randomization.",
@@ -2213,12 +2237,15 @@ static void HTPConfigSetDefaultsPhase2(char *name, HTPCfgRec *cfg_prec)
                   cfg_prec->request.inspect_window);
 
 
+        r = RandomGet();
         cfg_prec->response.inspect_min_size +=
             (int) (cfg_prec->response.inspect_min_size *
-                   (random() * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+                   (r * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+
+        r = RandomGet();
         cfg_prec->response.inspect_window +=
             (int) (cfg_prec->response.inspect_window *
-                   (random() * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
+                   (r * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
 
         SCLogConfig("'%s' server has 'response-body-minimal-inspect-size' set to"
                   " %d and 'response-body-inspect-window' set to %d after"
@@ -2464,9 +2491,9 @@ static void HTPConfigParseParameters(HTPCfgRec *cfg_prec, ConfNode *s,
                     (size_t)HTP_CONFIG_DEFAULT_FIELD_LIMIT_SOFT,
                     (size_t)limit);
         } else if (strcasecmp("randomize-inspection-sizes", p->name) == 0) {
-#ifndef AFLFUZZ_NO_RANDOM
-            cfg_prec->randomize = ConfValIsTrue(p->val);
-#endif
+            if (!g_disable_randomness) {
+                cfg_prec->randomize = ConfValIsTrue(p->val);
+            }
         } else if (strcasecmp("randomize-inspection-range", p->name) == 0) {
             uint32_t range = atoi(p->val);
             if (range > 100) {
@@ -2656,7 +2683,7 @@ static int HTPStateGetAlstateProgressCompletionStatus(uint8_t direction)
     return (direction & STREAM_TOSERVER) ? HTP_REQUEST_COMPLETE : HTP_RESPONSE_COMPLETE;
 }
 
-int HTPStateGetEventInfo(const char *event_name,
+static int HTPStateGetEventInfo(const char *event_name,
                          int *event_id, AppLayerEventType *event_type)
 {
     *event_id = SCMapEnumNameToValue(event_name, http_decoder_event_table);
@@ -2710,19 +2737,41 @@ static int HTPSetTxDetectState(void *alstate, void *vtx, DetectEngineState *s)
     return 0;
 }
 
+static uint64_t HTPGetTxMpmIDs(void *vtx)
+{
+    htp_tx_t *tx = (htp_tx_t *)vtx;
+    HtpTxUserData *tx_ud = htp_tx_get_user_data(tx);
+    return tx_ud ? tx_ud->mpm_ids : 0;
+}
+
+static int HTPSetTxMpmIDs(void *vtx, uint64_t mpm_ids)
+{
+    htp_tx_t *tx = (htp_tx_t *)vtx;
+    HtpTxUserData *tx_ud = htp_tx_get_user_data(tx);
+    if (tx_ud == NULL) {
+        tx_ud = HTPMalloc(sizeof(*tx_ud));
+        if (unlikely(tx_ud == NULL))
+            return -ENOMEM;
+        memset(tx_ud, 0, sizeof(*tx_ud));
+        htp_tx_set_user_data(tx, tx_ud);
+    }
+    tx_ud->mpm_ids = mpm_ids;
+    return 0;
+}
+
 static int HTPRegisterPatternsForProtocolDetection(void)
 {
-    char *methods[] = { "GET", "PUT", "POST", "HEAD", "TRACE", "OPTIONS",
+    const char *methods[] = { "GET", "PUT", "POST", "HEAD", "TRACE", "OPTIONS",
         "CONNECT", "DELETE", "PATCH", "PROPFIND", "PROPPATCH", "MKCOL",
         "COPY", "MOVE", "LOCK", "UNLOCK", "CHECKOUT", "UNCHECKOUT", "CHECKIN",
         "UPDATE", "LABEL", "REPORT", "MKWORKSPACE", "MKACTIVITY", "MERGE",
         "INVALID", "VERSION-CONTROL", "BASELINE-CONTROL", NULL};
-    char *spacings[] = { "|20|", "|09|", NULL };
-    char *versions[] = { "HTTP/0.9", "HTTP/1.0", "HTTP/1.1", NULL };
+    const char *spacings[] = { "|20|", "|09|", NULL };
+    const char *versions[] = { "HTTP/0.9", "HTTP/1.0", "HTTP/1.1", NULL };
 
-    uint methods_pos;
-    uint spacings_pos;
-    uint versions_pos;
+    int methods_pos;
+    int spacings_pos;
+    int versions_pos;
     int register_result;
     char method_buffer[32] = "";
 
@@ -2754,7 +2803,7 @@ static int HTPRegisterPatternsForProtocolDetection(void)
             return -1;
         }
     }
-    
+
     return 0;
 }
 
@@ -2766,7 +2815,7 @@ void RegisterHTPParsers(void)
 {
     SCEnter();
 
-    char *proto_name = "http";
+    const char *proto_name = "http";
 
     /** HTTP */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
@@ -2798,6 +2847,8 @@ void RegisterHTPParsers(void)
         AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_HTTP,
                                                HTPStateHasTxDetectState,
                                                HTPGetTxDetectState, HTPSetTxDetectState);
+        AppLayerParserRegisterMpmIDsFuncs(IPPROTO_TCP, ALPROTO_HTTP,
+                                               HTPGetTxMpmIDs, HTPSetTxMpmIDs);
 
         AppLayerParserRegisterParser(IPPROTO_TCP, ALPROTO_HTTP, STREAM_TOSERVER,
                                      HTPHandleRequestData);
@@ -2836,7 +2887,7 @@ void HtpConfigRestoreBackup(void)
 
 /** \test Test case where chunks are sent in smaller chunks and check the
  *        response of the parser from HTP library. */
-int HTPParserTest01(void)
+static int HTPParserTest01(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -2855,6 +2906,7 @@ int HTPParserTest01(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2906,8 +2958,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -2933,6 +2983,7 @@ static int HTPParserTest01a(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2983,14 +3034,12 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test See how it deals with an incomplete request. */
-int HTPParserTest02(void)
+static int HTPParserTest02(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3007,6 +3056,7 @@ int HTPParserTest02(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3040,15 +3090,13 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test case where method is invalid and data is sent in smaller chunks
  *        and check the response of the parser from HTP library. */
-int HTPParserTest03(void)
+static int HTPParserTest03(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3066,6 +3114,7 @@ int HTPParserTest03(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3110,15 +3159,13 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test case where invalid data is sent and check the response of the
  *        parser from HTP library. */
-int HTPParserTest04(void)
+static int HTPParserTest04(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3136,6 +3183,7 @@ int HTPParserTest04(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3171,15 +3219,13 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test both sides of a http stream mixed up to see if the HTP parser
  *        properly parsed them and also keeps them separated. */
-int HTPParserTest05(void)
+static int HTPParserTest05(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3207,6 +3253,7 @@ int HTPParserTest05(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3291,15 +3338,13 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test proper chunked encoded response body
  */
-int HTPParserTest06(void)
+static int HTPParserTest06(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3356,6 +3401,7 @@ int HTPParserTest06(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3410,15 +3456,13 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test
  */
-int HTPParserTest07(void)
+static int HTPParserTest07(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3436,6 +3480,7 @@ int HTPParserTest07(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3500,8 +3545,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -3510,7 +3553,7 @@ end:
 
 /** \test Abort
  */
-int HTPParserTest08(void)
+static int HTPParserTest08(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3544,6 +3587,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3584,9 +3628,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
-
     HTPFreeConfig();
     ConfDeInit();
     ConfRestoreContextBackup();
@@ -3597,7 +3638,7 @@ end:
 
 /** \test Abort
  */
-int HTPParserTest09(void)
+static int HTPParserTest09(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3632,6 +3673,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3670,9 +3712,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
-
     HTPFreeConfig();
     ConfDeInit();
     ConfRestoreContextBackup();
@@ -3683,7 +3722,7 @@ end:
 
 /** \test Host:www.google.com <- missing space between name:value (rfc violation)
  */
-int HTPParserTest10(void)
+static int HTPParserTest10(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3701,6 +3740,7 @@ int HTPParserTest10(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3768,8 +3808,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -3794,6 +3832,7 @@ static int HTPParserTest11(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3854,8 +3893,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -3880,6 +3917,7 @@ static int HTPParserTest12(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -3943,15 +3981,13 @@ static int HTPParserTest12(void)
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Host:www.google.com0dName: Value0d0a <- missing space between name:value (rfc violation)
  */
-int HTPParserTest13(void)
+static int HTPParserTest13(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -3969,6 +4005,7 @@ int HTPParserTest13(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4038,14 +4075,12 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test basic config */
-int HTPParserConfigTest01(void)
+static int HTPParserConfigTest01(void)
 {
     int ret = 0;
     char input[] = "\
@@ -4224,7 +4259,7 @@ end:
 }
 
 /** \test Test config builds radix correctly */
-int HTPParserConfigTest02(void)
+static int HTPParserConfigTest02(void)
 {
     int ret = 0;
     char input[] = "\
@@ -4320,7 +4355,7 @@ end:
 }
 
 /** \test Test traffic is handled by the correct htp config */
-int HTPParserConfigTest03(void)
+static int HTPParserConfigTest03(void)
 {
     int result = 1;
     Flow *f = NULL;
@@ -4361,7 +4396,7 @@ libhtp:\n\
 
     HTPConfigure();
 
-    char *addr = "192.168.10.42";
+    const char *addr = "192.168.10.42";
 
     memset(&ssn, 0, sizeof(ssn));
 
@@ -4370,6 +4405,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     htp_cfg_t *htp = cfglist.cfg;
 
@@ -4446,15 +4482,13 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /* disabled when we upgraded to libhtp 0.5.x */
 #if 0
-int HTPParserConfigTest04(void)
+static int HTPParserConfigTest04(void)
 {
     int result = 0;
 
@@ -4560,7 +4594,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -4568,6 +4602,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4688,8 +4723,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -4730,7 +4763,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -4738,6 +4771,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4858,8 +4892,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -4898,7 +4930,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -4906,6 +4938,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5000,8 +5033,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5036,7 +5067,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5044,6 +5075,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5111,8 +5143,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5147,7 +5177,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5155,6 +5185,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5222,8 +5253,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5258,7 +5287,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5266,6 +5295,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5333,8 +5363,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5370,7 +5398,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5378,6 +5406,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5445,8 +5474,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5479,7 +5506,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5487,6 +5514,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5554,8 +5582,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5589,7 +5615,7 @@ libhtp:\n\
     HtpConfigCreateBackup();
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
-    char *addr = "4.3.2.1";
+    const char *addr = "4.3.2.1";
     memset(&ssn, 0, sizeof(ssn));
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", addr, 1024, 80);
@@ -5597,6 +5623,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5664,8 +5691,6 @@ end:
     HtpConfigRestoreBackup();
 
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
@@ -5760,6 +5785,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5808,14 +5834,12 @@ end:
     ConfRestoreContextBackup();
     HtpConfigRestoreBackup();
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test Test really long request, this should result in HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG */
-int HTPParserTest14(void)
+static int HTPParserTest14(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -5873,6 +5897,7 @@ libhtp:\n\
     if (f == NULL)
         goto end;
     f->protoctx = &ssn;
+    f->alproto = ALPROTO_HTTP;
     f->proto = IPPROTO_TCP;
 
     StreamTcpInitConfig(TRUE);
@@ -5943,8 +5968,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     if (httpbuf != NULL)
         SCFree(httpbuf);
@@ -5957,7 +5980,7 @@ end:
 
 /** \test Test really long request (same as HTPParserTest14), now with config
  *        update to allow it */
-int HTPParserTest15(void)
+static int HTPParserTest15(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -6017,6 +6040,7 @@ libhtp:\n\
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6068,8 +6092,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     if (httpbuf != NULL)
         SCFree(httpbuf);
@@ -6081,7 +6103,7 @@ end:
 }
 
 /** \test Test unusual delims in request line HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG */
-int HTPParserTest16(void)
+static int HTPParserTest16(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -6107,6 +6129,7 @@ int HTPParserTest16(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6161,14 +6184,12 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (htp_state != NULL)
-        HTPStateFree(htp_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test CONNECT with plain text HTTP being tunneled */
-int HTPParserTest17(void)
+static int HTPParserTest17(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -6193,6 +6214,7 @@ int HTPParserTest17(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6284,14 +6306,12 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test CONNECT with plain text HTTP being tunneled */
-int HTPParserTest18(void)
+static int HTPParserTest18(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -6318,6 +6338,7 @@ int HTPParserTest18(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6417,14 +6438,12 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }
 
 /** \test CONNECT with TLS content (start of it at least) */
-int HTPParserTest19(void)
+static int HTPParserTest19(void)
 {
     int result = 0;
     Flow *f = NULL;
@@ -6447,6 +6466,7 @@ int HTPParserTest19(void)
         goto end;
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6515,8 +6535,6 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
-    if (http_state != NULL)
-        HTPStateFree(http_state);
     UTHFreeFlow(f);
     return result;
 }

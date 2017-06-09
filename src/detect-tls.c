@@ -64,8 +64,8 @@
  * \brief Regex for parsing "id" option, matching number or "number"
  */
 
-#define PARSE_REGEX  "^\\s*(\\!*)\\s*([A-z0-9\\s\\-\\.=,\\*@]+|\"[A-z0-9\\s\\-\\.=,\\*@]+\")\\s*$"
-#define PARSE_REGEX_FINGERPRINT  "^\\s*(\\!*)\\s*([A-z0-9\\:\\*]+|\"[A-z0-9\\:\\* ]+\")\\s*$"
+#define PARSE_REGEX  "^([A-z0-9\\s\\-\\.=,\\*@]+|\"[A-z0-9\\s\\-\\.=,\\*@]+\")\\s*$"
+#define PARSE_REGEX_FINGERPRINT  "^([A-z0-9\\:\\*]+|\"[A-z0-9\\:\\* ]+\")\\s*$"
 
 static pcre *subject_parse_regex;
 static pcre_extra *subject_parse_regex_study;
@@ -74,19 +74,41 @@ static pcre_extra *issuerdn_parse_regex_study;
 static pcre *fingerprint_parse_regex;
 static pcre_extra *fingerprint_parse_regex_study;
 
-static int DetectTlsSubjectMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
-static int DetectTlsSubjectSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectTlsSubjectMatch (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTlsSubjectSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectTlsSubjectRegisterTests(void);
 static void DetectTlsSubjectFree(void *);
-static int DetectTlsIssuerDNMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
-static int DetectTlsIssuerDNSetup (DetectEngineCtx *, Signature *, char *);
+
+static int DetectTlsIssuerDNMatch (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTlsIssuerDNSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectTlsIssuerDNRegisterTests(void);
 static void DetectTlsIssuerDNFree(void *);
-static int DetectTlsFingerprintMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
-static int DetectTlsFingerprintSetup (DetectEngineCtx *, Signature *, char *);
+
+static int DetectTlsFingerprintMatch (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTlsFingerprintSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectTlsFingerprintFree(void *);
-static int DetectTlsStoreSetup (DetectEngineCtx *, Signature *, char *);
-static int DetectTlsStoreMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
+
+static int DetectTlsStoreSetup (DetectEngineCtx *, Signature *, const char *);
+static int DetectTlsStorePostMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Packet *, const Signature *s, const SigMatchCtx *unused);
+
+static int g_tls_cert_list_id = 0;
+
+static int InspectTlsCert(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id)
+{
+    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, smd,
+                                          f, flags, alstate, txv, tx_id);
+}
 
 /**
  * \brief Registration function for keyword: tls.version
@@ -96,35 +118,35 @@ void DetectTlsRegister (void)
     sigmatch_table[DETECT_AL_TLS_SUBJECT].name = "tls.subject";
     sigmatch_table[DETECT_AL_TLS_SUBJECT].desc = "match TLS/SSL certificate Subject field";
     sigmatch_table[DETECT_AL_TLS_SUBJECT].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlssubject";
-    sigmatch_table[DETECT_AL_TLS_SUBJECT].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_SUBJECT].AppLayerMatch = DetectTlsSubjectMatch;
+    sigmatch_table[DETECT_AL_TLS_SUBJECT].AppLayerTxMatch = DetectTlsSubjectMatch;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].Setup = DetectTlsSubjectSetup;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].Free  = DetectTlsSubjectFree;
     sigmatch_table[DETECT_AL_TLS_SUBJECT].RegisterTests = DetectTlsSubjectRegisterTests;
+    sigmatch_table[DETECT_AL_TLS_SUBJECT].flags = SIGMATCH_QUOTES_MANDATORY|SIGMATCH_HANDLE_NEGATION;
 
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].name = "tls.issuerdn";
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].desc = "match TLS/SSL certificate IssuerDN field";
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsissuerdn";
-    sigmatch_table[DETECT_AL_TLS_ISSUERDN].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_ISSUERDN].AppLayerMatch = DetectTlsIssuerDNMatch;
+    sigmatch_table[DETECT_AL_TLS_ISSUERDN].AppLayerTxMatch = DetectTlsIssuerDNMatch;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].Setup = DetectTlsIssuerDNSetup;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].Free  = DetectTlsIssuerDNFree;
     sigmatch_table[DETECT_AL_TLS_ISSUERDN].RegisterTests = DetectTlsIssuerDNRegisterTests;
+    sigmatch_table[DETECT_AL_TLS_ISSUERDN].flags = SIGMATCH_QUOTES_MANDATORY|SIGMATCH_HANDLE_NEGATION;
 
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].name = "tls.fingerprint";
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].desc = "match TLS/SSL certificate SHA1 fingerprint";
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsfingerprint";
-    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].AppLayerMatch = DetectTlsFingerprintMatch;
+    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].AppLayerTxMatch = DetectTlsFingerprintMatch;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Setup = DetectTlsFingerprintSetup;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].Free  = DetectTlsFingerprintFree;
     sigmatch_table[DETECT_AL_TLS_FINGERPRINT].RegisterTests = NULL;
+    sigmatch_table[DETECT_AL_TLS_FINGERPRINT].flags = SIGMATCH_QUOTES_MANDATORY|SIGMATCH_HANDLE_NEGATION;
 
-    sigmatch_table[DETECT_AL_TLS_STORE].name = "tls.store";
+    sigmatch_table[DETECT_AL_TLS_STORE].name = "tls_store";
+    sigmatch_table[DETECT_AL_TLS_STORE].alias = "tls.store";
     sigmatch_table[DETECT_AL_TLS_STORE].desc = "store TLS/SSL certificate on disk";
     sigmatch_table[DETECT_AL_TLS_STORE].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsstore";
-    sigmatch_table[DETECT_AL_TLS_STORE].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_STORE].AppLayerMatch = DetectTlsStoreMatch;
+    sigmatch_table[DETECT_AL_TLS_STORE].Match = DetectTlsStorePostMatch;
     sigmatch_table[DETECT_AL_TLS_STORE].Setup = DetectTlsStoreSetup;
     sigmatch_table[DETECT_AL_TLS_STORE].Free  = NULL;
     sigmatch_table[DETECT_AL_TLS_STORE].RegisterTests = NULL;
@@ -136,6 +158,12 @@ void DetectTlsRegister (void)
             &issuerdn_parse_regex, &issuerdn_parse_regex_study);
     DetectSetupParseRegexes(PARSE_REGEX_FINGERPRINT,
             &fingerprint_parse_regex, &fingerprint_parse_regex_study);
+
+    g_tls_cert_list_id = DetectBufferTypeRegister("tls_cert");
+
+    DetectAppLayerInspectEngineRegister("tls_cert",
+            ALPROTO_TLS, SIG_FLAG_TOCLIENT, TLS_STATE_CERT_READY,
+            InspectTlsCert);
 }
 
 /**
@@ -149,11 +177,13 @@ void DetectTlsRegister (void)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectTlsSubjectMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectTlsSubjectMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
 
-    DetectTlsData *tls_data = (DetectTlsData *)m->ctx;
+    const DetectTlsData *tls_data = (const DetectTlsData *)m;
     SSLState *ssl_state = (SSLState *)state;
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, no match");
@@ -201,7 +231,7 @@ static int DetectTlsSubjectMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval id_d pointer to DetectTlsData on success
  * \retval NULL on failure
  */
-static DetectTlsData *DetectTlsSubjectParse (char *str)
+static DetectTlsData *DetectTlsSubjectParse (const char *str, bool negate)
 {
     DetectTlsData *tls = NULL;
 #define MAX_SUBSTRINGS 30
@@ -215,21 +245,15 @@ static DetectTlsData *DetectTlsSubjectParse (char *str)
     ret = pcre_exec(subject_parse_regex, subject_parse_regex_study, str, strlen(str), 0, 0,
                     ov, MAX_SUBSTRINGS);
 
-    if (ret != 3) {
+    if (ret != 2) {
         SCLogError(SC_ERR_PCRE_MATCH, "invalid tls.subject option");
         goto error;
     }
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-    if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-        goto error;
-    }
-    if (str_ptr[0] == '!')
+    if (negate)
         flag = DETECT_CONTENT_NEGATED;
-    pcre_free_substring(str_ptr);
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
@@ -287,12 +311,15 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTlsSubjectSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsSubjectSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectTlsData *tls = NULL;
     SigMatch *sm = NULL;
 
-    tls = DetectTlsSubjectParse(str);
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
+
+    tls = DetectTlsSubjectParse(str, s->init_data->negated);
     if (tls == NULL)
         goto error;
 
@@ -302,19 +329,10 @@ static int DetectTlsSubjectSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
     if (sm == NULL)
         goto error;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
     sm->type = DETECT_AL_TLS_SUBJECT;
     sm->ctx = (void *)tls;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_cert_list_id);
     return 0;
 
 error:
@@ -359,11 +377,13 @@ static void DetectTlsSubjectRegisterTests(void)
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectTlsIssuerDNMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectTlsIssuerDNMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
 
-    DetectTlsData *tls_data = (DetectTlsData *)m->ctx;
+    const DetectTlsData *tls_data = (const DetectTlsData *)m;
     SSLState *ssl_state = (SSLState *)state;
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, no match");
@@ -411,7 +431,7 @@ static int DetectTlsIssuerDNMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx
  * \retval id_d pointer to DetectTlsData on success
  * \retval NULL on failure
  */
-static DetectTlsData *DetectTlsIssuerDNParse(char *str)
+static DetectTlsData *DetectTlsIssuerDNParse(const char *str, bool negate)
 {
     DetectTlsData *tls = NULL;
 #define MAX_SUBSTRINGS 30
@@ -424,22 +444,15 @@ static DetectTlsData *DetectTlsIssuerDNParse(char *str)
 
     ret = pcre_exec(issuerdn_parse_regex, issuerdn_parse_regex_study, str, strlen(str), 0, 0,
                     ov, MAX_SUBSTRINGS);
-
-    if (ret != 3) {
+    if (ret != 2) {
         SCLogError(SC_ERR_PCRE_MATCH, "invalid tls.issuerdn option");
         goto error;
     }
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-    if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-        goto error;
-    }
-    if (str_ptr[0] == '!')
+    if (negate)
         flag = DETECT_CONTENT_NEGATED;
-    pcre_free_substring(str_ptr);
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
@@ -498,12 +511,15 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTlsIssuerDNSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsIssuerDNSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectTlsData *tls = NULL;
     SigMatch *sm = NULL;
 
-    tls = DetectTlsIssuerDNParse(str);
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
+
+    tls = DetectTlsIssuerDNParse(str, s->init_data->negated);
     if (tls == NULL)
         goto error;
 
@@ -513,19 +529,10 @@ static int DetectTlsIssuerDNSetup (DetectEngineCtx *de_ctx, Signature *s, char *
     if (sm == NULL)
         goto error;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
     sm->type = DETECT_AL_TLS_ISSUERDN;
     sm->ctx = (void *)tls;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_cert_list_id);
     return 0;
 
 error:
@@ -557,7 +564,7 @@ static void DetectTlsIssuerDNFree(void *ptr)
  * \retval pointer to DetectTlsData on success
  * \retval NULL on failure
  */
-static DetectTlsData *DetectTlsFingerprintParse (char *str)
+static DetectTlsData *DetectTlsFingerprintParse (const char *str, bool negate)
 {
     DetectTlsData *tls = NULL;
 #define MAX_SUBSTRINGS 30
@@ -570,22 +577,15 @@ static DetectTlsData *DetectTlsFingerprintParse (char *str)
 
     ret = pcre_exec(fingerprint_parse_regex, fingerprint_parse_regex_study, str, strlen(str), 0, 0,
                     ov, MAX_SUBSTRINGS);
-
-    if (ret != 3) {
+    if (ret != 2) {
         SCLogError(SC_ERR_PCRE_MATCH, "invalid tls.fingerprint option");
         goto error;
     }
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-    if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-        goto error;
-    }
-    if (str_ptr[0] == '!')
+    if (negate)
         flag = DETECT_CONTENT_NEGATED;
-    pcre_free_substring(str_ptr);
 
-    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    res = pcre_get_substring((char *)str, ov, MAX_SUBSTRINGS, 1, &str_ptr);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
@@ -641,10 +641,12 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
-    DetectTlsData *tls_data = (DetectTlsData *)m->ctx;
+    const DetectTlsData *tls_data = (const DetectTlsData *)m;
     SSLState *ssl_state = (SSLState *)state;
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, no match");
@@ -699,12 +701,15 @@ static int DetectTlsFingerprintMatch (ThreadVars *t, DetectEngineThreadCtx *det_
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTlsFingerprintSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsFingerprintSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectTlsData *tls = NULL;
     SigMatch *sm = NULL;
 
-    tls = DetectTlsFingerprintParse(str);
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
+
+    tls = DetectTlsFingerprintParse(str, s->init_data->negated);
     if (tls == NULL)
         goto error;
 
@@ -714,19 +719,10 @@ static int DetectTlsFingerprintSetup (DetectEngineCtx *de_ctx, Signature *s, cha
     if (sm == NULL)
         goto error;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
     sm->type = DETECT_AL_TLS_FINGERPRINT;
     sm->ctx = (void *)tls;
 
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_cert_list_id);
     return 0;
 
 error:
@@ -762,51 +758,40 @@ static void DetectTlsFingerprintFree(void *ptr)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTlsStoreSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsStoreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     SigMatch *sm = NULL;
 
-    s->flags |= SIG_FLAG_TLSSTORE;
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     sm = SigMatchAlloc();
     if (sm == NULL)
-        goto error;
-
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
+        return -1;
 
     sm->type = DETECT_AL_TLS_STORE;
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_TLS;
+    s->flags |= SIG_FLAG_TLSSTORE;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
+    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_POSTMATCH);
     return 0;
-
-error:
-    if (sm != NULL)
-        SCFree(sm);
-    return -1;
-
 }
 
-/** \warning modifies state */
-static int DetectTlsStoreMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+/** \warning modifies Flow::alstate */
+static int DetectTlsStorePostMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Packet *p, const Signature *s, const SigMatchCtx *unused)
 {
     SCEnter();
 
-    SSLState *ssl_state = (SSLState *)state;
+    if (p->flow == NULL)
+        return 0;
+
+    SSLState *ssl_state = FlowGetAppState(p->flow);
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, no match");
-        SCReturnInt(1);
+        SCReturnInt(0);
     }
 
-    if (s->flags & SIG_FLAG_TLSSTORE) {
-        ssl_state->server_connp.cert_log_flag |= SSL_TLS_LOG_PEM;
-    }
-
+    ssl_state->server_connp.cert_log_flag |= SSL_TLS_LOG_PEM;
     SCReturnInt(1);
 }
 

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -60,11 +60,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectSslVersionMatch(ThreadVars *, DetectEngineThreadCtx *, Flow *,
-                          uint8_t, void *, Signature *, SigMatch *);
-static int DetectSslVersionSetup(DetectEngineCtx *, Signature *, char *);
-void DetectSslVersionRegisterTests(void);
-void DetectSslVersionFree(void *);
+static int DetectSslVersionMatch(ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectSslVersionSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectSslVersionRegisterTests(void);
+static void DetectSslVersionFree(void *);
+static int g_tls_generic_list_id = 0;
 
 /**
  * \brief Registration function for keyword: ssl_version
@@ -72,13 +74,14 @@ void DetectSslVersionFree(void *);
 void DetectSslVersionRegister(void)
 {
     sigmatch_table[DETECT_AL_SSL_VERSION].name = "ssl_version";
-    sigmatch_table[DETECT_AL_SSL_VERSION].Match = NULL;
-    sigmatch_table[DETECT_AL_SSL_VERSION].AppLayerMatch = DetectSslVersionMatch;
+    sigmatch_table[DETECT_AL_SSL_VERSION].AppLayerTxMatch = DetectSslVersionMatch;
     sigmatch_table[DETECT_AL_SSL_VERSION].Setup = DetectSslVersionSetup;
     sigmatch_table[DETECT_AL_SSL_VERSION].Free  = DetectSslVersionFree;
     sigmatch_table[DETECT_AL_SSL_VERSION].RegisterTests = DetectSslVersionRegisterTests;
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
+
+    g_tls_generic_list_id = DetectBufferTypeRegister("tls_generic");
 }
 
 /**
@@ -92,8 +95,9 @@ void DetectSslVersionRegister(void)
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectSslVersionMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectSslVersionMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
 
@@ -101,7 +105,7 @@ int DetectSslVersionMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
     uint16_t ver = 0;
     uint8_t sig_ver = TLS_UNKNOWN;
 
-    DetectSslVersionData *ssl = (DetectSslVersionData *)m->ctx;
+    const DetectSslVersionData *ssl = (const DetectSslVersionData *)m;
     SSLState *app_state = (SSLState *)state;
     if (app_state == NULL) {
         SCLogDebug("no app state, no match");
@@ -161,7 +165,7 @@ int DetectSslVersionMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval ssl pointer to DetectSslVersionData on success
  * \retval NULL on failure
  */
-DetectSslVersionData *DetectSslVersionParse(char *str)
+static DetectSslVersionData *DetectSslVersionParse(const char *str)
 {
     DetectSslVersionData *ssl = NULL;
 	#define MAX_SUBSTRINGS 30
@@ -273,10 +277,13 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectSslVersionSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectSslVersionSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectSslVersionData *ssl = NULL;
     SigMatch *sm = NULL;
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     ssl = DetectSslVersionParse(str);
     if (ssl == NULL)
@@ -291,14 +298,7 @@ static int DetectSslVersionSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
     sm->type = DETECT_AL_SSL_VERSION;
     sm->ctx = (void *)ssl;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
-    s->alproto = ALPROTO_TLS;
+    SigMatchAppendSMToList(s, sm, g_tls_generic_list_id);
     return 0;
 
 error:
@@ -328,7 +328,7 @@ void DetectSslVersionFree(void *ptr)
  * \test DetectSslVersionTestParse01 is a test to make sure that we parse the
  *      "ssl_version" option correctly when given valid ssl_version option
  */
-int DetectSslVersionTestParse01(void)
+static int DetectSslVersionTestParse01(void)
 {
     DetectSslVersionData *ssl = NULL;
     ssl = DetectSslVersionParse("SSlv3");
@@ -343,7 +343,7 @@ int DetectSslVersionTestParse01(void)
  *      "ssl_version" option correctly when given an invalid ssl_version option
  *       it should return ssl = NULL
  */
-int DetectSslVersionTestParse02(void)
+static int DetectSslVersionTestParse02(void)
 {
     DetectSslVersionData *ssl = NULL;
     ssl = DetectSslVersionParse("2.5");
@@ -356,7 +356,7 @@ int DetectSslVersionTestParse02(void)
  * \test DetectSslVersionTestParse03 is a test to make sure that we parse the
  *      "ssl_version" options correctly when given valid ssl_version options
  */
-int DetectSslVersionTestParse03(void)
+static int DetectSslVersionTestParse03(void)
 {
     DetectSslVersionData *ssl = NULL;
     ssl = DetectSslVersionParse("SSlv3,tls1.0, !tls1.2");
@@ -549,110 +549,12 @@ static int DetectSslVersionTestDetect02(void)
     PASS;
 }
 
-static int DetectSslVersionTestDetect03(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    Flow f;
-    uint8_t sslbuf1[] = { 0x16 };
-    uint32_t ssllen1 = sizeof(sslbuf1);
-    uint8_t sslbuf2[] = { 0x03 };
-    uint32_t ssllen2 = sizeof(sslbuf2);
-    uint8_t sslbuf3[] = { 0x01 };
-    uint32_t ssllen3 = sizeof(sslbuf3);
-    uint8_t sslbuf4[] = { 0x01, 0x00, 0x00, 0xad, 0x03, 0x02 };
-    uint32_t ssllen4 = sizeof(sslbuf4);
-    TcpSession ssn;
-    Packet *p = NULL;
-    Signature *s = NULL;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
-
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&f, 0, sizeof(f));
-    memset(&ssn, 0, sizeof(ssn));
-
-    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
-    p->tcph->th_seq = htonl(1000);
-
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    p->flow = &f;
-    p->flowflags |= FLOW_PKT_TOSERVER;
-    p->flowflags |= FLOW_PKT_ESTABLISHED;
-    p->flags |= PKT_HAS_FLOW | PKT_STREAM_EST;
-    f.alproto = ALPROTO_TLS;
-    f.proto = p->proto;
-
-    StreamTcpInitConfig(TRUE);
-
-    StreamMsg *stream_msg = StreamMsgGetFromPool();
-    FAIL_IF_NULL(stream_msg);
-
-    memcpy(stream_msg->data, sslbuf4, ssllen4);
-    stream_msg->data_len = ssllen4;
-
-    ssn.toserver_smsg_head = stream_msg;
-    ssn.toserver_smsg_tail = stream_msg;
-
-    de_ctx = DetectEngineCtxInit();
-    FAIL_IF_NULL(de_ctx);
-
-    de_ctx->flags |= DE_QUIET;
-
-    s = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"TLS\"; ssl_version:tls1.0; content:\"|01 00 00 AD|\"; sid:1;)");
-    FAIL_IF_NULL(s);
-
-    SigGroupBuild(de_ctx);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    FLOWLOCK_WRLOCK(&f);
-    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS,
-                                STREAM_TOSERVER, sslbuf1, ssllen1);
-    FAIL_IF(r != 0);
-
-    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
-                            sslbuf2, ssllen2);
-    FAIL_IF(r != 0);
-
-    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
-                            sslbuf3, ssllen3);
-    FAIL_IF(r != 0);
-
-    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
-                            sslbuf4, ssllen4);
-    FAIL_IF(r != 0);
-    FLOWLOCK_UNLOCK(&f);
-
-    SSLState *app_state = f.alstate;
-    FAIL_IF_NULL(app_state);
-
-    FAIL_IF(app_state->client_connp.content_type != 0x16);
-
-    FAIL_IF(app_state->client_connp.version != TLS_VERSION_10);
-
-    /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-
-    FAIL_IF_NOT(PacketAlertCheck(p, 1));
-
-    AppLayerParserThreadCtxFree(alp_tctx);
-    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    DetectEngineCtxFree(de_ctx);
-
-    StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
-    UTHFreePackets(&p, 1);
-
-    PASS;
-}
-
 #endif /* UNITTESTS */
 
 /**
  * \brief this function registers unit tests for DetectSslVersion
  */
-void DetectSslVersionRegisterTests(void)
+static void DetectSslVersionRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
     UtRegisterTest("DetectSslVersionTestParse01", DetectSslVersionTestParse01);
@@ -662,8 +564,6 @@ void DetectSslVersionRegisterTests(void)
                    DetectSslVersionTestDetect01);
     UtRegisterTest("DetectSslVersionTestDetect02",
                    DetectSslVersionTestDetect02);
-    UtRegisterTest("DetectSslVersionTestDetect03",
-                   DetectSslVersionTestDetect03);
 #endif /* UNITTESTS */
 
     return;

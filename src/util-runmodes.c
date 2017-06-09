@@ -170,7 +170,7 @@ int RunModeSetLiveCaptureAutoFp(ConfigIfaceParserFunc ConfigParser,
 
         for (lthread = 0; lthread < nlive; lthread++) {
             const char *dev = LiveGetDeviceName(lthread);
-            const char *visual_devname = LiveGetShortName(live_dev);
+            const char *visual_devname = LiveGetShortName(dev);
             void *aconf;
             int threads_count;
 
@@ -393,7 +393,7 @@ int RunModeSetLiveCaptureSingle(ConfigIfaceParserFunc ConfigParser,
 
     if (nlive > 1) {
         SCLogError(SC_ERR_RUNMODE,
-                "Can't use single runmode with multiple device");
+                "Can't use the 'single' runmode with multiple devices");
         exit(EXIT_FAILURE);
     }
 
@@ -401,9 +401,8 @@ int RunModeSetLiveCaptureSingle(ConfigIfaceParserFunc ConfigParser,
         aconf = ConfigParser(live_dev);
         live_dev_c = live_dev;
     } else {
-        live_dev_c = LiveGetDeviceName(0);
         aconf = ConfigParser(live_dev_c);
-        /* \todo Set threads number in config to 1 */
+        live_dev_c = LiveGetDeviceName(0);
     }
 
     return RunModeSetLiveCaptureWorkersForDevice(

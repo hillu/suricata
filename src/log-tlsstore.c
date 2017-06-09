@@ -43,6 +43,7 @@
 
 #include "output.h"
 #include "log-tlslog.h"
+#include "log-tlsstore.h"
 #include "app-layer-ssl.h"
 #include "app-layer.h"
 #include "app-layer-parser.h"
@@ -131,6 +132,7 @@ static void LogTlsLogPem(LogTlsStoreLogThread *aft, const Packet *p, SSLState *s
             if (ptmp == NULL) {
                 SCFree(aft->enc_buf);
                 aft->enc_buf = NULL;
+                aft->enc_buf_len = 0;
                 SCLogWarning(SC_ERR_MEM_ALLOC, "Can't allocate data for base64 encoding");
                 goto end_fp;
             }
@@ -291,7 +293,7 @@ static int LogTlsStoreLogger(ThreadVars *tv, void *thread_data, const Packet *p,
     return 0;
 }
 
-static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogTlsStoreLogThread *aft = SCMalloc(sizeof(LogTlsStoreLogThread));
     if (unlikely(aft == NULL))
@@ -383,7 +385,7 @@ static OutputCtx *LogTlsStoreLogInitCtx(ConfNode *conf)
     output_ctx->DeInit = LogTlsStoreLogDeInitCtx;
 
     /* FIXME we need to implement backward compability here */
-    char *s_default_log_dir = NULL;
+    const char *s_default_log_dir = NULL;
     s_default_log_dir = ConfigGetLogDirectory();
 
     const char *s_base_dir = NULL;

@@ -47,6 +47,10 @@
 
 #include "app-layer-dns-tcp.h"
 
+#ifdef HAVE_RUST
+#include "app-layer-dns-tcp-rust.h"
+#endif
+
 struct DNSTcpHeader_ {
     uint16_t len;
     uint16_t tx_id;
@@ -57,6 +61,9 @@ struct DNSTcpHeader_ {
     uint16_t additional_rr;
 } __attribute__((__packed__));
 typedef struct DNSTcpHeader_ DNSTcpHeader;
+
+static uint16_t DNSTcpProbingParser(uint8_t *input, uint32_t ilen,
+        uint32_t *offset);
 
 /** \internal
  *  \param input_len at least enough for the DNSTcpHeader
@@ -288,6 +295,13 @@ static int DNSTCPRequestParse(Flow *f, void *dstate,
     DNSState *dns_state = (DNSState *)dstate;
     SCLogDebug("starting %u", input_len);
 
+    if (input == NULL && input_len > 0) {
+        SCLogDebug("Input is NULL, but len is %"PRIu32": must be a gap.",
+                input_len);
+        dns_state->gap_ts = 1;
+        SCReturnInt(1);
+    }
+
     if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
         SCReturnInt(1);
     }
@@ -299,6 +313,18 @@ static int DNSTCPRequestParse(Flow *f, void *dstate,
     /* probably a rst/fin sending an eof */
     if (input == NULL || input_len == 0) {
         goto insufficient_data;
+    }
+
+    /* Clear gap state. */
+    if (dns_state->gap_ts) {
+        if (DNSTcpProbingParser(input, input_len, NULL) == ALPROTO_DNS) {
+            SCLogDebug("New data probed as DNS, clearing gap state.");
+            BufferReset(dns_state);
+            dns_state->gap_ts = 0;
+        } else {
+            SCLogDebug("Unable to sync DNS parser, leaving gap state.");
+            SCReturnInt(1);
+        }
     }
 
 next_record:
@@ -508,6 +534,13 @@ static int DNSTCPResponseParse(Flow *f, void *dstate,
 {
     DNSState *dns_state = (DNSState *)dstate;
 
+    if (input == NULL && input_len > 0) {
+        SCLogDebug("Input is NULL, but len is %"PRIu32": must be a gap.",
+                input_len);
+        dns_state->gap_tc = 1;
+        SCReturnInt(1);
+    }
+
     if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
         SCReturnInt(1);
     }
@@ -519,6 +552,18 @@ static int DNSTCPResponseParse(Flow *f, void *dstate,
     /* probably a rst/fin sending an eof */
     if (input == NULL || input_len == 0) {
         goto insufficient_data;
+    }
+
+    /* Clear gap state. */
+    if (dns_state->gap_tc) {
+        if (DNSTcpProbingParser(input, input_len, NULL) == ALPROTO_DNS) {
+            SCLogDebug("New data probed as DNS, clearing gap state.");
+            BufferReset(dns_state);
+            dns_state->gap_tc = 0;
+        } else {
+            SCLogDebug("Unable to sync DNS parser, leaving gap state.");
+            SCReturnInt(1);
+        }
     }
 
 next_record:
@@ -651,8 +696,11 @@ static uint16_t DNSTcpProbeResponse(uint8_t *input, uint32_t len,
 
 void RegisterDNSTCPParsers(void)
 {
-    char *proto_name = "dns";
-
+    const char *proto_name = "dns";
+#ifdef HAVE_RUST
+    RegisterRustDNSTCPParsers();
+    return;
+#endif
     /** DNS */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
         AppLayerProtoDetectRegisterProtocol(ALPROTO_DNS, proto_name);
@@ -712,6 +760,11 @@ void RegisterDNSTCPParsers(void)
         AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DNS,
                                                                DNSGetAlstateProgressCompletionStatus);
         DNSAppLayerRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_DNS);
+
+        /* This parser accepts gaps. */
+        AppLayerParserRegisterOptionFlags(IPPROTO_TCP, ALPROTO_DNS,
+                APP_LAYER_PARSER_OPT_ACCEPT_GAPS);
+
     } else {
         SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
                   "still on.", proto_name);

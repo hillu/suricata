@@ -5,14 +5,17 @@ ACLOCAL_AMFLAGS = -I m4
 EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
              reference.config
-SUBDIRS = $(HTP_DIR) src qa rules doc contrib scripts
+SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts
 
 CLEANFILES = stamp-h[0-9]*
 
 install-data-am:
 	@echo "Run 'make install-conf' if you want to install initial configuration files. Or 'make install-full' to install configuration and rules";
 
-install-full: install install-conf install-rules
+install-full:
+	$(MAKE) install
+	$(MAKE) install-conf
+	$(MAKE) install-rules
 
 install-conf:
 	install -d "$(DESTDIR)$(e_sysconfdir)"

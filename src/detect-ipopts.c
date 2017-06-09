@@ -43,8 +43,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIpOptsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectIpOptsSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectIpOptsMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectIpOptsSetup (DetectEngineCtx *, Signature *, const char *);
 void IpOptsRegisterTests(void);
 void DetectIpOptsFree(void *);
 
@@ -98,7 +99,8 @@ struct DetectIpOpts_ {
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectIpOptsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectIpOptsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectIpOptsData *de = (const DetectIpOptsData *)ctx;
 
@@ -121,7 +123,7 @@ int DetectIpOptsMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
  * \retval de pointer to DetectIpOptsData on success
  * \retval NULL on failure
  */
-DetectIpOptsData *DetectIpOptsParse (char *rawstr)
+static DetectIpOptsData *DetectIpOptsParse (const char *rawstr)
 {
     int i;
     DetectIpOptsData *de = NULL;
@@ -169,7 +171,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectIpOptsSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     DetectIpOptsData *de = NULL;
     SigMatch *sm = NULL;
@@ -219,7 +221,7 @@ void DetectIpOptsFree(void *de_ptr)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse01 (void)
+static int IpOptsTestParse01 (void)
 {
     DetectIpOptsData *de = NULL;
     de = DetectIpOptsParse("lsrr");
@@ -237,7 +239,7 @@ int IpOptsTestParse01 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse02 (void)
+static int IpOptsTestParse02 (void)
 {
     DetectIpOptsData *de = NULL;
     de = DetectIpOptsParse("invalidopt");
@@ -255,7 +257,7 @@ int IpOptsTestParse02 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse03 (void)
+static int IpOptsTestParse03 (void)
 {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (unlikely(p == NULL))
@@ -305,7 +307,7 @@ error:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int IpOptsTestParse04 (void)
+static int IpOptsTestParse04 (void)
 {
     Packet *p = SCMalloc(SIZE_OF_PACKET);
     if (unlikely(p == NULL))

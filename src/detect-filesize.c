@@ -31,6 +31,7 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine.h"
 #include "detect-engine-state.h"
 
 #include "detect-filesize.h"
@@ -49,10 +50,11 @@ static pcre_extra *parse_regex_study;
 
 /*prototypes*/
 static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                       uint8_t flags, File *file, Signature *s, SigMatch *m);
-static int DetectFilesizeSetup (DetectEngineCtx *, Signature *, char *);
+        uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m);
+static int DetectFilesizeSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFilesizeFree (void *);
 static void DetectFilesizeRegisterTests (void);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for filesize: keyword
@@ -67,9 +69,10 @@ void DetectFilesizeRegister(void)
     sigmatch_table[DETECT_FILESIZE].Setup = DetectFilesizeSetup;
     sigmatch_table[DETECT_FILESIZE].Free = DetectFilesizeFree;
     sigmatch_table[DETECT_FILESIZE].RegisterTests = DetectFilesizeRegisterTests;
-    sigmatch_table[DETECT_FILESIZE].flags |= SIGMATCH_PAYLOAD; /** XXX necessary? */
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 }
 
 /**
@@ -87,11 +90,11 @@ void DetectFilesizeRegister(void)
  * \retval 1 match
  */
 static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f,
-                       uint8_t flags, File *file, Signature *s, SigMatch *m)
+        uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
 
-    DetectFilesizeData *fsd = (DetectFilesizeData *)m->ctx;
+    DetectFilesizeData *fsd = (DetectFilesizeData *)m;
     int ret = 0;
     uint64_t file_size = FileTrackedSize(file);
 
@@ -132,7 +135,7 @@ static int DetectFilesizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, F
  * \retval fsd pointer to DetectFilesizeData on success
  * \retval NULL on failure
  */
-static DetectFilesizeData *DetectFilesizeParse (char *str)
+static DetectFilesizeData *DetectFilesizeParse (const char *str)
 {
 
     DetectFilesizeData *fsd = NULL;
@@ -269,7 +272,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFilesizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFilesizeSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     SCEnter();
     DetectFilesizeData *fsd = NULL;
@@ -286,7 +289,7 @@ static int DetectFilesizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *str
     sm->type = DETECT_FILESIZE;
     sm->ctx = (SigMatchCtx *)fsd;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
+    SigMatchAppendSMToList(s, sm, g_file_match_list_id);
 
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_SIZE);
     SCReturnInt(0);
@@ -407,7 +410,7 @@ static int DetectFilesizeParseTest05(void)
  */
 
 static int DetectFilesizeInitTest(DetectEngineCtx **de_ctx, Signature **sig,
-                                DetectFilesizeData **fsd, char *str)
+                                DetectFilesizeData **fsd, const char *str)
 {
     char fullstr[1024];
     int result = 0;
