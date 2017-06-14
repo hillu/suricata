@@ -239,15 +239,15 @@ static inline Packet *FlowForceReassemblyPseudoPacketSetup(Packet *p,
     }
 
     if (FLOW_IS_IPV4(f)) {
-        p->tcph->th_sum = TCPCalculateChecksum(p->ip4h->s_ip_addrs,
-                                               (uint16_t *)p->tcph, 20);
+        p->tcph->th_sum = TCPChecksum(p->ip4h->s_ip_addrs,
+                                               (uint16_t *)p->tcph, 20, 0);
         /* calc ipv4 csum as we may log it and barnyard might reject
          * a wrong checksum */
-        p->ip4h->ip_csum = IPV4CalculateChecksum((uint16_t *)p->ip4h,
-                IPV4_GET_RAW_HLEN(p->ip4h));
+        p->ip4h->ip_csum = IPV4Checksum((uint16_t *)p->ip4h,
+                IPV4_GET_RAW_HLEN(p->ip4h), 0);
     } else if (FLOW_IS_IPV6(f)) {
-        p->tcph->th_sum = TCPCalculateChecksum(p->ip6h->s_ip6_addrs,
-                                               (uint16_t *)p->tcph, 20);
+        p->tcph->th_sum = TCPChecksum(p->ip6h->s_ip6_addrs,
+                                              (uint16_t *)p->tcph, 20, 0);
     }
 
     memset(&p->ts, 0, sizeof(struct timeval));

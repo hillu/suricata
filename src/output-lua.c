@@ -647,8 +647,6 @@ static int LuaScriptInit(const char *filename, LogLuaScriptOptions *options) {
         goto error;
     }
 
-    /* pop the table */
-    lua_pop(luastate, 1);
     LuaReturnState(luastate);
     return 0;
 error:
@@ -861,6 +859,7 @@ static OutputCtx *OutputLuaLogInit(ConfNode *conf)
 
         if (opts.alproto == ALPROTO_HTTP && opts.streaming) {
             om->StreamingLogFunc = LuaStreamingLogger;
+            om->stream_type = STREAMING_HTTP_BODIES;
             om->alproto = ALPROTO_HTTP;
             AppLayerHtpEnableRequestBodyCallback();
             AppLayerHtpEnableResponseBodyCallback();
@@ -902,6 +901,7 @@ static OutputCtx *OutputLuaLogInit(ConfNode *conf)
             AppLayerHtpNeedFileInspection();
         } else if (opts.streaming && opts.tcp_data) {
             om->StreamingLogFunc = LuaStreamingLogger;
+            om->stream_type = STREAMING_TCP_DATA;
         } else if (opts.flow) {
             om->FlowLogFunc = LuaFlowLogger;
         } else if (opts.stats) {
