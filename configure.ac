@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 3.2.1)
+    AC_INIT(suricata, 3.2.2)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     m4_ifndef([AS_VERSION_COMPARE], [AC_DEFUN([AS_VERSION_COMPARE],[])])
     AC_CONFIG_HEADERS([config.h])
@@ -127,7 +127,7 @@
     AC_CHECK_HEADERS([arpa/inet.h assert.h ctype.h errno.h fcntl.h inttypes.h])
     AC_CHECK_HEADERS([getopt.h])
     AC_CHECK_HEADERS([limits.h netdb.h netinet/in.h poll.h sched.h signal.h])
-    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h string.h strings.h sys/ioctl.h])
+    AC_CHECK_HEADERS([stdarg.h stdint.h stdio.h stdlib.h stdbool.h string.h strings.h sys/ioctl.h])
     AC_CHECK_HEADERS([syslog.h sys/prctl.h sys/socket.h sys/stat.h sys/syscall.h])
     AC_CHECK_HEADERS([sys/time.h time.h unistd.h])
     AC_CHECK_HEADERS([sys/ioctl.h linux/if_ether.h linux/if_packet.h linux/filter.h])
@@ -553,10 +553,24 @@
         [ pcre_jit_available=yes ], [ pcre_jit_available=no ]
         )
 
-    # bug 1693, libpcre 8.35 is broken and debian jessie is still using that
-    if test "$libpcre_buggy_found" = "yes"; then
-        pcre_jit_available="no, libpcre 8.35 blacklisted"
-    fi
+    case $host in
+        *powerpc64*)
+            PKG_CHECK_MODULES(LIBPCREVERSION, [libpcre = 8.39],[libpcre_ppc64_buggy_found1="yes"],[libprce_ppc64_buggy_found1="no"])
+            PKG_CHECK_MODULES(LIBPCREVERSION, [libpcre = 8.40],[libpcre_ppc64_buggy_found2="yes"],[libprce_ppc64_buggy_found2="no"])
+
+            if test "$libprce_ppc64_buggy_found1" = "yes" || test "$libprce_ppc64_buggy_found2"; then
+                # on powerpc64, both gcc and clang lead to SIGILL in
+                # unittests when jit is enabled.
+                pcre_jit_available="no, pcre 8.39/8.40 jit disabled for powerpc64"
+            fi
+        ;;
+        *)
+            # bug 1693, libpcre 8.35 is broken and debian jessie is still using that
+            if test "$libpcre_buggy_found" = "yes"; then
+                pcre_jit_available="no, libpcre 8.35 blacklisted"
+            fi
+        ;;
+    esac
 
     if test "x$pcre_jit_available" = "xyes"; then
        AC_MSG_RESULT(yes)

@@ -145,6 +145,7 @@ static void DisableAppLayer(ThreadVars *tv, Flow *f, Packet *p)
 {
     SCLogDebug("disable app layer for flow %p alproto %u ts %u tc %u",
             f, f->alproto, f->alproto_ts, f->alproto_tc);
+    FlowCleanupAppLayer(f);
     StreamTcpDisableAppLayer(f);
     TcpSession *ssn = f->protoctx;
     ssn->data_first_seen_dir = APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER;
@@ -559,7 +560,6 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
 
     AppLayerThreadCtx *app_tctx = ra_ctx->app_tctx;
     AppProto alproto;
-    uint8_t dir;
     int r = 0;
 
     SCLogDebug("data_len %u flags %02X", data_len, flags);
@@ -570,10 +570,8 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
 
     if (flags & STREAM_TOSERVER) {
         alproto = f->alproto_ts;
-        dir = 0;
     } else {
         alproto = f->alproto_tc;
-        dir = 1;
     }
 
     /* if we don't know the proto yet and we have received a stream
@@ -582,7 +580,6 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
      * only run the proto detection once. */
     if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_GAP)) {
         StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
-        StreamTcpSetSessionNoReassemblyFlag(ssn, dir);
         SCLogDebug("ALPROTO_UNKNOWN flow %p, due to GAP in stream start", f);
 
     } else if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_START)) {

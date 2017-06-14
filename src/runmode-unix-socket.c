@@ -66,6 +66,7 @@ const char *RunModeUnixSocketGetDefaultMode(void)
 
 #ifdef BUILD_UNIX_SOCKET
 
+static int RunModeUnixSocketMaster(void);
 static int unix_manager_file_task_running = 0;
 static int unix_manager_file_task_failed = 0;
 
@@ -349,6 +350,7 @@ TmEcode UnixSocketPcapFilesCheck(void *data)
     RunModeDispatch(RUNMODE_PCAP_FILE, NULL);
 
     /* Un-pause all the paused threads */
+    TmThreadWaitOnThreadInit();
     TmThreadContinueThreads();
     return TM_ECODE_OK;
 }
@@ -357,10 +359,14 @@ TmEcode UnixSocketPcapFilesCheck(void *data)
 void RunModeUnixSocketRegister(void)
 {
 #ifdef BUILD_UNIX_SOCKET
+    /* a bit of a hack, but register twice to --list-runmodes shows both */
     RunModeRegisterNewRunMode(RUNMODE_UNIX_SOCKET, "single",
                               "Unix socket mode",
-                              RunModeUnixSocketSingle);
-    default_mode = "single";
+                              RunModeUnixSocketMaster);
+    RunModeRegisterNewRunMode(RUNMODE_UNIX_SOCKET, "autofp",
+                              "Unix socket mode",
+                              RunModeUnixSocketMaster);
+    default_mode = "autofp";
 #endif
     return;
 }
@@ -753,14 +759,16 @@ TmEcode UnixSocketUnregisterTenant(json_t *cmd, json_t* answer, void *data)
 }
 #endif /* BUILD_UNIX_SOCKET */
 
+#ifdef BUILD_UNIX_SOCKET
 /**
  * \brief Single thread version of the Pcap file processing.
  */
-int RunModeUnixSocketSingle(void)
+static int RunModeUnixSocketMaster(void)
 {
-#ifdef BUILD_UNIX_SOCKET
-    PcapCommand *pcapcmd = SCMalloc(sizeof(PcapCommand));
+    if (UnixManagerInit() != 0)
+        return 1;
 
+    PcapCommand *pcapcmd = SCMalloc(sizeof(PcapCommand));
     if (unlikely(pcapcmd == NULL)) {
         SCLogError(SC_ERR_MEM_ALLOC, "Can not allocate pcap command");
         return 1;
@@ -769,20 +777,19 @@ int RunModeUnixSocketSingle(void)
     pcapcmd->running = 0;
     pcapcmd->currentfile = NULL;
 
-    UnixManagerThreadSpawn(1);
-
-    unix_socket_mode_is_running = 1;
-
     UnixManagerRegisterCommand("pcap-file", UnixSocketAddPcapFile, pcapcmd, UNIX_CMD_TAKE_ARGS);
     UnixManagerRegisterCommand("pcap-file-number", UnixSocketPcapFilesNumber, pcapcmd, 0);
     UnixManagerRegisterCommand("pcap-file-list", UnixSocketPcapFilesList, pcapcmd, 0);
     UnixManagerRegisterCommand("pcap-current", UnixSocketPcapCurrent, pcapcmd, 0);
 
     UnixManagerRegisterBackgroundTask(UnixSocketPcapFilesCheck, pcapcmd);
-#endif
+
+    UnixManagerThreadSpawn(1);
+    unix_socket_mode_is_running = 1;
 
     return 0;
 }
+#endif
 
 int RunModeUnixSocketIsActive(void)
 {
