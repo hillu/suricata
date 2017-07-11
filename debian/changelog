@@ -1,3 +1,13 @@
+suricata (4.0.0-rc1-1) unstable; urgency=medium
+
+  * [636f10f] d/rules: actually use dh-systemd (Closes: #861732)
+  * [c728ed0] d/rules: cleanup comments
+  * [f0d9adb] suricata: switch to src:libhtp instead of the bundled one
+  * [fa5f8be] New upstream version 4.0.0-rc1
+  * [b6d8304] d/control: remove Build-Conflict with libhtp-dev
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 11 Jul 2017 11:06:52 +0200
+
 suricata (3.2.1-1) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
