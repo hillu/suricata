@@ -1,2 +1,0 @@
-# false positive, the link is there. Somehow lintian is confused
-libhtp-0.5.23-1: dev-pkg-without-shlib-symlink
