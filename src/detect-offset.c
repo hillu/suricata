@@ -33,13 +33,13 @@
 #include "detect-content.h"
 #include "detect-uricontent.h"
 #include "detect-byte-extract.h"
-#include "app-layer.h"
+#include "detect-offset.h"
 
 #include "flow-var.h"
 
 #include "util-debug.h"
 
-static int DetectOffsetSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectOffsetSetup(DetectEngineCtx *, Signature *, const char *);
 
 void DetectOffsetRegister (void)
 {
@@ -50,58 +50,21 @@ void DetectOffsetRegister (void)
     sigmatch_table[DETECT_OFFSET].Setup = DetectOffsetSetup;
     sigmatch_table[DETECT_OFFSET].Free  = NULL;
     sigmatch_table[DETECT_OFFSET].RegisterTests = NULL;
-
-    sigmatch_table[DETECT_OFFSET].flags |= SIGMATCH_PAYLOAD;
 }
 
-int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
+int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, const char *offsetstr)
 {
-    char *str = offsetstr;
-    char dubbed = 0;
+    const char *str = offsetstr;
     SigMatch *pm = NULL;
     int ret = -1;
 
-    /* Strip leading and trailing "s. */
-    if (offsetstr[0] == '\"') {
-        str = SCStrdup(offsetstr+1);
-        if (unlikely(str == NULL))
-            goto end;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        dubbed = 1;
-    }
-
-    /* retrive the sm to apply the depth against */
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        pm = SigMatchGetLastSMFromLists(s, 2, DETECT_CONTENT, s->sm_lists_tail[s->list]);
-    } else {
-        pm =  SigMatchGetLastSMFromLists(s, 28,
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
-    }
+    /* retrive the sm to apply the offset against */
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "offset needs "
-                   "preceding content, uricontent option, http_client_body, "
-                   "http_server_body, http_header option, http_raw_header option, "
-                   "http_method option, http_cookie, http_raw_uri, "
-                   "http_stat_msg, http_stat_code, http_user_agent or "
-                   "file_data/dce_stub_data sticky buffer options");
+                   "preceding content option");
         goto end;
     }
-
 
     /* verify other conditions */
     DetectContentData *cd = (DetectContentData *)pm->ctx;
@@ -153,8 +116,6 @@ int DetectOffsetSetup (DetectEngineCtx *de_ctx, Signature *s, char *offsetstr)
 
     ret = 0;
  end:
-    if (dubbed)
-        SCFree(str);
     return ret;
 }
 

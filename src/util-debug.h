@@ -139,6 +139,9 @@ typedef struct SCLogOPIfaceCtx_ {
     /* override for the global_log_format(currently not used) */
     const char *log_format;
 
+    /* Mutex used for locking around rotate/write to a file. */
+    SCMutex fp_mutex;
+
     struct SCLogOPIfaceCtx_ *next;
 } SCLogOPIfaceCtx;
 
@@ -148,16 +151,16 @@ typedef struct SCLogOPIfaceCtx_ {
  */
 typedef struct SCLogInitData_ {
     /* startup message */
-    char *startup_message;
+    const char *startup_message;
 
     /* the log level */
     SCLogLevel global_log_level;
 
     /* the log format */
-    char *global_log_format;
+    const char *global_log_format;
 
     /* output filter */
-    char *op_filter;
+    const char *op_filter;
 
     /* list of output interfaces to be used */
     SCLogOPIfaceCtx *op_ifaces;

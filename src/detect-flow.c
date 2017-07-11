@@ -49,8 +49,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectFlowMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectFlowSetup (DetectEngineCtx *, Signature *, char *);
+int DetectFlowMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectFlowSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectFlowRegisterTests(void);
 void DetectFlowFree(void *);
 
@@ -132,7 +133,8 @@ static inline int FlowMatch(const uint32_t pflags, const uint8_t pflowflags,
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     SCEnter();
 
@@ -164,7 +166,7 @@ int DetectFlowMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, S
  * \retval fd pointer to DetectFlowData on success
  * \retval NULL on failure
  */
-DetectFlowData *DetectFlowParse (char *flowstr)
+static DetectFlowData *DetectFlowParse (const char *flowstr)
 {
     DetectFlowData *fd = NULL;
     char *args[3] = {NULL,NULL,NULL};
@@ -324,7 +326,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectFlowSetup (DetectEngineCtx *de_ctx, Signature *s, char *flowstr)
+int DetectFlowSetup (DetectEngineCtx *de_ctx, Signature *s, const char *flowstr)
 {
     DetectFlowData *fd = NULL;
     SigMatch *sm = NULL;
@@ -334,7 +336,7 @@ int DetectFlowSetup (DetectEngineCtx *de_ctx, Signature *s, char *flowstr)
         goto error;
 
     /*ensure only one flow option*/
-    if (s->init_flags & SIG_FLAG_INIT_FLOW) {
+    if (s->init_data->init_flags & SIG_FLAG_INIT_FLOW) {
         SCLogError (SC_ERR_INVALID_SIGNATURE, "A signature may have only one flow option.");
         goto error;
     }
@@ -365,7 +367,7 @@ int DetectFlowSetup (DetectEngineCtx *de_ctx, Signature *s, char *flowstr)
     if (fd->flags & DETECT_FLOW_FLAG_NOSTREAM) {
         s->flags |= SIG_FLAG_REQUIRE_PACKET;
     } else {
-        s->init_flags |= SIG_FLAG_INIT_FLOW;
+        s->init_data->init_flags |= SIG_FLAG_INIT_FLOW;
     }
 
     return 0;
@@ -435,7 +437,7 @@ static int PrefilterSetupFlow(SigGroupHead *sgh)
 static _Bool PrefilterFlowIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_FLOW:
                 return TRUE;
@@ -450,7 +452,7 @@ static _Bool PrefilterFlowIsPrefilterable(const Signature *s)
  * \test DetectFlowTestParse01 is a test to make sure that we return "something"
  *  when given valid flow opt
  */
-int DetectFlowTestParse01 (void)
+static int DetectFlowTestParse01 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established");
@@ -462,7 +464,7 @@ int DetectFlowTestParse01 (void)
 /**
  * \test DetectFlowTestParse02 is a test for setting the established flow opt
  */
-int DetectFlowTestParse02 (void)
+static int DetectFlowTestParse02 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established");
@@ -475,7 +477,7 @@ int DetectFlowTestParse02 (void)
 /**
  * \test DetectFlowTestParse03 is a test for setting the stateless flow opt
  */
-int DetectFlowTestParse03 (void)
+static int DetectFlowTestParse03 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("stateless");
@@ -488,7 +490,7 @@ int DetectFlowTestParse03 (void)
 /**
  * \test DetectFlowTestParse04 is a test for setting the to_client flow opt
  */
-int DetectFlowTestParse04 (void)
+static int DetectFlowTestParse04 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client");
@@ -501,7 +503,7 @@ int DetectFlowTestParse04 (void)
 /**
  * \test DetectFlowTestParse05 is a test for setting the to_server flow opt
  */
-int DetectFlowTestParse05 (void)
+static int DetectFlowTestParse05 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_server");
@@ -514,7 +516,7 @@ int DetectFlowTestParse05 (void)
 /**
  * \test DetectFlowTestParse06 is a test for setting the from_server flow opt
  */
-int DetectFlowTestParse06 (void)
+static int DetectFlowTestParse06 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server");
@@ -527,7 +529,7 @@ int DetectFlowTestParse06 (void)
 /**
  * \test DetectFlowTestParse07 is a test for setting the from_client flow opt
  */
-int DetectFlowTestParse07 (void)
+static int DetectFlowTestParse07 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_client");
@@ -540,7 +542,7 @@ int DetectFlowTestParse07 (void)
 /**
  * \test DetectFlowTestParse08 is a test for setting the established,to_client flow opts
  */
-int DetectFlowTestParse08 (void)
+static int DetectFlowTestParse08 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established,to_client");
@@ -553,7 +555,7 @@ int DetectFlowTestParse08 (void)
 /**
  * \test DetectFlowTestParse09 is a test for setting the to_client,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse09 (void)
+static int DetectFlowTestParse09 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,stateless");
@@ -568,7 +570,7 @@ int DetectFlowTestParse09 (void)
 /**
  * \test DetectFlowTestParse10 is a test for setting the from_server,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse10 (void)
+static int DetectFlowTestParse10 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,stateless");
@@ -583,7 +585,7 @@ int DetectFlowTestParse10 (void)
 /**
  * \test DetectFlowTestParse11 is a test for setting the from_server,stateless flow opts with spaces all around
  */
-int DetectFlowTestParse11 (void)
+static int DetectFlowTestParse11 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse(" from_server , stateless ");
@@ -599,7 +601,7 @@ int DetectFlowTestParse11 (void)
  * \test DetectFlowTestParseNocase01 is a test to make sure that we return "something"
  *  when given valid flow opt
  */
-int DetectFlowTestParseNocase01 (void)
+static int DetectFlowTestParseNocase01 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED");
@@ -611,7 +613,7 @@ int DetectFlowTestParseNocase01 (void)
 /**
  * \test DetectFlowTestParseNocase02 is a test for setting the established flow opt
  */
-int DetectFlowTestParseNocase02 (void)
+static int DetectFlowTestParseNocase02 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED");
@@ -625,7 +627,7 @@ int DetectFlowTestParseNocase02 (void)
 /**
  * \test DetectFlowTestParseNocase03 is a test for setting the stateless flow opt
  */
-int DetectFlowTestParseNocase03 (void)
+static int DetectFlowTestParseNocase03 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("STATELESS");
@@ -637,7 +639,7 @@ int DetectFlowTestParseNocase03 (void)
 /**
  * \test DetectFlowTestParseNocase04 is a test for setting the to_client flow opt
  */
-int DetectFlowTestParseNocase04 (void)
+static int DetectFlowTestParseNocase04 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_CLIENT");
@@ -650,7 +652,7 @@ int DetectFlowTestParseNocase04 (void)
 /**
  * \test DetectFlowTestParseNocase05 is a test for setting the to_server flow opt
  */
-int DetectFlowTestParseNocase05 (void)
+static int DetectFlowTestParseNocase05 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_SERVER");
@@ -663,7 +665,7 @@ int DetectFlowTestParseNocase05 (void)
 /**
  * \test DetectFlowTestParseNocase06 is a test for setting the from_server flow opt
  */
-int DetectFlowTestParseNocase06 (void)
+static int DetectFlowTestParseNocase06 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER");
@@ -676,7 +678,7 @@ int DetectFlowTestParseNocase06 (void)
 /**
  * \test DetectFlowTestParseNocase07 is a test for setting the from_client flow opt
  */
-int DetectFlowTestParseNocase07 (void)
+static int DetectFlowTestParseNocase07 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_CLIENT");
@@ -689,7 +691,7 @@ int DetectFlowTestParseNocase07 (void)
 /**
  * \test DetectFlowTestParseNocase08 is a test for setting the established,to_client flow opts
  */
-int DetectFlowTestParseNocase08 (void)
+static int DetectFlowTestParseNocase08 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("ESTABLISHED,TO_CLIENT");
@@ -704,7 +706,7 @@ int DetectFlowTestParseNocase08 (void)
 /**
  * \test DetectFlowTestParseNocase09 is a test for setting the to_client,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase09 (void)
+static int DetectFlowTestParseNocase09 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("TO_CLIENT,STATELESS");
@@ -719,7 +721,7 @@ int DetectFlowTestParseNocase09 (void)
 /**
  * \test DetectFlowTestParseNocase10 is a test for setting the from_server,stateless flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase10 (void)
+static int DetectFlowTestParseNocase10 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,STATELESS");
@@ -734,7 +736,7 @@ int DetectFlowTestParseNocase10 (void)
 /**
  * \test DetectFlowTestParseNocase11 is a test for setting the from_server,stateless flow opts with spaces all around
  */
-int DetectFlowTestParseNocase11 (void)
+static int DetectFlowTestParseNocase11 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse(" FROM_SERVER , STATELESS ");
@@ -749,7 +751,7 @@ int DetectFlowTestParseNocase11 (void)
 /**
  * \test DetectFlowTestParse12 is a test for setting an invalid seperator :
  */
-int DetectFlowTestParse12 (void)
+static int DetectFlowTestParse12 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server:stateless");
@@ -760,7 +762,7 @@ int DetectFlowTestParse12 (void)
 /**
  * \test DetectFlowTestParse13 is a test for an invalid option
  */
-int DetectFlowTestParse13 (void)
+static int DetectFlowTestParse13 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("invalidoptiontest");
@@ -771,7 +773,7 @@ int DetectFlowTestParse13 (void)
 /**
  * \test DetectFlowTestParse14 is a test for a empty option
  */
-int DetectFlowTestParse14 (void)
+static int DetectFlowTestParse14 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("");
@@ -782,7 +784,7 @@ int DetectFlowTestParse14 (void)
 /**
  * \test DetectFlowTestParse15 is a test for an invalid combo of options established,stateless
  */
-int DetectFlowTestParse15 (void)
+static int DetectFlowTestParse15 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("established,stateless");
@@ -793,7 +795,7 @@ int DetectFlowTestParse15 (void)
 /**
  * \test DetectFlowTestParse16 is a test for an invalid combo of options to_client,to_server
  */
-int DetectFlowTestParse16 (void)
+static int DetectFlowTestParse16 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,to_server");
@@ -805,7 +807,7 @@ int DetectFlowTestParse16 (void)
  * \test DetectFlowTestParse16 is a test for an invalid combo of options to_client,from_server
  * flowbit flags are the same
  */
-int DetectFlowTestParse17 (void)
+static int DetectFlowTestParse17 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("to_client,from_server");
@@ -816,7 +818,7 @@ int DetectFlowTestParse17 (void)
 /**
  * \test DetectFlowTestParse18 is a test for setting the from_server,stateless,only_stream flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParse18 (void)
+static int DetectFlowTestParse18 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,only_stream");
@@ -832,7 +834,7 @@ int DetectFlowTestParse18 (void)
 /**
  * \test DetectFlowTestParseNocase18 is a test for setting the from_server,stateless,only_stream flow opts (order of state,dir reversed)
  */
-int DetectFlowTestParseNocase18 (void)
+static int DetectFlowTestParseNocase18 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,ESTABLISHED,ONLY_STREAM");
@@ -849,7 +851,7 @@ int DetectFlowTestParseNocase18 (void)
 /**
  * \test DetectFlowTestParse19 is a test for one to many options passed to DetectFlowParse
  */
-int DetectFlowTestParse19 (void)
+static int DetectFlowTestParse19 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,only_stream,a");
@@ -860,7 +862,7 @@ int DetectFlowTestParse19 (void)
 /**
  * \test DetectFlowTestParse20 is a test for setting from_server, established, no_stream
  */
-int DetectFlowTestParse20 (void)
+static int DetectFlowTestParse20 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,established,no_stream");
@@ -876,7 +878,7 @@ int DetectFlowTestParse20 (void)
 /**
  * \test DetectFlowTestParse20 is a test for setting from_server, established, no_stream
  */
-int DetectFlowTestParseNocase20 (void)
+static int DetectFlowTestParseNocase20 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("FROM_SERVER,ESTABLISHED,NO_STREAM");
@@ -892,7 +894,7 @@ int DetectFlowTestParseNocase20 (void)
 /**
  * \test DetectFlowTestParse21 is a test for an invalid opt between to valid opts
  */
-int DetectFlowTestParse21 (void)
+static int DetectFlowTestParse21 (void)
 {
     DetectFlowData *fd = NULL;
     fd = DetectFlowParse("from_server,a,no_stream");
@@ -912,7 +914,7 @@ static int DetectFlowSigTest01(void)
     Packet *p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
     FAIL_IF_NULL(p);
 
-    char *sig1 = "alert tcp any any -> any any (msg:\"dummy\"; "
+    const char *sig1 = "alert tcp any any -> any any (msg:\"dummy\"; "
         "content:\"nova\"; flow:no_stream; sid:1;)";
 
     memset(&dtv, 0, sizeof(DecodeThreadVars));

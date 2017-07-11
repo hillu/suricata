@@ -430,6 +430,11 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     dtv->counter_erspan = StatsRegisterMaxCounter("decoder.erspan", tv);
     dtv->counter_flow_memcap = StatsRegisterCounter("flow.memcap", tv);
 
+    dtv->counter_flow_tcp = StatsRegisterCounter("flow.tcp", tv);
+    dtv->counter_flow_udp = StatsRegisterCounter("flow.udp", tv);
+    dtv->counter_flow_icmp4 = StatsRegisterCounter("flow.icmpv4", tv);
+    dtv->counter_flow_icmp6 = StatsRegisterCounter("flow.icmpv6", tv);
+
     dtv->counter_defrag_ipv4_fragments =
         StatsRegisterCounter("defrag.ipv4.fragments", tv);
     dtv->counter_defrag_ipv4_reassembled =
@@ -549,7 +554,7 @@ inline int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen)
 
 const char *PktSrcToString(enum PktSrcEnum pkt_src)
 {
-    char *pkt_src_str = "<unknown>";
+    const char *pkt_src_str = "<unknown>";
     switch (pkt_src) {
         case PKT_SRC_WIRE:
             pkt_src_str = "wire/pcap";
@@ -571,6 +576,9 @@ const char *PktSrcToString(enum PktSrcEnum pkt_src)
             break;
         case PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO:
             pkt_src_str = "stream";
+            break;
+        case PKT_SRC_STREAM_TCP_DETECTLOG_FLUSH:
+            pkt_src_str = "stream (detect/log)";
             break;
         case PKT_SRC_FFR:
             pkt_src_str = "stream (flow timeout)";

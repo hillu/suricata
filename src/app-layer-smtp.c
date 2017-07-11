@@ -328,7 +328,7 @@ static void SMTPConfigure(void) {
     SCReturn;
 }
 
-void SMTPSetEvent(SMTPState *s, uint8_t e)
+static void SMTPSetEvent(SMTPState *s, uint8_t e)
 {
     SCLogDebug("setting event %u", e);
 
@@ -954,9 +954,8 @@ static int SMTPProcessReply(SMTPState *state, Flow *f,
         if (reply_code == SMTP_REPLY_220) {
             /* we are entering STARRTTLS data mode */
             state->parser_state |= SMTP_PARSER_STATE_COMMAND_DATA_MODE;
-            AppLayerParserStateSetFlag(pstate,
-                                             APP_LAYER_PARSER_NO_INSPECTION |
-                                             APP_LAYER_PARSER_NO_REASSEMBLY);
+            AppLayerRequestProtocolTLSUpgrade(f);
+            state->curr_tx->done = 1;
         } else {
             /* decoder event */
             SMTPSetEvent(state, SMTP_DECODER_EVENT_TLS_REJECTED);
@@ -1472,7 +1471,7 @@ static void SMTPFreeMpmState(void)
     }
 }
 
-int SMTPStateGetEventInfo(const char *event_name,
+static int SMTPStateGetEventInfo(const char *event_name,
                           int *event_id, AppLayerEventType *event_type)
 {
     *event_id = SCMapEnumNameToValue(event_name, smtp_decoder_event_table);
@@ -1640,7 +1639,7 @@ static int SMTPSetTxDetectState(void *state, void *vtx, DetectEngineState *s)
  */
 void RegisterSMTPParsers(void)
 {
-    char *proto_name = "smtp";
+    const char *proto_name = "smtp";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
         AppLayerProtoDetectRegisterProtocol(ALPROTO_SMTP, proto_name);
@@ -1793,6 +1792,7 @@ static int SMTPParserTest01(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -1890,10 +1890,7 @@ static int SMTPParserTest01(void)
         goto end;
     }
 
-    if (!(f.flags & FLOW_NOPAYLOAD_INSPECTION) ||
-        !(ssn.flags & STREAMTCP_FLAG_APP_LAYER_DISABLED) ||
-        !(((TcpSession *)f.protoctx)->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) ||
-        !(((TcpSession *)f.protoctx)->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY)) {
+    if (!FlowChangeProto(&f)) {
         goto end;
     }
 
@@ -2152,6 +2149,7 @@ static int SMTPParserTest02(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -2787,6 +2785,7 @@ static int SMTPParserTest03(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -2935,6 +2934,7 @@ static int SMTPParserTest04(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3083,6 +3083,7 @@ static int SMTPParserTest05(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3380,6 +3381,7 @@ static int SMTPParserTest06(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3619,6 +3621,7 @@ static int SMTPParserTest07(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3733,6 +3736,7 @@ static int SMTPParserTest08(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3847,6 +3851,7 @@ static int SMTPParserTest09(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -3961,6 +3966,7 @@ static int SMTPParserTest10(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -4069,6 +4075,7 @@ static int SMTPParserTest11(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();
@@ -4163,6 +4170,7 @@ static int SMTPParserTest12(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
@@ -4305,6 +4313,7 @@ static int SMTPParserTest13(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
     p->flow = &f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
@@ -4590,6 +4599,7 @@ static int SMTPParserTest14(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_SMTP;
 
     StreamTcpInitConfig(TRUE);
     SMTPTestInitConfig();

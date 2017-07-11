@@ -47,7 +47,10 @@
 #include "util-proto-name.h"
 #include "util-logopenfile.h"
 #include "util-time.h"
+#include "util-crypt.h"
 #include "output-json.h"
+#include "output-json-alert.h"
+#include "output-json-http.h"
 
 #ifdef HAVE_LIBJANSSON
 
@@ -125,8 +128,8 @@ typedef enum {
 } HttpField;
 
 struct {
-    char *config_field;
-    char *htp_field;
+    const char *config_field;
+    const char *htp_field;
     uint32_t flags;
 } http_fields[] =  {
     { "accept", "accept", LOG_HTTP_REQUEST },
@@ -181,7 +184,7 @@ struct {
     { "www_authenticate", "www-authenticate", 0 },
 };
 
-void JsonHttpLogJSONBasic(json_t *js, htp_tx_t *tx)
+static void JsonHttpLogJSONBasic(json_t *js, htp_tx_t *tx)
 {
     char *c;
 
@@ -291,7 +294,7 @@ static void JsonHttpLogJSONCustom(LogHttpFileCtx *http_ctx, json_t *js, htp_tx_t
     }
 }
 
-void JsonHttpLogJSONExtended(json_t *js, htp_tx_t *tx)
+static void JsonHttpLogJSONExtended(json_t *js, htp_tx_t *tx)
 {
     char *c;
 
@@ -347,6 +350,79 @@ void JsonHttpLogJSONExtended(json_t *js, htp_tx_t *tx)
 
     /* length */
     json_object_set_new(js, "length", json_integer(tx->response_message_len));
+}
+
+static void BodyPrintableBuffer(json_t *js, HtpBody *body, const char *key)
+{
+    if (body->sb != NULL && body->sb->buf != NULL) {
+        uint32_t offset = 0;
+        const uint8_t *body_data;
+        uint32_t body_data_len;
+        uint64_t body_offset;
+
+        if (StreamingBufferGetData(body->sb, &body_data,
+                                   &body_data_len, &body_offset) == 0) {
+            return;
+        }
+
+        uint8_t printable_buf[body_data_len + 1];
+        PrintStringsToBuffer(printable_buf, &offset,
+                             sizeof(printable_buf),
+                             body_data, body_data_len);
+        if (offset > 0) {
+            json_object_set_new(js, key, json_string((char *)printable_buf));
+        }
+    }
+}
+
+void JsonHttpLogJSONBodyPrintable(json_t *js, Flow *f, uint64_t tx_id)
+{
+    HtpState *htp_state = (HtpState *)FlowGetAppState(f);
+    if (htp_state) {
+        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, tx_id);
+        if (tx) {
+            HtpTxUserData *htud = (HtpTxUserData *)htp_tx_get_user_data(tx);
+            if (htud != NULL) {
+                BodyPrintableBuffer(js, &htud->request_body, "http_request_body_printable");
+                BodyPrintableBuffer(js, &htud->response_body, "http_response_body_printable");
+            }
+        }
+    }
+}
+
+static void BodyBase64Buffer(json_t *js, HtpBody *body, const char *key)
+{
+    if (body->sb != NULL && body->sb->buf != NULL) {
+        const uint8_t *body_data;
+        uint32_t body_data_len;
+        uint64_t body_offset;
+
+        if (StreamingBufferGetData(body->sb, &body_data,
+                                   &body_data_len, &body_offset) == 0) {
+            return;
+        }
+
+        unsigned long len = body_data_len * 2 + 1;
+        uint8_t encoded[len];
+        if (Base64Encode(body_data, body_data_len, encoded, &len) == SC_BASE64_OK) {
+            json_object_set_new(js, key, json_string((char *)encoded));
+        }
+    }
+}
+
+void JsonHttpLogJSONBodyBase64(json_t *js, Flow *f, uint64_t tx_id)
+{
+    HtpState *htp_state = (HtpState *)FlowGetAppState(f);
+    if (htp_state) {
+        htp_tx_t *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, tx_id);
+        if (tx) {
+            HtpTxUserData *htud = (HtpTxUserData *)htp_tx_get_user_data(tx);
+            if (htud != NULL) {
+                BodyBase64Buffer(js, &htud->request_body, "http_request_body");
+                BodyBase64Buffer(js, &htud->response_body, "http_response_body");
+            }
+        }
+    }
 }
 
 /* JSON format logging */
@@ -408,7 +484,6 @@ json_t *JsonHttpAddMetadata(const Flow *f, uint64_t tx_id)
 
             JsonHttpLogJSONBasic(hjs, tx);
             JsonHttpLogJSONExtended(hjs, tx);
-
             return hjs;
         }
     }
@@ -426,7 +501,7 @@ static void OutputHttpLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "http.json"
-OutputCtx *OutputHttpLogInit(ConfNode *conf)
+static OutputCtx *OutputHttpLogInit(ConfNode *conf)
 {
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
@@ -480,7 +555,7 @@ static void OutputHttpLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-OutputCtx *OutputHttpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputHttpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     OutputJsonCtx *ojc = parent_ctx->data;
 
@@ -540,7 +615,7 @@ OutputCtx *OutputHttpLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonHttpLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonHttpLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonHttpLogThread *aft = SCMalloc(sizeof(JsonHttpLogThread));
     if (unlikely(aft == NULL))

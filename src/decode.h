@@ -54,6 +54,7 @@ enum PktSrcEnum {
     PKT_SRC_DEFRAG,
     PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO,
     PKT_SRC_FFR,
+    PKT_SRC_STREAM_TCP_DETECTLOG_FLUSH,
 };
 
 #include "source-nflog.h"
@@ -260,7 +261,7 @@ typedef struct PacketAlert_ {
     SigIntId num; /* Internal num, used for sorting */
     uint8_t action; /* Internal num, used for sorting */
     uint8_t flags;
-    struct Signature_ *s;
+    const struct Signature_ *s;
     uint64_t tx_id;
 } PacketAlert;
 
@@ -298,12 +299,14 @@ typedef struct PacketEngineEvents_ {
 } PacketEngineEvents;
 
 typedef struct PktVar_ {
-    const char *name;
+    uint32_t id;
     struct PktVar_ *next; /* right now just implement this as a list,
                            * in the long run we have thing of something
                            * faster. */
-    uint8_t *value;
+    uint16_t key_len;
     uint16_t value_len;
+    uint8_t *key;
+    uint8_t *value;
 } PktVar;
 
 #ifdef PROFILING
@@ -552,10 +555,6 @@ typedef struct Packet_
     /** data linktype in host order */
     int datalink;
 
-    /* used to hold flowbits only if debuglog is enabled */
-    int debuglog_flowbits_names_len;
-    const char **debuglog_flowbits_names;
-
     /* tunnel/encapsulation handling */
     struct Packet_ *root; /* in case of tunnel this is a ptr
                            * to the 'real' packet, the one we
@@ -665,6 +664,11 @@ typedef struct DecodeThreadVars_
     uint16_t counter_defrag_max_hit;
 
     uint16_t counter_flow_memcap;
+
+    uint16_t counter_flow_tcp;
+    uint16_t counter_flow_udp;
+    uint16_t counter_flow_icmp4;
+    uint16_t counter_flow_icmp6;
 
      uint16_t counter_invalid_events[DECODE_EVENT_PACKET_MAX];
     /* thread data for flow logging api: only used at forced
@@ -866,26 +870,14 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
      ((p)->action |= a)); \
 } while (0)
 
-#define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
+#define TUNNEL_INCR_PKT_RTV_NOLOCK(p) do {                                          \
         ((p)->root ? (p)->root->tunnel_rtv_cnt++ : (p)->tunnel_rtv_cnt++);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
     } while (0)
 
 #define TUNNEL_INCR_PKT_TPR(p) do {                                                 \
         SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
         ((p)->root ? (p)->root->tunnel_tpr_cnt++ : (p)->tunnel_tpr_cnt++);          \
         SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR_NOLOCK(p) do {                                          \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
     } while (0)
 
 #define TUNNEL_PKT_RTV(p) ((p)->root ? (p)->root->tunnel_rtv_cnt : (p)->tunnel_rtv_cnt)
@@ -950,6 +942,13 @@ int DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, P
 int DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeMPLS(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeERSPAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeTEMPLATE(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint16_t, PacketQueue *);
+
+#ifdef UNITTESTS
+void DecodeIPV6FragHeader(Packet *p, uint8_t *pkt,
+                          uint16_t hdrextlen, uint16_t plen,
+                          uint16_t prev_hdrextlen);
+#endif
 
 void AddressDebugPrint(Address *);
 
@@ -1070,6 +1069,9 @@ int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
 #define LINKTYPE_LINUX_SLL  113
 #define LINKTYPE_PPP        9
 #define LINKTYPE_RAW        DLT_RAW
+/* http://www.tcpdump.org/linktypes.html defines DLT_RAW as 101, yet others don't.
+ * Libpcap on at least OpenBSD returns 101 as datalink type for RAW pcaps though. */
+#define LINKTYPE_RAW2       101
 #define PPP_OVER_GRE        11
 #define VLAN_OVER_GRE       13
 
@@ -1110,11 +1112,48 @@ int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
 
 #define PKT_REBUILT_FRAGMENT            (1<<25)     /**< Packet is rebuilt from
                                                      * fragments. */
+#define PKT_DETECT_HAS_STREAMDATA       (1<<26)     /**< Set by Detect() if raw stream data is available. */
+
+#define PKT_PSEUDO_DETECTLOG_FLUSH      (1<<27)     /**< Detect/log flush for protocol upgrade */
+
 
 /** \brief return 1 if the packet is a pseudo packet */
-#define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)
+#define PKT_IS_PSEUDOPKT(p) \
+    ((p)->flags & (PKT_PSEUDO_STREAM_END|PKT_PSEUDO_DETECTLOG_FLUSH))
 
 #define PKT_SET_SRC(p, src_val) ((p)->pkt_src = src_val)
+
+/** \brief return true if *this* packet needs to trigger a verdict.
+ *
+ *  If we have the root packet, and we have none outstanding,
+ *  we can verdict now.
+ *
+ *  If we have a upper layer packet, it's the only one and root
+ *  is already processed, we can verdict now.
+ *
+ *  Otherwise, a future packet will issue the verdict.
+ */
+static inline bool VerdictTunnelPacket(Packet *p)
+{
+    bool verdict = true;
+    SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
+    SCMutexLock(m);
+    const uint16_t outstanding = TUNNEL_PKT_TPR(p) - TUNNEL_PKT_RTV(p);
+    SCLogDebug("tunnel: outstanding %u", outstanding);
+
+    /* if there are packets outstanding, we won't verdict this one */
+    if (IS_TUNNEL_ROOT_PKT(p) && !IS_TUNNEL_PKT_VERDICTED(p) && !outstanding) {
+        // verdict
+        SCLogDebug("root %p: verdict", p);
+    } else if (!IS_TUNNEL_ROOT_PKT(p) && outstanding == 1 && p->root && IS_TUNNEL_PKT_VERDICTED(p->root)) {
+        // verdict
+        SCLogDebug("tunnel %p: verdict", p);
+    } else {
+        verdict = false;
+    }
+    SCMutexUnlock(m);
+    return verdict;
+}
 
 #endif /* __DECODE_H__ */
 

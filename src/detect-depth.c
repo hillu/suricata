@@ -33,6 +33,7 @@
 #include "detect-content.h"
 #include "detect-uricontent.h"
 #include "detect-byte-extract.h"
+#include "detect-depth.h"
 
 #include "flow-var.h"
 #include "app-layer.h"
@@ -40,7 +41,7 @@
 #include "util-byte.h"
 #include "util-debug.h"
 
-static int DetectDepthSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectDepthSetup (DetectEngineCtx *, Signature *, const char *);
 
 void DetectDepthRegister (void)
 {
@@ -51,48 +52,16 @@ void DetectDepthRegister (void)
     sigmatch_table[DETECT_DEPTH].Setup = DetectDepthSetup;
     sigmatch_table[DETECT_DEPTH].Free  = NULL;
     sigmatch_table[DETECT_DEPTH].RegisterTests = NULL;
-
-    sigmatch_table[DETECT_DEPTH].flags |= SIGMATCH_PAYLOAD;
 }
 
-static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depthstr)
+static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, const char *depthstr)
 {
-    char *str = depthstr;
-    char dubbed = 0;
+    const char *str = depthstr;
     SigMatch *pm = NULL;
     int ret = -1;
 
-    /* Strip leading and trailing "s. */
-    if (depthstr[0] == '\"') {
-        str = SCStrdup(depthstr + 1);
-        if (unlikely(str == NULL))
-            goto end;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        dubbed = 1;
-    }
-
     /* retrive the sm to apply the depth against */
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        pm = SigMatchGetLastSMFromLists(s, 2, DETECT_CONTENT, s->sm_lists_tail[s->list]);
-    } else {
-        pm =  SigMatchGetLastSMFromLists(s, 28,
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
-    }
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "depth needs "
                    "preceding content, uricontent option, http_client_body, "
@@ -151,7 +120,5 @@ static int DetectDepthSetup (DetectEngineCtx *de_ctx, Signature *s, char *depths
 
     ret = 0;
  end:
-    if (dubbed)
-        SCFree(str);
     return ret;
 }

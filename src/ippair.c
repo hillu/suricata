@@ -96,7 +96,7 @@ void IPPairFree(IPPair *h)
     }
 }
 
-IPPair *IPPairNew(Address *a, Address *b)
+static IPPair *IPPairNew(Address *a, Address *b)
 {
     IPPair *p = IPPairAlloc();
     if (p == NULL)
@@ -137,17 +137,14 @@ void IPPairInitConfig(char quiet)
     SC_ATOMIC_INIT(ippair_prune_idx);
     IPPairQueueInit(&ippair_spare_q);
 
-#ifndef AFLFUZZ_NO_RANDOM
-    unsigned int seed = RandomTimePreseed();
     /* set defaults */
-    ippair_config.hash_rand   = (int)( IPPAIR_DEFAULT_HASHSIZE * (rand_r(&seed) / RAND_MAX + 1.0));
-#endif
+    ippair_config.hash_rand   = (uint32_t)RandomGet();
     ippair_config.hash_size   = IPPAIR_DEFAULT_HASHSIZE;
     ippair_config.memcap      = IPPAIR_DEFAULT_MEMCAP;
     ippair_config.prealloc    = IPPAIR_DEFAULT_PREALLOC;
 
     /* Check if we have memcap and hash_size defined at config */
-    char *conf_val;
+    const char *conf_val;
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
@@ -206,7 +203,7 @@ void IPPairInitConfig(char quiet)
     (void) SC_ATOMIC_ADD(ippair_memuse, (ippair_config.hash_size * sizeof(IPPairHashRow)));
 
     if (quiet == FALSE) {
-        SCLogConfig("allocated %llu bytes of memory for the ippair hash... "
+        SCLogConfig("allocated %"PRIu64" bytes of memory for the ippair hash... "
                   "%" PRIu32 " buckets of size %" PRIuMAX "",
                   SC_ATOMIC_GET(ippair_memuse), ippair_config.hash_size,
                   (uintmax_t)sizeof(IPPairHashRow));
@@ -233,7 +230,7 @@ void IPPairInitConfig(char quiet)
     if (quiet == FALSE) {
         SCLogConfig("preallocated %" PRIu32 " ippairs of size %" PRIu16 "",
                 ippair_spare_q.len, g_ippair_size);
-        SCLogConfig("ippair memory usage: %llu bytes, maximum: %"PRIu64,
+        SCLogConfig("ippair memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(ippair_memuse), ippair_config.memcap);
     }
 
@@ -248,7 +245,7 @@ void IPPairPrintStats (void)
     SCLogPerf("ippairbits added: %" PRIu32 ", removed: %" PRIu32 ", max memory usage: %" PRIu32 "",
         ippairbits_added, ippairbits_removed, ippairbits_memuse_max);
 #endif /* IPPAIRBITS_STATS */
-    SCLogPerf("ippair memory usage: %llu bytes, maximum: %"PRIu64,
+    SCLogPerf("ippair memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
             SC_ATOMIC_GET(ippair_memuse), ippair_config.memcap);
     return;
 }
@@ -471,7 +468,7 @@ static IPPair *IPPairGetNew(Address *a, Address *b)
     return h;
 }
 
-void IPPairInit(IPPair *h, Address *a, Address *b)
+static void IPPairInit(IPPair *h, Address *a, Address *b)
 {
     COPY_ADDRESS(a, &h->a[0]);
     COPY_ADDRESS(b, &h->a[1]);

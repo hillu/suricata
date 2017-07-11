@@ -83,7 +83,7 @@ SC_ATOMIC_DECLARE(unsigned int, flow_prune_idx);
 SC_ATOMIC_DECLARE(unsigned int, flow_flags);
 
 void FlowRegisterTests(void);
-void FlowInitFlowProto();
+void FlowInitFlowProto(void);
 int FlowSetProtoFreeFunc(uint8_t, void (*Free)(void *));
 
 /* Run mode selected at suricata.c */
@@ -94,7 +94,7 @@ void FlowCleanupAppLayer(Flow *f)
     if (f == NULL || f->proto == 0)
         return;
 
-    AppLayerParserStateCleanup(f->proto, f->alproto, f->alstate, f->alparser);
+    AppLayerParserStateCleanup(f, f->alstate, f->alparser);
     f->alstate = NULL;
     f->alparser = NULL;
     return;
@@ -175,6 +175,38 @@ void FlowSetHasAlertsFlag(Flow *f)
 int FlowHasAlerts(const Flow *f)
 {
     if (f->flags & FLOW_HAS_ALERTS) {
+        return 1;
+    }
+
+    return 0;
+}
+
+/** \brief Set flag to indicate to change proto for the flow
+ *
+ * \param f flow
+ */
+void FlowSetChangeProtoFlag(Flow *f)
+{
+    f->flags |= FLOW_CHANGE_PROTO;
+}
+
+/** \brief Unset flag to indicate to change proto for the flow
+ *
+ * \param f flow
+ */
+void FlowUnsetChangeProtoFlag(Flow *f)
+{
+    f->flags &= ~FLOW_CHANGE_PROTO;
+}
+
+/** \brief Check if change proto flag is set for flow
+ * \param f flow
+ * \retval 1 change proto flag is set
+ * \retval 0 change proto flag is not set
+ */
+int FlowChangeProto(Flow *f)
+{
+    if (f->flags & FLOW_CHANGE_PROTO) {
         return 1;
     }
 
@@ -349,11 +381,8 @@ void FlowInitConfig(char quiet)
     FlowQueueInit(&flow_spare_q);
     FlowQueueInit(&flow_recycle_q);
 
-#ifndef AFLFUZZ_NO_RANDOM
-    unsigned int seed = RandomTimePreseed();
     /* set defaults */
-    flow_config.hash_rand   = (int)( FLOW_DEFAULT_HASHSIZE * (rand_r(&seed) / RAND_MAX + 1.0));
-#endif
+    flow_config.hash_rand   = (uint32_t)RandomGet();
     flow_config.hash_size   = FLOW_DEFAULT_HASHSIZE;
     flow_config.memcap      = FLOW_DEFAULT_MEMCAP;
     flow_config.prealloc    = FLOW_DEFAULT_PREALLOC;
@@ -374,7 +403,7 @@ void FlowInitConfig(char quiet)
     }
 
     /* Check if we have memcap and hash_size defined at config */
-    char *conf_val;
+    const char *conf_val;
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
@@ -431,7 +460,7 @@ void FlowInitConfig(char quiet)
     (void) SC_ATOMIC_ADD(flow_memuse, (flow_config.hash_size * sizeof(FlowBucket)));
 
     if (quiet == FALSE) {
-        SCLogConfig("allocated %llu bytes of memory for the flow hash... "
+        SCLogConfig("allocated %"PRIu64" bytes of memory for the flow hash... "
                   "%" PRIu32 " buckets of size %" PRIuMAX "",
                   SC_ATOMIC_GET(flow_memuse), flow_config.hash_size,
                   (uintmax_t)sizeof(FlowBucket));
@@ -459,7 +488,7 @@ void FlowInitConfig(char quiet)
     if (quiet == FALSE) {
         SCLogConfig("preallocated %" PRIu32 " flows of size %" PRIuMAX "",
                 flow_spare_q.len, (uintmax_t)(sizeof(Flow) + + FlowStorageSize()));
-        SCLogConfig("flow memory usage: %llu bytes, maximum: %"PRIu64,
+        SCLogConfig("flow memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(flow_memuse), flow_config.memcap);
     }
 

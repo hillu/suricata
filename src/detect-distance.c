@@ -37,6 +37,7 @@
 #include "detect-uricontent.h"
 #include "detect-pcre.h"
 #include "detect-byte-extract.h"
+#include "detect-distance.h"
 
 #include "flow-var.h"
 
@@ -45,8 +46,8 @@
 #include "detect-bytejump.h"
 #include "util-unittest-helper.h"
 
-static int DetectDistanceSetup(DetectEngineCtx *, Signature *, char *);
-void DetectDistanceRegisterTests(void);
+static int DetectDistanceSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectDistanceRegisterTests(void);
 
 void DetectDistanceRegister(void)
 {
@@ -57,49 +58,17 @@ void DetectDistanceRegister(void)
     sigmatch_table[DETECT_DISTANCE].Setup = DetectDistanceSetup;
     sigmatch_table[DETECT_DISTANCE].Free  = NULL;
     sigmatch_table[DETECT_DISTANCE].RegisterTests = DetectDistanceRegisterTests;
-
-    sigmatch_table[DETECT_DISTANCE].flags |= SIGMATCH_PAYLOAD;
 }
 
 static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
-        char *distancestr)
+        const char *distancestr)
 {
-    char *str = distancestr;
-    char dubbed = 0;
+    const char *str = distancestr;
     SigMatch *pm = NULL;
     int ret = -1;
 
-    /* Strip leading and trailing "s. */
-    if (distancestr[0] == '\"') {
-        str = SCStrdup(distancestr + 1);
-        if (unlikely(str == NULL))
-            goto end;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        dubbed = 1;
-    }
-
-    /* retrive the sm to apply the depth against */
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        pm = SigMatchGetLastSMFromLists(s, 2, DETECT_CONTENT, s->sm_lists_tail[s->list]);
-    } else {
-        pm =  SigMatchGetLastSMFromLists(s, 28,
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
-    }
+    /* retrieve the sm to apply the distance against */
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_OFFSET_MISSING_CONTENT, "distance needs "
                    "preceding content, uricontent option, http_client_body, "
@@ -147,9 +116,8 @@ static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
     }
     cd->flags |= DETECT_CONTENT_DISTANCE;
 
-    SigMatch *prev_pm = SigMatchGetLastSMFromLists(s, 4,
-                                                   DETECT_CONTENT, pm->prev,
-                                                   DETECT_PCRE, pm->prev);
+    SigMatch *prev_pm = DetectGetLastSMByListPtr(s, pm->prev,
+            DETECT_CONTENT, DETECT_PCRE, -1);
     if (prev_pm == NULL) {
         ret = 0;
         goto end;
@@ -163,7 +131,11 @@ static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
                        "only content");
             goto end;
         }
-        prev_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        if ((cd->flags & DETECT_CONTENT_NEGATED) == 0) {
+            prev_cd->flags |= DETECT_CONTENT_DISTANCE_NEXT;
+        } else {
+            prev_cd->flags |= DETECT_CONTENT_RELATIVE_NEXT;
+        }
     } else if (prev_pm->type == DETECT_PCRE) {
         DetectPcreData *pd = (DetectPcreData *)prev_pm->ctx;
         pd->flags |= DETECT_PCRE_RELATIVE_NEXT;
@@ -171,8 +143,6 @@ static int DetectDistanceSetup (DetectEngineCtx *de_ctx, Signature *s,
 
     ret = 0;
  end:
-    if (dubbed)
-        SCFree(str);
     return ret;
 }
 
@@ -236,7 +206,7 @@ end:
  * distance works, if the previous keyword is byte_jump and content
  * (bug 163)
  */
-int DetectDistanceTestPacket01 (void)
+static int DetectDistanceTestPacket01 (void)
 {
     int result = 0;
     uint8_t buf[] = { 0x01, 0x00, 0x00, 0x00, 0x00, 0x00 };
@@ -260,7 +230,7 @@ end:
 }
 #endif /* UNITTESTS */
 
-void DetectDistanceRegisterTests(void)
+static void DetectDistanceRegisterTests(void)
 {
 #ifdef UNITTESTS
     UtRegisterTest("DetectDistanceTest01 -- distance / within mix",

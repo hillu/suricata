@@ -164,6 +164,10 @@
 #include <sys/stat.h>
 #endif
 
+#if HAVE_SYS_MMAN_H
+#include <sys/mman.h>
+#endif
+
 #if HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -225,7 +229,8 @@
 #endif
 /* Appears not all current distros have jansson that defines this. */
 #ifndef json_boolean
-#define json_boolean(val)      ((val) ? json_true() : json_false())
+#define json_boolean(val)      SCJsonBool((val))
+//#define json_boolean(val)      ((val) ? json_true() : json_false())
 #endif
 #endif
 
@@ -278,37 +283,61 @@
 
 /** Windows does not define __WORDSIZE, but it uses __X86__ */
 #ifndef __WORDSIZE
-	#if defined(__X86__) || defined(_X86_)
-		#define __WORDSIZE 32
-	#else
-		#if defined(__X86_64__) || defined(_X86_64_)
-			#define __WORDSIZE 64
-		#endif
-	#endif
+    #if defined(__X86__) || defined(_X86_) || defined(_M_IX86)
+        #define __WORDSIZE 32
+    #else
+        #if defined(__X86_64__) || defined(_X86_64_) || \
+            defined(__x86_64)   || defined(__x86_64__) || \
+            defined(__amd64)    || defined(__amd64__)
+            #define __WORDSIZE 64
+        #endif
+    #endif
+#endif
 
-    #ifndef __WORDSIZE
-        #warning Defaulting to __WORDSIZE 32
+/** if not succesful yet try the data models */
+#ifndef __WORDSIZE
+    #if defined(_ILP32) || defined(__ILP32__)
         #define __WORDSIZE 32
     #endif
+    #if defined(_LP64) || defined(__LP64__)
+        #define __WORDSIZE 64
+    #endif
+#endif
+
+#ifndef __WORDSIZE
+    #warning Defaulting to __WORDSIZE 32
+    #define __WORDSIZE 32
 #endif
 
 /** darwin doesn't defined __BYTE_ORDER and friends, but BYTE_ORDER */
 #ifndef __BYTE_ORDER
-#ifdef BYTE_ORDER
-#define __BYTE_ORDER BYTE_ORDER
-#endif
+    #if defined(BYTE_ORDER)
+        #define __BYTE_ORDER BYTE_ORDER
+    #elif defined(__BYTE_ORDER__)
+        #define __BYTE_ORDER __BYTE_ORDER__
+    #else
+        #error "byte order not detected"
+    #endif
 #endif
 
 #ifndef __LITTLE_ENDIAN
-#ifdef LITTLE_ENDIAN
-#define __LITTLE_ENDIAN LITTLE_ENDIAN
-#endif
+    #if defined(LITTLE_ENDIAN)
+        #define __LITTLE_ENDIAN LITTLE_ENDIAN
+    #elif defined(__ORDER_LITTLE_ENDIAN__)
+        #define __LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
+    #endif
 #endif
 
 #ifndef __BIG_ENDIAN
-#ifdef BIG_ENDIAN
-#define __BIG_ENDIAN BIG_ENDIAN
+    #if defined(BIG_ENDIAN)
+        #define __BIG_ENDIAN BIG_ENDIAN
+    #elif defined(__ORDER_BIG_ENDIAN__)
+        #define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
+    #endif
 #endif
+
+#if !defined(__LITTLE_ENDIAN) && !defined(__BIG_ENDIAN)
+    #error "byte order: can't figure out big or little"
 #endif
 
 #ifndef HAVE_PCRE_FREE_STUDY
@@ -333,7 +362,9 @@
 typedef enum PacketProfileDetectId_ {
     PROF_DETECT_IPONLY,
     PROF_DETECT_RULES,
-    PROF_DETECT_STATEFUL,
+    PROF_DETECT_STATEFUL_START,
+    PROF_DETECT_STATEFUL_CONT,
+    PROF_DETECT_STATEFUL_UPDATE,
     PROF_DETECT_PREFILTER,
     PROF_DETECT_PF_PKT,
     PROF_DETECT_PF_PAYLOAD,
@@ -365,6 +396,7 @@ typedef enum {
     LOGGER_JSON_HTTP,
     LOGGER_JSON_SMTP,
     LOGGER_JSON_TLS,
+    LOGGER_JSON_NFS,
     LOGGER_JSON_TEMPLATE,
     LOGGER_TLS_STORE,
     LOGGER_TLS,
@@ -379,6 +411,7 @@ typedef enum {
     LOGGER_PRELUDE,
     LOGGER_PCAP,
     LOGGER_JSON_DNP3,
+    LOGGER_JSON_VARS,
     LOGGER_SIZE,
 } LoggerId;
 

@@ -25,7 +25,8 @@
 
 #include "suricata-common.h"
 
-#include "util-detect-file-hash.h"
+#include "detect-engine.h"
+#include "detect-file-hash-common.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
@@ -33,7 +34,7 @@
 
 #ifndef HAVE_NSS
 
-static int DetectFileSha1SetupNoSupport (DetectEngineCtx *a, Signature *b, char *c)
+static int DetectFileSha1SetupNoSupport (DetectEngineCtx *a, Signature *b, const char *c)
 {
     SCLogError(SC_ERR_NO_SHA1_SUPPORT, "no SHA-1 calculation support built in, needed for filesha1 keyword");
     return -1;
@@ -57,8 +58,9 @@ void DetectFileSha1Register(void)
 
 #else /* HAVE_NSS */
 
-static int DetectFileSha1Setup (DetectEngineCtx *, Signature *, char *);
+static int DetectFileSha1Setup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFileSha1RegisterTests(void);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for keyword: filesha1
@@ -72,6 +74,8 @@ void DetectFileSha1Register(void)
     sigmatch_table[DETECT_FILESHA1].Setup = DetectFileSha1Setup;
     sigmatch_table[DETECT_FILESHA1].Free  = DetectFileHashFree;
     sigmatch_table[DETECT_FILESHA1].RegisterTests = DetectFileSha1RegisterTests;
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 
     SCLogDebug("registering filesha1 rule option");
     return;
@@ -88,13 +92,13 @@ void DetectFileSha1Register(void)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFileSha1Setup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFileSha1Setup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILESHA1);
+    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILESHA1, g_file_match_list_id);
 }
 
 #ifdef UNITTESTS
-static int SHA1MatchLookupString(ROHashTable *hash, char *string)
+static int SHA1MatchLookupString(ROHashTable *hash, const char *string)
 {
     uint8_t sha1[20];
     if (ReadHashString(sha1, string, "file", 88, 40) == 1) {

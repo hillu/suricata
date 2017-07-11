@@ -43,6 +43,7 @@
 #include "detect-engine-state.h"
 #include "detect-engine-content-inspection.h"
 #include "detect-engine-prefilter.h"
+#include "detect-engine-hsbd.h"
 
 #include "flow-util.h"
 #include "util-debug.h"
@@ -262,11 +263,9 @@ int PrefilterTxHttpResponseBodyRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
 
 
 int DetectEngineInspectHttpServerBody(ThreadVars *tv,
-                                      DetectEngineCtx *de_ctx,
-                                      DetectEngineThreadCtx *det_ctx,
-                                      Signature *s, Flow *f, uint8_t flags,
-                                      void *alstate,
-                                      void *tx, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *tx, uint64_t tx_id)
 {
     HtpState *htp_state = (HtpState *)alstate;
     uint32_t buffer_len = 0;
@@ -283,7 +282,7 @@ int DetectEngineInspectHttpServerBody(ThreadVars *tv,
     det_ctx->buffer_offset = 0;
     det_ctx->discontinue_matching = 0;
     det_ctx->inspection_recursion_counter = 0;
-    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_FILEDATA],
+    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
                                           f,
                                           (uint8_t *)buffer,
                                           buffer_len,

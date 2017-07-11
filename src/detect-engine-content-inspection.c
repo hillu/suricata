@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2011 Open Information Security Foundation
+/* Copyright (C) 2007-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -99,7 +99,7 @@
  *  \retval 1 match
  */
 int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, SigMatch *sm,
+                                  const Signature *s, const SigMatchData *smd,
                                   Flow *f,
                                   uint8_t *buffer, uint32_t buffer_len,
                                   uint32_t stream_start_offset,
@@ -112,19 +112,19 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 
     if (det_ctx->inspection_recursion_counter == de_ctx->inspection_recursion_limit) {
         det_ctx->discontinue_matching = 1;
-        KEYWORD_PROFILING_END(det_ctx, sm->type, 0);
+        KEYWORD_PROFILING_END(det_ctx, smd->type, 0);
         SCReturnInt(0);
     }
 
-    if (sm == NULL || buffer_len == 0) {
-        KEYWORD_PROFILING_END(det_ctx, sm->type, 0);
+    if (smd == NULL || buffer_len == 0) {
+        KEYWORD_PROFILING_END(det_ctx, smd->type, 0);
         SCReturnInt(0);
     }
 
     /* \todo unify this which is phase 2 of payload inspection unification */
-    if (sm->type == DETECT_CONTENT) {
+    if (smd->type == DETECT_CONTENT) {
 
-        DetectContentData *cd = (DetectContentData *)sm->ctx;
+        DetectContentData *cd = (DetectContentData *)smd->ctx;
         SCLogDebug("inspecting content %"PRIu32" buffer_len %"PRIu32, cd->id, buffer_len);
 
         /* we might have already have this content matched by the mpm.
@@ -273,19 +273,27 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 #ifdef DEBUG
             BUG_ON(sbuffer_len > buffer_len);
 #endif
-
-            /* \todo Add another optimization here.  If cd->content_len is
-             * greater than sbuffer_len found is anyways NULL */
-
-            /* do the actual search */
-            found = SpmScan(cd->spm_ctx, det_ctx->spm_thread_ctx, sbuffer,
-                            sbuffer_len);
+            if (cd->flags & DETECT_CONTENT_ENDS_WITH && depth < buffer_len) {
+                SCLogDebug("depth < buffer_len while DETECT_CONTENT_ENDS_WITH is set. Can't possibly match.");
+                found = NULL;
+            } else if (cd->content_len > sbuffer_len) {
+                found = NULL;
+            } else {
+                /* do the actual search */
+                found = SpmScan(cd->spm_ctx, det_ctx->spm_thread_ctx, sbuffer,
+                        sbuffer_len);
+            }
 
             /* next we evaluate the result in combination with the
              * negation flag. */
             SCLogDebug("found %p cd negated %s", found, cd->flags & DETECT_CONTENT_NEGATED ? "true" : "false");
 
             if (found == NULL && !(cd->flags & DETECT_CONTENT_NEGATED)) {
+                if ((cd->flags & (DETECT_CONTENT_DISTANCE|DETECT_CONTENT_WITHIN)) == 0) {
+                    /* independent match from previous matches, so failure is fatal */
+                    det_ctx->discontinue_matching = 1;
+                }
+
                 goto no_match;
             } else if (found == NULL && (cd->flags & DETECT_CONTENT_NEGATED)) {
                 goto match;
@@ -301,41 +309,49 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                 SCLogDebug("content %"PRIu32" matched at offset %"PRIu32"", cd->id, match_offset);
                 det_ctx->buffer_offset = match_offset;
 
-                /* Match branch, add replace to the list if needed */
-                if (cd->flags & DETECT_CONTENT_REPLACE) {
-                    if (inspection_mode == DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD) {
-                        /* we will need to replace content if match is confirmed */
-                        det_ctx->replist = DetectReplaceAddToList(det_ctx->replist, found, cd);
-                    } else {
-                        SCLogWarning(SC_ERR_INVALID_VALUE, "Can't modify payload without packet");
+                if ((cd->flags & DETECT_CONTENT_ENDS_WITH) == 0 || match_offset == buffer_len) {
+                    /* Match branch, add replace to the list if needed */
+                    if (cd->flags & DETECT_CONTENT_REPLACE) {
+                        if (inspection_mode == DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD) {
+                            /* we will need to replace content if match is confirmed */
+                            det_ctx->replist = DetectReplaceAddToList(det_ctx->replist, found, cd);
+                        } else {
+                            SCLogWarning(SC_ERR_INVALID_VALUE, "Can't modify payload without packet");
+                        }
                     }
+
+                    /* if this is the last match we're done */
+                    if (smd->is_last) {
+                        goto match;
+                    }
+
+                    SCLogDebug("content %"PRIu32, cd->id);
+                    KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
+
+                    /* see if the next buffer keywords match. If not, we will
+                     * search for another occurence of this content and see
+                     * if the others match then until we run out of matches */
+                    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd+1,
+                            f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
+                    if (r == 1) {
+                        SCReturnInt(1);
+                    }
+                    SCLogDebug("no match for 'next sm'");
+
+                    if (det_ctx->discontinue_matching) {
+                        SCLogDebug("'next sm' said to discontinue this right now");
+                        goto no_match;
+                    }
+
+                    /* no match and no reason to look for another instance */
+                    if ((cd->flags & DETECT_CONTENT_WITHIN_NEXT) == 0) {
+                        SCLogDebug("'next sm' does not depend on me, so we can give up");
+                        det_ctx->discontinue_matching = 1;
+                        goto no_match;
+                    }
+
+                    SCLogDebug("'next sm' depends on me %p, lets see what we can do (flags %u)", cd, cd->flags);
                 }
-                if (!(cd->flags & DETECT_CONTENT_RELATIVE_NEXT)) {
-                    SCLogDebug("no relative match coming up, so this is a match");
-                    goto match;
-                }
-
-                /* bail out if we have no next match. Technically this is an
-                 * error, as the current cd has the DETECT_CONTENT_RELATIVE_NEXT
-                 * flag set. */
-                if (sm->next == NULL) {
-                    goto no_match;
-                }
-
-                SCLogDebug("content %"PRIu32, cd->id);
-                KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
-
-                /* see if the next buffer keywords match. If not, we will
-                 * search for another occurence of this content and see
-                 * if the others match then until we run out of matches */
-                int r = DetectEngineContentInspection(de_ctx, det_ctx, s, sm->next, f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
-                if (r == 1) {
-                    SCReturnInt(1);
-                }
-
-                if (det_ctx->discontinue_matching)
-                    goto no_match;
-
                 /* set the previous match offset to the start of this match + 1 */
                 prev_offset = (match_offset - (cd->content_len - 1));
                 SCLogDebug("trying to see if there is another match after prev_offset %"PRIu32, prev_offset);
@@ -343,10 +359,10 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
 
         } while(1);
 
-    } else if (sm->type == DETECT_ISDATAAT) {
+    } else if (smd->type == DETECT_ISDATAAT) {
         SCLogDebug("inspecting isdataat");
 
-        DetectIsdataatData *id = (DetectIsdataatData *)sm->ctx;
+        DetectIsdataatData *id = (DetectIsdataatData *)smd->ctx;
         if (id->flags & ISDATAAT_RELATIVE) {
             if (det_ctx->buffer_offset + id->dataat > buffer_len) {
                 SCLogDebug("det_ctx->buffer_offset + id->dataat %"PRIu32" > %"PRIu32, det_ctx->buffer_offset + id->dataat, buffer_len);
@@ -373,9 +389,9 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
             }
         }
 
-    } else if (sm->type == DETECT_PCRE) {
+    } else if (smd->type == DETECT_PCRE) {
         SCLogDebug("inspecting pcre");
-        DetectPcreData *pe = (DetectPcreData *)sm->ctx;
+        DetectPcreData *pe = (DetectPcreData *)smd->ctx;
         uint32_t prev_buffer_offset = det_ctx->buffer_offset;
         uint32_t prev_offset = 0;
         int r = 0;
@@ -385,7 +401,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
             Packet *p = NULL;
             if (inspection_mode == DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD)
                 p = (Packet *)data;
-            r = DetectPcrePayloadMatch(det_ctx, s, sm, p, f,
+            r = DetectPcrePayloadMatch(det_ctx, s, smd, p, f,
                                        buffer, buffer_len);
             if (r == 0) {
                 goto no_match;
@@ -395,7 +411,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                 SCLogDebug("no relative match coming up, so this is a match");
                 goto match;
             }
-            KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
+            KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
 
             /* save it, in case we need to do a pcre match once again */
             prev_offset = det_ctx->pcre_match_start_offset;
@@ -403,8 +419,8 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
             /* see if the next payload keywords match. If not, we will
              * search for another occurence of this pcre and see
              * if the others match, until we run out of matches */
-            r = DetectEngineContentInspection(de_ctx, det_ctx, s, sm->next,
-                                              f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
+            r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd+1,
+                    f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
             if (r == 1) {
                 SCReturnInt(1);
             }
@@ -416,8 +432,8 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
             det_ctx->pcre_match_start_offset = prev_offset;
         } while (1);
 
-    } else if (sm->type == DETECT_BYTETEST) {
-        DetectBytetestData *btd = (DetectBytetestData *)sm->ctx;
+    } else if (smd->type == DETECT_BYTETEST) {
+        DetectBytetestData *btd = (DetectBytetestData *)smd->ctx;
         uint8_t flags = btd->flags;
         int32_t offset = btd->offset;
         uint64_t value = btd->value;
@@ -438,15 +454,15 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                       DETECT_BYTETEST_LITTLE: 0);
         }
 
-        if (DetectBytetestDoMatch(det_ctx, s, sm->ctx, buffer, buffer_len, flags,
+        if (DetectBytetestDoMatch(det_ctx, s, smd->ctx, buffer, buffer_len, flags,
                                   offset, value) != 1) {
             goto no_match;
         }
 
         goto match;
 
-    } else if (sm->type == DETECT_BYTEJUMP) {
-        DetectBytejumpData *bjd = (DetectBytejumpData *)sm->ctx;
+    } else if (smd->type == DETECT_BYTEJUMP) {
+        DetectBytejumpData *bjd = (DetectBytejumpData *)smd->ctx;
         uint8_t flags = bjd->flags;
         int32_t offset = bjd->offset;
 
@@ -464,16 +480,16 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                       DETECT_BYTEJUMP_LITTLE: 0);
         }
 
-        if (DetectBytejumpDoMatch(det_ctx, s, sm->ctx, buffer, buffer_len,
+        if (DetectBytejumpDoMatch(det_ctx, s, smd->ctx, buffer, buffer_len,
                                   flags, offset) != 1) {
             goto no_match;
         }
 
         goto match;
 
-    } else if (sm->type == DETECT_BYTE_EXTRACT) {
+    } else if (smd->type == DETECT_BYTE_EXTRACT) {
 
-        DetectByteExtractData *bed = (DetectByteExtractData *)sm->ctx;
+        DetectByteExtractData *bed = (DetectByteExtractData *)smd->ctx;
         uint8_t endian = bed->endian;
 
         /* if we have dce enabled we will have to use the endianness
@@ -488,7 +504,7 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                        DETECT_BYTE_EXTRACT_ENDIAN_LITTLE : DETECT_BYTE_EXTRACT_ENDIAN_BIG);
         }
 
-        if (DetectByteExtractDoMatch(det_ctx, sm, s, buffer,
+        if (DetectByteExtractDoMatch(det_ctx, smd, s, buffer,
                                      buffer_len,
                                      &det_ctx->bj_values[bed->local_id],
                                      endian) != 1) {
@@ -498,11 +514,11 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         goto match;
 
         /* we should never get here, but bail out just in case */
-    } else if (sm->type == DETECT_AL_URILEN) {
+    } else if (smd->type == DETECT_AL_URILEN) {
         SCLogDebug("inspecting uri len");
 
         int r = 0;
-        DetectUrilenData *urilend = (DetectUrilenData *) sm->ctx;
+        DetectUrilenData *urilend = (DetectUrilenData *) smd->ctx;
 
         switch (urilend->mode) {
             case DETECT_URILEN_EQ:
@@ -534,10 +550,10 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         goto no_match;
 #ifdef HAVE_LUA
     }
-    else if (sm->type == DETECT_LUA) {
+    else if (smd->type == DETECT_LUA) {
         SCLogDebug("lua starting");
 
-        if (DetectLuaMatchBuffer(det_ctx, s, sm, buffer, buffer_len,
+        if (DetectLuaMatchBuffer(det_ctx, s, smd, buffer, buffer_len,
                     det_ctx->buffer_offset, f) != 1)
         {
             SCLogDebug("lua no_match");
@@ -546,10 +562,10 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
         SCLogDebug("lua match");
         goto match;
 #endif /* HAVE_LUA */
-    } else if (sm->type == DETECT_BASE64_DECODE) {
-        if (DetectBase64DecodeDoMatch(det_ctx, s, sm, buffer, buffer_len)) {
+    } else if (smd->type == DETECT_BASE64_DECODE) {
+        if (DetectBase64DecodeDoMatch(det_ctx, s, smd, buffer, buffer_len)) {
             if (s->sm_arrays[DETECT_SM_LIST_BASE64_DATA] != NULL) {
-                KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
+                KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
                 if (DetectBase64DataDoMatch(de_ctx, det_ctx, s, f)) {
                     /* Base64 is a terminal list. */
                     goto final_match;
@@ -557,25 +573,30 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
             }
         }
     } else {
-        SCLogDebug("sm->type %u", sm->type);
+        SCLogDebug("sm->type %u", smd->type);
 #ifdef DEBUG
         BUG_ON(1);
 #endif
     }
 
 no_match:
-    KEYWORD_PROFILING_END(det_ctx, sm->type, 0);
+    KEYWORD_PROFILING_END(det_ctx, smd->type, 0);
     SCReturnInt(0);
 
 match:
     /* this sigmatch matched, inspect the next one. If it was the last,
      * the buffer portion of the signature matched. */
-    if (sm->next != NULL) {
-        KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
-        int r = DetectEngineContentInspection(de_ctx, det_ctx, s, sm->next, f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
+    if (!smd->is_last) {
+        KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
+        int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd+1,
+                f, buffer, buffer_len, stream_start_offset, inspection_mode, data);
         SCReturnInt(r);
     }
 final_match:
-    KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
+    KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
     SCReturnInt(1);
 }
+
+#ifdef UNITTESTS
+#include "tests/detect-engine-content-inspection.c"
+#endif

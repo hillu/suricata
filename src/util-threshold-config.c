@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -57,7 +57,10 @@ typedef enum ThresholdRuleType {
     THRESHOLD_TYPE_SUPPRESS,
 } ThresholdRuleType;
 
+#ifdef UNITTESTS
 /* File descriptor for unittests */
+static FILE *g_ut_threshold_fp = NULL;
+#endif
 
 /* common base for all options */
 #define DETECT_BASE_REGEX "^\\s*(event_filter|threshold|rate_filter|suppress)\\s*gen_id\\s*(\\d+)\\s*,\\s*sig_id\\s*(\\d+)\\s*(.*)\\s*$"
@@ -94,6 +97,8 @@ static pcre_extra *regex_rate_study = NULL;
 static pcre *regex_suppress = NULL;
 static pcre_extra *regex_suppress_study = NULL;
 
+static void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd);
+
 /**
  * \brief Returns the path for the Threshold Config file.  We check if we
  *        can retrieve the path from the yaml conf file.  If it is not present,
@@ -103,9 +108,9 @@ static pcre_extra *regex_suppress_study = NULL;
  * \retval log_filename Pointer to a string containing the path for the
  *                      Threshold Config file.
  */
-static char *SCThresholdConfGetConfFilename(const DetectEngineCtx *de_ctx)
+static const char *SCThresholdConfGetConfFilename(const DetectEngineCtx *de_ctx)
 {
-    char *log_filename = NULL;
+    const char *log_filename = NULL;
 
     if (de_ctx != NULL && strlen(de_ctx->config_prefix) > 0) {
         char config_value[256];
@@ -137,26 +142,30 @@ static char *SCThresholdConfGetConfFilename(const DetectEngineCtx *de_ctx)
  *        file.
  *
  * \param de_ctx Pointer to the Detection Engine Context.
- * \param utfd Pointer for unit test file descriptor.
  *
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-int SCThresholdConfInitContext(DetectEngineCtx *de_ctx, FILE *utfd)
+int SCThresholdConfInitContext(DetectEngineCtx *de_ctx)
 {
-    char *filename = NULL;
+    const char *filename = NULL;
     const char *eb = NULL;
-    FILE *fd = utfd;
     int eo;
     int opts = 0;
-
+#ifndef UNITTESTS
+    FILE *fd = NULL;
+#else
+    FILE *fd = g_ut_threshold_fp;
     if (fd == NULL) {
+#endif
         filename = SCThresholdConfGetConfFilename(de_ctx);
         if ( (fd = fopen(filename, "r")) == NULL) {
             SCLogWarning(SC_ERR_FOPEN, "Error opening file: \"%s\": %s", filename, strerror(errno));
             goto error;
         }
+#ifdef UNITTESTS
     }
+#endif
 
     regex_base = pcre_compile(DETECT_BASE_REGEX, opts, &eb, &eo, NULL);
     if (regex_base == NULL) {
@@ -209,6 +218,9 @@ int SCThresholdConfInitContext(DetectEngineCtx *de_ctx, FILE *utfd)
     SCThresholdConfParseFile(de_ctx, fd);
     SCThresholdConfDeInitContext(de_ctx, fd);
 
+#ifdef UNITTESTS
+    g_ut_threshold_fp = NULL;
+#endif
     SCLogDebug("Global thresholding options defined");
     return 0;
 
@@ -223,7 +235,7 @@ error:
  * \param de_ctx Pointer to the Detection Engine Context.
  * \param fd Pointer to file descriptor.
  */
-void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
+static void SCThresholdConfDeInitContext(DetectEngineCtx *de_ctx, FILE *fd)
 {
     if (fd != NULL)
         fclose(fd);
@@ -448,8 +460,8 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
     /* Install it */
     if (id == 0 && gid == 0) {
         for (s = de_ctx->sig_list; s != NULL; s = s->next) {
-            sm = SigMatchGetLastSMFromLists(s, 2,
-                    DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+            sm = DetectGetLastSMByListId(s,
+                    DETECT_SM_LIST_THRESHOLD, DETECT_THRESHOLD, -1);
             if (sm != NULL) {
                 SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
                         "an event var set.  The signature event var is "
@@ -458,8 +470,8 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
                 continue;
             }
 
-            sm = SigMatchGetLastSMFromLists(s, 2,
-                    DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+            sm = DetectGetLastSMByListId(s,
+                    DETECT_SM_LIST_THRESHOLD, DETECT_DETECTION_FILTER, -1);
             if (sm != NULL) {
                 SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
                         "an event var set.  The signature event var is "
@@ -511,18 +523,8 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
     } else if (id == 0 && gid > 0) {
         for (s = de_ctx->sig_list; s != NULL; s = s->next) {
             if (s->gid == gid) {
-                sm = SigMatchGetLastSMFromLists(s, 2,
-                        DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
-                if (sm != NULL) {
-                    SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
-                            "an event var set.  The signature event var is "
-                            "given precedence over the threshold.conf one.  "
-                            "We'll change this in the future though.", id);
-                    continue;
-                }
-
-                sm = SigMatchGetLastSMFromLists(s, 2,
-                        DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+                sm = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+                        DETECT_THRESHOLD, DETECT_DETECTION_FILTER, -1);
                 if (sm != NULL) {
                     SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
                             "an event var set.  The signature event var is "
@@ -584,8 +586,8 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
             if (parsed_type != TYPE_SUPPRESS && parsed_type != TYPE_THRESHOLD &&
                 parsed_type != TYPE_BOTH && parsed_type != TYPE_LIMIT)
             {
-                sm = SigMatchGetLastSMFromLists(s, 2,
-                        DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+                sm = DetectGetLastSMByListId(s,
+                        DETECT_SM_LIST_THRESHOLD, DETECT_THRESHOLD, -1);
                 if (sm != NULL) {
                     SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
                             "a threshold set. The signature event var is "
@@ -594,8 +596,8 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
                     goto end;
                 }
 
-                sm = SigMatchGetLastSMFromLists(s, 2,
-                        DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+                sm = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+                        DETECT_DETECTION_FILTER, -1);
                 if (sm != NULL) {
                     SCLogWarning(SC_ERR_EVENT_ENGINE, "signature sid:%"PRIu32 " has "
                             "a detection_filter set. The signature event var is "
@@ -605,20 +607,14 @@ static int SetupThresholdRule(DetectEngineCtx *de_ctx, uint32_t id, uint32_t gid
                 }
 
             /* replace threshold on sig if we have a global override for it */
-#if 1
             } else if (parsed_type == TYPE_THRESHOLD || parsed_type == TYPE_BOTH || parsed_type == TYPE_LIMIT) {
-                sm = SigMatchGetLastSMFromLists(s, 2,
-                        DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
-                if (sm == NULL) {
-                    sm = SigMatchGetLastSMFromLists(s, 2,
-                            DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
-                }
+                sm = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+                        DETECT_THRESHOLD, DETECT_DETECTION_FILTER, -1);
                 if (sm != NULL) {
                     SigMatchRemoveSMFromList(s, sm, DETECT_SM_LIST_THRESHOLD);
                     SigMatchFree(sm);
                     sm = NULL;
                 }
-#endif
             }
 
             de = SCMalloc(sizeof(DetectThresholdData));
@@ -1000,7 +996,7 @@ error:
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
+static int SCThresholdConfAddThresholdtype(char *rawstr, DetectEngineCtx *de_ctx)
 {
     uint8_t parsed_type = 0;
     uint8_t parsed_track = 0;
@@ -1050,7 +1046,7 @@ error:
  * \retval 1 On the argument string being a comment or blank line
  * \retval 0 Otherwise
  */
-int SCThresholdConfIsLineBlankOrComment(char *line)
+static int SCThresholdConfIsLineBlankOrComment(char *line)
 {
     while (*line != '\0') {
         /* we have a comment */
@@ -1076,7 +1072,7 @@ int SCThresholdConfIsLineBlankOrComment(char *line)
  * \retval the position of the slash making it multiline
  * \retval 0 Otherwise
  */
-int SCThresholdConfLineIsMultiline(char *line)
+static int SCThresholdConfLineIsMultiline(char *line)
 {
     int flag = 0;
     char *rline = line;
@@ -1103,7 +1099,7 @@ int SCThresholdConfLineIsMultiline(char *line)
  * \param fd Pointer to file descriptor.
  * \retval int of the line length
  */
-int SCThresholdConfLineLength(FILE *fd)
+static int SCThresholdConfLineLength(FILE *fd)
 {
     long pos = ftell(fd);
     int len = 0;
@@ -1200,7 +1196,7 @@ void SCThresholdConfParseFile(DetectEngineCtx *de_ctx, FILE *fd)
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD01()
+static FILE *SCThresholdConfGenerateValidDummyFD01(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1221,7 +1217,7 @@ FILE *SCThresholdConfGenerateValidDummyFD01()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateInValidDummyFD02()
+static FILE *SCThresholdConfGenerateInValidDummyFD02(void)
 {
     FILE *fd;
     const char *buffer =
@@ -1239,7 +1235,7 @@ FILE *SCThresholdConfGenerateInValidDummyFD02()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD03()
+static FILE *SCThresholdConfGenerateValidDummyFD03(void)
 {
     FILE *fd;
     const char *buffer =
@@ -1258,7 +1254,7 @@ FILE *SCThresholdConfGenerateValidDummyFD03()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD04()
+static FILE *SCThresholdConfGenerateValidDummyFD04(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1278,7 +1274,7 @@ FILE *SCThresholdConfGenerateValidDummyFD04()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD05()
+static FILE *SCThresholdConfGenerateValidDummyFD05(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1299,7 +1295,7 @@ FILE *SCThresholdConfGenerateValidDummyFD05()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD06()
+static FILE *SCThresholdConfGenerateValidDummyFD06(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1320,7 +1316,7 @@ FILE *SCThresholdConfGenerateValidDummyFD06()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD07()
+static FILE *SCThresholdConfGenerateValidDummyFD07(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1340,7 +1336,7 @@ FILE *SCThresholdConfGenerateValidDummyFD07()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD08()
+static FILE *SCThresholdConfGenerateValidDummyFD08(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1360,7 +1356,7 @@ FILE *SCThresholdConfGenerateValidDummyFD08()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD09()
+static FILE *SCThresholdConfGenerateValidDummyFD09(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1381,7 +1377,7 @@ FILE *SCThresholdConfGenerateValidDummyFD09()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD10()
+static FILE *SCThresholdConfGenerateValidDummyFD10(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1401,7 +1397,7 @@ FILE *SCThresholdConfGenerateValidDummyFD10()
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD11()
+static FILE *SCThresholdConfGenerateValidDummyFD11(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -1421,43 +1417,31 @@ FILE *SCThresholdConfGenerateValidDummyFD11()
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest01(void)
+static int SCThresholdConfTest01(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD01();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD01();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_LIMIT && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60))
-            result = 1;
-    }
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
 
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    FAIL_IF_NOT(de->type == TYPE_LIMIT && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1466,42 +1450,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest02(void)
+static int SCThresholdConfTest02(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:100;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:100;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD01();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD01();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_BOTH && de->track == TRACK_DST && de->count == 10 && de->seconds == 60))
-            result = 1;
-    }
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+
+    FAIL_IF_NOT(de->type == TYPE_BOTH && de->track == TRACK_DST && de->count == 10 && de->seconds == 60);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1510,42 +1483,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest03(void)
+static int SCThresholdConfTest03(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD01();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD01();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60))
-            result = 1;
-    }
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+
+    FAIL_IF_NOT(de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1554,43 +1516,27 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest04(void)
+static int SCThresholdConfTest04(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateInValidDummyFD02();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateInValidDummyFD02();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NOT_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de == NULL)
-            return result;
-        else
-            result = 1;
-    }
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-    return result == 0;
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 
 /**
@@ -1599,69 +1545,53 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest05(void)
+static int SCThresholdConfTest05(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    Signature *s = NULL, *ns = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1;)");
+    FAIL_IF_NULL(sig);
+    sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any 80 (msg:\"Threshold limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
 
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any 80 (msg:\"Threshold limit\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any 80 (msg:\"Threshold limit\"; gid:1; sid:100;)");
+    FAIL_IF_NULL(sig);
 
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any 80 (msg:\"Threshold limit\"; gid:1; sid:100;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD03();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    fd = SCThresholdConfGenerateValidDummyFD03();
-    SCThresholdConfInitContext(de_ctx,fd);
+    Signature *s = de_ctx->sig_list;
+    SigMatch *m = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
+    FAIL_IF_NULL(m->ctx);
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NOT(de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60);
 
-    for (s = de_ctx->sig_list; s != NULL;) {
+    s = de_ctx->sig_list->next;
+    m = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
+    FAIL_IF_NULL(m->ctx);
+    de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NOT(de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60);
 
-        ns = s->next;
+    s = de_ctx->sig_list->next->next;
+    m = DetectGetLastSMByListId(s, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
+    FAIL_IF_NULL(m->ctx);
+    de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NOT(de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60);
 
-        if(s->id == 1 || s->id == 10 || s->id == 100) {
-
-            m = SigMatchGetLastSMFromLists(s, 2,
-                                           DETECT_THRESHOLD, s->sm_lists[DETECT_SM_LIST_THRESHOLD]);
-
-            if(m == NULL)   {
-                goto end;
-            } else {
-                de = (DetectThresholdData *)m->ctx;
-                if(de != NULL && (de->type == TYPE_THRESHOLD && de->track == TRACK_SRC && de->count == 100 && de->seconds == 60))
-                    result++;
-            }
-        }
-
-        s = ns;
-    }
-
-    if(result == 3)
-        result = 1;
-
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-    DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1670,43 +1600,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest06(void)
+static int SCThresholdConfTest06(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD04();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD04();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_LIMIT && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60))
-            result = 1;
-    }
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_LIMIT && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60);
 
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1715,43 +1633,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest07(void)
+static int SCThresholdConfTest07(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD05();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD05();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_DETECTION_FILTER, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_DETECTION_FILTER, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_RATE && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60))
-            result = 1;
-    }
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_RATE && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60);
 
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1761,43 +1667,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest08(void)
+static int SCThresholdConfTest08(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD06();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD06();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_DETECTION_FILTER, sig->sm_lists[DETECT_SM_LIST_THRESHOLD]);
+    SigMatch *m = DetectGetLastSMByListId(sig, DETECT_SM_LIST_THRESHOLD,
+            DETECT_DETECTION_FILTER, -1);
+    FAIL_IF_NULL(m);
 
-    if(m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_RATE && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60))
-            result = 1;
-    }
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_RATE && de->track == TRACK_SRC && de->count == 1 && de->seconds == 60);
 
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
@@ -1806,67 +1700,51 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest09(void)
+static int SCThresholdConfTest09(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
+    ThreadVars th_v;
+    memset(&th_v, 0, sizeof(th_v));
 
     HostInitConfig(HOST_QUIET);
 
-    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-
-    memset(&th_v, 0, sizeof(th_v));
-
     struct timeval ts;
-
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
+    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
+    FAIL_IF_NULL(p);
 
+    DetectEngineThreadCtx *det_ctx = NULL;
+
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"ratefilter test\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"ratefilter test\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(s);
 
-    fd = SCThresholdConfGenerateValidDummyFD07();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD07();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     TimeGet(&p->ts);
-
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP)) {
-        result = 0;
-        goto end;
-    }
-
+    FAIL_IF(p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP));
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP)) {
-        result = 0;
-        goto end;
-    }
-
+    FAIL_IF(p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP));
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP));
 
     TimeSetIncrementTime(2);
     TimeGet(&p->ts);
@@ -1874,10 +1752,7 @@ int SCThresholdConfTest09(void)
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || !(PACKET_TEST_ACTION(p, ACTION_DROP))) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(p->alerts.cnt != 1 || !(PACKET_TEST_ACTION(p, ACTION_DROP)));
 
     TimeSetIncrementTime(3);
     TimeGet(&p->ts);
@@ -1885,10 +1760,7 @@ int SCThresholdConfTest09(void)
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || !(PACKET_TEST_ACTION(p, ACTION_DROP))) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(p->alerts.cnt != 1 || !(PACKET_TEST_ACTION(p, ACTION_DROP)));
 
     TimeSetIncrementTime(10);
     TimeGet(&p->ts);
@@ -1896,31 +1768,18 @@ int SCThresholdConfTest09(void)
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP));
 
     p->alerts.cnt = 0;
     p->action = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    if (p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP)) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(p->alerts.cnt != 1 || PACKET_TEST_ACTION(p, ACTION_DROP));
 
-    result = 1;
-
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -1929,98 +1788,70 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest10(void)
+static int SCThresholdConfTest10(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
-    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
-    Packet *p2 = UTHBuildPacketSrcDst((uint8_t*)"lalala", 6, IPPROTO_TCP, "172.26.0.1", "172.26.0.10");
-
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    int alerts = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-
     struct timeval ts;
-
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
+    Packet *p1 = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
+    FAIL_IF_NULL(p1);
+    Packet *p2 = UTHBuildPacketSrcDst((uint8_t*)"lalala", 6, IPPROTO_TCP,
+            "172.26.0.1", "172.26.0.10");
+    FAIL_IF_NULL(p2);
+
+    ThreadVars th_v;
+    memset(&th_v, 0, sizeof(th_v));
+
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL || p2 == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"ratefilter test\"; gid:1; sid:10;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"ratefilter test\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(s);
 
-    fd = SCThresholdConfGenerateValidDummyFD08();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD08();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+    TimeGet(&p1->ts);
 
-    TimeGet(&p->ts);
-
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts = PacketAlertCheck(p, 10);
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    FAIL_IF(PacketAlertCheck(p1, 10));
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
-    alerts += PacketAlertCheck(p2, 10);
-    if (alerts > 0) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p2, 10));
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-    if (alerts != 1) {
-        result = 0;
-        goto end;
-    }
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    FAIL_IF_NOT(PacketAlertCheck(p1, 10) == 1);
 
     TimeSetIncrementTime(2);
-    TimeGet(&p->ts);
+    TimeGet(&p1->ts);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
-    alerts += PacketAlertCheck(p2, 10);
-    if (alerts != 2) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF_NOT(PacketAlertCheck(p2, 10) == 1);
 
     TimeSetIncrementTime(10);
-    TimeGet(&p->ts);
+    TimeGet(&p1->ts);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-    alerts += PacketAlertCheck(p, 10);
-
-    if (alerts == 2)
-        result = 1;
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
+    FAIL_IF_NOT(PacketAlertCheck(p1, 10) == 0);
 
     /* Ensure that a Threshold entry was installed at the sig */
-    if (de_ctx->ths_ctx.th_entry[sig->num] == NULL) {
-        result = 0;
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx->ths_ctx.th_entry[s->num]);
 
-end:
-    UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
+    UTHFreePacket(p1);
+    UTHFreePacket(p2);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2029,48 +1860,48 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest11(void)
+static int SCThresholdConfTest11(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
-    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    int alerts10 = 0;
-    int alerts11 = 0;
-    int alerts12 = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-
     struct timeval ts;
-
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
+    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
+    FAIL_IF_NULL(p);
+
+    ThreadVars th_v;
+    memset(&th_v, 0, sizeof(th_v));
+
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test limit\"; gid:1; sid:10;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test threshold\"; gid:1; sid:11;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test both\"; gid:1; sid:12;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(s);
+    s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test threshold\"; gid:1; sid:11;)");
+    FAIL_IF_NULL(s);
+    s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test both\"; gid:1; sid:12;)");
+    FAIL_IF_NULL(s);
 
-    fd = SCThresholdConfGenerateValidDummyFD09();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD09();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     TimeGet(&p->ts);
+
+    int alerts10 = 0;
+    int alerts11 = 0;
+    int alerts12 = 0;
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     alerts10 += PacketAlertCheck(p, 10);
@@ -2120,26 +1951,16 @@ int SCThresholdConfTest11(void)
     alerts11 += PacketAlertCheck(p, 11);
     alerts12 += PacketAlertCheck(p, 12);
 
-    if (alerts10 == 4)
-        result = 1;
-
+    FAIL_IF_NOT(alerts10 == 4);
     /* One on the first interval, another on the second */
-    if (alerts11 == 2)
-        result = 1;
+    FAIL_IF_NOT(alerts11 == 2);
+    FAIL_IF_NOT(alerts12 == 2);
 
-    if (alerts12 == 2)
-        result = 1;
-
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2148,48 +1969,48 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest12(void)
+static int SCThresholdConfTest12(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
-    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    int alerts10 = 0;
-    int alerts11 = 0;
-    int alerts12 = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-
     struct timeval ts;
-
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
+    Packet *p = UTHBuildPacket((uint8_t*)"lalala", 6, IPPROTO_TCP);
+    FAIL_IF_NULL(p);
+
+    ThreadVars th_v;
+    memset(&th_v, 0, sizeof(th_v));
+
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
+    DetectEngineThreadCtx *det_ctx = NULL;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test limit\"; gid:1; sid:10;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test threshold\"; gid:1; sid:11;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"event_filter test both\"; gid:1; sid:12;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test limit\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(s);
+    s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test threshold\"; gid:1; sid:11;)");
+    FAIL_IF_NULL(s);
+    s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"event_filter test both\"; gid:1; sid:12;)");
+    FAIL_IF_NULL(s);
 
-    fd = SCThresholdConfGenerateValidDummyFD10();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD10();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     TimeGet(&p->ts);
+
+    int alerts10 = 0;
+    int alerts11 = 0;
+    int alerts12 = 0;
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     alerts10 += PacketAlertCheck(p, 10);
@@ -2239,27 +2060,16 @@ int SCThresholdConfTest12(void)
     alerts11 += PacketAlertCheck(p, 11);
     alerts12 += PacketAlertCheck(p, 12);
 
-    /* Yes, none of the alerts will be out of the count of the given interval for type limit */
-    if (alerts10 == 10)
-        result = 1;
-
+    FAIL_IF_NOT(alerts10 == 10);
     /* One on the first interval, another on the second */
-    if (alerts11 == 1)
-        result = 1;
+    FAIL_IF_NOT(alerts11 == 1);
+    FAIL_IF_NOT(alerts12 == 1);
 
-    if (alerts12 == 1)
-        result = 1;
-
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2268,46 +2078,31 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest13(void)
+static int SCThresholdConfTest13(void)
 {
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
-    HostInitConfig(HOST_QUIET);
-
-    if (de_ctx == NULL)
-        return result;
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; gid:1; sid:1000;)");
+    FAIL_IF_NULL(sig);
 
-    fd = SCThresholdConfGenerateValidDummyFD11();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD11();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_SUPPRESS]);
+    SigMatch *m = DetectGetLastSMByListId(sig,
+            DETECT_SM_LIST_SUPPRESS, DETECT_THRESHOLD, -1);
+    FAIL_IF_NULL(m);
 
-    if (m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if(de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC))
-            result = 1;
+    DetectThresholdData *de = (DetectThresholdData *)m->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
 
-    }
-end:
-    SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2316,63 +2111,63 @@ end:
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int SCThresholdConfTest14(void)
+static int SCThresholdConfTest14(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
-    Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
+    Packet *p1 = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
                                     "192.168.0.100", 1234, 24);
-    Packet *p1 = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.1.1",
+    FAIL_IF_NULL(p1);
+    Packet *p2 = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.1.1",
                                     "192.168.0.100", 1234, 24);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
+    FAIL_IF_NULL(p2);
 
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+        "alert tcp any any -> any any (msg:\"suppress test\"; gid:1; sid:10000;)");
+    FAIL_IF_NULL(sig);
+    sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"suppress test 2\"; gid:1; sid:10;)");
+    FAIL_IF_NULL(sig);
+    sig = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"suppress test 3\"; gid:1; sid:1000;)");
+    FAIL_IF_NULL(sig);
+
+    ThreadVars th_v;
     memset(&th_v, 0, sizeof(th_v));
 
     struct timeval ts;
-
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
-
-    de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test\"; gid:1; sid:10000;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test 2\"; gid:1; sid:10;)");
-    sig = sig->next = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"suppress test 3\"; gid:1; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD11();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD11();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p1);
-    if ((PacketAlertCheck(p, 10000) == 0) && (PacketAlertCheck(p, 10) == 1) &&
-        (PacketAlertCheck(p, 1000) == 1) && (PacketAlertCheck(p1, 1000) == 0))
-        result = 1;
+    SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
 
-end:
-    UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    FAIL_IF_NOT(PacketAlertCheck(p1, 10000) == 0);
+    FAIL_IF_NOT(PacketAlertCheck(p1, 10) == 1);
+    FAIL_IF_NOT(PacketAlertCheck(p1, 1000) == 1);
+    FAIL_IF_NOT(PacketAlertCheck(p2, 1000) == 0);
+
+    UTHFreePacket(p1);
+    UTHFreePacket(p2);
 
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2383,37 +2178,32 @@ end:
  */
 static int SCThresholdConfTest15(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
                                     "192.168.0.100", 1234, 24);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
+    FAIL_IF_NULL(p);
 
+    ThreadVars th_v;
     memset(&th_v, 0, sizeof(th_v));
 
-    struct timeval ts;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
 
+    struct timeval ts;
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "drop tcp any any -> any any (msg:\"suppress test\"; content:\"lalala\"; gid:1; sid:10000;)");
+    FAIL_IF_NULL(sig);
 
-    de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"drop tcp any any -> any any (msg:\"suppress test\"; content:\"lalala\"; gid:1; sid:10000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD11();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD11();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -2421,27 +2211,15 @@ static int SCThresholdConfTest15(void)
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     /* 10000 shouldn't match */
-    if (PacketAlertCheck(p, 10000) != 0) {
-        printf("sid 10000 should not have alerted: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 10000) != 0);
     /* however, it should have set the drop flag */
-    if (!(PACKET_TEST_ACTION(p, ACTION_DROP))) {
-        printf("sid 10000 should have set DROP flag even if suppressed: ");
-        goto end;
-    }
+    FAIL_IF(!(PACKET_TEST_ACTION(p, ACTION_DROP)));
 
-    result = 1;
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2452,65 +2230,47 @@ end:
  */
 static int SCThresholdConfTest16(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.1.1",
                                     "192.168.0.100", 1234, 24);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
+    FAIL_IF_NULL(p);
 
+    ThreadVars th_v;
     memset(&th_v, 0, sizeof(th_v));
 
-    struct timeval ts;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
 
+    struct timeval ts;
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "drop tcp any any -> any any (msg:\"suppress test\"; gid:1; sid:1000;)");
+    FAIL_IF_NULL(sig);
 
-    de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"drop tcp any any -> any any (msg:\"suppress test\"; gid:1; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD11();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD11();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    /* 10000 shouldn't match */
-    if (PacketAlertCheck(p, 1000) != 0) {
-        printf("sid 1000 should not have alerted: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 1000) != 0);
     /* however, it should have set the drop flag */
-    if (!(PACKET_TEST_ACTION(p, ACTION_DROP))) {
-        printf("sid 1000 should have set DROP flag even if suppressed: ");
-        goto end;
-    }
+    FAIL_IF(!(PACKET_TEST_ACTION(p, ACTION_DROP)));
 
-    result = 1;
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2521,37 +2281,32 @@ end:
  */
 static int SCThresholdConfTest17(void)
 {
-    Signature *sig = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
 
     Packet *p = UTHBuildPacketReal((uint8_t*)"lalala", 6, IPPROTO_TCP, "192.168.0.10",
                                     "192.168.0.100", 1234, 24);
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
+    FAIL_IF_NULL(p);
 
+    ThreadVars th_v;
     memset(&th_v, 0, sizeof(th_v));
 
-    struct timeval ts;
+    DetectEngineThreadCtx *det_ctx = NULL;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
 
+    struct timeval ts;
     memset (&ts, 0, sizeof(struct timeval));
     TimeGet(&ts);
 
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL || p == NULL)
-        return result;
+    Signature *sig = DetectEngineAppendSig(de_ctx,
+            "drop tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:10000;)");
+    FAIL_IF_NULL(sig);
 
-    de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"drop tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:10000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD11();
-    SCThresholdConfInitContext(de_ctx,fd);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD11();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -2559,27 +2314,15 @@ static int SCThresholdConfTest17(void)
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
     /* 10000 shouldn't match */
-    if (PacketAlertCheck(p, 10000) != 0) {
-        printf("sid 10000 should not have alerted: ");
-        goto end;
-    }
+    FAIL_IF(PacketAlertCheck(p, 10000) != 0);
     /* however, it should have set the drop flag */
-    if (!(PACKET_TEST_ACTION(p, ACTION_DROP))) {
-        printf("sid 10000 should have set DROP flag even if suppressed: ");
-        goto end;
-    }
+    FAIL_IF(!(PACKET_TEST_ACTION(p, ACTION_DROP)));
 
-    result = 1;
-end:
     UTHFreePacket(p);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
-
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2587,7 +2330,7 @@ end:
  *
  * \retval fd Pointer to file descriptor.
  */
-static FILE *SCThresholdConfGenerateInvalidDummyFD12()
+static FILE *SCThresholdConfGenerateInvalidDummyFD12(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -2609,52 +2352,29 @@ static FILE *SCThresholdConfGenerateInvalidDummyFD12()
  */
 static int SCThresholdConfTest18(void)
 {
-    Signature *s = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-    SigMatch *sm = NULL;
-    DetectThresholdData *de = NULL;
-
     HostInitConfig(HOST_QUIET);
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return result;
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    s = DetectEngineAppendSig(de_ctx, "alert tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:2200029;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateInvalidDummyFD12();
-    SCThresholdConfInitContext(de_ctx,fd);
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:2200029;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateInvalidDummyFD12();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
     SigGroupBuild(de_ctx);
 
-    if (s->sm_lists[DETECT_SM_LIST_SUPPRESS] == NULL) {
-        printf("no thresholds: ");
-        goto end;
-    }
-    sm = s->sm_lists[DETECT_SM_LIST_SUPPRESS];
-    if (sm == NULL) {
-        printf("no sm: ");
-        goto end;
-    }
+    FAIL_IF_NULL(s->sm_arrays[DETECT_SM_LIST_SUPPRESS]);
+    SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_SUPPRESS];
+    DetectThresholdData *de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_DST);
 
-    de = (DetectThresholdData *)sm->ctx;
-    if (de == NULL) {
-        printf("no de: ");
-        goto end;
-    }
-    if (!(de->type == TYPE_SUPPRESS && de->track == TRACK_DST)) {
-        printf("de state wrong: ");
-        goto end;
-    }
-
-    result = 1;
-end:
     DetectEngineCtxFree(de_ctx);
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2662,7 +2382,7 @@ end:
  *
  * \retval fd Pointer to file descriptor.
  */
-static FILE *SCThresholdConfGenerateInvalidDummyFD13()
+static FILE *SCThresholdConfGenerateInvalidDummyFD13(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -2684,52 +2404,26 @@ static FILE *SCThresholdConfGenerateInvalidDummyFD13()
  */
 static int SCThresholdConfTest19(void)
 {
-    Signature *s = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-    SigMatch *sm = NULL;
-    DetectThresholdData *de = NULL;
-
     HostInitConfig(HOST_QUIET);
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        return result;
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-
-    s = DetectEngineAppendSig(de_ctx, "alert tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:2200029;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateInvalidDummyFD13();
-    SCThresholdConfInitContext(de_ctx,fd);
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp 192.168.0.10 any -> 192.168.0.100 any (msg:\"suppress test\"; gid:1; sid:2200029;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateInvalidDummyFD13();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
     SigGroupBuild(de_ctx);
-
-    if (s->sm_lists[DETECT_SM_LIST_SUPPRESS] == NULL) {
-        printf("no thresholds: ");
-        goto end;
-    }
-    sm = s->sm_lists[DETECT_SM_LIST_SUPPRESS];
-    if (sm == NULL) {
-        printf("no sm: ");
-        goto end;
-    }
-
-    de = (DetectThresholdData *)sm->ctx;
-    if (de == NULL) {
-        printf("no de: ");
-        goto end;
-    }
-    if (!(de->type == TYPE_SUPPRESS && de->track == TRACK_DST)) {
-        printf("de state wrong: ");
-        goto end;
-    }
-
-    result = 1;
-end:
+    FAIL_IF_NULL(s->sm_arrays[DETECT_SM_LIST_SUPPRESS]);
+    SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_SUPPRESS];
+    DetectThresholdData *de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_DST);
     DetectEngineCtxFree(de_ctx);
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2737,7 +2431,7 @@ end:
  *
  * \retval fd Pointer to file descriptor.
  */
-FILE *SCThresholdConfGenerateValidDummyFD20()
+static FILE *SCThresholdConfGenerateValidDummyFD20(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -2760,55 +2454,41 @@ FILE *SCThresholdConfGenerateValidDummyFD20()
  */
 static int SCThresholdConfTest20(void)
 {
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
-
-    if (de_ctx == NULL)
-        return result;
-
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; content:\"abc\"; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD20();
-    SCThresholdConfInitContext(de_ctx,fd);
-
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_SUPPRESS]);
-    if (m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-            m = m->next;
-            if (m != NULL)   {
-                de = (DetectThresholdData *)m->ctx;
-                if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-                    m = m->next;
-                    if (m != NULL)   {
-                        de = (DetectThresholdData *)m->ctx;
-                        if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-                            result = 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-end:
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; content:\"abc\"; sid:1000;)");
+    FAIL_IF_NULL(s);
+    FAIL_IF_NOT_NULL(g_ut_threshold_fp);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD20();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
     SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    FAIL_IF_NULL(s->sm_arrays[DETECT_SM_LIST_SUPPRESS]);
+
+    SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_SUPPRESS];
+    DetectThresholdData *de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF(smd->is_last);
+
+    smd++;
+    de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF(smd->is_last);
+
+    smd++;
+    de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF_NOT(smd->is_last);
+
     DetectEngineCtxFree(de_ctx);
     HostShutdown();
-    return result;
+    PASS;
 }
 
 /**
@@ -2820,55 +2500,40 @@ end:
  */
 static int SCThresholdConfTest21(void)
 {
-    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    DetectThresholdData *de = NULL;
-    Signature *sig = NULL;
-    SigMatch *m = NULL;
-    int result = 0;
-    FILE *fd = NULL;
-
     HostInitConfig(HOST_QUIET);
-
-    if (de_ctx == NULL)
-        return result;
-
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-
-    sig = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"Threshold limit\"; content:\"abc\"; threshold: type limit, track by_dst, count 5, seconds 60; sid:1000;)");
-    if (sig == NULL) {
-        goto end;
-    }
-
-    fd = SCThresholdConfGenerateValidDummyFD20();
-    SCThresholdConfInitContext(de_ctx,fd);
-
-    m = SigMatchGetLastSMFromLists(sig, 2,
-                                   DETECT_THRESHOLD, sig->sm_lists[DETECT_SM_LIST_SUPPRESS]);
-    if (m != NULL)   {
-        de = (DetectThresholdData *)m->ctx;
-        if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-            m = m->next;
-            if (m != NULL)   {
-                de = (DetectThresholdData *)m->ctx;
-                if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-                    m = m->next;
-                    if (m != NULL)   {
-                        de = (DetectThresholdData *)m->ctx;
-                        if (de != NULL && (de->type == TYPE_SUPPRESS && de->track == TRACK_SRC)) {
-                            result = 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-end:
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any (msg:\"Threshold limit\"; content:\"abc\"; threshold: type limit, track by_dst, count 5, seconds 60; sid:1000;)");
+    FAIL_IF_NULL(s);
+    g_ut_threshold_fp = SCThresholdConfGenerateValidDummyFD20();
+    FAIL_IF_NULL(g_ut_threshold_fp);
+    SCThresholdConfInitContext(de_ctx);
     SigGroupBuild(de_ctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
+    FAIL_IF_NULL(s->sm_arrays[DETECT_SM_LIST_SUPPRESS]);
+
+    SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_SUPPRESS];
+    DetectThresholdData *de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF(smd->is_last);
+
+    smd++;
+    de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF(smd->is_last);
+
+    smd++;
+    de = (DetectThresholdData *)smd->ctx;
+    FAIL_IF_NULL(de);
+    FAIL_IF_NOT(de->type == TYPE_SUPPRESS && de->track == TRACK_SRC);
+    FAIL_IF_NOT(smd->is_last);
+
     DetectEngineCtxFree(de_ctx);
     HostShutdown();
-    return result;
+    PASS;
 }
 
 #endif /* UNITTESTS */

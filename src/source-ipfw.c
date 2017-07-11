@@ -54,7 +54,7 @@
  *
  */
 
-TmEcode NoIPFWSupportExit(ThreadVars *, void *, void **);
+TmEcode NoIPFWSupportExit(ThreadVars *, const void *, void **);
 
 void TmModuleReceiveIPFWRegister (void)
 {
@@ -90,7 +90,7 @@ void TmModuleDecodeIPFWRegister (void)
     tmm_modules[TMM_DECODEIPFW].flags = TM_FLAG_DECODE_TM;
 }
 
-TmEcode NoIPFWSupportExit(ThreadVars *tv, void *initdata, void **data)
+TmEcode NoIPFWSupportExit(ThreadVars *tv, const void *initdata, void **data)
 {
 
     SCLogError(SC_ERR_IPFW_NOSUPPORT,"Error creating thread %s: you do not have support for ipfw "
@@ -130,7 +130,7 @@ static SCMutex ipfw_init_lock;
 
 /* IPFW Prototypes */
 void *IPFWGetQueue(int number);
-TmEcode ReceiveIPFWThreadInit(ThreadVars *, void *, void **);
+TmEcode ReceiveIPFWThreadInit(ThreadVars *, const void *, void **);
 TmEcode ReceiveIPFW(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 TmEcode ReceiveIPFWLoop(ThreadVars *tv, void *data, void *slot);
 void ReceiveIPFWThreadExitStats(ThreadVars *, void *);
@@ -138,11 +138,11 @@ TmEcode ReceiveIPFWThreadDeinit(ThreadVars *, void *);
 
 TmEcode IPFWSetVerdict(ThreadVars *, IPFWThreadVars *, Packet *);
 TmEcode VerdictIPFW(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
-TmEcode VerdictIPFWThreadInit(ThreadVars *, void *, void **);
+TmEcode VerdictIPFWThreadInit(ThreadVars *, const void *, void **);
 void VerdictIPFWThreadExitStats(ThreadVars *, void *);
 TmEcode VerdictIPFWThreadDeinit(ThreadVars *, void *);
 
-TmEcode DecodeIPFWThreadInit(ThreadVars *, void *, void **);
+TmEcode DecodeIPFWThreadInit(ThreadVars *, const void *, void **);
 TmEcode DecodeIPFWThreadDeinit(ThreadVars *tv, void *data);
 TmEcode DecodeIPFW(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
@@ -326,7 +326,7 @@ TmEcode ReceiveIPFWLoop(ThreadVars *tv, void *data, void *slot)
  * \param data pointer gets populated with IPFWThreadVars
  *
  */
-TmEcode ReceiveIPFWThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode ReceiveIPFWThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     struct timeval timev;
     int flag;
@@ -483,7 +483,7 @@ TmEcode DecodeIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
  * \param initdata pointer for passing in args
  * \param data pointer that gets cast into IPFWThreadVars for ptv
  */
-TmEcode DecodeIPFWThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode DecodeIPFWThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     DecodeThreadVars *dtv = NULL;
     dtv = DecodeThreadVarsAlloc(tv);
@@ -623,30 +623,12 @@ TmEcode VerdictIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
      *  if this is a tunnel packet we check if we are ready to verdict
      * already. */
     if (IS_TUNNEL_PKT(p)) {
-        char verdict = 1;
-
-        SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
-        SCMutexLock(m);
-
-        /* if there are more tunnel packets than ready to verdict packets,
-         * we won't verdict this one
-         */
-        if (TUNNEL_PKT_TPR(p) > TUNNEL_PKT_RTV(p)) {
-            SCLogDebug("VerdictIPFW: not ready to verdict yet: "
-                    "TUNNEL_PKT_TPR(p) > TUNNEL_PKT_RTV(p) = %" PRId32
-                    " > %" PRId32 "", TUNNEL_PKT_TPR(p), TUNNEL_PKT_RTV(p));
-            verdict = 0;
-        }
-
-        SCMutexUnlock(m);
+        bool verdict = VerdictTunnelPacket(p);
 
         /* don't verdict if we are not ready */
-        if (verdict == 1) {
+        if (verdict == true) {
             SCLogDebug("Setting verdict on tunnel");
             retval = IPFWSetVerdict(tv, ptv, p->root ? p->root : p);
-
-        } else {
-            TUNNEL_INCR_PKT_RTV(p);
         }
     } else {
         /* no tunnel, verdict normally */
@@ -665,7 +647,7 @@ TmEcode VerdictIPFW(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
  * \param initdata pointer for passing in args
  * \param data pointer that gets cast into IPFWThreadVars for ptv
  */
-TmEcode VerdictIPFWThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode VerdictIPFWThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
 
     IPFWThreadVars *ptv = NULL;

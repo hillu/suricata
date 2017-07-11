@@ -82,7 +82,7 @@ static inline TmEcode FlowUpdate(Packet *p)
 
 static TmEcode FlowWorkerThreadDeinit(ThreadVars *tv, void *data);
 
-static TmEcode FlowWorkerThreadInit(ThreadVars *tv, void *initdata, void **data)
+static TmEcode FlowWorkerThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     FlowWorkerThreadData *fw = SCCalloc(1, sizeof(*fw));
     if (fw == NULL)
@@ -119,6 +119,7 @@ static TmEcode FlowWorkerThreadInit(ThreadVars *tv, void *initdata, void **data)
         return TM_ECODE_FAILED;
     }
 
+    DecodeRegisterPerfCounters(fw->dtv, tv);
     AppLayerRegisterThreadCounters(tv);
 
     /* setup pq for stream end pkts */
@@ -160,7 +161,7 @@ static TmEcode FlowWorkerThreadDeinit(ThreadVars *tv, void *data)
 TmEcode Detect(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq);
 TmEcode StreamTcp (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
-TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *preq, PacketQueue *unused)
+static TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *preq, PacketQueue *unused)
 {
     FlowWorkerThreadData *fw = data;
     void *detect_thread = SC_ATOMIC_GET(fw->detect_thread);
@@ -197,13 +198,26 @@ TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *preq, Pac
     SCLogDebug("packet %"PRIu64" has flow? %s", p->pcap_cnt, p->flow ? "yes" : "no");
 
     /* handle TCP and app layer */
-    if (PKT_IS_TCP(p)) {
-        SCLogDebug("packet %"PRIu64" is TCP", p->pcap_cnt);
+    if (p->flow && PKT_IS_TCP(p)) {
+        SCLogDebug("packet %"PRIu64" is TCP. Direction %s", p->pcap_cnt, PKT_IS_TOSERVER(p) ? "TOSERVER" : "TOCLIENT");
         DEBUG_ASSERT_FLOW_LOCKED(p->flow);
+
+        /* if detect is disabled, we need to apply file flags to the flow
+         * here on the first packet. */
+        if (detect_thread == NULL &&
+                ((PKT_IS_TOSERVER(p) && (p->flowflags & FLOW_PKT_TOSERVER_FIRST)) ||
+                 (PKT_IS_TOCLIENT(p) && (p->flowflags & FLOW_PKT_TOCLIENT_FIRST))))
+        {
+            DisableDetectFlowFileFlags(p->flow);
+        }
 
         FLOWWORKER_PROFILING_START(p, PROFILE_FLOWWORKER_STREAM);
         StreamTcp(tv, p, fw->stream_thread, &fw->pq, NULL);
         FLOWWORKER_PROFILING_END(p, PROFILE_FLOWWORKER_STREAM);
+
+        if (FlowChangeProto(p->flow)) {
+            StreamTcpDetectLogFlush(tv, fw->stream_thread, p->flow, p, &fw->pq);
+        }
 
         /* Packets here can safely access p->flow as it's locked */
         SCLogDebug("packet %"PRIu64": extra packets %u", p->pcap_cnt, fw->pq.len);
@@ -249,8 +263,10 @@ TmEcode FlowWorker(ThreadVars *tv, Packet *p, void *data, PacketQueue *preq, Pac
 
     /*  Release tcp segments. Done here after alerting can use them. */
     if (p->flow != NULL && p->proto == IPPROTO_TCP) {
+        FLOWWORKER_PROFILING_START(p, PROFILE_FLOWWORKER_TCPPRUNE);
         StreamTcpPruneSession(p->flow, p->flowflags & FLOW_PKT_TOSERVER ?
                 STREAM_TOSERVER : STREAM_TOCLIENT);
+        FLOWWORKER_PROFILING_END(p, PROFILE_FLOWWORKER_TCPPRUNE);
     }
 
     if (p->flow) {
@@ -286,6 +302,8 @@ const char *ProfileFlowWorkerIdToString(enum ProfileFlowWorkerId fwi)
             return "app-layer";
         case PROFILE_FLOWWORKER_DETECT:
             return "detect";
+        case PROFILE_FLOWWORKER_TCPPRUNE:
+            return "tcp-prune";
         case PROFILE_FLOWWORKER_SIZE:
             return "size";
     }

@@ -33,6 +33,7 @@
 #include "detect-engine-state.h"
 #include "detect-engine-content-inspection.h"
 #include "detect-engine-prefilter.h"
+#include "detect-engine-uri.h"
 
 #include "flow-util.h"
 #include "util-debug.h"
@@ -105,11 +106,9 @@ int PrefilterTxUriRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
  * \retval 2 Sig can't match.
  */
 int DetectEngineInspectHttpUri(ThreadVars *tv,
-                                  DetectEngineCtx *de_ctx,
-                                  DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, Flow *f, uint8_t flags,
-                                  void *alstate,
-                                  void *txv, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
 {
     HtpTxUserData *tx_ud = htp_tx_get_user_data(txv);
 
@@ -131,7 +130,7 @@ int DetectEngineInspectHttpUri(ThreadVars *tv,
 
     /* Inspect all the uricontents fetched on each
      * transaction at the app layer */
-    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_UMATCH],
+    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
                                           f,
                                           bstr_ptr(tx_ud->request_uri_normalized),
                                           bstr_len(tx_ud->request_uri_normalized),
@@ -226,8 +225,6 @@ static int UriTestSig01(void)
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -351,8 +348,6 @@ static int UriTestSig02(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -474,8 +469,6 @@ static int UriTestSig03(void)
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -599,8 +592,6 @@ static int UriTestSig04(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -722,8 +713,6 @@ static int UriTestSig05(void)
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -847,8 +836,6 @@ static int UriTestSig06(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -970,8 +957,6 @@ static int UriTestSig07(void)
         printf("sig 1 didnt alert, but it should: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -1095,8 +1080,6 @@ static int UriTestSig08(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -1219,8 +1202,6 @@ static int UriTestSig09(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -1342,8 +1323,6 @@ static int UriTestSig10(void)
         printf("sig 1 alerted, but it should not: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -1468,8 +1447,6 @@ static int UriTestSig11(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -1593,8 +1570,6 @@ static int UriTestSig12(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -1716,8 +1691,6 @@ static int UriTestSig13(void)
         printf("sig 1 didnt alert with pkt, but it should: ");
         goto end;
     }
-
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
 
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
@@ -1842,8 +1815,6 @@ static int UriTestSig14(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -1967,8 +1938,6 @@ static int UriTestSig15(void)
         goto end;
     }
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
-
     FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
@@ -2015,8 +1984,6 @@ end:
 /** \test Test pcre /U with anchored regex (bug 155) */
 static int UriTestSig16(void)
 {
-    int result = 0;
-    Flow f;
     HtpState *http_state = NULL;
     uint8_t http_buf1[] = "POST /search?q=123&aq=7123abcee HTTP/1.0\r\n"
         "User-Agent: Mozilla/1.0/\r\n"
@@ -2027,114 +1994,79 @@ static int UriTestSig16(void)
         "Cookie: hellocatch\r\n\r\n";
     uint32_t http_buf2_len = sizeof(http_buf2) - 1;
     TcpSession ssn;
-    Packet *p = NULL;
     Signature *s = NULL;
     ThreadVars tv;
     DetectEngineThreadCtx *det_ctx = NULL;
     AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
     memset(&tv, 0, sizeof(ThreadVars));
-    memset(&f, 0, sizeof(Flow));
     memset(&ssn, 0, sizeof(TcpSession));
+    StreamTcpInitConfig(TRUE);
 
-    p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
+    Packet *p = UTHBuildPacket(http_buf1, http_buf1_len, IPPROTO_TCP);
+    FAIL_IF_NULL(p);
+    p->tcph->th_seq = htonl(1000);
+    Flow *f = UTHBuildFlow(AF_INET, "192.168.1.5", "192.168.1.1", 41424, 80);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_TCP;
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.proto = IPPROTO_TCP;
-    f.flags |= FLOW_IPV4;
+    UTHAddSessionToFlow(f, 1000, 1000);
+    UTHAddStreamToFlow(f, 0, http_buf1, http_buf1_len);
 
-    p->flow = &f;
+    p->flow = f;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
-    f.alproto = ALPROTO_HTTP;
-
-    StreamTcpInitConfig(TRUE);
+    f->alproto = ALPROTO_HTTP;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    s = de_ctx->sig_list = SigInit(de_ctx, "drop tcp any any -> any any (msg:\"ET TROJAN Downadup/Conficker A or B Worm reporting\"; flow:to_server,established; uricontent:\"/search?q=\"; pcre:\"/^\\/search\\?q=[0-9]{1,3}(&aq=7(\\?[0-9a-f]{8})?)?/U\"; pcre:\"/\\x0d\\x0aHost\\: \\d+\\.\\d+\\.\\d+\\.\\d+\\x0d\\x0a/\"; sid:2009024; rev:9;)");
-    if (s == NULL) {
-        goto end;
-    }
+    s = de_ctx->sig_list = SigInit(de_ctx, "drop tcp any any -> any any (flow:to_server,established; uricontent:\"/search?q=\"; pcre:\"/^\\/search\\?q=[0-9]{1,3}(&aq=7(\\?[0-9a-f]{8})?)?/U\"; pcre:\"/\\x0d\\x0aHost\\: \\d+\\.\\d+\\.\\d+\\.\\d+\\x0d\\x0a/\"; sid:2009024; rev:9;)");
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    FLOWLOCK_WRLOCK(&f);
-    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
-                                STREAM_TOSERVER, http_buf1, http_buf1_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        FLOWLOCK_UNLOCK(&f);
-        goto end;
-    }
-    FLOWLOCK_UNLOCK(&f);
+    UTHAddStreamToFlow(f, 0, http_buf2, http_buf2_len);
 
-    http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf1, http_buf1_len);
+    FAIL_IF(r != 0);
+
+    http_state = f->alstate;
+    FAIL_IF_NULL(http_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
-
-    if (!PacketAlertCheck(p, 2009024)) {
-        printf("sig 1 didnt alert with pkt, but it should: ");
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 2009024));
     p->alerts.cnt = 0;
 
-    DetectEngineStateReset(f.de_state, STREAM_TOSERVER | STREAM_TOCLIENT);
     p->payload = http_buf2;
     p->payload_len = http_buf2_len;
 
-    FLOWLOCK_WRLOCK(&f);
-    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+    r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
                             STREAM_TOSERVER, http_buf2, http_buf2_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        FLOWLOCK_UNLOCK(&f);
-        goto end;
-    }
-    FLOWLOCK_UNLOCK(&f);
+    FAIL_IF(r != 0);
 
-    http_state = f.alstate;
-    if (http_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    http_state = f->alstate;
+    FAIL_IF_NULL(http_state);
 
     /* do detect */
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
+    FAIL_IF(PacketAlertCheck(p, 2009024));
 
-    if (PacketAlertCheck(p, 2009024)) {
-        printf("sig 1 alerted, but it should not (host should not match): ");
-        goto end;
-    }
+    AppLayerParserThreadCtxFree(alp_tctx);
+    DetectEngineThreadCtxDeinit(&tv, det_ctx);
+    DetectEngineCtxFree(de_ctx);
 
-    result = 1;
-
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
-    if (det_ctx != NULL)
-        DetectEngineThreadCtxDeinit(&tv, det_ctx);
-    if (de_ctx != NULL)
-        SigGroupCleanup(de_ctx);
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
+    UTHRemoveSessionFromFlow(f);
+    UTHFreeFlow(f);
 
     StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
     UTHFreePacket(p);
-    return result;
+    PASS;
 }
 
 /**

@@ -42,7 +42,7 @@
 static pcre *parse_regex = NULL;
 static pcre_extra *parse_regex_study = NULL;
 
-static int DetectFastPatternSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectFastPatternSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectFastPatternRegisterTests(void);
 
 /* holds the list of sm match lists that need to be searched for a keyword
@@ -137,7 +137,6 @@ void DetectFastPatternRegister(void)
     sigmatch_table[DETECT_FAST_PATTERN].RegisterTests = DetectFastPatternRegisterTests;
 
     sigmatch_table[DETECT_FAST_PATTERN].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_FAST_PATTERN].flags |= SIGMATCH_PAYLOAD;
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
@@ -155,70 +154,34 @@ void DetectFastPatternRegister(void)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-static int DetectFastPatternSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectFastPatternSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
     char arg_substr[128] = "";
     DetectContentData *cd = NULL;
+    const int nlists = DetectBufferTypeMaxId();
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_PMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_UMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_DNSQUERYNAME_MATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_TLSSNI_MATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_TLSISSUER_MATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_TLSSUBJECT_MATCH] == NULL &&
-        s->sm_lists_tail[DETECT_SM_LIST_HTTP_REQLINEMATCH] == NULL) {
-        SCLogWarning(SC_WARN_COMPATIBILITY, "fast_pattern found inside the "
-                     "rule, without a preceding content based keyword.  "
-                     "Currently we provide fast_pattern support for content, "
-                     "uricontent, http_client_body, http_server_body, http_header, "
-                     "http_raw_header, http_method, http_cookie, "
-                     "http_raw_uri, http_stat_msg, http_stat_code, "
-                     "http_user_agent, http_host, http_raw_host, "
-                     "http_request_line, dns_query, "
-                     "tls_sni, tls_cert_issuer or tls_cert_subject option");
+    SigMatch *pm1 = DetectGetLastSMFromMpmLists(s);
+    SigMatch *pm2 = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
+    if (pm1 == NULL && pm2 == NULL) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "fast_pattern found inside "
+                "the rule, without a content context. Please use a "
+                "content based keyword before using fast_pattern");
         return -1;
     }
 
-    SigMatch *pm = SigMatchGetLastSMFromLists(s, 38,
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HTTP_REQLINEMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_DNSQUERYNAME_MATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_TLSSNI_MATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_TLSISSUER_MATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_TLSSUBJECT_MATCH]);
-    if (pm == NULL) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "fast_pattern found inside "
-                   "the rule, without a content context. Please use a "
-                   "content based keyword before using fast_pattern");
-        return -1;
+    SigMatch *pm = NULL;
+    if (pm1 && pm2) {
+        if (pm1->idx > pm2->idx)
+            pm = pm1;
+        else
+            pm = pm2;
+    } else if (pm1 && !pm2) {
+        pm = pm1;
+    } else {
+        pm = pm2;
     }
 
     cd = (DetectContentData *)pm->ctx;
@@ -242,9 +205,9 @@ static int DetectFastPatternSetup(DetectEngineCtx *de_ctx, Signature *s, char *a
         }
         else { /*allow only one content to have fast_pattern modifier*/
             int list_id = 0;
-            for (list_id = 0; list_id < DETECT_SM_LIST_MAX; list_id++) {
+            for (list_id = 0; list_id < nlists; list_id++) {
                 SigMatch *sm = NULL;
-                for (sm = s->sm_lists[list_id]; sm != NULL; sm = sm->next) {
+                for (sm = s->init_data->smlists[list_id]; sm != NULL; sm = sm->next) {
                     if (sm->type == DETECT_CONTENT) {
                         DetectContentData *tmp_cd = (DetectContentData *)sm->ctx;
                         if (tmp_cd->flags & DETECT_CONTENT_FAST_PATTERN) {
@@ -357,11 +320,24 @@ static int DetectFastPatternSetup(DetectEngineCtx *de_ctx, Signature *s, char *a
 /*----------------------------------Unittests---------------------------------*/
 
 #ifdef UNITTESTS
+static int g_file_data_buffer_id = 0;
+static int g_http_method_buffer_id = 0;
+static int g_http_uri_buffer_id = 0;
+static int g_http_ua_buffer_id = 0;
+static int g_http_cookie_buffer_id = 0;
+static int g_http_host_buffer_id = 0;
+static int g_http_raw_host_buffer_id = 0;
+static int g_http_stat_code_buffer_id = 0;
+static int g_http_stat_msg_buffer_id = 0;
+static int g_http_raw_header_buffer_id = 0;
+static int g_http_header_buffer_id = 0;
+static int g_http_client_body_buffer_id = 0;
+static int g_http_raw_uri_buffer_id = 0;
 
 /**
  * \test Checks if a fast_pattern is registered in a Signature
  */
-int DetectFastPatternTest01(void)
+static int DetectFastPatternTest01(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -371,7 +347,7 @@ int DetectFastPatternTest01(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; tcpv4-csum:valid; fast_pattern; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -402,7 +378,7 @@ int DetectFastPatternTest01(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature
  */
-int DetectFastPatternTest02(void)
+static int DetectFastPatternTest02(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -411,7 +387,7 @@ int DetectFastPatternTest02(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern; "
                                "content:\"boo\"; fast_pattern; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
@@ -430,7 +406,7 @@ int DetectFastPatternTest02(void)
  * \test Checks that we have no fast_pattern registerd for a Signature when the
  *       Signature doesn't contain a fast_pattern
  */
-int DetectFastPatternTest03(void)
+static int DetectFastPatternTest03(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -440,7 +416,7 @@ int DetectFastPatternTest03(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -471,7 +447,7 @@ int DetectFastPatternTest03(void)
  * \test Checks that a fast_pattern is not registered in a Signature, when we
  *       supply a fast_pattern with an argument
  */
-int DetectFastPatternTest04(void)
+static int DetectFastPatternTest04(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -480,7 +456,7 @@ int DetectFastPatternTest04(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:boo; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -496,7 +472,7 @@ int DetectFastPatternTest04(void)
  * \test Checks to make sure that other sigs work that should when fast_pattern is inspecting on the same payload
  *
  */
-int DetectFastPatternTest14(void)
+static int DetectFastPatternTest14(void)
 {
     uint8_t *buf = (uint8_t *) "Dummy is our name.  Oh yes.  From right here "
         "right now, all the way to hangover.  right.  strings5_imp now here "
@@ -559,7 +535,7 @@ end:
 /**
  * \test Checks if a fast_pattern is registered in a Signature
  */
-int DetectFastPatternTest15(void)
+static int DetectFastPatternTest15(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -569,7 +545,7 @@ int DetectFastPatternTest15(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -600,7 +576,7 @@ int DetectFastPatternTest15(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature
  */
-int DetectFastPatternTest16(void)
+static int DetectFastPatternTest16(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -610,7 +586,7 @@ int DetectFastPatternTest16(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
@@ -638,7 +614,7 @@ int DetectFastPatternTest16(void)
     return result;
 }
 
-int DetectFastPatternTest17(void)
+static int DetectFastPatternTest17(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -648,7 +624,7 @@ int DetectFastPatternTest17(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -674,7 +650,7 @@ int DetectFastPatternTest17(void)
     return result;
 }
 
-int DetectFastPatternTest18(void)
+static int DetectFastPatternTest18(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -684,7 +660,7 @@ int DetectFastPatternTest18(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -710,7 +686,7 @@ int DetectFastPatternTest18(void)
     return result;
 }
 
-int DetectFastPatternTest19(void)
+static int DetectFastPatternTest19(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -719,7 +695,7 @@ int DetectFastPatternTest19(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:only; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -732,7 +708,7 @@ int DetectFastPatternTest19(void)
     return result;
 }
 
-int DetectFastPatternTest20(void)
+static int DetectFastPatternTest20(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -741,7 +717,7 @@ int DetectFastPatternTest20(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; distance:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -754,7 +730,7 @@ int DetectFastPatternTest20(void)
     return result;
 }
 
-int DetectFastPatternTest21(void)
+static int DetectFastPatternTest21(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -763,7 +739,7 @@ int DetectFastPatternTest21(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:only; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -776,7 +752,7 @@ int DetectFastPatternTest21(void)
     return result;
 }
 
-int DetectFastPatternTest22(void)
+static int DetectFastPatternTest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -785,7 +761,7 @@ int DetectFastPatternTest22(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; within:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -798,7 +774,7 @@ int DetectFastPatternTest22(void)
     return result;
 }
 
-int DetectFastPatternTest23(void)
+static int DetectFastPatternTest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -807,7 +783,7 @@ int DetectFastPatternTest23(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:only; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -820,7 +796,7 @@ int DetectFastPatternTest23(void)
     return result;
 }
 
-int DetectFastPatternTest24(void)
+static int DetectFastPatternTest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -829,7 +805,7 @@ int DetectFastPatternTest24(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; offset:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -842,7 +818,7 @@ int DetectFastPatternTest24(void)
     return result;
 }
 
-int DetectFastPatternTest25(void)
+static int DetectFastPatternTest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -851,7 +827,7 @@ int DetectFastPatternTest25(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:only; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -864,7 +840,7 @@ int DetectFastPatternTest25(void)
     return result;
 }
 
-int DetectFastPatternTest26(void)
+static int DetectFastPatternTest26(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -873,7 +849,7 @@ int DetectFastPatternTest26(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; depth:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -886,7 +862,7 @@ int DetectFastPatternTest26(void)
     return result;
 }
 
-int DetectFastPatternTest27(void)
+static int DetectFastPatternTest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -895,7 +871,7 @@ int DetectFastPatternTest27(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -908,7 +884,7 @@ int DetectFastPatternTest27(void)
     return result;
 }
 
-int DetectFastPatternTest28(void)
+static int DetectFastPatternTest28(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -917,7 +893,7 @@ int DetectFastPatternTest28(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; content:\"two\"; distance:30; content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -939,7 +915,7 @@ int DetectFastPatternTest28(void)
     return result;
 }
 
-int DetectFastPatternTest29(void)
+static int DetectFastPatternTest29(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -948,7 +924,7 @@ int DetectFastPatternTest29(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; within:30; content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -969,7 +945,7 @@ int DetectFastPatternTest29(void)
     return result;
 }
 
-int DetectFastPatternTest30(void)
+static int DetectFastPatternTest30(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -978,7 +954,7 @@ int DetectFastPatternTest30(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; offset:30; content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -999,7 +975,7 @@ int DetectFastPatternTest30(void)
     return result;
 }
 
-int DetectFastPatternTest31(void)
+static int DetectFastPatternTest31(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1008,7 +984,7 @@ int DetectFastPatternTest31(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; depth:30; content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1029,7 +1005,7 @@ int DetectFastPatternTest31(void)
     return result;
 }
 
-int DetectFastPatternTest32(void)
+static int DetectFastPatternTest32(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1038,7 +1014,7 @@ int DetectFastPatternTest32(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; content:\"two\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1060,7 +1036,7 @@ int DetectFastPatternTest32(void)
     return result;
 }
 
-int DetectFastPatternTest33(void)
+static int DetectFastPatternTest33(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1069,7 +1045,7 @@ int DetectFastPatternTest33(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; fast_pattern; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1082,7 +1058,7 @@ int DetectFastPatternTest33(void)
     return result;
 }
 
-int DetectFastPatternTest34(void)
+static int DetectFastPatternTest34(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1091,7 +1067,7 @@ int DetectFastPatternTest34(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; fast_pattern; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1104,7 +1080,7 @@ int DetectFastPatternTest34(void)
     return result;
 }
 
-int DetectFastPatternTest35(void)
+static int DetectFastPatternTest35(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1113,7 +1089,7 @@ int DetectFastPatternTest35(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; fast_pattern; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1126,7 +1102,7 @@ int DetectFastPatternTest35(void)
     return result;
 }
 
-int DetectFastPatternTest36(void)
+static int DetectFastPatternTest36(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1135,7 +1111,7 @@ int DetectFastPatternTest36(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; fast_pattern; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1148,7 +1124,7 @@ int DetectFastPatternTest36(void)
     return result;
 }
 
-int DetectFastPatternTest37(void)
+static int DetectFastPatternTest37(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1157,7 +1133,7 @@ int DetectFastPatternTest37(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; content:\"oneonetwo\"; fast_pattern:3,4; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1178,7 +1154,7 @@ int DetectFastPatternTest37(void)
     return result;
 }
 
-int DetectFastPatternTest38(void)
+static int DetectFastPatternTest38(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1187,7 +1163,7 @@ int DetectFastPatternTest38(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"twotwotwo\"; fast_pattern:3,4; content:\"three\"; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1208,7 +1184,7 @@ int DetectFastPatternTest38(void)
     return result;
 }
 
-int DetectFastPatternTest39(void)
+static int DetectFastPatternTest39(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1217,7 +1193,7 @@ int DetectFastPatternTest39(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"twotwotwo\"; fast_pattern:3,4; content:\"three\"; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1238,7 +1214,7 @@ int DetectFastPatternTest39(void)
     return result;
 }
 
-int DetectFastPatternTest40(void)
+static int DetectFastPatternTest40(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1247,7 +1223,7 @@ int DetectFastPatternTest40(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"twotwotwo\"; fast_pattern:3,4; content:\"three\"; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1268,7 +1244,7 @@ int DetectFastPatternTest40(void)
     return result;
 }
 
-int DetectFastPatternTest41(void)
+static int DetectFastPatternTest41(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1277,7 +1253,7 @@ int DetectFastPatternTest41(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"twotwotwo\"; fast_pattern:3,4; content:\"three\"; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1298,7 +1274,7 @@ int DetectFastPatternTest41(void)
     return result;
 }
 
-int DetectFastPatternTest42(void)
+static int DetectFastPatternTest42(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1307,7 +1283,7 @@ int DetectFastPatternTest42(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; distance:10; content:\"threethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1328,7 +1304,7 @@ int DetectFastPatternTest42(void)
     return result;
 }
 
-int DetectFastPatternTest43(void)
+static int DetectFastPatternTest43(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1337,7 +1313,7 @@ int DetectFastPatternTest43(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; within:10; content:\"threethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1358,7 +1334,7 @@ int DetectFastPatternTest43(void)
     return result;
 }
 
-int DetectFastPatternTest44(void)
+static int DetectFastPatternTest44(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1367,7 +1343,7 @@ int DetectFastPatternTest44(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; offset:10; content:\"threethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1388,7 +1364,7 @@ int DetectFastPatternTest44(void)
     return result;
 }
 
-int DetectFastPatternTest45(void)
+static int DetectFastPatternTest45(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1397,7 +1373,7 @@ int DetectFastPatternTest45(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; depth:10; content:\"threethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1418,7 +1394,7 @@ int DetectFastPatternTest45(void)
     return result;
 }
 
-int DetectFastPatternTest46(void)
+static int DetectFastPatternTest46(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1427,7 +1403,7 @@ int DetectFastPatternTest46(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:65977,4; content:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1440,7 +1416,7 @@ int DetectFastPatternTest46(void)
     return result;
 }
 
-int DetectFastPatternTest47(void)
+static int DetectFastPatternTest47(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1449,7 +1425,7 @@ int DetectFastPatternTest47(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"twooneone\"; fast_pattern:3,65977; content:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1462,7 +1438,7 @@ int DetectFastPatternTest47(void)
     return result;
 }
 
-int DetectFastPatternTest48(void)
+static int DetectFastPatternTest48(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1471,7 +1447,7 @@ int DetectFastPatternTest48(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:\"two\"; fast_pattern:65534,4; content:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1484,7 +1460,7 @@ int DetectFastPatternTest48(void)
     return result;
 }
 
-int DetectFastPatternTest49(void)
+static int DetectFastPatternTest49(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1493,7 +1469,7 @@ int DetectFastPatternTest49(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
@@ -1515,7 +1491,7 @@ int DetectFastPatternTest49(void)
     return result;
 }
 
-int DetectFastPatternTest50(void)
+static int DetectFastPatternTest50(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1524,7 +1500,7 @@ int DetectFastPatternTest50(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; distance:10; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1537,7 +1513,7 @@ int DetectFastPatternTest50(void)
     return result;
 }
 
-int DetectFastPatternTest51(void)
+static int DetectFastPatternTest51(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1546,7 +1522,7 @@ int DetectFastPatternTest51(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; within:10; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1559,7 +1535,7 @@ int DetectFastPatternTest51(void)
     return result;
 }
 
-int DetectFastPatternTest52(void)
+static int DetectFastPatternTest52(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1568,7 +1544,7 @@ int DetectFastPatternTest52(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; offset:10; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1581,7 +1557,7 @@ int DetectFastPatternTest52(void)
     return result;
 }
 
-int DetectFastPatternTest53(void)
+static int DetectFastPatternTest53(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1590,7 +1566,7 @@ int DetectFastPatternTest53(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; depth:10; content:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1611,7 +1587,7 @@ int DetectFastPatternTest53(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest54(void)
+static int DetectFastPatternTest54(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -1621,14 +1597,14 @@ int DetectFastPatternTest54(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"/one/\"; fast_pattern:only; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     while (sm != NULL) {
         if (sm->type == DETECT_CONTENT) {
             if ( ((DetectContentData *)sm->ctx)->flags &
@@ -1652,7 +1628,7 @@ int DetectFastPatternTest54(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest55(void)
+static int DetectFastPatternTest55(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -1662,14 +1638,14 @@ int DetectFastPatternTest55(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"oneoneone\"; fast_pattern:3,4; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     while (sm != NULL) {
         if (sm->type == DETECT_CONTENT) {
             if ( ((DetectContentData *)sm->ctx)->flags &
@@ -1690,7 +1666,7 @@ int DetectFastPatternTest55(void)
     return result;
 }
 
-int DetectFastPatternTest56(void)
+static int DetectFastPatternTest56(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -1700,13 +1676,13 @@ int DetectFastPatternTest56(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (sm->type == DETECT_CONTENT) {
         if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
@@ -1726,7 +1702,7 @@ int DetectFastPatternTest56(void)
     return result;
 }
 
-int DetectFastPatternTest57(void)
+static int DetectFastPatternTest57(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -1736,13 +1712,13 @@ int DetectFastPatternTest57(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"oneoneone\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (sm->type == DETECT_CONTENT) {
         if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
@@ -1762,7 +1738,7 @@ int DetectFastPatternTest57(void)
     return result;
 }
 
-int DetectFastPatternTest58(void)
+static int DetectFastPatternTest58(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1771,7 +1747,7 @@ int DetectFastPatternTest58(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:only; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1784,7 +1760,7 @@ int DetectFastPatternTest58(void)
     return result;
 }
 
-int DetectFastPatternTest59(void)
+static int DetectFastPatternTest59(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1793,7 +1769,7 @@ int DetectFastPatternTest59(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; distance:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1806,7 +1782,7 @@ int DetectFastPatternTest59(void)
     return result;
 }
 
-int DetectFastPatternTest60(void)
+static int DetectFastPatternTest60(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1815,7 +1791,7 @@ int DetectFastPatternTest60(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:only; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1828,7 +1804,7 @@ int DetectFastPatternTest60(void)
     return result;
 }
 
-int DetectFastPatternTest61(void)
+static int DetectFastPatternTest61(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1837,7 +1813,7 @@ int DetectFastPatternTest61(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; within:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1850,7 +1826,7 @@ int DetectFastPatternTest61(void)
     return result;
 }
 
-int DetectFastPatternTest62(void)
+static int DetectFastPatternTest62(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1859,7 +1835,7 @@ int DetectFastPatternTest62(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:only; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1872,7 +1848,7 @@ int DetectFastPatternTest62(void)
     return result;
 }
 
-int DetectFastPatternTest63(void)
+static int DetectFastPatternTest63(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1881,7 +1857,7 @@ int DetectFastPatternTest63(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; offset:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1894,7 +1870,7 @@ int DetectFastPatternTest63(void)
     return result;
 }
 
-int DetectFastPatternTest64(void)
+static int DetectFastPatternTest64(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1903,7 +1879,7 @@ int DetectFastPatternTest64(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:only; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1916,7 +1892,7 @@ int DetectFastPatternTest64(void)
     return result;
 }
 
-int DetectFastPatternTest65(void)
+static int DetectFastPatternTest65(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1925,7 +1901,7 @@ int DetectFastPatternTest65(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; depth:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1938,7 +1914,7 @@ int DetectFastPatternTest65(void)
     return result;
 }
 
-int DetectFastPatternTest66(void)
+static int DetectFastPatternTest66(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1947,7 +1923,7 @@ int DetectFastPatternTest66(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -1960,7 +1936,7 @@ int DetectFastPatternTest66(void)
     return result;
 }
 
-int DetectFastPatternTest67(void)
+static int DetectFastPatternTest67(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1969,12 +1945,12 @@ int DetectFastPatternTest67(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent: \"one\"; uricontent:\"two\"; distance:30; uricontent:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -1991,7 +1967,7 @@ int DetectFastPatternTest67(void)
     return result;
 }
 
-int DetectFastPatternTest68(void)
+static int DetectFastPatternTest68(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2000,11 +1976,11 @@ int DetectFastPatternTest68(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; within:30; uricontent:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -2021,7 +1997,7 @@ int DetectFastPatternTest68(void)
     return result;
 }
 
-int DetectFastPatternTest69(void)
+static int DetectFastPatternTest69(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2030,11 +2006,11 @@ int DetectFastPatternTest69(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; offset:30; uricontent:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -2051,7 +2027,7 @@ int DetectFastPatternTest69(void)
     return result;
 }
 
-int DetectFastPatternTest70(void)
+static int DetectFastPatternTest70(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2060,11 +2036,11 @@ int DetectFastPatternTest70(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; depth:30; uricontent:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -2081,7 +2057,7 @@ int DetectFastPatternTest70(void)
     return result;
 }
 
-int DetectFastPatternTest71(void)
+static int DetectFastPatternTest71(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2090,11 +2066,11 @@ int DetectFastPatternTest71(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:!\"one\"; fast_pattern; uricontent:\"two\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -2112,7 +2088,7 @@ int DetectFastPatternTest71(void)
     return result;
 }
 
-int DetectFastPatternTest72(void)
+static int DetectFastPatternTest72(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2121,7 +2097,7 @@ int DetectFastPatternTest72(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; uricontent:!\"one\"; fast_pattern; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2134,7 +2110,7 @@ int DetectFastPatternTest72(void)
     return result;
 }
 
-int DetectFastPatternTest73(void)
+static int DetectFastPatternTest73(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2143,7 +2119,7 @@ int DetectFastPatternTest73(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; uricontent:!\"one\"; fast_pattern; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2156,7 +2132,7 @@ int DetectFastPatternTest73(void)
     return result;
 }
 
-int DetectFastPatternTest74(void)
+static int DetectFastPatternTest74(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2165,7 +2141,7 @@ int DetectFastPatternTest74(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; uricontent:!\"one\"; fast_pattern; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2178,7 +2154,7 @@ int DetectFastPatternTest74(void)
     return result;
 }
 
-int DetectFastPatternTest75(void)
+static int DetectFastPatternTest75(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2187,7 +2163,7 @@ int DetectFastPatternTest75(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; uricontent:!\"one\"; fast_pattern; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2200,7 +2176,7 @@ int DetectFastPatternTest75(void)
     return result;
 }
 
-int DetectFastPatternTest76(void)
+static int DetectFastPatternTest76(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2209,11 +2185,11 @@ int DetectFastPatternTest76(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2230,7 +2206,7 @@ int DetectFastPatternTest76(void)
     return result;
 }
 
-int DetectFastPatternTest77(void)
+static int DetectFastPatternTest77(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2239,11 +2215,11 @@ int DetectFastPatternTest77(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2260,7 +2236,7 @@ int DetectFastPatternTest77(void)
     return result;
 }
 
-int DetectFastPatternTest78(void)
+static int DetectFastPatternTest78(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2269,11 +2245,11 @@ int DetectFastPatternTest78(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2290,7 +2266,7 @@ int DetectFastPatternTest78(void)
     return result;
 }
 
-int DetectFastPatternTest79(void)
+static int DetectFastPatternTest79(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2299,11 +2275,11 @@ int DetectFastPatternTest79(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2320,7 +2296,7 @@ int DetectFastPatternTest79(void)
     return result;
 }
 
-int DetectFastPatternTest80(void)
+static int DetectFastPatternTest80(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2329,11 +2305,11 @@ int DetectFastPatternTest80(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2350,7 +2326,7 @@ int DetectFastPatternTest80(void)
     return result;
 }
 
-int DetectFastPatternTest81(void)
+static int DetectFastPatternTest81(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2359,11 +2335,11 @@ int DetectFastPatternTest81(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; distance:10; uricontent:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2380,7 +2356,7 @@ int DetectFastPatternTest81(void)
     return result;
 }
 
-int DetectFastPatternTest82(void)
+static int DetectFastPatternTest82(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2389,11 +2365,11 @@ int DetectFastPatternTest82(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; within:10; uricontent:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2410,7 +2386,7 @@ int DetectFastPatternTest82(void)
     return result;
 }
 
-int DetectFastPatternTest83(void)
+static int DetectFastPatternTest83(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2419,11 +2395,11 @@ int DetectFastPatternTest83(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; offset:10; uricontent:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2440,7 +2416,7 @@ int DetectFastPatternTest83(void)
     return result;
 }
 
-int DetectFastPatternTest84(void)
+static int DetectFastPatternTest84(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2449,11 +2425,11 @@ int DetectFastPatternTest84(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; depth:10; uricontent:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -2473,7 +2449,7 @@ int DetectFastPatternTest84(void)
     return result;
 }
 
-int DetectFastPatternTest85(void)
+static int DetectFastPatternTest85(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2482,7 +2458,7 @@ int DetectFastPatternTest85(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:65977,4; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2495,7 +2471,7 @@ int DetectFastPatternTest85(void)
     return result;
 }
 
-int DetectFastPatternTest86(void)
+static int DetectFastPatternTest86(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2504,7 +2480,7 @@ int DetectFastPatternTest86(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"oneonetwo\"; fast_pattern:3,65977; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2517,7 +2493,7 @@ int DetectFastPatternTest86(void)
     return result;
 }
 
-int DetectFastPatternTest87(void)
+static int DetectFastPatternTest87(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2526,7 +2502,7 @@ int DetectFastPatternTest87(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; fast_pattern:65534,4; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2539,7 +2515,7 @@ int DetectFastPatternTest87(void)
     return result;
 }
 
-int DetectFastPatternTest88(void)
+static int DetectFastPatternTest88(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2548,11 +2524,11 @@ int DetectFastPatternTest88(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"oneonetwo\"; fast_pattern:3,4; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -2570,7 +2546,7 @@ int DetectFastPatternTest88(void)
     return result;
 }
 
-int DetectFastPatternTest89(void)
+static int DetectFastPatternTest89(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2579,7 +2555,7 @@ int DetectFastPatternTest89(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"oneonetwo\"; fast_pattern:3,4; distance:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2592,7 +2568,7 @@ int DetectFastPatternTest89(void)
     return result;
 }
 
-int DetectFastPatternTest90(void)
+static int DetectFastPatternTest90(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2601,7 +2577,7 @@ int DetectFastPatternTest90(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"oneonetwo\"; fast_pattern:3,4; within:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2614,7 +2590,7 @@ int DetectFastPatternTest90(void)
     return result;
 }
 
-int DetectFastPatternTest91(void)
+static int DetectFastPatternTest91(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2623,7 +2599,7 @@ int DetectFastPatternTest91(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"oneonetwo\"; fast_pattern:3,4; offset:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2636,7 +2612,7 @@ int DetectFastPatternTest91(void)
     return result;
 }
 
-int DetectFastPatternTest92(void)
+static int DetectFastPatternTest92(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2645,7 +2621,7 @@ int DetectFastPatternTest92(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:!\"oneonetwo\"; fast_pattern:3,4; depth:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2663,7 +2639,7 @@ int DetectFastPatternTest92(void)
 /*   http_uri fast_pattern tests v */
 
 
-int DetectFastPatternTest93(void)
+static int DetectFastPatternTest93(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2672,11 +2648,11 @@ int DetectFastPatternTest93(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -2697,7 +2673,7 @@ int DetectFastPatternTest93(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest94(void)
+static int DetectFastPatternTest94(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -2707,14 +2683,14 @@ int DetectFastPatternTest94(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_uri; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     while (sm != NULL) {
         if (sm->type == DETECT_CONTENT) {
             if ( ((DetectContentData *)sm->ctx)->flags &
@@ -2738,7 +2714,7 @@ int DetectFastPatternTest94(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest95(void)
+static int DetectFastPatternTest95(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -2748,14 +2724,14 @@ int DetectFastPatternTest95(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_uri; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     while (sm != NULL) {
         if (sm->type == DETECT_CONTENT) {
             if ( ((DetectContentData *)sm->ctx)->flags &
@@ -2776,7 +2752,7 @@ int DetectFastPatternTest95(void)
     return result;
 }
 
-int DetectFastPatternTest96(void)
+static int DetectFastPatternTest96(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -2786,13 +2762,13 @@ int DetectFastPatternTest96(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (sm->type == DETECT_CONTENT) {
         if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
@@ -2812,7 +2788,7 @@ int DetectFastPatternTest96(void)
     return result;
 }
 
-int DetectFastPatternTest97(void)
+static int DetectFastPatternTest97(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -2822,13 +2798,13 @@ int DetectFastPatternTest97(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (sm->type == DETECT_CONTENT) {
         if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
@@ -2848,7 +2824,7 @@ int DetectFastPatternTest97(void)
     return result;
 }
 
-int DetectFastPatternTest98(void)
+static int DetectFastPatternTest98(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2857,7 +2833,7 @@ int DetectFastPatternTest98(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:only; http_uri; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2870,7 +2846,7 @@ int DetectFastPatternTest98(void)
     return result;
 }
 
-int DetectFastPatternTest99(void)
+static int DetectFastPatternTest99(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2879,7 +2855,7 @@ int DetectFastPatternTest99(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; distance:10; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2892,7 +2868,7 @@ int DetectFastPatternTest99(void)
     return result;
 }
 
-int DetectFastPatternTest100(void)
+static int DetectFastPatternTest100(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2901,7 +2877,7 @@ int DetectFastPatternTest100(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:only; http_uri; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2914,7 +2890,7 @@ int DetectFastPatternTest100(void)
     return result;
 }
 
-int DetectFastPatternTest101(void)
+static int DetectFastPatternTest101(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2923,7 +2899,7 @@ int DetectFastPatternTest101(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; within:10; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2936,7 +2912,7 @@ int DetectFastPatternTest101(void)
     return result;
 }
 
-int DetectFastPatternTest102(void)
+static int DetectFastPatternTest102(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2945,7 +2921,7 @@ int DetectFastPatternTest102(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:only; http_uri; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2958,7 +2934,7 @@ int DetectFastPatternTest102(void)
     return result;
 }
 
-int DetectFastPatternTest103(void)
+static int DetectFastPatternTest103(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2967,7 +2943,7 @@ int DetectFastPatternTest103(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; offset:10; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -2980,7 +2956,7 @@ int DetectFastPatternTest103(void)
     return result;
 }
 
-int DetectFastPatternTest104(void)
+static int DetectFastPatternTest104(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2989,7 +2965,7 @@ int DetectFastPatternTest104(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:only; http_uri; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3002,7 +2978,7 @@ int DetectFastPatternTest104(void)
     return result;
 }
 
-int DetectFastPatternTest105(void)
+static int DetectFastPatternTest105(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3011,7 +2987,7 @@ int DetectFastPatternTest105(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; depth:10; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3024,7 +3000,7 @@ int DetectFastPatternTest105(void)
     return result;
 }
 
-int DetectFastPatternTest106(void)
+static int DetectFastPatternTest106(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3033,7 +3009,7 @@ int DetectFastPatternTest106(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"two\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3046,7 +3022,7 @@ int DetectFastPatternTest106(void)
     return result;
 }
 
-int DetectFastPatternTest107(void)
+static int DetectFastPatternTest107(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3055,12 +3031,12 @@ int DetectFastPatternTest107(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent: \"one\"; uricontent:\"two\"; distance:30; content:\"two\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -3077,7 +3053,7 @@ int DetectFastPatternTest107(void)
     return result;
 }
 
-int DetectFastPatternTest108(void)
+static int DetectFastPatternTest108(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3086,11 +3062,11 @@ int DetectFastPatternTest108(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; within:30; content:\"two\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -3107,7 +3083,7 @@ int DetectFastPatternTest108(void)
     return result;
 }
 
-int DetectFastPatternTest109(void)
+static int DetectFastPatternTest109(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3116,11 +3092,11 @@ int DetectFastPatternTest109(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; offset:30; content:\"two\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -3137,7 +3113,7 @@ int DetectFastPatternTest109(void)
     return result;
 }
 
-int DetectFastPatternTest110(void)
+static int DetectFastPatternTest110(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3146,11 +3122,11 @@ int DetectFastPatternTest110(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; depth:30; content:\"two\"; fast_pattern:only; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -3167,7 +3143,7 @@ int DetectFastPatternTest110(void)
     return result;
 }
 
-int DetectFastPatternTest111(void)
+static int DetectFastPatternTest111(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3176,11 +3152,11 @@ int DetectFastPatternTest111(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_uri; uricontent:\"two\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -3198,7 +3174,7 @@ int DetectFastPatternTest111(void)
     return result;
 }
 
-int DetectFastPatternTest112(void)
+static int DetectFastPatternTest112(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3207,7 +3183,7 @@ int DetectFastPatternTest112(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; content:!\"one\"; fast_pattern; http_uri; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3220,7 +3196,7 @@ int DetectFastPatternTest112(void)
     return result;
 }
 
-int DetectFastPatternTest113(void)
+static int DetectFastPatternTest113(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3229,7 +3205,7 @@ int DetectFastPatternTest113(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; content:!\"one\"; fast_pattern; http_uri; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3242,7 +3218,7 @@ int DetectFastPatternTest113(void)
     return result;
 }
 
-int DetectFastPatternTest114(void)
+static int DetectFastPatternTest114(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3251,7 +3227,7 @@ int DetectFastPatternTest114(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; content:!\"one\"; fast_pattern; http_uri; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3264,7 +3240,7 @@ int DetectFastPatternTest114(void)
     return result;
 }
 
-int DetectFastPatternTest115(void)
+static int DetectFastPatternTest115(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3273,7 +3249,7 @@ int DetectFastPatternTest115(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"two\"; content:!\"one\"; fast_pattern; http_uri; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3286,7 +3262,7 @@ int DetectFastPatternTest115(void)
     return result;
 }
 
-int DetectFastPatternTest116(void)
+static int DetectFastPatternTest116(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3295,11 +3271,11 @@ int DetectFastPatternTest116(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3316,7 +3292,7 @@ int DetectFastPatternTest116(void)
     return result;
 }
 
-int DetectFastPatternTest117(void)
+static int DetectFastPatternTest117(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3325,11 +3301,11 @@ int DetectFastPatternTest117(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3346,7 +3322,7 @@ int DetectFastPatternTest117(void)
     return result;
 }
 
-int DetectFastPatternTest118(void)
+static int DetectFastPatternTest118(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3355,11 +3331,11 @@ int DetectFastPatternTest118(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3376,7 +3352,7 @@ int DetectFastPatternTest118(void)
     return result;
 }
 
-int DetectFastPatternTest119(void)
+static int DetectFastPatternTest119(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3385,11 +3361,11 @@ int DetectFastPatternTest119(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3406,7 +3382,7 @@ int DetectFastPatternTest119(void)
     return result;
 }
 
-int DetectFastPatternTest120(void)
+static int DetectFastPatternTest120(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3415,11 +3391,11 @@ int DetectFastPatternTest120(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3436,7 +3412,7 @@ int DetectFastPatternTest120(void)
     return result;
 }
 
-int DetectFastPatternTest121(void)
+static int DetectFastPatternTest121(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3445,11 +3421,11 @@ int DetectFastPatternTest121(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3466,7 +3442,7 @@ int DetectFastPatternTest121(void)
     return result;
 }
 
-int DetectFastPatternTest122(void)
+static int DetectFastPatternTest122(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3475,11 +3451,11 @@ int DetectFastPatternTest122(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3496,7 +3472,7 @@ int DetectFastPatternTest122(void)
     return result;
 }
 
-int DetectFastPatternTest123(void)
+static int DetectFastPatternTest123(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3505,11 +3481,11 @@ int DetectFastPatternTest123(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3526,7 +3502,7 @@ int DetectFastPatternTest123(void)
     return result;
 }
 
-int DetectFastPatternTest124(void)
+static int DetectFastPatternTest124(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3535,11 +3511,11 @@ int DetectFastPatternTest124(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; uricontent:\"two\"; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -3559,7 +3535,7 @@ int DetectFastPatternTest124(void)
     return result;
 }
 
-int DetectFastPatternTest125(void)
+static int DetectFastPatternTest125(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3568,7 +3544,7 @@ int DetectFastPatternTest125(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:65977,4; http_uri; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3581,7 +3557,7 @@ int DetectFastPatternTest125(void)
     return result;
 }
 
-int DetectFastPatternTest126(void)
+static int DetectFastPatternTest126(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3590,7 +3566,7 @@ int DetectFastPatternTest126(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"oneonetwo\"; fast_pattern:3,65977; http_uri; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3603,7 +3579,7 @@ int DetectFastPatternTest126(void)
     return result;
 }
 
-int DetectFastPatternTest127(void)
+static int DetectFastPatternTest127(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3612,7 +3588,7 @@ int DetectFastPatternTest127(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:\"two\"; fast_pattern:65534,4; http_uri; uricontent:\"three\"; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3625,7 +3601,7 @@ int DetectFastPatternTest127(void)
     return result;
 }
 
-int DetectFastPatternTest128(void)
+static int DetectFastPatternTest128(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3634,11 +3610,11 @@ int DetectFastPatternTest128(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -3656,7 +3632,7 @@ int DetectFastPatternTest128(void)
     return result;
 }
 
-int DetectFastPatternTest129(void)
+static int DetectFastPatternTest129(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3665,7 +3641,7 @@ int DetectFastPatternTest129(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; distance:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3678,7 +3654,7 @@ int DetectFastPatternTest129(void)
     return result;
 }
 
-int DetectFastPatternTest130(void)
+static int DetectFastPatternTest130(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3687,7 +3663,7 @@ int DetectFastPatternTest130(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; within:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3700,7 +3676,7 @@ int DetectFastPatternTest130(void)
     return result;
 }
 
-int DetectFastPatternTest131(void)
+static int DetectFastPatternTest131(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3709,7 +3685,7 @@ int DetectFastPatternTest131(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"twooneone\"; fast_pattern:3,4; http_uri; offset:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3722,7 +3698,7 @@ int DetectFastPatternTest131(void)
     return result;
 }
 
-int DetectFastPatternTest132(void)
+static int DetectFastPatternTest132(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3731,7 +3707,7 @@ int DetectFastPatternTest132(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; depth:10; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3744,7 +3720,7 @@ int DetectFastPatternTest132(void)
     return result;
 }
 
-int DetectFastPatternTest133(void)
+static int DetectFastPatternTest133(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3753,11 +3729,11 @@ int DetectFastPatternTest133(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(uricontent:\"one\"; content:!\"oneonetwo\"; fast_pattern:3,4; http_uri; uricontent:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_UMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -3780,7 +3756,7 @@ int DetectFastPatternTest133(void)
 /* http_client_body fast_pattern tests v */
 
 
-int DetectFastPatternTest134(void)
+static int DetectFastPatternTest134(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3789,11 +3765,11 @@ int DetectFastPatternTest134(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -3814,7 +3790,7 @@ int DetectFastPatternTest134(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest135(void)
+static int DetectFastPatternTest135(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -3824,14 +3800,14 @@ int DetectFastPatternTest135(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_client_body; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -3851,7 +3827,7 @@ int DetectFastPatternTest135(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest136(void)
+static int DetectFastPatternTest136(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -3861,14 +3837,14 @@ int DetectFastPatternTest136(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_client_body; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -3884,7 +3860,7 @@ int DetectFastPatternTest136(void)
     return result;
 }
 
-int DetectFastPatternTest137(void)
+static int DetectFastPatternTest137(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -3894,13 +3870,13 @@ int DetectFastPatternTest137(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -3918,7 +3894,7 @@ int DetectFastPatternTest137(void)
     return result;
 }
 
-int DetectFastPatternTest138(void)
+static int DetectFastPatternTest138(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -3928,13 +3904,13 @@ int DetectFastPatternTest138(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -3952,7 +3928,7 @@ int DetectFastPatternTest138(void)
     return result;
 }
 
-int DetectFastPatternTest139(void)
+static int DetectFastPatternTest139(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3961,7 +3937,7 @@ int DetectFastPatternTest139(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:only; http_client_body; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3974,7 +3950,7 @@ int DetectFastPatternTest139(void)
     return result;
 }
 
-int DetectFastPatternTest140(void)
+static int DetectFastPatternTest140(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3983,7 +3959,7 @@ int DetectFastPatternTest140(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; distance:10; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -3996,7 +3972,7 @@ int DetectFastPatternTest140(void)
     return result;
 }
 
-int DetectFastPatternTest141(void)
+static int DetectFastPatternTest141(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4005,7 +3981,7 @@ int DetectFastPatternTest141(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:only; http_client_body; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4018,7 +3994,7 @@ int DetectFastPatternTest141(void)
     return result;
 }
 
-int DetectFastPatternTest142(void)
+static int DetectFastPatternTest142(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4027,7 +4003,7 @@ int DetectFastPatternTest142(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; within:10; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4040,7 +4016,7 @@ int DetectFastPatternTest142(void)
     return result;
 }
 
-int DetectFastPatternTest143(void)
+static int DetectFastPatternTest143(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4049,7 +4025,7 @@ int DetectFastPatternTest143(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:only; http_client_body; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4062,7 +4038,7 @@ int DetectFastPatternTest143(void)
     return result;
 }
 
-int DetectFastPatternTest144(void)
+static int DetectFastPatternTest144(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4071,7 +4047,7 @@ int DetectFastPatternTest144(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; offset:10; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4084,7 +4060,7 @@ int DetectFastPatternTest144(void)
     return result;
 }
 
-int DetectFastPatternTest145(void)
+static int DetectFastPatternTest145(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4093,7 +4069,7 @@ int DetectFastPatternTest145(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:only; http_client_body; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4106,7 +4082,7 @@ int DetectFastPatternTest145(void)
     return result;
 }
 
-int DetectFastPatternTest146(void)
+static int DetectFastPatternTest146(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4115,7 +4091,7 @@ int DetectFastPatternTest146(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; depth:10; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4128,7 +4104,7 @@ int DetectFastPatternTest146(void)
     return result;
 }
 
-int DetectFastPatternTest147(void)
+static int DetectFastPatternTest147(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4137,7 +4113,7 @@ int DetectFastPatternTest147(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"two\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4150,7 +4126,7 @@ int DetectFastPatternTest147(void)
     return result;
 }
 
-int DetectFastPatternTest148(void)
+static int DetectFastPatternTest148(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4159,12 +4135,12 @@ int DetectFastPatternTest148(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; http_client_body; content:\"two\"; http_client_body; distance:30; content:\"two\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -4181,7 +4157,7 @@ int DetectFastPatternTest148(void)
     return result;
 }
 
-int DetectFastPatternTest149(void)
+static int DetectFastPatternTest149(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4190,11 +4166,11 @@ int DetectFastPatternTest149(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; within:30; content:\"two\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -4211,7 +4187,7 @@ int DetectFastPatternTest149(void)
     return result;
 }
 
-int DetectFastPatternTest150(void)
+static int DetectFastPatternTest150(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4220,11 +4196,11 @@ int DetectFastPatternTest150(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; offset:30; content:\"two\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -4241,7 +4217,7 @@ int DetectFastPatternTest150(void)
     return result;
 }
 
-int DetectFastPatternTest151(void)
+static int DetectFastPatternTest151(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4250,11 +4226,11 @@ int DetectFastPatternTest151(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; depth:30; content:\"two\"; fast_pattern:only; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -4271,7 +4247,7 @@ int DetectFastPatternTest151(void)
     return result;
 }
 
-int DetectFastPatternTest152(void)
+static int DetectFastPatternTest152(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4280,11 +4256,11 @@ int DetectFastPatternTest152(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_client_body; content:\"two\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -4302,7 +4278,7 @@ int DetectFastPatternTest152(void)
     return result;
 }
 
-int DetectFastPatternTest153(void)
+static int DetectFastPatternTest153(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4311,7 +4287,7 @@ int DetectFastPatternTest153(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_client_body; content:!\"one\"; fast_pattern; http_client_body; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4324,7 +4300,7 @@ int DetectFastPatternTest153(void)
     return result;
 }
 
-int DetectFastPatternTest154(void)
+static int DetectFastPatternTest154(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4333,7 +4309,7 @@ int DetectFastPatternTest154(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_client_body; content:!\"one\"; fast_pattern; http_client_body; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4346,7 +4322,7 @@ int DetectFastPatternTest154(void)
     return result;
 }
 
-int DetectFastPatternTest155(void)
+static int DetectFastPatternTest155(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4355,7 +4331,7 @@ int DetectFastPatternTest155(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_client_body; content:!\"one\"; fast_pattern; http_client_body; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4368,7 +4344,7 @@ int DetectFastPatternTest155(void)
     return result;
 }
 
-int DetectFastPatternTest156(void)
+static int DetectFastPatternTest156(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4377,7 +4353,7 @@ int DetectFastPatternTest156(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_client_body; content:!\"one\"; fast_pattern; http_client_body; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4390,7 +4366,7 @@ int DetectFastPatternTest156(void)
     return result;
 }
 
-int DetectFastPatternTest157(void)
+static int DetectFastPatternTest157(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4399,11 +4375,11 @@ int DetectFastPatternTest157(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4420,7 +4396,7 @@ int DetectFastPatternTest157(void)
     return result;
 }
 
-int DetectFastPatternTest158(void)
+static int DetectFastPatternTest158(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4429,11 +4405,11 @@ int DetectFastPatternTest158(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4450,7 +4426,7 @@ int DetectFastPatternTest158(void)
     return result;
 }
 
-int DetectFastPatternTest159(void)
+static int DetectFastPatternTest159(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4459,11 +4435,11 @@ int DetectFastPatternTest159(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4480,7 +4456,7 @@ int DetectFastPatternTest159(void)
     return result;
 }
 
-int DetectFastPatternTest160(void)
+static int DetectFastPatternTest160(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4489,11 +4465,11 @@ int DetectFastPatternTest160(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4510,7 +4486,7 @@ int DetectFastPatternTest160(void)
     return result;
 }
 
-int DetectFastPatternTest161(void)
+static int DetectFastPatternTest161(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4519,11 +4495,11 @@ int DetectFastPatternTest161(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4540,7 +4516,7 @@ int DetectFastPatternTest161(void)
     return result;
 }
 
-int DetectFastPatternTest162(void)
+static int DetectFastPatternTest162(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4549,11 +4525,11 @@ int DetectFastPatternTest162(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4570,7 +4546,7 @@ int DetectFastPatternTest162(void)
     return result;
 }
 
-int DetectFastPatternTest163(void)
+static int DetectFastPatternTest163(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4579,11 +4555,11 @@ int DetectFastPatternTest163(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4600,7 +4576,7 @@ int DetectFastPatternTest163(void)
     return result;
 }
 
-int DetectFastPatternTest164(void)
+static int DetectFastPatternTest164(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4609,11 +4585,11 @@ int DetectFastPatternTest164(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4630,7 +4606,7 @@ int DetectFastPatternTest164(void)
     return result;
 }
 
-int DetectFastPatternTest165(void)
+static int DetectFastPatternTest165(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4639,11 +4615,11 @@ int DetectFastPatternTest165(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; http_client_body; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -4663,7 +4639,7 @@ int DetectFastPatternTest165(void)
     return result;
 }
 
-int DetectFastPatternTest166(void)
+static int DetectFastPatternTest166(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4672,7 +4648,7 @@ int DetectFastPatternTest166(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:65977,4; http_client_body; content:\"three\"; http_client_body; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4685,7 +4661,7 @@ int DetectFastPatternTest166(void)
     return result;
 }
 
-int DetectFastPatternTest167(void)
+static int DetectFastPatternTest167(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4694,7 +4670,7 @@ int DetectFastPatternTest167(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_client_body; content:\"oneonetwo\"; fast_pattern:3,65977; http_client_body; content:\"three\"; distance:10; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4707,7 +4683,7 @@ int DetectFastPatternTest167(void)
     return result;
 }
 
-int DetectFastPatternTest168(void)
+static int DetectFastPatternTest168(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4716,7 +4692,7 @@ int DetectFastPatternTest168(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:\"two\"; fast_pattern:65534,4; http_client_body; content:\"three\"; http_client_body; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4729,7 +4705,7 @@ int DetectFastPatternTest168(void)
     return result;
 }
 
-int DetectFastPatternTest169(void)
+static int DetectFastPatternTest169(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4738,11 +4714,11 @@ int DetectFastPatternTest169(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -4760,7 +4736,7 @@ int DetectFastPatternTest169(void)
     return result;
 }
 
-int DetectFastPatternTest170(void)
+static int DetectFastPatternTest170(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4769,7 +4745,7 @@ int DetectFastPatternTest170(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; distance:10; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4782,7 +4758,7 @@ int DetectFastPatternTest170(void)
     return result;
 }
 
-int DetectFastPatternTest171(void)
+static int DetectFastPatternTest171(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4791,7 +4767,7 @@ int DetectFastPatternTest171(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; within:10; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4804,7 +4780,7 @@ int DetectFastPatternTest171(void)
     return result;
 }
 
-int DetectFastPatternTest172(void)
+static int DetectFastPatternTest172(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4813,7 +4789,7 @@ int DetectFastPatternTest172(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"twooneone\"; fast_pattern:3,4; http_client_body; offset:10; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4826,7 +4802,7 @@ int DetectFastPatternTest172(void)
     return result;
 }
 
-int DetectFastPatternTest173(void)
+static int DetectFastPatternTest173(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4835,7 +4811,7 @@ int DetectFastPatternTest173(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; depth:10; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4848,7 +4824,7 @@ int DetectFastPatternTest173(void)
     return result;
 }
 
-int DetectFastPatternTest174(void)
+static int DetectFastPatternTest174(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4857,11 +4833,11 @@ int DetectFastPatternTest174(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_client_body; content:!\"oneonetwo\"; fast_pattern:3,4; http_client_body; content:\"three\"; http_client_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -4884,7 +4860,7 @@ int DetectFastPatternTest174(void)
 /*          content fast_pattern tests v */
 
 
-int DetectFastPatternTest175(void)
+static int DetectFastPatternTest175(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4893,7 +4869,7 @@ int DetectFastPatternTest175(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; distance:20; fast_pattern; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4906,7 +4882,7 @@ int DetectFastPatternTest175(void)
     return result;
 }
 
-int DetectFastPatternTest176(void)
+static int DetectFastPatternTest176(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4915,7 +4891,7 @@ int DetectFastPatternTest176(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; within:20; fast_pattern; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4928,7 +4904,7 @@ int DetectFastPatternTest176(void)
     return result;
 }
 
-int DetectFastPatternTest177(void)
+static int DetectFastPatternTest177(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4937,7 +4913,7 @@ int DetectFastPatternTest177(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; offset:20; fast_pattern; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4950,7 +4926,7 @@ int DetectFastPatternTest177(void)
     return result;
 }
 
-int DetectFastPatternTest178(void)
+static int DetectFastPatternTest178(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4959,7 +4935,7 @@ int DetectFastPatternTest178(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; content:!\"one\"; depth:20; fast_pattern; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -4976,7 +4952,7 @@ int DetectFastPatternTest178(void)
 /* http_header fast_pattern tests v */
 
 
-int DetectFastPatternTest179(void)
+static int DetectFastPatternTest179(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4985,13 +4961,13 @@ int DetectFastPatternTest179(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_header; "
                                "content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -5012,7 +4988,7 @@ int DetectFastPatternTest179(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest180(void)
+static int DetectFastPatternTest180(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -5022,14 +4998,14 @@ int DetectFastPatternTest180(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_header; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_header_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -5049,7 +5025,7 @@ int DetectFastPatternTest180(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest181(void)
+static int DetectFastPatternTest181(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -5059,14 +5035,14 @@ int DetectFastPatternTest181(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_header; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_header_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -5082,7 +5058,7 @@ int DetectFastPatternTest181(void)
     return result;
 }
 
-int DetectFastPatternTest182(void)
+static int DetectFastPatternTest182(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -5092,13 +5068,13 @@ int DetectFastPatternTest182(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_header_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -5116,7 +5092,7 @@ int DetectFastPatternTest182(void)
     return result;
 }
 
-int DetectFastPatternTest183(void)
+static int DetectFastPatternTest183(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -5126,13 +5102,13 @@ int DetectFastPatternTest183(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_header_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -5150,7 +5126,7 @@ int DetectFastPatternTest183(void)
     return result;
 }
 
-int DetectFastPatternTest184(void)
+static int DetectFastPatternTest184(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5159,7 +5135,7 @@ int DetectFastPatternTest184(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:only; http_header; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5172,7 +5148,7 @@ int DetectFastPatternTest184(void)
     return result;
 }
 
-int DetectFastPatternTest185(void)
+static int DetectFastPatternTest185(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5181,7 +5157,7 @@ int DetectFastPatternTest185(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; distance:10; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5194,7 +5170,7 @@ int DetectFastPatternTest185(void)
     return result;
 }
 
-int DetectFastPatternTest186(void)
+static int DetectFastPatternTest186(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5203,7 +5179,7 @@ int DetectFastPatternTest186(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:only; http_header; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5216,7 +5192,7 @@ int DetectFastPatternTest186(void)
     return result;
 }
 
-int DetectFastPatternTest187(void)
+static int DetectFastPatternTest187(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5225,7 +5201,7 @@ int DetectFastPatternTest187(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; within:10; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5238,7 +5214,7 @@ int DetectFastPatternTest187(void)
     return result;
 }
 
-int DetectFastPatternTest188(void)
+static int DetectFastPatternTest188(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5247,7 +5223,7 @@ int DetectFastPatternTest188(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:only; http_header; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5260,7 +5236,7 @@ int DetectFastPatternTest188(void)
     return result;
 }
 
-int DetectFastPatternTest189(void)
+static int DetectFastPatternTest189(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5269,7 +5245,7 @@ int DetectFastPatternTest189(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; offset:10; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5282,7 +5258,7 @@ int DetectFastPatternTest189(void)
     return result;
 }
 
-int DetectFastPatternTest190(void)
+static int DetectFastPatternTest190(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5291,7 +5267,7 @@ int DetectFastPatternTest190(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:only; http_header; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5304,7 +5280,7 @@ int DetectFastPatternTest190(void)
     return result;
 }
 
-int DetectFastPatternTest191(void)
+static int DetectFastPatternTest191(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5313,7 +5289,7 @@ int DetectFastPatternTest191(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; depth:10; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5326,7 +5302,7 @@ int DetectFastPatternTest191(void)
     return result;
 }
 
-int DetectFastPatternTest192(void)
+static int DetectFastPatternTest192(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5335,7 +5311,7 @@ int DetectFastPatternTest192(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"two\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5348,7 +5324,7 @@ int DetectFastPatternTest192(void)
     return result;
 }
 
-int DetectFastPatternTest193(void)
+static int DetectFastPatternTest193(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5357,12 +5333,12 @@ int DetectFastPatternTest193(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; http_header; content:\"two\"; http_header; distance:30; content:\"two\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -5379,7 +5355,7 @@ int DetectFastPatternTest193(void)
     return result;
 }
 
-int DetectFastPatternTest194(void)
+static int DetectFastPatternTest194(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5388,11 +5364,11 @@ int DetectFastPatternTest194(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; within:30; content:\"two\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -5409,7 +5385,7 @@ int DetectFastPatternTest194(void)
     return result;
 }
 
-int DetectFastPatternTest195(void)
+static int DetectFastPatternTest195(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5418,11 +5394,11 @@ int DetectFastPatternTest195(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; offset:30; content:\"two\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -5439,7 +5415,7 @@ int DetectFastPatternTest195(void)
     return result;
 }
 
-int DetectFastPatternTest196(void)
+static int DetectFastPatternTest196(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5448,11 +5424,11 @@ int DetectFastPatternTest196(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; depth:30; content:\"two\"; fast_pattern:only; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -5469,7 +5445,7 @@ int DetectFastPatternTest196(void)
     return result;
 }
 
-int DetectFastPatternTest197(void)
+static int DetectFastPatternTest197(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5478,11 +5454,11 @@ int DetectFastPatternTest197(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_header; content:\"two\"; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -5500,7 +5476,7 @@ int DetectFastPatternTest197(void)
     return result;
 }
 
-int DetectFastPatternTest198(void)
+static int DetectFastPatternTest198(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5509,7 +5485,7 @@ int DetectFastPatternTest198(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_header; content:!\"one\"; fast_pattern; http_header; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5522,7 +5498,7 @@ int DetectFastPatternTest198(void)
     return result;
 }
 
-int DetectFastPatternTest199(void)
+static int DetectFastPatternTest199(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5531,7 +5507,7 @@ int DetectFastPatternTest199(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_header; content:!\"one\"; fast_pattern; http_header; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5544,7 +5520,7 @@ int DetectFastPatternTest199(void)
     return result;
 }
 
-int DetectFastPatternTest200(void)
+static int DetectFastPatternTest200(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5553,7 +5529,7 @@ int DetectFastPatternTest200(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_header; content:!\"one\"; fast_pattern; http_header; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5566,7 +5542,7 @@ int DetectFastPatternTest200(void)
     return result;
 }
 
-int DetectFastPatternTest201(void)
+static int DetectFastPatternTest201(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5575,7 +5551,7 @@ int DetectFastPatternTest201(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_header; content:!\"one\"; fast_pattern; http_header; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5588,7 +5564,7 @@ int DetectFastPatternTest201(void)
     return result;
 }
 
-int DetectFastPatternTest202(void)
+static int DetectFastPatternTest202(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5597,11 +5573,11 @@ int DetectFastPatternTest202(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5618,7 +5594,7 @@ int DetectFastPatternTest202(void)
     return result;
 }
 
-int DetectFastPatternTest203(void)
+static int DetectFastPatternTest203(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5627,11 +5603,11 @@ int DetectFastPatternTest203(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5648,7 +5624,7 @@ int DetectFastPatternTest203(void)
     return result;
 }
 
-int DetectFastPatternTest204(void)
+static int DetectFastPatternTest204(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5657,11 +5633,11 @@ int DetectFastPatternTest204(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5678,7 +5654,7 @@ int DetectFastPatternTest204(void)
     return result;
 }
 
-int DetectFastPatternTest205(void)
+static int DetectFastPatternTest205(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5687,11 +5663,11 @@ int DetectFastPatternTest205(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5708,7 +5684,7 @@ int DetectFastPatternTest205(void)
     return result;
 }
 
-int DetectFastPatternTest206(void)
+static int DetectFastPatternTest206(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5717,11 +5693,11 @@ int DetectFastPatternTest206(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5738,7 +5714,7 @@ int DetectFastPatternTest206(void)
     return result;
 }
 
-int DetectFastPatternTest207(void)
+static int DetectFastPatternTest207(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5747,11 +5723,11 @@ int DetectFastPatternTest207(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5768,7 +5744,7 @@ int DetectFastPatternTest207(void)
     return result;
 }
 
-int DetectFastPatternTest208(void)
+static int DetectFastPatternTest208(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5777,11 +5753,11 @@ int DetectFastPatternTest208(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5798,7 +5774,7 @@ int DetectFastPatternTest208(void)
     return result;
 }
 
-int DetectFastPatternTest209(void)
+static int DetectFastPatternTest209(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5807,11 +5783,11 @@ int DetectFastPatternTest209(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5828,7 +5804,7 @@ int DetectFastPatternTest209(void)
     return result;
 }
 
-int DetectFastPatternTest210(void)
+static int DetectFastPatternTest210(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5837,11 +5813,11 @@ int DetectFastPatternTest210(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; http_header; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -5861,7 +5837,7 @@ int DetectFastPatternTest210(void)
     return result;
 }
 
-int DetectFastPatternTest211(void)
+static int DetectFastPatternTest211(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5870,7 +5846,7 @@ int DetectFastPatternTest211(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:65977,4; http_header; content:\"three\"; http_header; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5883,7 +5859,7 @@ int DetectFastPatternTest211(void)
     return result;
 }
 
-int DetectFastPatternTest212(void)
+static int DetectFastPatternTest212(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5892,7 +5868,7 @@ int DetectFastPatternTest212(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_header; content:\"oneonetwo\"; fast_pattern:3,65977; http_header; content:\"three\"; distance:10; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5905,7 +5881,7 @@ int DetectFastPatternTest212(void)
     return result;
 }
 
-int DetectFastPatternTest213(void)
+static int DetectFastPatternTest213(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5914,7 +5890,7 @@ int DetectFastPatternTest213(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:\"two\"; fast_pattern:65534,4; http_header; content:\"three\"; http_header; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5927,7 +5903,7 @@ int DetectFastPatternTest213(void)
     return result;
 }
 
-int DetectFastPatternTest214(void)
+static int DetectFastPatternTest214(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5936,11 +5912,11 @@ int DetectFastPatternTest214(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -5958,7 +5934,7 @@ int DetectFastPatternTest214(void)
     return result;
 }
 
-int DetectFastPatternTest215(void)
+static int DetectFastPatternTest215(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5967,7 +5943,7 @@ int DetectFastPatternTest215(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; distance:10; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -5980,7 +5956,7 @@ int DetectFastPatternTest215(void)
     return result;
 }
 
-int DetectFastPatternTest216(void)
+static int DetectFastPatternTest216(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -5989,7 +5965,7 @@ int DetectFastPatternTest216(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; within:10; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -6002,7 +5978,7 @@ int DetectFastPatternTest216(void)
     return result;
 }
 
-int DetectFastPatternTest217(void)
+static int DetectFastPatternTest217(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6011,7 +5987,7 @@ int DetectFastPatternTest217(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; offset:10; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -6024,7 +6000,7 @@ int DetectFastPatternTest217(void)
     return result;
 }
 
-int DetectFastPatternTest218(void)
+static int DetectFastPatternTest218(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6033,7 +6009,7 @@ int DetectFastPatternTest218(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; depth:10; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -6046,7 +6022,7 @@ int DetectFastPatternTest218(void)
     return result;
 }
 
-int DetectFastPatternTest219(void)
+static int DetectFastPatternTest219(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6055,11 +6031,11 @@ int DetectFastPatternTest219(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_header; content:\"three\"; http_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -6082,7 +6058,7 @@ int DetectFastPatternTest219(void)
 /* http_raw_header fast_pattern tests v */
 
 
-int DetectFastPatternTest220(void)
+static int DetectFastPatternTest220(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6097,7 +6073,7 @@ int DetectFastPatternTest220(void)
                                "content:\"three\"; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -6118,7 +6094,7 @@ int DetectFastPatternTest220(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest221(void)
+static int DetectFastPatternTest221(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -6135,7 +6111,7 @@ int DetectFastPatternTest221(void)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_header_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -6155,7 +6131,7 @@ int DetectFastPatternTest221(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest222(void)
+static int DetectFastPatternTest222(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -6172,7 +6148,7 @@ int DetectFastPatternTest222(void)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_header_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -6188,7 +6164,7 @@ int DetectFastPatternTest222(void)
     return result;
 }
 
-int DetectFastPatternTest223(void)
+static int DetectFastPatternTest223(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -6204,7 +6180,7 @@ int DetectFastPatternTest223(void)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_header_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -6222,7 +6198,7 @@ int DetectFastPatternTest223(void)
     return result;
 }
 
-int DetectFastPatternTest224(void)
+static int DetectFastPatternTest224(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -6238,7 +6214,7 @@ int DetectFastPatternTest224(void)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_header_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -6256,7 +6232,7 @@ int DetectFastPatternTest224(void)
     return result;
 }
 
-int DetectFastPatternTest225(void)
+static int DetectFastPatternTest225(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6278,7 +6254,7 @@ int DetectFastPatternTest225(void)
     return result;
 }
 
-int DetectFastPatternTest226(void)
+static int DetectFastPatternTest226(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6300,7 +6276,7 @@ int DetectFastPatternTest226(void)
     return result;
 }
 
-int DetectFastPatternTest227(void)
+static int DetectFastPatternTest227(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6322,7 +6298,7 @@ int DetectFastPatternTest227(void)
     return result;
 }
 
-int DetectFastPatternTest228(void)
+static int DetectFastPatternTest228(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6344,7 +6320,7 @@ int DetectFastPatternTest228(void)
     return result;
 }
 
-int DetectFastPatternTest229(void)
+static int DetectFastPatternTest229(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6366,7 +6342,7 @@ int DetectFastPatternTest229(void)
     return result;
 }
 
-int DetectFastPatternTest230(void)
+static int DetectFastPatternTest230(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6388,7 +6364,7 @@ int DetectFastPatternTest230(void)
     return result;
 }
 
-int DetectFastPatternTest231(void)
+static int DetectFastPatternTest231(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6410,7 +6386,7 @@ int DetectFastPatternTest231(void)
     return result;
 }
 
-int DetectFastPatternTest232(void)
+static int DetectFastPatternTest232(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6432,7 +6408,7 @@ int DetectFastPatternTest232(void)
     return result;
 }
 
-int DetectFastPatternTest233(void)
+static int DetectFastPatternTest233(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6454,7 +6430,7 @@ int DetectFastPatternTest233(void)
     return result;
 }
 
-int DetectFastPatternTest234(void)
+static int DetectFastPatternTest234(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6468,7 +6444,7 @@ int DetectFastPatternTest234(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -6485,7 +6461,7 @@ int DetectFastPatternTest234(void)
     return result;
 }
 
-int DetectFastPatternTest235(void)
+static int DetectFastPatternTest235(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6498,7 +6474,7 @@ int DetectFastPatternTest235(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; within:30; content:\"two\"; fast_pattern:only; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -6515,7 +6491,7 @@ int DetectFastPatternTest235(void)
     return result;
 }
 
-int DetectFastPatternTest236(void)
+static int DetectFastPatternTest236(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6528,7 +6504,7 @@ int DetectFastPatternTest236(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; offset:30; content:\"two\"; fast_pattern:only; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -6545,7 +6521,7 @@ int DetectFastPatternTest236(void)
     return result;
 }
 
-int DetectFastPatternTest237(void)
+static int DetectFastPatternTest237(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6558,7 +6534,7 @@ int DetectFastPatternTest237(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; depth:30; content:\"two\"; fast_pattern:only; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -6575,7 +6551,7 @@ int DetectFastPatternTest237(void)
     return result;
 }
 
-int DetectFastPatternTest238(void)
+static int DetectFastPatternTest238(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6588,7 +6564,7 @@ int DetectFastPatternTest238(void)
                                "(flow:to_server; content:!\"one\"; fast_pattern; http_raw_header; content:\"two\"; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -6606,7 +6582,7 @@ int DetectFastPatternTest238(void)
     return result;
 }
 
-int DetectFastPatternTest239(void)
+static int DetectFastPatternTest239(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6628,7 +6604,7 @@ int DetectFastPatternTest239(void)
     return result;
 }
 
-int DetectFastPatternTest240(void)
+static int DetectFastPatternTest240(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6650,7 +6626,7 @@ int DetectFastPatternTest240(void)
     return result;
 }
 
-int DetectFastPatternTest241(void)
+static int DetectFastPatternTest241(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6672,7 +6648,7 @@ int DetectFastPatternTest241(void)
     return result;
 }
 
-int DetectFastPatternTest242(void)
+static int DetectFastPatternTest242(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6694,7 +6670,7 @@ int DetectFastPatternTest242(void)
     return result;
 }
 
-int DetectFastPatternTest243(void)
+static int DetectFastPatternTest243(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6707,7 +6683,7 @@ int DetectFastPatternTest243(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6724,7 +6700,7 @@ int DetectFastPatternTest243(void)
     return result;
 }
 
-int DetectFastPatternTest244(void)
+static int DetectFastPatternTest244(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6737,7 +6713,7 @@ int DetectFastPatternTest244(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6754,7 +6730,7 @@ int DetectFastPatternTest244(void)
     return result;
 }
 
-int DetectFastPatternTest245(void)
+static int DetectFastPatternTest245(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6767,7 +6743,7 @@ int DetectFastPatternTest245(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6784,7 +6760,7 @@ int DetectFastPatternTest245(void)
     return result;
 }
 
-int DetectFastPatternTest246(void)
+static int DetectFastPatternTest246(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6797,7 +6773,7 @@ int DetectFastPatternTest246(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6814,7 +6790,7 @@ int DetectFastPatternTest246(void)
     return result;
 }
 
-int DetectFastPatternTest247(void)
+static int DetectFastPatternTest247(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6827,7 +6803,7 @@ int DetectFastPatternTest247(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6844,7 +6820,7 @@ int DetectFastPatternTest247(void)
     return result;
 }
 
-int DetectFastPatternTest248(void)
+static int DetectFastPatternTest248(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6857,7 +6833,7 @@ int DetectFastPatternTest248(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6874,7 +6850,7 @@ int DetectFastPatternTest248(void)
     return result;
 }
 
-int DetectFastPatternTest249(void)
+static int DetectFastPatternTest249(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6887,7 +6863,7 @@ int DetectFastPatternTest249(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6904,7 +6880,7 @@ int DetectFastPatternTest249(void)
     return result;
 }
 
-int DetectFastPatternTest250(void)
+static int DetectFastPatternTest250(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6917,7 +6893,7 @@ int DetectFastPatternTest250(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6934,7 +6910,7 @@ int DetectFastPatternTest250(void)
     return result;
 }
 
-int DetectFastPatternTest251(void)
+static int DetectFastPatternTest251(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6947,7 +6923,7 @@ int DetectFastPatternTest251(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:\"two\"; http_raw_header; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -6967,7 +6943,7 @@ int DetectFastPatternTest251(void)
     return result;
 }
 
-int DetectFastPatternTest252(void)
+static int DetectFastPatternTest252(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -6989,7 +6965,7 @@ int DetectFastPatternTest252(void)
     return result;
 }
 
-int DetectFastPatternTest253(void)
+static int DetectFastPatternTest253(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7011,7 +6987,7 @@ int DetectFastPatternTest253(void)
     return result;
 }
 
-int DetectFastPatternTest254(void)
+static int DetectFastPatternTest254(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7033,7 +7009,7 @@ int DetectFastPatternTest254(void)
     return result;
 }
 
-int DetectFastPatternTest255(void)
+static int DetectFastPatternTest255(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7046,7 +7022,7 @@ int DetectFastPatternTest255(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -7064,7 +7040,7 @@ int DetectFastPatternTest255(void)
     return result;
 }
 
-int DetectFastPatternTest256(void)
+static int DetectFastPatternTest256(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7086,7 +7062,7 @@ int DetectFastPatternTest256(void)
     return result;
 }
 
-int DetectFastPatternTest257(void)
+static int DetectFastPatternTest257(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7108,7 +7084,7 @@ int DetectFastPatternTest257(void)
     return result;
 }
 
-int DetectFastPatternTest258(void)
+static int DetectFastPatternTest258(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7130,7 +7106,7 @@ int DetectFastPatternTest258(void)
     return result;
 }
 
-int DetectFastPatternTest259(void)
+static int DetectFastPatternTest259(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7152,7 +7128,7 @@ int DetectFastPatternTest259(void)
     return result;
 }
 
-int DetectFastPatternTest260(void)
+static int DetectFastPatternTest260(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7165,7 +7141,7 @@ int DetectFastPatternTest260(void)
                                "(flow:to_server; content:\"one\"; http_raw_header; content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_header; content:\"three\"; http_raw_header; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_header_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -7188,7 +7164,7 @@ int DetectFastPatternTest260(void)
 /*     http_method fast_pattern tests v */
 
 
-int DetectFastPatternTest261(void)
+static int DetectFastPatternTest261(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7197,13 +7173,13 @@ int DetectFastPatternTest261(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_method; "
                                "content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -7224,7 +7200,7 @@ int DetectFastPatternTest261(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest262(void)
+static int DetectFastPatternTest262(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -7234,14 +7210,14 @@ int DetectFastPatternTest262(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_method; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_method_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -7261,7 +7237,7 @@ int DetectFastPatternTest262(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest263(void)
+static int DetectFastPatternTest263(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -7271,14 +7247,14 @@ int DetectFastPatternTest263(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_method; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_method_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -7294,7 +7270,7 @@ int DetectFastPatternTest263(void)
     return result;
 }
 
-int DetectFastPatternTest264(void)
+static int DetectFastPatternTest264(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -7304,13 +7280,13 @@ int DetectFastPatternTest264(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_method_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -7328,7 +7304,7 @@ int DetectFastPatternTest264(void)
     return result;
 }
 
-int DetectFastPatternTest265(void)
+static int DetectFastPatternTest265(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -7338,13 +7314,13 @@ int DetectFastPatternTest265(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_method_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -7362,7 +7338,7 @@ int DetectFastPatternTest265(void)
     return result;
 }
 
-int DetectFastPatternTest266(void)
+static int DetectFastPatternTest266(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7371,7 +7347,7 @@ int DetectFastPatternTest266(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:only; http_method; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7384,7 +7360,7 @@ int DetectFastPatternTest266(void)
     return result;
 }
 
-int DetectFastPatternTest267(void)
+static int DetectFastPatternTest267(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7393,7 +7369,7 @@ int DetectFastPatternTest267(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; distance:10; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7406,7 +7382,7 @@ int DetectFastPatternTest267(void)
     return result;
 }
 
-int DetectFastPatternTest268(void)
+static int DetectFastPatternTest268(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7415,7 +7391,7 @@ int DetectFastPatternTest268(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:only; http_method; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7428,7 +7404,7 @@ int DetectFastPatternTest268(void)
     return result;
 }
 
-int DetectFastPatternTest269(void)
+static int DetectFastPatternTest269(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7437,7 +7413,7 @@ int DetectFastPatternTest269(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; within:10; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7450,7 +7426,7 @@ int DetectFastPatternTest269(void)
     return result;
 }
 
-int DetectFastPatternTest270(void)
+static int DetectFastPatternTest270(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7459,7 +7435,7 @@ int DetectFastPatternTest270(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:only; http_method; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7472,7 +7448,7 @@ int DetectFastPatternTest270(void)
     return result;
 }
 
-int DetectFastPatternTest271(void)
+static int DetectFastPatternTest271(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7481,7 +7457,7 @@ int DetectFastPatternTest271(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; offset:10; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7494,7 +7470,7 @@ int DetectFastPatternTest271(void)
     return result;
 }
 
-int DetectFastPatternTest272(void)
+static int DetectFastPatternTest272(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7503,7 +7479,7 @@ int DetectFastPatternTest272(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:only; http_method; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7516,7 +7492,7 @@ int DetectFastPatternTest272(void)
     return result;
 }
 
-int DetectFastPatternTest273(void)
+static int DetectFastPatternTest273(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7525,7 +7501,7 @@ int DetectFastPatternTest273(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; depth:10; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7538,7 +7514,7 @@ int DetectFastPatternTest273(void)
     return result;
 }
 
-int DetectFastPatternTest274(void)
+static int DetectFastPatternTest274(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7547,7 +7523,7 @@ int DetectFastPatternTest274(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"two\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7560,7 +7536,7 @@ int DetectFastPatternTest274(void)
     return result;
 }
 
-int DetectFastPatternTest275(void)
+static int DetectFastPatternTest275(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7569,12 +7545,12 @@ int DetectFastPatternTest275(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; http_method; content:\"two\"; http_method; distance:30; content:\"two\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -7591,7 +7567,7 @@ int DetectFastPatternTest275(void)
     return result;
 }
 
-int DetectFastPatternTest276(void)
+static int DetectFastPatternTest276(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7600,11 +7576,11 @@ int DetectFastPatternTest276(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; within:30; content:\"two\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -7621,7 +7597,7 @@ int DetectFastPatternTest276(void)
     return result;
 }
 
-int DetectFastPatternTest277(void)
+static int DetectFastPatternTest277(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7630,11 +7606,11 @@ int DetectFastPatternTest277(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; offset:30; content:\"two\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -7651,7 +7627,7 @@ int DetectFastPatternTest277(void)
     return result;
 }
 
-int DetectFastPatternTest278(void)
+static int DetectFastPatternTest278(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7660,11 +7636,11 @@ int DetectFastPatternTest278(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; depth:30; content:\"two\"; fast_pattern:only; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -7681,7 +7657,7 @@ int DetectFastPatternTest278(void)
     return result;
 }
 
-int DetectFastPatternTest279(void)
+static int DetectFastPatternTest279(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7690,11 +7666,11 @@ int DetectFastPatternTest279(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_method; content:\"two\"; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -7712,7 +7688,7 @@ int DetectFastPatternTest279(void)
     return result;
 }
 
-int DetectFastPatternTest280(void)
+static int DetectFastPatternTest280(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7721,7 +7697,7 @@ int DetectFastPatternTest280(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_method; content:!\"one\"; fast_pattern; http_method; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7734,7 +7710,7 @@ int DetectFastPatternTest280(void)
     return result;
 }
 
-int DetectFastPatternTest281(void)
+static int DetectFastPatternTest281(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7743,7 +7719,7 @@ int DetectFastPatternTest281(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_method; content:!\"one\"; fast_pattern; http_method; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7756,7 +7732,7 @@ int DetectFastPatternTest281(void)
     return result;
 }
 
-int DetectFastPatternTest282(void)
+static int DetectFastPatternTest282(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7765,7 +7741,7 @@ int DetectFastPatternTest282(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_method; content:!\"one\"; fast_pattern; http_method; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7778,7 +7754,7 @@ int DetectFastPatternTest282(void)
     return result;
 }
 
-int DetectFastPatternTest283(void)
+static int DetectFastPatternTest283(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7787,7 +7763,7 @@ int DetectFastPatternTest283(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_method; content:!\"one\"; fast_pattern; http_method; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -7800,7 +7776,7 @@ int DetectFastPatternTest283(void)
     return result;
 }
 
-int DetectFastPatternTest284(void)
+static int DetectFastPatternTest284(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7809,11 +7785,11 @@ int DetectFastPatternTest284(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7830,7 +7806,7 @@ int DetectFastPatternTest284(void)
     return result;
 }
 
-int DetectFastPatternTest285(void)
+static int DetectFastPatternTest285(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7839,11 +7815,11 @@ int DetectFastPatternTest285(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7860,7 +7836,7 @@ int DetectFastPatternTest285(void)
     return result;
 }
 
-int DetectFastPatternTest286(void)
+static int DetectFastPatternTest286(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7869,11 +7845,11 @@ int DetectFastPatternTest286(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7890,7 +7866,7 @@ int DetectFastPatternTest286(void)
     return result;
 }
 
-int DetectFastPatternTest287(void)
+static int DetectFastPatternTest287(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7899,11 +7875,11 @@ int DetectFastPatternTest287(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7920,7 +7896,7 @@ int DetectFastPatternTest287(void)
     return result;
 }
 
-int DetectFastPatternTest288(void)
+static int DetectFastPatternTest288(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7929,11 +7905,11 @@ int DetectFastPatternTest288(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7950,7 +7926,7 @@ int DetectFastPatternTest288(void)
     return result;
 }
 
-int DetectFastPatternTest289(void)
+static int DetectFastPatternTest289(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7959,11 +7935,11 @@ int DetectFastPatternTest289(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -7980,7 +7956,7 @@ int DetectFastPatternTest289(void)
     return result;
 }
 
-int DetectFastPatternTest290(void)
+static int DetectFastPatternTest290(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -7989,11 +7965,11 @@ int DetectFastPatternTest290(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8010,7 +7986,7 @@ int DetectFastPatternTest290(void)
     return result;
 }
 
-int DetectFastPatternTest291(void)
+static int DetectFastPatternTest291(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8019,11 +7995,11 @@ int DetectFastPatternTest291(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8040,7 +8016,7 @@ int DetectFastPatternTest291(void)
     return result;
 }
 
-int DetectFastPatternTest292(void)
+static int DetectFastPatternTest292(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8049,11 +8025,11 @@ int DetectFastPatternTest292(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; http_method; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8073,7 +8049,7 @@ int DetectFastPatternTest292(void)
     return result;
 }
 
-int DetectFastPatternTest293(void)
+static int DetectFastPatternTest293(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8082,7 +8058,7 @@ int DetectFastPatternTest293(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:65977,4; http_method; content:\"three\"; http_method; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8095,7 +8071,7 @@ int DetectFastPatternTest293(void)
     return result;
 }
 
-int DetectFastPatternTest294(void)
+static int DetectFastPatternTest294(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8104,7 +8080,7 @@ int DetectFastPatternTest294(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_method; content:\"oneonetwo\"; fast_pattern:3,65977; http_method; content:\"three\"; distance:10; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8117,7 +8093,7 @@ int DetectFastPatternTest294(void)
     return result;
 }
 
-int DetectFastPatternTest295(void)
+static int DetectFastPatternTest295(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8126,7 +8102,7 @@ int DetectFastPatternTest295(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:\"two\"; fast_pattern:65534,4; http_method; content:\"three\"; http_method; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8139,7 +8115,7 @@ int DetectFastPatternTest295(void)
     return result;
 }
 
-int DetectFastPatternTest296(void)
+static int DetectFastPatternTest296(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8148,11 +8124,11 @@ int DetectFastPatternTest296(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -8170,7 +8146,7 @@ int DetectFastPatternTest296(void)
     return result;
 }
 
-int DetectFastPatternTest297(void)
+static int DetectFastPatternTest297(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8179,7 +8155,7 @@ int DetectFastPatternTest297(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; distance:10; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8192,7 +8168,7 @@ int DetectFastPatternTest297(void)
     return result;
 }
 
-int DetectFastPatternTest298(void)
+static int DetectFastPatternTest298(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8201,7 +8177,7 @@ int DetectFastPatternTest298(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; within:10; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8214,7 +8190,7 @@ int DetectFastPatternTest298(void)
     return result;
 }
 
-int DetectFastPatternTest299(void)
+static int DetectFastPatternTest299(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8223,7 +8199,7 @@ int DetectFastPatternTest299(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; offset:10; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8236,7 +8212,7 @@ int DetectFastPatternTest299(void)
     return result;
 }
 
-int DetectFastPatternTest300(void)
+static int DetectFastPatternTest300(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8245,7 +8221,7 @@ int DetectFastPatternTest300(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; depth:10; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8258,7 +8234,7 @@ int DetectFastPatternTest300(void)
     return result;
 }
 
-int DetectFastPatternTest301(void)
+static int DetectFastPatternTest301(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8267,11 +8243,11 @@ int DetectFastPatternTest301(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_method; content:!\"oneonetwo\"; fast_pattern:3,4; http_method; content:\"three\"; http_method; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_method_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -8294,7 +8270,7 @@ int DetectFastPatternTest301(void)
 /* http_cookie fast_pattern tests v */
 
 
-int DetectFastPatternTest302(void)
+static int DetectFastPatternTest302(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8303,13 +8279,13 @@ int DetectFastPatternTest302(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; "
                                "content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -8330,7 +8306,7 @@ int DetectFastPatternTest302(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest303(void)
+static int DetectFastPatternTest303(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -8340,14 +8316,14 @@ int DetectFastPatternTest303(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_cookie; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_cookie_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -8367,7 +8343,7 @@ int DetectFastPatternTest303(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest304(void)
+static int DetectFastPatternTest304(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -8377,14 +8353,14 @@ int DetectFastPatternTest304(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_cookie; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_cookie_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -8400,7 +8376,7 @@ int DetectFastPatternTest304(void)
     return result;
 }
 
-int DetectFastPatternTest305(void)
+static int DetectFastPatternTest305(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -8410,13 +8386,13 @@ int DetectFastPatternTest305(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_cookie_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -8434,7 +8410,7 @@ int DetectFastPatternTest305(void)
     return result;
 }
 
-int DetectFastPatternTest306(void)
+static int DetectFastPatternTest306(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -8444,13 +8420,13 @@ int DetectFastPatternTest306(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_cookie_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -8468,7 +8444,7 @@ int DetectFastPatternTest306(void)
     return result;
 }
 
-int DetectFastPatternTest307(void)
+static int DetectFastPatternTest307(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8477,7 +8453,7 @@ int DetectFastPatternTest307(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:only; http_cookie; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8490,7 +8466,7 @@ int DetectFastPatternTest307(void)
     return result;
 }
 
-int DetectFastPatternTest308(void)
+static int DetectFastPatternTest308(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8499,7 +8475,7 @@ int DetectFastPatternTest308(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; distance:10; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8512,7 +8488,7 @@ int DetectFastPatternTest308(void)
     return result;
 }
 
-int DetectFastPatternTest309(void)
+static int DetectFastPatternTest309(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8521,7 +8497,7 @@ int DetectFastPatternTest309(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:only; http_cookie; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8534,7 +8510,7 @@ int DetectFastPatternTest309(void)
     return result;
 }
 
-int DetectFastPatternTest310(void)
+static int DetectFastPatternTest310(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8543,7 +8519,7 @@ int DetectFastPatternTest310(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; within:10; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8556,7 +8532,7 @@ int DetectFastPatternTest310(void)
     return result;
 }
 
-int DetectFastPatternTest311(void)
+static int DetectFastPatternTest311(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8565,7 +8541,7 @@ int DetectFastPatternTest311(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:only; http_cookie; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8578,7 +8554,7 @@ int DetectFastPatternTest311(void)
     return result;
 }
 
-int DetectFastPatternTest312(void)
+static int DetectFastPatternTest312(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8587,7 +8563,7 @@ int DetectFastPatternTest312(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; offset:10; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8600,7 +8576,7 @@ int DetectFastPatternTest312(void)
     return result;
 }
 
-int DetectFastPatternTest313(void)
+static int DetectFastPatternTest313(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8609,7 +8585,7 @@ int DetectFastPatternTest313(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:only; http_cookie; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8622,7 +8598,7 @@ int DetectFastPatternTest313(void)
     return result;
 }
 
-int DetectFastPatternTest314(void)
+static int DetectFastPatternTest314(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8631,7 +8607,7 @@ int DetectFastPatternTest314(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; depth:10; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8644,7 +8620,7 @@ int DetectFastPatternTest314(void)
     return result;
 }
 
-int DetectFastPatternTest315(void)
+static int DetectFastPatternTest315(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8653,7 +8629,7 @@ int DetectFastPatternTest315(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"two\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8666,7 +8642,7 @@ int DetectFastPatternTest315(void)
     return result;
 }
 
-int DetectFastPatternTest316(void)
+static int DetectFastPatternTest316(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8675,12 +8651,12 @@ int DetectFastPatternTest316(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; http_cookie; content:\"two\"; http_cookie; distance:30; content:\"two\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -8697,7 +8673,7 @@ int DetectFastPatternTest316(void)
     return result;
 }
 
-int DetectFastPatternTest317(void)
+static int DetectFastPatternTest317(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8706,11 +8682,11 @@ int DetectFastPatternTest317(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; within:30; content:\"two\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -8727,7 +8703,7 @@ int DetectFastPatternTest317(void)
     return result;
 }
 
-int DetectFastPatternTest318(void)
+static int DetectFastPatternTest318(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8736,11 +8712,11 @@ int DetectFastPatternTest318(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; offset:30; content:\"two\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -8757,7 +8733,7 @@ int DetectFastPatternTest318(void)
     return result;
 }
 
-int DetectFastPatternTest319(void)
+static int DetectFastPatternTest319(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8766,11 +8742,11 @@ int DetectFastPatternTest319(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; depth:30; content:\"two\"; fast_pattern:only; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -8787,7 +8763,7 @@ int DetectFastPatternTest319(void)
     return result;
 }
 
-int DetectFastPatternTest320(void)
+static int DetectFastPatternTest320(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8796,11 +8772,11 @@ int DetectFastPatternTest320(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_cookie; content:\"two\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -8818,7 +8794,7 @@ int DetectFastPatternTest320(void)
     return result;
 }
 
-int DetectFastPatternTest321(void)
+static int DetectFastPatternTest321(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8827,7 +8803,7 @@ int DetectFastPatternTest321(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_cookie; content:!\"one\"; fast_pattern; http_cookie; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8840,7 +8816,7 @@ int DetectFastPatternTest321(void)
     return result;
 }
 
-int DetectFastPatternTest322(void)
+static int DetectFastPatternTest322(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8849,7 +8825,7 @@ int DetectFastPatternTest322(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_cookie; content:!\"one\"; fast_pattern; http_cookie; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8862,7 +8838,7 @@ int DetectFastPatternTest322(void)
     return result;
 }
 
-int DetectFastPatternTest323(void)
+static int DetectFastPatternTest323(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8871,7 +8847,7 @@ int DetectFastPatternTest323(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_cookie; content:!\"one\"; fast_pattern; http_cookie; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8884,7 +8860,7 @@ int DetectFastPatternTest323(void)
     return result;
 }
 
-int DetectFastPatternTest324(void)
+static int DetectFastPatternTest324(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8893,7 +8869,7 @@ int DetectFastPatternTest324(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_cookie; content:!\"one\"; fast_pattern; http_cookie; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -8906,7 +8882,7 @@ int DetectFastPatternTest324(void)
     return result;
 }
 
-int DetectFastPatternTest325(void)
+static int DetectFastPatternTest325(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8915,11 +8891,11 @@ int DetectFastPatternTest325(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8936,7 +8912,7 @@ int DetectFastPatternTest325(void)
     return result;
 }
 
-int DetectFastPatternTest326(void)
+static int DetectFastPatternTest326(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8945,11 +8921,11 @@ int DetectFastPatternTest326(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8966,7 +8942,7 @@ int DetectFastPatternTest326(void)
     return result;
 }
 
-int DetectFastPatternTest327(void)
+static int DetectFastPatternTest327(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -8975,11 +8951,11 @@ int DetectFastPatternTest327(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -8996,7 +8972,7 @@ int DetectFastPatternTest327(void)
     return result;
 }
 
-int DetectFastPatternTest328(void)
+static int DetectFastPatternTest328(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9005,11 +8981,11 @@ int DetectFastPatternTest328(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9026,7 +9002,7 @@ int DetectFastPatternTest328(void)
     return result;
 }
 
-int DetectFastPatternTest329(void)
+static int DetectFastPatternTest329(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9035,11 +9011,11 @@ int DetectFastPatternTest329(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9056,7 +9032,7 @@ int DetectFastPatternTest329(void)
     return result;
 }
 
-int DetectFastPatternTest330(void)
+static int DetectFastPatternTest330(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9065,11 +9041,11 @@ int DetectFastPatternTest330(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; distance:10; content:\"oneonethree\"; fast_pattern:3,4; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9086,7 +9062,7 @@ int DetectFastPatternTest330(void)
     return result;
 }
 
-int DetectFastPatternTest331(void)
+static int DetectFastPatternTest331(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9095,11 +9071,11 @@ int DetectFastPatternTest331(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; within:10; content:\"oneonethree\"; fast_pattern:3,4; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9116,7 +9092,7 @@ int DetectFastPatternTest331(void)
     return result;
 }
 
-int DetectFastPatternTest332(void)
+static int DetectFastPatternTest332(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9125,11 +9101,11 @@ int DetectFastPatternTest332(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; offset:10; content:\"oneonethree\"; fast_pattern:3,4; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9146,7 +9122,7 @@ int DetectFastPatternTest332(void)
     return result;
 }
 
-int DetectFastPatternTest333(void)
+static int DetectFastPatternTest333(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9155,11 +9131,11 @@ int DetectFastPatternTest333(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; http_cookie; depth:10; content:\"oneonethree\"; fast_pattern:3,4; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -9179,7 +9155,7 @@ int DetectFastPatternTest333(void)
     return result;
 }
 
-int DetectFastPatternTest334(void)
+static int DetectFastPatternTest334(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9188,7 +9164,7 @@ int DetectFastPatternTest334(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:65977,4; http_cookie; content:\"three\"; http_cookie; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9201,7 +9177,7 @@ int DetectFastPatternTest334(void)
     return result;
 }
 
-int DetectFastPatternTest335(void)
+static int DetectFastPatternTest335(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9210,7 +9186,7 @@ int DetectFastPatternTest335(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_cookie; content:\"oneonetwo\"; fast_pattern:3,65977; http_cookie; content:\"three\"; distance:10; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9223,7 +9199,7 @@ int DetectFastPatternTest335(void)
     return result;
 }
 
-int DetectFastPatternTest336(void)
+static int DetectFastPatternTest336(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9232,7 +9208,7 @@ int DetectFastPatternTest336(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:\"two\"; fast_pattern:65534,4; http_cookie; content:\"three\"; http_cookie; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9245,7 +9221,7 @@ int DetectFastPatternTest336(void)
     return result;
 }
 
-int DetectFastPatternTest337(void)
+static int DetectFastPatternTest337(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9254,11 +9230,11 @@ int DetectFastPatternTest337(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -9276,7 +9252,7 @@ int DetectFastPatternTest337(void)
     return result;
 }
 
-int DetectFastPatternTest338(void)
+static int DetectFastPatternTest338(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9285,7 +9261,7 @@ int DetectFastPatternTest338(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; distance:10; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9298,7 +9274,7 @@ int DetectFastPatternTest338(void)
     return result;
 }
 
-int DetectFastPatternTest339(void)
+static int DetectFastPatternTest339(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9307,7 +9283,7 @@ int DetectFastPatternTest339(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; within:10; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9320,7 +9296,7 @@ int DetectFastPatternTest339(void)
     return result;
 }
 
-int DetectFastPatternTest340(void)
+static int DetectFastPatternTest340(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9329,7 +9305,7 @@ int DetectFastPatternTest340(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; offset:10; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9342,7 +9318,7 @@ int DetectFastPatternTest340(void)
     return result;
 }
 
-int DetectFastPatternTest341(void)
+static int DetectFastPatternTest341(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9351,7 +9327,7 @@ int DetectFastPatternTest341(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; depth:10; content:\"three2\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list != NULL)
         goto end;
@@ -9364,7 +9340,7 @@ int DetectFastPatternTest341(void)
     return result;
 }
 
-int DetectFastPatternTest342(void)
+static int DetectFastPatternTest342(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9373,11 +9349,11 @@ int DetectFastPatternTest342(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_cookie; content:!\"oneonetwo\"; fast_pattern:3,4; http_cookie; content:\"three\"; http_cookie; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_cookie_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -9400,7 +9376,7 @@ int DetectFastPatternTest342(void)
 /* http_raw_uri fast_pattern tests v */
 
 
-int DetectFastPatternTest343(void)
+static int DetectFastPatternTest343(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9409,13 +9385,13 @@ int DetectFastPatternTest343(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -9436,7 +9412,7 @@ int DetectFastPatternTest343(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest344(void)
+static int DetectFastPatternTest344(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -9446,14 +9422,14 @@ int DetectFastPatternTest344(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"/one/\"; fast_pattern:only; http_raw_uri; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -9473,7 +9449,7 @@ int DetectFastPatternTest344(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest345(void)
+static int DetectFastPatternTest345(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -9483,14 +9459,14 @@ int DetectFastPatternTest345(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_raw_uri; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -9506,7 +9482,7 @@ int DetectFastPatternTest345(void)
     return result;
 }
 
-int DetectFastPatternTest346(void)
+static int DetectFastPatternTest346(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -9516,13 +9492,13 @@ int DetectFastPatternTest346(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -9540,7 +9516,7 @@ int DetectFastPatternTest346(void)
     return result;
 }
 
-int DetectFastPatternTest347(void)
+static int DetectFastPatternTest347(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -9550,13 +9526,13 @@ int DetectFastPatternTest347(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRUDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_uri_buffer_id];
     DetectContentData *ud = (DetectContentData *)sm->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
             !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -9574,7 +9550,7 @@ int DetectFastPatternTest347(void)
     return result;
 }
 
-int DetectFastPatternTest348(void)
+static int DetectFastPatternTest348(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9583,7 +9559,7 @@ int DetectFastPatternTest348(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9597,7 +9573,7 @@ int DetectFastPatternTest348(void)
     return result;
 }
 
-int DetectFastPatternTest349(void)
+static int DetectFastPatternTest349(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9606,7 +9582,7 @@ int DetectFastPatternTest349(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9620,7 +9596,7 @@ int DetectFastPatternTest349(void)
     return result;
 }
 
-int DetectFastPatternTest350(void)
+static int DetectFastPatternTest350(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9629,7 +9605,7 @@ int DetectFastPatternTest350(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9643,7 +9619,7 @@ int DetectFastPatternTest350(void)
     return result;
 }
 
-int DetectFastPatternTest351(void)
+static int DetectFastPatternTest351(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9652,7 +9628,7 @@ int DetectFastPatternTest351(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; within:10; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9666,7 +9642,7 @@ int DetectFastPatternTest351(void)
     return result;
 }
 
-int DetectFastPatternTest352(void)
+static int DetectFastPatternTest352(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9675,7 +9651,7 @@ int DetectFastPatternTest352(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9689,7 +9665,7 @@ int DetectFastPatternTest352(void)
     return result;
 }
 
-int DetectFastPatternTest353(void)
+static int DetectFastPatternTest353(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9698,7 +9674,7 @@ int DetectFastPatternTest353(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9712,7 +9688,7 @@ int DetectFastPatternTest353(void)
     return result;
 }
 
-int DetectFastPatternTest354(void)
+static int DetectFastPatternTest354(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9721,7 +9697,7 @@ int DetectFastPatternTest354(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9735,7 +9711,7 @@ int DetectFastPatternTest354(void)
     return result;
 }
 
-int DetectFastPatternTest355(void)
+static int DetectFastPatternTest355(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9744,7 +9720,7 @@ int DetectFastPatternTest355(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9758,7 +9734,7 @@ int DetectFastPatternTest355(void)
     return result;
 }
 
-int DetectFastPatternTest356(void)
+static int DetectFastPatternTest356(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9767,7 +9743,7 @@ int DetectFastPatternTest356(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"two\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9781,7 +9757,7 @@ int DetectFastPatternTest356(void)
     return result;
 }
 
-int DetectFastPatternTest357(void)
+static int DetectFastPatternTest357(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9790,14 +9766,14 @@ int DetectFastPatternTest357(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content: \"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -9814,7 +9790,7 @@ int DetectFastPatternTest357(void)
     return result;
 }
 
-int DetectFastPatternTest358(void)
+static int DetectFastPatternTest358(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9823,13 +9799,13 @@ int DetectFastPatternTest358(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; within:30; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -9846,7 +9822,7 @@ int DetectFastPatternTest358(void)
     return result;
 }
 
-int DetectFastPatternTest359(void)
+static int DetectFastPatternTest359(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9855,13 +9831,13 @@ int DetectFastPatternTest359(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -9878,7 +9854,7 @@ int DetectFastPatternTest359(void)
     return result;
 }
 
-int DetectFastPatternTest360(void)
+static int DetectFastPatternTest360(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9887,13 +9863,13 @@ int DetectFastPatternTest360(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -9910,7 +9886,7 @@ int DetectFastPatternTest360(void)
     return result;
 }
 
-int DetectFastPatternTest361(void)
+static int DetectFastPatternTest361(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9919,12 +9895,12 @@ int DetectFastPatternTest361(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -9942,7 +9918,7 @@ int DetectFastPatternTest361(void)
     return result;
 }
 
-int DetectFastPatternTest362(void)
+static int DetectFastPatternTest362(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9951,7 +9927,7 @@ int DetectFastPatternTest362(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_uri; "
                                "content:!\"one\"; fast_pattern; http_raw_uri; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9965,7 +9941,7 @@ int DetectFastPatternTest362(void)
     return result;
 }
 
-int DetectFastPatternTest363(void)
+static int DetectFastPatternTest363(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9974,7 +9950,7 @@ int DetectFastPatternTest363(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_uri; "
                                "content:!\"one\"; fast_pattern; http_raw_uri; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -9988,7 +9964,7 @@ int DetectFastPatternTest363(void)
     return result;
 }
 
-int DetectFastPatternTest364(void)
+static int DetectFastPatternTest364(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -9997,7 +9973,7 @@ int DetectFastPatternTest364(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_uri; "
                                "content:!\"one\"; fast_pattern; http_raw_uri; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10011,7 +9987,7 @@ int DetectFastPatternTest364(void)
     return result;
 }
 
-int DetectFastPatternTest365(void)
+static int DetectFastPatternTest365(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10020,7 +9996,7 @@ int DetectFastPatternTest365(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_uri; "
                                "content:!\"one\"; fast_pattern; http_raw_uri; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10034,7 +10010,7 @@ int DetectFastPatternTest365(void)
     return result;
 }
 
-int DetectFastPatternTest366(void)
+static int DetectFastPatternTest366(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10043,13 +10019,13 @@ int DetectFastPatternTest366(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10066,7 +10042,7 @@ int DetectFastPatternTest366(void)
     return result;
 }
 
-int DetectFastPatternTest367(void)
+static int DetectFastPatternTest367(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10075,13 +10051,13 @@ int DetectFastPatternTest367(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10098,7 +10074,7 @@ int DetectFastPatternTest367(void)
     return result;
 }
 
-int DetectFastPatternTest368(void)
+static int DetectFastPatternTest368(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10107,13 +10083,13 @@ int DetectFastPatternTest368(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10130,7 +10106,7 @@ int DetectFastPatternTest368(void)
     return result;
 }
 
-int DetectFastPatternTest369(void)
+static int DetectFastPatternTest369(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10139,13 +10115,13 @@ int DetectFastPatternTest369(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10162,7 +10138,7 @@ int DetectFastPatternTest369(void)
     return result;
 }
 
-int DetectFastPatternTest370(void)
+static int DetectFastPatternTest370(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10171,13 +10147,13 @@ int DetectFastPatternTest370(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10194,7 +10170,7 @@ int DetectFastPatternTest370(void)
     return result;
 }
 
-int DetectFastPatternTest371(void)
+static int DetectFastPatternTest371(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10203,13 +10179,13 @@ int DetectFastPatternTest371(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10226,7 +10202,7 @@ int DetectFastPatternTest371(void)
     return result;
 }
 
-int DetectFastPatternTest372(void)
+static int DetectFastPatternTest372(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10235,13 +10211,13 @@ int DetectFastPatternTest372(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10258,7 +10234,7 @@ int DetectFastPatternTest372(void)
     return result;
 }
 
-int DetectFastPatternTest373(void)
+static int DetectFastPatternTest373(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10267,13 +10243,13 @@ int DetectFastPatternTest373(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10290,7 +10266,7 @@ int DetectFastPatternTest373(void)
     return result;
 }
 
-int DetectFastPatternTest374(void)
+static int DetectFastPatternTest374(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10299,13 +10275,13 @@ int DetectFastPatternTest374(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; http_raw_uri; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -10325,7 +10301,7 @@ int DetectFastPatternTest374(void)
     return result;
 }
 
-int DetectFastPatternTest375(void)
+static int DetectFastPatternTest375(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10334,7 +10310,7 @@ int DetectFastPatternTest375(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:65977,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; distance:10; sid:1;)");
@@ -10349,7 +10325,7 @@ int DetectFastPatternTest375(void)
     return result;
 }
 
-int DetectFastPatternTest376(void)
+static int DetectFastPatternTest376(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10358,7 +10334,7 @@ int DetectFastPatternTest376(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_raw_uri; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_raw_uri; "
                                "content:\"three\"; distance:10; http_raw_uri; sid:1;)");
@@ -10373,7 +10349,7 @@ int DetectFastPatternTest376(void)
     return result;
 }
 
-int DetectFastPatternTest377(void)
+static int DetectFastPatternTest377(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10382,7 +10358,7 @@ int DetectFastPatternTest377(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:\"two\"; fast_pattern:65534,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; distance:10; sid:1;)");
@@ -10397,7 +10373,7 @@ int DetectFastPatternTest377(void)
     return result;
 }
 
-int DetectFastPatternTest378(void)
+static int DetectFastPatternTest378(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10406,13 +10382,13 @@ int DetectFastPatternTest378(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -10430,7 +10406,7 @@ int DetectFastPatternTest378(void)
     return result;
 }
 
-int DetectFastPatternTest379(void)
+static int DetectFastPatternTest379(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10439,7 +10415,7 @@ int DetectFastPatternTest379(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; distance:10; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
@@ -10454,7 +10430,7 @@ int DetectFastPatternTest379(void)
     return result;
 }
 
-int DetectFastPatternTest380(void)
+static int DetectFastPatternTest380(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10463,7 +10439,7 @@ int DetectFastPatternTest380(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; within:10; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
@@ -10478,7 +10454,7 @@ int DetectFastPatternTest380(void)
     return result;
 }
 
-int DetectFastPatternTest381(void)
+static int DetectFastPatternTest381(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10487,7 +10463,7 @@ int DetectFastPatternTest381(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; offset:10; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
@@ -10502,7 +10478,7 @@ int DetectFastPatternTest381(void)
     return result;
 }
 
-int DetectFastPatternTest382(void)
+static int DetectFastPatternTest382(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10511,7 +10487,7 @@ int DetectFastPatternTest382(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; depth:10; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
@@ -10526,7 +10502,7 @@ int DetectFastPatternTest382(void)
     return result;
 }
 
-int DetectFastPatternTest383(void)
+static int DetectFastPatternTest383(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10535,13 +10511,13 @@ int DetectFastPatternTest383(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_uri; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_uri; "
                                "content:\"three\"; http_raw_uri; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_uri_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -10564,7 +10540,7 @@ int DetectFastPatternTest383(void)
 /* http_stat_msg fast_pattern tests v */
 
 
-int DetectFastPatternTest384(void)
+static int DetectFastPatternTest384(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10573,13 +10549,13 @@ int DetectFastPatternTest384(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -10600,7 +10576,7 @@ int DetectFastPatternTest384(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest385(void)
+static int DetectFastPatternTest385(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -10610,14 +10586,14 @@ int DetectFastPatternTest385(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_stat_msg; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -10637,7 +10613,7 @@ int DetectFastPatternTest385(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest386(void)
+static int DetectFastPatternTest386(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -10647,14 +10623,14 @@ int DetectFastPatternTest386(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_stat_msg; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -10670,7 +10646,7 @@ int DetectFastPatternTest386(void)
     return result;
 }
 
-int DetectFastPatternTest387(void)
+static int DetectFastPatternTest387(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -10680,12 +10656,12 @@ int DetectFastPatternTest387(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -10706,7 +10682,7 @@ int DetectFastPatternTest387(void)
     return result;
 }
 
-int DetectFastPatternTest388(void)
+static int DetectFastPatternTest388(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -10716,12 +10692,12 @@ int DetectFastPatternTest388(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -10743,7 +10719,7 @@ int DetectFastPatternTest388(void)
     return result;
 }
 
-int DetectFastPatternTest389(void)
+static int DetectFastPatternTest389(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10752,7 +10728,7 @@ int DetectFastPatternTest389(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10766,7 +10742,7 @@ int DetectFastPatternTest389(void)
     return result;
 }
 
-int DetectFastPatternTest390(void)
+static int DetectFastPatternTest390(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10775,7 +10751,7 @@ int DetectFastPatternTest390(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10789,7 +10765,7 @@ int DetectFastPatternTest390(void)
     return result;
 }
 
-int DetectFastPatternTest391(void)
+static int DetectFastPatternTest391(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10798,7 +10774,7 @@ int DetectFastPatternTest391(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10812,7 +10788,7 @@ int DetectFastPatternTest391(void)
     return result;
 }
 
-int DetectFastPatternTest392(void)
+static int DetectFastPatternTest392(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10821,7 +10797,7 @@ int DetectFastPatternTest392(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; within:10; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10835,7 +10811,7 @@ int DetectFastPatternTest392(void)
     return result;
 }
 
-int DetectFastPatternTest393(void)
+static int DetectFastPatternTest393(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10844,7 +10820,7 @@ int DetectFastPatternTest393(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10858,7 +10834,7 @@ int DetectFastPatternTest393(void)
     return result;
 }
 
-int DetectFastPatternTest394(void)
+static int DetectFastPatternTest394(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10867,7 +10843,7 @@ int DetectFastPatternTest394(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10881,7 +10857,7 @@ int DetectFastPatternTest394(void)
     return result;
 }
 
-int DetectFastPatternTest395(void)
+static int DetectFastPatternTest395(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10890,7 +10866,7 @@ int DetectFastPatternTest395(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10904,7 +10880,7 @@ int DetectFastPatternTest395(void)
     return result;
 }
 
-int DetectFastPatternTest396(void)
+static int DetectFastPatternTest396(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10913,7 +10889,7 @@ int DetectFastPatternTest396(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10927,7 +10903,7 @@ int DetectFastPatternTest396(void)
     return result;
 }
 
-int DetectFastPatternTest397(void)
+static int DetectFastPatternTest397(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10936,7 +10912,7 @@ int DetectFastPatternTest397(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"two\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -10950,7 +10926,7 @@ int DetectFastPatternTest397(void)
     return result;
 }
 
-int DetectFastPatternTest398(void)
+static int DetectFastPatternTest398(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10959,14 +10935,14 @@ int DetectFastPatternTest398(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -10983,7 +10959,7 @@ int DetectFastPatternTest398(void)
     return result;
 }
 
-int DetectFastPatternTest399(void)
+static int DetectFastPatternTest399(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -10992,13 +10968,13 @@ int DetectFastPatternTest399(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; within:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -11015,7 +10991,7 @@ int DetectFastPatternTest399(void)
     return result;
 }
 
-int DetectFastPatternTest400(void)
+static int DetectFastPatternTest400(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11024,13 +11000,13 @@ int DetectFastPatternTest400(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -11047,7 +11023,7 @@ int DetectFastPatternTest400(void)
     return result;
 }
 
-int DetectFastPatternTest401(void)
+static int DetectFastPatternTest401(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11056,13 +11032,13 @@ int DetectFastPatternTest401(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -11079,7 +11055,7 @@ int DetectFastPatternTest401(void)
     return result;
 }
 
-int DetectFastPatternTest402(void)
+static int DetectFastPatternTest402(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11088,12 +11064,12 @@ int DetectFastPatternTest402(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -11111,7 +11087,7 @@ int DetectFastPatternTest402(void)
     return result;
 }
 
-int DetectFastPatternTest403(void)
+static int DetectFastPatternTest403(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11120,7 +11096,7 @@ int DetectFastPatternTest403(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_msg; "
                                "content:!\"one\"; fast_pattern; http_stat_msg; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11134,7 +11110,7 @@ int DetectFastPatternTest403(void)
     return result;
 }
 
-int DetectFastPatternTest404(void)
+static int DetectFastPatternTest404(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11143,7 +11119,7 @@ int DetectFastPatternTest404(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_msg; "
                                "content:!\"one\"; fast_pattern; http_stat_msg; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11157,7 +11133,7 @@ int DetectFastPatternTest404(void)
     return result;
 }
 
-int DetectFastPatternTest405(void)
+static int DetectFastPatternTest405(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11166,7 +11142,7 @@ int DetectFastPatternTest405(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_msg; "
                                "content:!\"one\"; fast_pattern; http_stat_msg; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11180,7 +11156,7 @@ int DetectFastPatternTest405(void)
     return result;
 }
 
-int DetectFastPatternTest406(void)
+static int DetectFastPatternTest406(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11189,7 +11165,7 @@ int DetectFastPatternTest406(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_msg; "
                                "content:!\"one\"; fast_pattern; http_stat_msg; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11203,7 +11179,7 @@ int DetectFastPatternTest406(void)
     return result;
 }
 
-int DetectFastPatternTest407(void)
+static int DetectFastPatternTest407(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11212,13 +11188,13 @@ int DetectFastPatternTest407(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11235,7 +11211,7 @@ int DetectFastPatternTest407(void)
     return result;
 }
 
-int DetectFastPatternTest408(void)
+static int DetectFastPatternTest408(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11244,13 +11220,13 @@ int DetectFastPatternTest408(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11267,7 +11243,7 @@ int DetectFastPatternTest408(void)
     return result;
 }
 
-int DetectFastPatternTest409(void)
+static int DetectFastPatternTest409(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11276,13 +11252,13 @@ int DetectFastPatternTest409(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11299,7 +11275,7 @@ int DetectFastPatternTest409(void)
     return result;
 }
 
-int DetectFastPatternTest410(void)
+static int DetectFastPatternTest410(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11308,13 +11284,13 @@ int DetectFastPatternTest410(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11331,7 +11307,7 @@ int DetectFastPatternTest410(void)
     return result;
 }
 
-int DetectFastPatternTest411(void)
+static int DetectFastPatternTest411(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11340,13 +11316,13 @@ int DetectFastPatternTest411(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11363,7 +11339,7 @@ int DetectFastPatternTest411(void)
     return result;
 }
 
-int DetectFastPatternTest412(void)
+static int DetectFastPatternTest412(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11372,13 +11348,13 @@ int DetectFastPatternTest412(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11395,7 +11371,7 @@ int DetectFastPatternTest412(void)
     return result;
 }
 
-int DetectFastPatternTest413(void)
+static int DetectFastPatternTest413(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11404,13 +11380,13 @@ int DetectFastPatternTest413(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11427,7 +11403,7 @@ int DetectFastPatternTest413(void)
     return result;
 }
 
-int DetectFastPatternTest414(void)
+static int DetectFastPatternTest414(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11436,13 +11412,13 @@ int DetectFastPatternTest414(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11459,7 +11435,7 @@ int DetectFastPatternTest414(void)
     return result;
 }
 
-int DetectFastPatternTest415(void)
+static int DetectFastPatternTest415(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11468,13 +11444,13 @@ int DetectFastPatternTest415(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; http_stat_msg; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -11494,7 +11470,7 @@ int DetectFastPatternTest415(void)
     return result;
 }
 
-int DetectFastPatternTest416(void)
+static int DetectFastPatternTest416(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11503,7 +11479,7 @@ int DetectFastPatternTest416(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:65977,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; distance:10; sid:1;)");
@@ -11518,7 +11494,7 @@ int DetectFastPatternTest416(void)
     return result;
 }
 
-int DetectFastPatternTest417(void)
+static int DetectFastPatternTest417(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11527,7 +11503,7 @@ int DetectFastPatternTest417(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_stat_msg; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_stat_msg; "
                                "content:\"three\"; distance:10; http_stat_msg; sid:1;)");
@@ -11542,7 +11518,7 @@ int DetectFastPatternTest417(void)
     return result;
 }
 
-int DetectFastPatternTest418(void)
+static int DetectFastPatternTest418(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11551,7 +11527,7 @@ int DetectFastPatternTest418(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:\"two\"; fast_pattern:65534,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; distance:10; sid:1;)");
@@ -11566,7 +11542,7 @@ int DetectFastPatternTest418(void)
     return result;
 }
 
-int DetectFastPatternTest419(void)
+static int DetectFastPatternTest419(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11575,13 +11551,13 @@ int DetectFastPatternTest419(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -11599,7 +11575,7 @@ int DetectFastPatternTest419(void)
     return result;
 }
 
-int DetectFastPatternTest420(void)
+static int DetectFastPatternTest420(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11608,7 +11584,7 @@ int DetectFastPatternTest420(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; distance:10; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
@@ -11623,7 +11599,7 @@ int DetectFastPatternTest420(void)
     return result;
 }
 
-int DetectFastPatternTest421(void)
+static int DetectFastPatternTest421(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11632,7 +11608,7 @@ int DetectFastPatternTest421(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; within:10; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
@@ -11647,7 +11623,7 @@ int DetectFastPatternTest421(void)
     return result;
 }
 
-int DetectFastPatternTest422(void)
+static int DetectFastPatternTest422(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11656,7 +11632,7 @@ int DetectFastPatternTest422(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; offset:10; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
@@ -11671,7 +11647,7 @@ int DetectFastPatternTest422(void)
     return result;
 }
 
-int DetectFastPatternTest423(void)
+static int DetectFastPatternTest423(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11680,7 +11656,7 @@ int DetectFastPatternTest423(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; depth:10; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
@@ -11695,7 +11671,7 @@ int DetectFastPatternTest423(void)
     return result;
 }
 
-int DetectFastPatternTest424(void)
+static int DetectFastPatternTest424(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11704,13 +11680,13 @@ int DetectFastPatternTest424(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_msg; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_msg; "
                                "content:\"three\"; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_msg_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -11733,7 +11709,7 @@ int DetectFastPatternTest424(void)
 /* http_stat_code fast_pattern tests v */
 
 
-int DetectFastPatternTest425(void)
+static int DetectFastPatternTest425(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11742,13 +11718,13 @@ int DetectFastPatternTest425(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -11769,7 +11745,7 @@ int DetectFastPatternTest425(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest426(void)
+static int DetectFastPatternTest426(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -11779,14 +11755,14 @@ int DetectFastPatternTest426(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_stat_code; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -11806,7 +11782,7 @@ int DetectFastPatternTest426(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest427(void)
+static int DetectFastPatternTest427(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -11816,14 +11792,14 @@ int DetectFastPatternTest427(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_stat_code; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -11839,7 +11815,7 @@ int DetectFastPatternTest427(void)
     return result;
 }
 
-int DetectFastPatternTest428(void)
+static int DetectFastPatternTest428(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -11849,12 +11825,12 @@ int DetectFastPatternTest428(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -11876,7 +11852,7 @@ int DetectFastPatternTest428(void)
     return result;
 }
 
-int DetectFastPatternTest429(void)
+static int DetectFastPatternTest429(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -11886,12 +11862,12 @@ int DetectFastPatternTest429(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -11913,7 +11889,7 @@ int DetectFastPatternTest429(void)
     return result;
 }
 
-int DetectFastPatternTest430(void)
+static int DetectFastPatternTest430(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11922,7 +11898,7 @@ int DetectFastPatternTest430(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11936,7 +11912,7 @@ int DetectFastPatternTest430(void)
     return result;
 }
 
-int DetectFastPatternTest431(void)
+static int DetectFastPatternTest431(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11945,7 +11921,7 @@ int DetectFastPatternTest431(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11959,7 +11935,7 @@ int DetectFastPatternTest431(void)
     return result;
 }
 
-int DetectFastPatternTest432(void)
+static int DetectFastPatternTest432(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11968,7 +11944,7 @@ int DetectFastPatternTest432(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -11982,7 +11958,7 @@ int DetectFastPatternTest432(void)
     return result;
 }
 
-int DetectFastPatternTest433(void)
+static int DetectFastPatternTest433(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -11991,7 +11967,7 @@ int DetectFastPatternTest433(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; within:10; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12005,7 +11981,7 @@ int DetectFastPatternTest433(void)
     return result;
 }
 
-int DetectFastPatternTest434(void)
+static int DetectFastPatternTest434(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12014,7 +11990,7 @@ int DetectFastPatternTest434(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12028,7 +12004,7 @@ int DetectFastPatternTest434(void)
     return result;
 }
 
-int DetectFastPatternTest435(void)
+static int DetectFastPatternTest435(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12037,7 +12013,7 @@ int DetectFastPatternTest435(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12051,7 +12027,7 @@ int DetectFastPatternTest435(void)
     return result;
 }
 
-int DetectFastPatternTest436(void)
+static int DetectFastPatternTest436(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12060,7 +12036,7 @@ int DetectFastPatternTest436(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12074,7 +12050,7 @@ int DetectFastPatternTest436(void)
     return result;
 }
 
-int DetectFastPatternTest437(void)
+static int DetectFastPatternTest437(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12083,7 +12059,7 @@ int DetectFastPatternTest437(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12097,7 +12073,7 @@ int DetectFastPatternTest437(void)
     return result;
 }
 
-int DetectFastPatternTest438(void)
+static int DetectFastPatternTest438(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12106,7 +12082,7 @@ int DetectFastPatternTest438(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"two\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12120,7 +12096,7 @@ int DetectFastPatternTest438(void)
     return result;
 }
 
-int DetectFastPatternTest439(void)
+static int DetectFastPatternTest439(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12129,14 +12105,14 @@ int DetectFastPatternTest439(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -12153,7 +12129,7 @@ int DetectFastPatternTest439(void)
     return result;
 }
 
-int DetectFastPatternTest440(void)
+static int DetectFastPatternTest440(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12162,13 +12138,13 @@ int DetectFastPatternTest440(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; within:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -12185,7 +12161,7 @@ int DetectFastPatternTest440(void)
     return result;
 }
 
-int DetectFastPatternTest441(void)
+static int DetectFastPatternTest441(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12194,13 +12170,13 @@ int DetectFastPatternTest441(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -12217,7 +12193,7 @@ int DetectFastPatternTest441(void)
     return result;
 }
 
-int DetectFastPatternTest442(void)
+static int DetectFastPatternTest442(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12226,13 +12202,13 @@ int DetectFastPatternTest442(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -12249,7 +12225,7 @@ int DetectFastPatternTest442(void)
     return result;
 }
 
-int DetectFastPatternTest443(void)
+static int DetectFastPatternTest443(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12258,12 +12234,12 @@ int DetectFastPatternTest443(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_stat_code; "
                                "content:\"two\"; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -12281,7 +12257,7 @@ int DetectFastPatternTest443(void)
     return result;
 }
 
-int DetectFastPatternTest444(void)
+static int DetectFastPatternTest444(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12290,7 +12266,7 @@ int DetectFastPatternTest444(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_code; "
                                "content:!\"one\"; fast_pattern; http_stat_code; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12304,7 +12280,7 @@ int DetectFastPatternTest444(void)
     return result;
 }
 
-int DetectFastPatternTest445(void)
+static int DetectFastPatternTest445(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12313,7 +12289,7 @@ int DetectFastPatternTest445(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_code; "
                                "content:!\"one\"; fast_pattern; http_stat_code; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12327,7 +12303,7 @@ int DetectFastPatternTest445(void)
     return result;
 }
 
-int DetectFastPatternTest446(void)
+static int DetectFastPatternTest446(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12336,7 +12312,7 @@ int DetectFastPatternTest446(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_code; "
                                "content:!\"one\"; fast_pattern; http_stat_code; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12350,7 +12326,7 @@ int DetectFastPatternTest446(void)
     return result;
 }
 
-int DetectFastPatternTest447(void)
+static int DetectFastPatternTest447(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12359,7 +12335,7 @@ int DetectFastPatternTest447(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_stat_code; "
                                "content:!\"one\"; fast_pattern; http_stat_code; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -12373,7 +12349,7 @@ int DetectFastPatternTest447(void)
     return result;
 }
 
-int DetectFastPatternTest448(void)
+static int DetectFastPatternTest448(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12382,13 +12358,13 @@ int DetectFastPatternTest448(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12405,7 +12381,7 @@ int DetectFastPatternTest448(void)
     return result;
 }
 
-int DetectFastPatternTest449(void)
+static int DetectFastPatternTest449(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12414,13 +12390,13 @@ int DetectFastPatternTest449(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12437,7 +12413,7 @@ int DetectFastPatternTest449(void)
     return result;
 }
 
-int DetectFastPatternTest450(void)
+static int DetectFastPatternTest450(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12446,13 +12422,13 @@ int DetectFastPatternTest450(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12469,7 +12445,7 @@ int DetectFastPatternTest450(void)
     return result;
 }
 
-int DetectFastPatternTest451(void)
+static int DetectFastPatternTest451(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12478,13 +12454,13 @@ int DetectFastPatternTest451(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12501,7 +12477,7 @@ int DetectFastPatternTest451(void)
     return result;
 }
 
-int DetectFastPatternTest452(void)
+static int DetectFastPatternTest452(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12510,13 +12486,13 @@ int DetectFastPatternTest452(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12533,7 +12509,7 @@ int DetectFastPatternTest452(void)
     return result;
 }
 
-int DetectFastPatternTest453(void)
+static int DetectFastPatternTest453(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12542,13 +12518,13 @@ int DetectFastPatternTest453(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12565,7 +12541,7 @@ int DetectFastPatternTest453(void)
     return result;
 }
 
-int DetectFastPatternTest454(void)
+static int DetectFastPatternTest454(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12574,13 +12550,13 @@ int DetectFastPatternTest454(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12597,7 +12573,7 @@ int DetectFastPatternTest454(void)
     return result;
 }
 
-int DetectFastPatternTest455(void)
+static int DetectFastPatternTest455(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12606,13 +12582,13 @@ int DetectFastPatternTest455(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12629,7 +12605,7 @@ int DetectFastPatternTest455(void)
     return result;
 }
 
-int DetectFastPatternTest456(void)
+static int DetectFastPatternTest456(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12638,13 +12614,13 @@ int DetectFastPatternTest456(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; http_stat_code; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -12664,7 +12640,7 @@ int DetectFastPatternTest456(void)
     return result;
 }
 
-int DetectFastPatternTest457(void)
+static int DetectFastPatternTest457(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12673,7 +12649,7 @@ int DetectFastPatternTest457(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:65977,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; distance:10; sid:1;)");
@@ -12688,7 +12664,7 @@ int DetectFastPatternTest457(void)
     return result;
 }
 
-int DetectFastPatternTest458(void)
+static int DetectFastPatternTest458(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12697,7 +12673,7 @@ int DetectFastPatternTest458(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_stat_code; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_stat_code; "
                                "content:\"three\"; distance:10; http_stat_code; sid:1;)");
@@ -12712,7 +12688,7 @@ int DetectFastPatternTest458(void)
     return result;
 }
 
-int DetectFastPatternTest459(void)
+static int DetectFastPatternTest459(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12721,7 +12697,7 @@ int DetectFastPatternTest459(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:\"two\"; fast_pattern:65534,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; distance:10; sid:1;)");
@@ -12736,7 +12712,7 @@ int DetectFastPatternTest459(void)
     return result;
 }
 
-int DetectFastPatternTest460(void)
+static int DetectFastPatternTest460(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12745,13 +12721,13 @@ int DetectFastPatternTest460(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -12769,7 +12745,7 @@ int DetectFastPatternTest460(void)
     return result;
 }
 
-int DetectFastPatternTest461(void)
+static int DetectFastPatternTest461(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12778,7 +12754,7 @@ int DetectFastPatternTest461(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; distance:10; "
                                "content:\"three\"; http_stat_code; sid:1;)");
@@ -12793,7 +12769,7 @@ int DetectFastPatternTest461(void)
     return result;
 }
 
-int DetectFastPatternTest462(void)
+static int DetectFastPatternTest462(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12802,7 +12778,7 @@ int DetectFastPatternTest462(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; within:10; "
                                "content:\"three\"; http_stat_code; sid:1;)");
@@ -12817,7 +12793,7 @@ int DetectFastPatternTest462(void)
     return result;
 }
 
-int DetectFastPatternTest463(void)
+static int DetectFastPatternTest463(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12826,7 +12802,7 @@ int DetectFastPatternTest463(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; offset:10; "
                                "content:\"three\"; http_stat_code; sid:1;)");
@@ -12841,7 +12817,7 @@ int DetectFastPatternTest463(void)
     return result;
 }
 
-int DetectFastPatternTest464(void)
+static int DetectFastPatternTest464(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12850,7 +12826,7 @@ int DetectFastPatternTest464(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; depth:10; "
                                "content:\"three\"; http_stat_code; sid:1;)");
@@ -12865,7 +12841,7 @@ int DetectFastPatternTest464(void)
     return result;
 }
 
-int DetectFastPatternTest465(void)
+static int DetectFastPatternTest465(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12874,13 +12850,13 @@ int DetectFastPatternTest465(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_stat_code; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_stat_code; "
                                "content:\"three\"; http_stat_code; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_stat_code_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -12903,7 +12879,7 @@ int DetectFastPatternTest465(void)
 /* http_server_body fast_pattern tests v */
 
 
-int DetectFastPatternTest466(void)
+static int DetectFastPatternTest466(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -12912,14 +12888,14 @@ int DetectFastPatternTest466(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -12940,7 +12916,7 @@ int DetectFastPatternTest466(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest467(void)
+static int DetectFastPatternTest467(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -12950,14 +12926,14 @@ int DetectFastPatternTest467(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_server_body; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -12977,7 +12953,7 @@ int DetectFastPatternTest467(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest468(void)
+static int DetectFastPatternTest468(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -12987,14 +12963,14 @@ int DetectFastPatternTest468(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_server_body; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -13010,7 +12986,7 @@ int DetectFastPatternTest468(void)
     return result;
 }
 
-int DetectFastPatternTest469(void)
+static int DetectFastPatternTest469(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -13020,12 +12996,12 @@ int DetectFastPatternTest469(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -13046,7 +13022,7 @@ int DetectFastPatternTest469(void)
     return result;
 }
 
-int DetectFastPatternTest470(void)
+static int DetectFastPatternTest470(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -13056,12 +13032,12 @@ int DetectFastPatternTest470(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -13083,7 +13059,7 @@ int DetectFastPatternTest470(void)
     return result;
 }
 
-int DetectFastPatternTest471(void)
+static int DetectFastPatternTest471(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13092,7 +13068,7 @@ int DetectFastPatternTest471(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:only; http_server_body; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13106,7 +13082,7 @@ int DetectFastPatternTest471(void)
     return result;
 }
 
-int DetectFastPatternTest472(void)
+static int DetectFastPatternTest472(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13115,7 +13091,7 @@ int DetectFastPatternTest472(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13129,7 +13105,7 @@ int DetectFastPatternTest472(void)
     return result;
 }
 
-int DetectFastPatternTest473(void)
+static int DetectFastPatternTest473(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13138,7 +13114,7 @@ int DetectFastPatternTest473(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:only; http_server_body; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13152,7 +13128,7 @@ int DetectFastPatternTest473(void)
     return result;
 }
 
-int DetectFastPatternTest474(void)
+static int DetectFastPatternTest474(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13161,7 +13137,7 @@ int DetectFastPatternTest474(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; within:10; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13175,7 +13151,7 @@ int DetectFastPatternTest474(void)
     return result;
 }
 
-int DetectFastPatternTest475(void)
+static int DetectFastPatternTest475(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13184,7 +13160,7 @@ int DetectFastPatternTest475(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:only; http_server_body; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13198,7 +13174,7 @@ int DetectFastPatternTest475(void)
     return result;
 }
 
-int DetectFastPatternTest476(void)
+static int DetectFastPatternTest476(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13207,7 +13183,7 @@ int DetectFastPatternTest476(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13221,7 +13197,7 @@ int DetectFastPatternTest476(void)
     return result;
 }
 
-int DetectFastPatternTest477(void)
+static int DetectFastPatternTest477(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13230,7 +13206,7 @@ int DetectFastPatternTest477(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:only; http_server_body; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13244,7 +13220,7 @@ int DetectFastPatternTest477(void)
     return result;
 }
 
-int DetectFastPatternTest478(void)
+static int DetectFastPatternTest478(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13253,7 +13229,7 @@ int DetectFastPatternTest478(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13267,7 +13243,7 @@ int DetectFastPatternTest478(void)
     return result;
 }
 
-int DetectFastPatternTest479(void)
+static int DetectFastPatternTest479(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13276,7 +13252,7 @@ int DetectFastPatternTest479(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"two\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13290,7 +13266,7 @@ int DetectFastPatternTest479(void)
     return result;
 }
 
-int DetectFastPatternTest480(void)
+static int DetectFastPatternTest480(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13299,14 +13275,14 @@ int DetectFastPatternTest480(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_server_body; "
                                "content:\"two\"; http_server_body; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -13323,7 +13299,7 @@ int DetectFastPatternTest480(void)
     return result;
 }
 
-int DetectFastPatternTest481(void)
+static int DetectFastPatternTest481(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13332,14 +13308,14 @@ int DetectFastPatternTest481(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; within:30; "
                                "content:\"two\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -13356,7 +13332,7 @@ int DetectFastPatternTest481(void)
     return result;
 }
 
-int DetectFastPatternTest482(void)
+static int DetectFastPatternTest482(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13365,14 +13341,14 @@ int DetectFastPatternTest482(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -13389,7 +13365,7 @@ int DetectFastPatternTest482(void)
     return result;
 }
 
-int DetectFastPatternTest483(void)
+static int DetectFastPatternTest483(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13398,14 +13374,14 @@ int DetectFastPatternTest483(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -13422,7 +13398,7 @@ int DetectFastPatternTest483(void)
     return result;
 }
 
-int DetectFastPatternTest484(void)
+static int DetectFastPatternTest484(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13431,13 +13407,13 @@ int DetectFastPatternTest484(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_server_body; "
                                "content:\"two\"; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -13455,7 +13431,7 @@ int DetectFastPatternTest484(void)
     return result;
 }
 
-int DetectFastPatternTest485(void)
+static int DetectFastPatternTest485(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13464,7 +13440,7 @@ int DetectFastPatternTest485(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_server_body; "
                                "content:!\"one\"; fast_pattern; http_server_body; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13478,7 +13454,7 @@ int DetectFastPatternTest485(void)
     return result;
 }
 
-int DetectFastPatternTest486(void)
+static int DetectFastPatternTest486(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13487,7 +13463,7 @@ int DetectFastPatternTest486(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_server_body; "
                                "content:!\"one\"; fast_pattern; http_server_body; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13501,7 +13477,7 @@ int DetectFastPatternTest486(void)
     return result;
 }
 
-int DetectFastPatternTest487(void)
+static int DetectFastPatternTest487(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13510,7 +13486,7 @@ int DetectFastPatternTest487(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_server_body; "
                                "content:!\"one\"; fast_pattern; http_server_body; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13524,7 +13500,7 @@ int DetectFastPatternTest487(void)
     return result;
 }
 
-int DetectFastPatternTest488(void)
+static int DetectFastPatternTest488(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13533,7 +13509,7 @@ int DetectFastPatternTest488(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_server_body; "
                                "content:!\"one\"; fast_pattern; http_server_body; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -13547,7 +13523,7 @@ int DetectFastPatternTest488(void)
     return result;
 }
 
-int DetectFastPatternTest489(void)
+static int DetectFastPatternTest489(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13556,14 +13532,14 @@ int DetectFastPatternTest489(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13580,7 +13556,7 @@ int DetectFastPatternTest489(void)
     return result;
 }
 
-int DetectFastPatternTest490(void)
+static int DetectFastPatternTest490(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13589,14 +13565,14 @@ int DetectFastPatternTest490(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13613,7 +13589,7 @@ int DetectFastPatternTest490(void)
     return result;
 }
 
-int DetectFastPatternTest491(void)
+static int DetectFastPatternTest491(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13622,14 +13598,14 @@ int DetectFastPatternTest491(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13646,7 +13622,7 @@ int DetectFastPatternTest491(void)
     return result;
 }
 
-int DetectFastPatternTest492(void)
+static int DetectFastPatternTest492(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13655,14 +13631,14 @@ int DetectFastPatternTest492(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13679,7 +13655,7 @@ int DetectFastPatternTest492(void)
     return result;
 }
 
-int DetectFastPatternTest493(void)
+static int DetectFastPatternTest493(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13688,14 +13664,14 @@ int DetectFastPatternTest493(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13712,7 +13688,7 @@ int DetectFastPatternTest493(void)
     return result;
 }
 
-int DetectFastPatternTest494(void)
+static int DetectFastPatternTest494(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13721,14 +13697,14 @@ int DetectFastPatternTest494(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13745,7 +13721,7 @@ int DetectFastPatternTest494(void)
     return result;
 }
 
-int DetectFastPatternTest495(void)
+static int DetectFastPatternTest495(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13754,14 +13730,14 @@ int DetectFastPatternTest495(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13778,7 +13754,7 @@ int DetectFastPatternTest495(void)
     return result;
 }
 
-int DetectFastPatternTest496(void)
+static int DetectFastPatternTest496(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13787,14 +13763,14 @@ int DetectFastPatternTest496(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13811,7 +13787,7 @@ int DetectFastPatternTest496(void)
     return result;
 }
 
-int DetectFastPatternTest497(void)
+static int DetectFastPatternTest497(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13820,14 +13796,14 @@ int DetectFastPatternTest497(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; http_server_body; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -13847,7 +13823,7 @@ int DetectFastPatternTest497(void)
     return result;
 }
 
-int DetectFastPatternTest498(void)
+static int DetectFastPatternTest498(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13856,7 +13832,7 @@ int DetectFastPatternTest498(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:65977,4; http_server_body; "
                                "content:\"three\"; http_server_body; distance:10; sid:1;)");
@@ -13871,7 +13847,7 @@ int DetectFastPatternTest498(void)
     return result;
 }
 
-int DetectFastPatternTest499(void)
+static int DetectFastPatternTest499(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13880,7 +13856,7 @@ int DetectFastPatternTest499(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_server_body; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_server_body; "
                                "content:\"three\"; distance:10; http_server_body; sid:1;)");
@@ -13895,7 +13871,7 @@ int DetectFastPatternTest499(void)
     return result;
 }
 
-int DetectFastPatternTest500(void)
+static int DetectFastPatternTest500(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13904,7 +13880,7 @@ int DetectFastPatternTest500(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:\"two\"; fast_pattern:65534,4; http_server_body; "
                                "content:\"three\"; http_server_body; distance:10; sid:1;)");
@@ -13919,7 +13895,7 @@ int DetectFastPatternTest500(void)
     return result;
 }
 
-int DetectFastPatternTest501(void)
+static int DetectFastPatternTest501(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13928,14 +13904,14 @@ int DetectFastPatternTest501(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -13953,7 +13929,7 @@ int DetectFastPatternTest501(void)
     return result;
 }
 
-int DetectFastPatternTest502(void)
+static int DetectFastPatternTest502(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13962,7 +13938,7 @@ int DetectFastPatternTest502(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; distance:10; "
                                "content:\"three\"; http_server_body; sid:1;)");
@@ -13977,7 +13953,7 @@ int DetectFastPatternTest502(void)
     return result;
 }
 
-int DetectFastPatternTest503(void)
+static int DetectFastPatternTest503(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -13986,7 +13962,7 @@ int DetectFastPatternTest503(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; within:10; "
                                "content:\"three\"; http_server_body; sid:1;)");
@@ -14001,7 +13977,7 @@ int DetectFastPatternTest503(void)
     return result;
 }
 
-int DetectFastPatternTest504(void)
+static int DetectFastPatternTest504(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14010,7 +13986,7 @@ int DetectFastPatternTest504(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; offset:10; "
                                "content:\"three\"; http_server_body; sid:1;)");
@@ -14025,7 +14001,7 @@ int DetectFastPatternTest504(void)
     return result;
 }
 
-int DetectFastPatternTest505(void)
+static int DetectFastPatternTest505(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14034,7 +14010,7 @@ int DetectFastPatternTest505(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; depth:10; "
                                "content:\"three\"; http_server_body; sid:1;)");
@@ -14049,7 +14025,7 @@ int DetectFastPatternTest505(void)
     return result;
 }
 
-int DetectFastPatternTest506(void)
+static int DetectFastPatternTest506(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14058,14 +14034,14 @@ int DetectFastPatternTest506(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_server_body; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_server_body; "
                                "content:\"three\"; http_server_body; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -14087,45 +14063,28 @@ int DetectFastPatternTest506(void)
 /* http_server_body fast_pattern tests ^ */
 /* file_data fast_pattern tests v */
 
-
-int DetectFastPatternTest507(void)
+/** \test file_data and icmp don't mix */
+static int DetectFastPatternTest507(void)
 {
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-
-    if ( (de_ctx = DetectEngineCtxInit()) == NULL)
-        goto end;
-
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
-                               "(file_data; content:\"one\"; "
-                               "content:!\"oneonetwo\"; fast_pattern:3,4; "
-                               "content:\"three\"; sid:1;)");
-    if (de_ctx->sig_list == NULL)
-        goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
-    if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
-        ud->flags & DETECT_CONTENT_NEGATED &&
-        !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
-        ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
-        ud->fp_chop_offset == 3 &&
-        ud->fp_chop_len == 4) {
-        result = 1;
-    } else {
-        result = 0;
-    }
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert icmp any any -> any any "
+            "(file_data; content:\"one\"; "
+            "content:!\"oneonetwo\"; fast_pattern:3,4; "
+            "content:\"three\"; sid:1;)");
+    FAIL_IF_NOT_NULL(s);
 
- end:
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    return result;
+    PASS;
 }
 
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest508(void)
+static int DetectFastPatternTest508(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -14135,14 +14094,14 @@ int DetectFastPatternTest508(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; fast_pattern:only; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -14162,7 +14121,7 @@ int DetectFastPatternTest508(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest509(void)
+static int DetectFastPatternTest509(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -14172,14 +14131,14 @@ int DetectFastPatternTest509(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"oneoneone\"; fast_pattern:3,4; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -14195,7 +14154,7 @@ int DetectFastPatternTest509(void)
     return result;
 }
 
-int DetectFastPatternTest510(void)
+static int DetectFastPatternTest510(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -14205,12 +14164,12 @@ int DetectFastPatternTest510(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -14231,7 +14190,7 @@ int DetectFastPatternTest510(void)
     return result;
 }
 
-int DetectFastPatternTest511(void)
+static int DetectFastPatternTest511(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -14241,12 +14200,12 @@ int DetectFastPatternTest511(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"oneoneone\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -14268,7 +14227,7 @@ int DetectFastPatternTest511(void)
     return result;
 }
 
-int DetectFastPatternTest512(void)
+static int DetectFastPatternTest512(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14277,7 +14236,7 @@ int DetectFastPatternTest512(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:only; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14291,7 +14250,7 @@ int DetectFastPatternTest512(void)
     return result;
 }
 
-int DetectFastPatternTest513(void)
+static int DetectFastPatternTest513(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14300,7 +14259,7 @@ int DetectFastPatternTest513(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; distance:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14314,7 +14273,7 @@ int DetectFastPatternTest513(void)
     return result;
 }
 
-int DetectFastPatternTest514(void)
+static int DetectFastPatternTest514(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14323,7 +14282,7 @@ int DetectFastPatternTest514(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:only; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14337,7 +14296,7 @@ int DetectFastPatternTest514(void)
     return result;
 }
 
-int DetectFastPatternTest515(void)
+static int DetectFastPatternTest515(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14346,7 +14305,7 @@ int DetectFastPatternTest515(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; within:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14360,7 +14319,7 @@ int DetectFastPatternTest515(void)
     return result;
 }
 
-int DetectFastPatternTest516(void)
+static int DetectFastPatternTest516(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14369,7 +14328,7 @@ int DetectFastPatternTest516(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:only;  offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14383,7 +14342,7 @@ int DetectFastPatternTest516(void)
     return result;
 }
 
-int DetectFastPatternTest517(void)
+static int DetectFastPatternTest517(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14392,7 +14351,7 @@ int DetectFastPatternTest517(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; offset:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14406,7 +14365,7 @@ int DetectFastPatternTest517(void)
     return result;
 }
 
-int DetectFastPatternTest518(void)
+static int DetectFastPatternTest518(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14415,7 +14374,7 @@ int DetectFastPatternTest518(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:only; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14429,7 +14388,7 @@ int DetectFastPatternTest518(void)
     return result;
 }
 
-int DetectFastPatternTest519(void)
+static int DetectFastPatternTest519(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14438,7 +14397,7 @@ int DetectFastPatternTest519(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; depth:10; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14452,7 +14411,7 @@ int DetectFastPatternTest519(void)
     return result;
 }
 
-int DetectFastPatternTest520(void)
+static int DetectFastPatternTest520(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14461,7 +14420,7 @@ int DetectFastPatternTest520(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14475,7 +14434,7 @@ int DetectFastPatternTest520(void)
     return result;
 }
 
-int DetectFastPatternTest521(void)
+static int DetectFastPatternTest521(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14484,14 +14443,14 @@ int DetectFastPatternTest521(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\" one\"; "
                                "content:\"two\"; distance:30; "
                                "content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -14508,7 +14467,7 @@ int DetectFastPatternTest521(void)
     return result;
 }
 
-int DetectFastPatternTest522(void)
+static int DetectFastPatternTest522(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14517,14 +14476,14 @@ int DetectFastPatternTest522(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; within:30; "
                                "content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -14541,7 +14500,7 @@ int DetectFastPatternTest522(void)
     return result;
 }
 
-int DetectFastPatternTest523(void)
+static int DetectFastPatternTest523(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14550,14 +14509,14 @@ int DetectFastPatternTest523(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; offset:30; "
                                "content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -14574,7 +14533,7 @@ int DetectFastPatternTest523(void)
     return result;
 }
 
-int DetectFastPatternTest524(void)
+static int DetectFastPatternTest524(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14583,14 +14542,14 @@ int DetectFastPatternTest524(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; depth:30; "
                                "content:\"two\"; fast_pattern:only; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -14607,7 +14566,7 @@ int DetectFastPatternTest524(void)
     return result;
 }
 
-int DetectFastPatternTest525(void)
+static int DetectFastPatternTest525(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14616,13 +14575,13 @@ int DetectFastPatternTest525(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:!\"one\"; fast_pattern; "
                                "content:\"two\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -14640,7 +14599,7 @@ int DetectFastPatternTest525(void)
     return result;
 }
 
-int DetectFastPatternTest526(void)
+static int DetectFastPatternTest526(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14649,7 +14608,7 @@ int DetectFastPatternTest526(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"two\"; "
                                "content:!\"one\"; fast_pattern; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14663,7 +14622,7 @@ int DetectFastPatternTest526(void)
     return result;
 }
 
-int DetectFastPatternTest527(void)
+static int DetectFastPatternTest527(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14672,7 +14631,7 @@ int DetectFastPatternTest527(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"two\"; "
                                "content:!\"one\"; fast_pattern; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14686,7 +14645,7 @@ int DetectFastPatternTest527(void)
     return result;
 }
 
-int DetectFastPatternTest528(void)
+static int DetectFastPatternTest528(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14695,7 +14654,7 @@ int DetectFastPatternTest528(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"two\"; "
                                "content:!\"one\"; fast_pattern; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14709,7 +14668,7 @@ int DetectFastPatternTest528(void)
     return result;
 }
 
-int DetectFastPatternTest529(void)
+static int DetectFastPatternTest529(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14718,7 +14677,7 @@ int DetectFastPatternTest529(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"two\"; "
                                "content:!\"one\"; fast_pattern; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -14732,7 +14691,7 @@ int DetectFastPatternTest529(void)
     return result;
 }
 
-int DetectFastPatternTest530(void)
+static int DetectFastPatternTest530(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14741,14 +14700,14 @@ int DetectFastPatternTest530(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,4;  "
                                "content:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14765,7 +14724,7 @@ int DetectFastPatternTest530(void)
     return result;
 }
 
-int DetectFastPatternTest531(void)
+static int DetectFastPatternTest531(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14774,14 +14733,14 @@ int DetectFastPatternTest531(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14798,7 +14757,7 @@ int DetectFastPatternTest531(void)
     return result;
 }
 
-int DetectFastPatternTest532(void)
+static int DetectFastPatternTest532(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14807,14 +14766,14 @@ int DetectFastPatternTest532(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14831,7 +14790,7 @@ int DetectFastPatternTest532(void)
     return result;
 }
 
-int DetectFastPatternTest533(void)
+static int DetectFastPatternTest533(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14840,14 +14799,14 @@ int DetectFastPatternTest533(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14864,7 +14823,7 @@ int DetectFastPatternTest533(void)
     return result;
 }
 
-int DetectFastPatternTest534(void)
+static int DetectFastPatternTest534(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14873,14 +14832,14 @@ int DetectFastPatternTest534(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14897,7 +14856,7 @@ int DetectFastPatternTest534(void)
     return result;
 }
 
-int DetectFastPatternTest535(void)
+static int DetectFastPatternTest535(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14906,14 +14865,14 @@ int DetectFastPatternTest535(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14930,7 +14889,7 @@ int DetectFastPatternTest535(void)
     return result;
 }
 
-int DetectFastPatternTest536(void)
+static int DetectFastPatternTest536(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14939,14 +14898,14 @@ int DetectFastPatternTest536(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14963,7 +14922,7 @@ int DetectFastPatternTest536(void)
     return result;
 }
 
-int DetectFastPatternTest537(void)
+static int DetectFastPatternTest537(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -14972,14 +14931,14 @@ int DetectFastPatternTest537(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -14996,7 +14955,7 @@ int DetectFastPatternTest537(void)
     return result;
 }
 
-int DetectFastPatternTest538(void)
+static int DetectFastPatternTest538(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15005,14 +14964,14 @@ int DetectFastPatternTest538(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -15032,7 +14991,7 @@ int DetectFastPatternTest538(void)
     return result;
 }
 
-int DetectFastPatternTest539(void)
+static int DetectFastPatternTest539(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15041,7 +15000,7 @@ int DetectFastPatternTest539(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:65977,4; "
                                "content:\"three\"; distance:10; sid:1;)");
@@ -15056,7 +15015,7 @@ int DetectFastPatternTest539(void)
     return result;
 }
 
-int DetectFastPatternTest540(void)
+static int DetectFastPatternTest540(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15065,7 +15024,7 @@ int DetectFastPatternTest540(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; "
                                "content:\"three\"; distance:10; sid:1;)");
@@ -15080,7 +15039,7 @@ int DetectFastPatternTest540(void)
     return result;
 }
 
-int DetectFastPatternTest541(void)
+static int DetectFastPatternTest541(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15089,7 +15048,7 @@ int DetectFastPatternTest541(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:\"two\"; fast_pattern:65534,4; "
                                "content:\"three\"; distance:10; sid:1;)");
@@ -15104,7 +15063,7 @@ int DetectFastPatternTest541(void)
     return result;
 }
 
-int DetectFastPatternTest542(void)
+static int DetectFastPatternTest542(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15113,14 +15072,14 @@ int DetectFastPatternTest542(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -15138,7 +15097,7 @@ int DetectFastPatternTest542(void)
     return result;
 }
 
-int DetectFastPatternTest543(void)
+static int DetectFastPatternTest543(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15147,7 +15106,7 @@ int DetectFastPatternTest543(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; distance:10; "
                                "content:\"three\"; sid:1;)");
@@ -15162,7 +15121,7 @@ int DetectFastPatternTest543(void)
     return result;
 }
 
-int DetectFastPatternTest544(void)
+static int DetectFastPatternTest544(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15171,7 +15130,7 @@ int DetectFastPatternTest544(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; within:10; "
                                "content:\"three\"; sid:1;)");
@@ -15186,7 +15145,7 @@ int DetectFastPatternTest544(void)
     return result;
 }
 
-int DetectFastPatternTest545(void)
+static int DetectFastPatternTest545(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15195,7 +15154,7 @@ int DetectFastPatternTest545(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; offset:10; "
                                "content:\"three\"; sid:1;)");
@@ -15210,7 +15169,7 @@ int DetectFastPatternTest545(void)
     return result;
 }
 
-int DetectFastPatternTest546(void)
+static int DetectFastPatternTest546(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15219,7 +15178,7 @@ int DetectFastPatternTest546(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; depth:10; "
                                "content:\"three\"; sid:1;)");
@@ -15234,7 +15193,7 @@ int DetectFastPatternTest546(void)
     return result;
 }
 
-int DetectFastPatternTest547(void)
+static int DetectFastPatternTest547(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15243,14 +15202,14 @@ int DetectFastPatternTest547(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(file_data; content:\"one\"; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; "
                                "content:\"three\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_file_data_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -15273,7 +15232,7 @@ int DetectFastPatternTest547(void)
 /* http_user_agent fast_pattern tests v */
 
 
-int DetectFastPatternTest548(void)
+static int DetectFastPatternTest548(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15282,13 +15241,13 @@ int DetectFastPatternTest548(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -15310,7 +15269,7 @@ int DetectFastPatternTest548(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest549(void)
+static int DetectFastPatternTest549(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -15320,14 +15279,14 @@ int DetectFastPatternTest549(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_user_agent; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_ua_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -15347,7 +15306,7 @@ int DetectFastPatternTest549(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest550(void)
+static int DetectFastPatternTest550(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -15357,14 +15316,14 @@ int DetectFastPatternTest550(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_user_agent; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_ua_buffer_id];
     if (sm != NULL) {
         if ( ((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) {
@@ -15380,7 +15339,7 @@ int DetectFastPatternTest550(void)
     return result;
 }
 
-int DetectFastPatternTest551(void)
+static int DetectFastPatternTest551(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -15390,12 +15349,12 @@ int DetectFastPatternTest551(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_ua_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -15416,7 +15375,7 @@ int DetectFastPatternTest551(void)
     return result;
 }
 
-int DetectFastPatternTest552(void)
+static int DetectFastPatternTest552(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -15426,12 +15385,12 @@ int DetectFastPatternTest552(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_ua_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -15453,7 +15412,7 @@ int DetectFastPatternTest552(void)
     return result;
 }
 
-int DetectFastPatternTest553(void)
+static int DetectFastPatternTest553(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15462,7 +15421,7 @@ int DetectFastPatternTest553(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15476,7 +15435,7 @@ int DetectFastPatternTest553(void)
     return result;
 }
 
-int DetectFastPatternTest554(void)
+static int DetectFastPatternTest554(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15485,7 +15444,7 @@ int DetectFastPatternTest554(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15499,7 +15458,7 @@ int DetectFastPatternTest554(void)
     return result;
 }
 
-int DetectFastPatternTest555(void)
+static int DetectFastPatternTest555(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15508,7 +15467,7 @@ int DetectFastPatternTest555(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15522,7 +15481,7 @@ int DetectFastPatternTest555(void)
     return result;
 }
 
-int DetectFastPatternTest556(void)
+static int DetectFastPatternTest556(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15531,7 +15490,7 @@ int DetectFastPatternTest556(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; within:10; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15545,7 +15504,7 @@ int DetectFastPatternTest556(void)
     return result;
 }
 
-int DetectFastPatternTest557(void)
+static int DetectFastPatternTest557(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15554,7 +15513,7 @@ int DetectFastPatternTest557(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15568,7 +15527,7 @@ int DetectFastPatternTest557(void)
     return result;
 }
 
-int DetectFastPatternTest558(void)
+static int DetectFastPatternTest558(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15577,7 +15536,7 @@ int DetectFastPatternTest558(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15591,7 +15550,7 @@ int DetectFastPatternTest558(void)
     return result;
 }
 
-int DetectFastPatternTest559(void)
+static int DetectFastPatternTest559(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15600,7 +15559,7 @@ int DetectFastPatternTest559(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15614,7 +15573,7 @@ int DetectFastPatternTest559(void)
     return result;
 }
 
-int DetectFastPatternTest560(void)
+static int DetectFastPatternTest560(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15623,7 +15582,7 @@ int DetectFastPatternTest560(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15637,7 +15596,7 @@ int DetectFastPatternTest560(void)
     return result;
 }
 
-int DetectFastPatternTest561(void)
+static int DetectFastPatternTest561(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15646,7 +15605,7 @@ int DetectFastPatternTest561(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"two\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15660,7 +15619,7 @@ int DetectFastPatternTest561(void)
     return result;
 }
 
-int DetectFastPatternTest562(void)
+static int DetectFastPatternTest562(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15669,14 +15628,14 @@ int DetectFastPatternTest562(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -15693,7 +15652,7 @@ int DetectFastPatternTest562(void)
     return result;
 }
 
-int DetectFastPatternTest563(void)
+static int DetectFastPatternTest563(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15702,13 +15661,13 @@ int DetectFastPatternTest563(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; within:30; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -15725,7 +15684,7 @@ int DetectFastPatternTest563(void)
     return result;
 }
 
-int DetectFastPatternTest564(void)
+static int DetectFastPatternTest564(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15734,13 +15693,13 @@ int DetectFastPatternTest564(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -15757,7 +15716,7 @@ int DetectFastPatternTest564(void)
     return result;
 }
 
-int DetectFastPatternTest565(void)
+static int DetectFastPatternTest565(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15766,13 +15725,13 @@ int DetectFastPatternTest565(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -15789,7 +15748,7 @@ int DetectFastPatternTest565(void)
     return result;
 }
 
-int DetectFastPatternTest566(void)
+static int DetectFastPatternTest566(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15798,12 +15757,12 @@ int DetectFastPatternTest566(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_user_agent; "
                                "content:\"two\"; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -15821,7 +15780,7 @@ int DetectFastPatternTest566(void)
     return result;
 }
 
-int DetectFastPatternTest567(void)
+static int DetectFastPatternTest567(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15830,7 +15789,7 @@ int DetectFastPatternTest567(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_user_agent; "
                                "content:!\"one\"; fast_pattern; http_user_agent; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15844,7 +15803,7 @@ int DetectFastPatternTest567(void)
     return result;
 }
 
-int DetectFastPatternTest568(void)
+static int DetectFastPatternTest568(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15853,7 +15812,7 @@ int DetectFastPatternTest568(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_user_agent; "
                                "content:!\"one\"; fast_pattern; http_user_agent; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15867,7 +15826,7 @@ int DetectFastPatternTest568(void)
     return result;
 }
 
-int DetectFastPatternTest569(void)
+static int DetectFastPatternTest569(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15876,7 +15835,7 @@ int DetectFastPatternTest569(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_user_agent; "
                                "content:!\"one\"; fast_pattern; http_user_agent; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15890,7 +15849,7 @@ int DetectFastPatternTest569(void)
     return result;
 }
 
-int DetectFastPatternTest570(void)
+static int DetectFastPatternTest570(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15899,7 +15858,7 @@ int DetectFastPatternTest570(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_user_agent; "
                                "content:!\"one\"; fast_pattern; http_user_agent; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -15913,7 +15872,7 @@ int DetectFastPatternTest570(void)
     return result;
 }
 
-int DetectFastPatternTest571(void)
+static int DetectFastPatternTest571(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15922,13 +15881,13 @@ int DetectFastPatternTest571(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -15945,7 +15904,7 @@ int DetectFastPatternTest571(void)
     return result;
 }
 
-int DetectFastPatternTest572(void)
+static int DetectFastPatternTest572(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15954,13 +15913,13 @@ int DetectFastPatternTest572(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -15977,7 +15936,7 @@ int DetectFastPatternTest572(void)
     return result;
 }
 
-int DetectFastPatternTest573(void)
+static int DetectFastPatternTest573(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -15986,13 +15945,13 @@ int DetectFastPatternTest573(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16009,7 +15968,7 @@ int DetectFastPatternTest573(void)
     return result;
 }
 
-int DetectFastPatternTest574(void)
+static int DetectFastPatternTest574(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16018,13 +15977,13 @@ int DetectFastPatternTest574(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16041,7 +16000,7 @@ int DetectFastPatternTest574(void)
     return result;
 }
 
-int DetectFastPatternTest575(void)
+static int DetectFastPatternTest575(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16050,13 +16009,13 @@ int DetectFastPatternTest575(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16073,7 +16032,7 @@ int DetectFastPatternTest575(void)
     return result;
 }
 
-int DetectFastPatternTest576(void)
+static int DetectFastPatternTest576(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16082,13 +16041,13 @@ int DetectFastPatternTest576(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16105,7 +16064,7 @@ int DetectFastPatternTest576(void)
     return result;
 }
 
-int DetectFastPatternTest577(void)
+static int DetectFastPatternTest577(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16114,13 +16073,13 @@ int DetectFastPatternTest577(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16137,7 +16096,7 @@ int DetectFastPatternTest577(void)
     return result;
 }
 
-int DetectFastPatternTest578(void)
+static int DetectFastPatternTest578(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16146,13 +16105,13 @@ int DetectFastPatternTest578(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16169,7 +16128,7 @@ int DetectFastPatternTest578(void)
     return result;
 }
 
-int DetectFastPatternTest579(void)
+static int DetectFastPatternTest579(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16178,13 +16137,13 @@ int DetectFastPatternTest579(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; http_user_agent; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -16204,7 +16163,7 @@ int DetectFastPatternTest579(void)
     return result;
 }
 
-int DetectFastPatternTest580(void)
+static int DetectFastPatternTest580(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16213,7 +16172,7 @@ int DetectFastPatternTest580(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:65977,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; distance:10; sid:1;)");
@@ -16228,7 +16187,7 @@ int DetectFastPatternTest580(void)
     return result;
 }
 
-int DetectFastPatternTest581(void)
+static int DetectFastPatternTest581(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16237,7 +16196,7 @@ int DetectFastPatternTest581(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_user_agent; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_user_agent; "
                                "content:\"three\"; distance:10; http_user_agent; sid:1;)");
@@ -16252,7 +16211,7 @@ int DetectFastPatternTest581(void)
     return result;
 }
 
-int DetectFastPatternTest582(void)
+static int DetectFastPatternTest582(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16261,7 +16220,7 @@ int DetectFastPatternTest582(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:\"two\"; fast_pattern:65534,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; distance:10; sid:1;)");
@@ -16276,7 +16235,7 @@ int DetectFastPatternTest582(void)
     return result;
 }
 
-int DetectFastPatternTest583(void)
+static int DetectFastPatternTest583(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16285,13 +16244,13 @@ int DetectFastPatternTest583(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -16309,7 +16268,7 @@ int DetectFastPatternTest583(void)
     return result;
 }
 
-int DetectFastPatternTest584(void)
+static int DetectFastPatternTest584(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16318,7 +16277,7 @@ int DetectFastPatternTest584(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; distance:10; "
                                "content:\"three\"; http_user_agent; sid:1;)");
@@ -16333,7 +16292,7 @@ int DetectFastPatternTest584(void)
     return result;
 }
 
-int DetectFastPatternTest585(void)
+static int DetectFastPatternTest585(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16342,7 +16301,7 @@ int DetectFastPatternTest585(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; within:10; "
                                "content:\"three\"; http_user_agent; sid:1;)");
@@ -16357,7 +16316,7 @@ int DetectFastPatternTest585(void)
     return result;
 }
 
-int DetectFastPatternTest586(void)
+static int DetectFastPatternTest586(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16366,7 +16325,7 @@ int DetectFastPatternTest586(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; offset:10; "
                                "content:\"three\"; http_user_agent; sid:1;)");
@@ -16381,7 +16340,7 @@ int DetectFastPatternTest586(void)
     return result;
 }
 
-int DetectFastPatternTest587(void)
+static int DetectFastPatternTest587(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16390,7 +16349,7 @@ int DetectFastPatternTest587(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; depth:10; "
                                "content:\"three\"; http_user_agent; sid:1;)");
@@ -16405,7 +16364,7 @@ int DetectFastPatternTest587(void)
     return result;
 }
 
-int DetectFastPatternTest588(void)
+static int DetectFastPatternTest588(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16414,13 +16373,13 @@ int DetectFastPatternTest588(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_user_agent; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_user_agent; "
                                "content:\"three\"; http_user_agent; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -16443,7 +16402,7 @@ int DetectFastPatternTest588(void)
 /* http_host fast_pattern tests v */
 
 
-int DetectFastPatternTest589(void)
+static int DetectFastPatternTest589(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16452,13 +16411,13 @@ int DetectFastPatternTest589(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -16479,7 +16438,7 @@ int DetectFastPatternTest589(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest590(void)
+static int DetectFastPatternTest590(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -16489,14 +16448,14 @@ int DetectFastPatternTest590(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_host;  "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_host_buffer_id];
     if (sm != NULL) {
         if ( (((DetectContentData *)sm->ctx)->flags &
               DETECT_CONTENT_FAST_PATTERN)) {
@@ -16516,7 +16475,7 @@ int DetectFastPatternTest590(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest591(void)
+static int DetectFastPatternTest591(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -16526,14 +16485,14 @@ int DetectFastPatternTest591(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_host; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_host_buffer_id];
     if (sm != NULL) {
         if ( (((DetectContentData *)sm->ctx)->flags &
               DETECT_CONTENT_FAST_PATTERN)) {
@@ -16549,7 +16508,7 @@ int DetectFastPatternTest591(void)
     return result;
 }
 
-int DetectFastPatternTest592(void)
+static int DetectFastPatternTest592(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -16559,12 +16518,12 @@ int DetectFastPatternTest592(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_host_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -16585,7 +16544,7 @@ int DetectFastPatternTest592(void)
     return result;
 }
 
-int DetectFastPatternTest593(void)
+static int DetectFastPatternTest593(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -16595,12 +16554,12 @@ int DetectFastPatternTest593(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_host_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -16622,7 +16581,7 @@ int DetectFastPatternTest593(void)
     return result;
 }
 
-int DetectFastPatternTest594(void)
+static int DetectFastPatternTest594(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16631,7 +16590,7 @@ int DetectFastPatternTest594(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:only; http_host; distance:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16645,7 +16604,7 @@ int DetectFastPatternTest594(void)
     return result;
 }
 
-int DetectFastPatternTest595(void)
+static int DetectFastPatternTest595(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16654,7 +16613,7 @@ int DetectFastPatternTest595(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16668,7 +16627,7 @@ int DetectFastPatternTest595(void)
     return result;
 }
 
-int DetectFastPatternTest596(void)
+static int DetectFastPatternTest596(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16677,7 +16636,7 @@ int DetectFastPatternTest596(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:only; http_host; within:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16691,7 +16650,7 @@ int DetectFastPatternTest596(void)
     return result;
 }
 
-int DetectFastPatternTest597(void)
+static int DetectFastPatternTest597(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16700,7 +16659,7 @@ int DetectFastPatternTest597(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; within:10; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16714,7 +16673,7 @@ int DetectFastPatternTest597(void)
     return result;
 }
 
-int DetectFastPatternTest598(void)
+static int DetectFastPatternTest598(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16723,7 +16682,7 @@ int DetectFastPatternTest598(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:only; http_host; offset:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16737,7 +16696,7 @@ int DetectFastPatternTest598(void)
     return result;
 }
 
-int DetectFastPatternTest599(void)
+static int DetectFastPatternTest599(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16746,7 +16705,7 @@ int DetectFastPatternTest599(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16760,7 +16719,7 @@ int DetectFastPatternTest599(void)
     return result;
 }
 
-int DetectFastPatternTest600(void)
+static int DetectFastPatternTest600(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16769,7 +16728,7 @@ int DetectFastPatternTest600(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:only; http_host; depth:10; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16783,7 +16742,7 @@ int DetectFastPatternTest600(void)
     return result;
 }
 
-int DetectFastPatternTest601(void)
+static int DetectFastPatternTest601(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16792,7 +16751,7 @@ int DetectFastPatternTest601(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16806,7 +16765,7 @@ int DetectFastPatternTest601(void)
     return result;
 }
 
-int DetectFastPatternTest602(void)
+static int DetectFastPatternTest602(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16815,7 +16774,7 @@ int DetectFastPatternTest602(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"two\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -16829,7 +16788,7 @@ int DetectFastPatternTest602(void)
     return result;
 }
 
-int DetectFastPatternTest603(void)
+static int DetectFastPatternTest603(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16838,14 +16797,14 @@ int DetectFastPatternTest603(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_host; "
                                "content:\"two\"; http_host; distance:30; "
                                "content:\"two\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -16862,7 +16821,7 @@ int DetectFastPatternTest603(void)
     return result;
 }
 
-int DetectFastPatternTest604(void)
+static int DetectFastPatternTest604(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16871,13 +16830,13 @@ int DetectFastPatternTest604(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; within:30; "
                                "content:\"two\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -16894,7 +16853,7 @@ int DetectFastPatternTest604(void)
     return result;
 }
 
-int DetectFastPatternTest605(void)
+static int DetectFastPatternTest605(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16903,13 +16862,13 @@ int DetectFastPatternTest605(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; offset:30; "
                                "content:\"two\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -16926,7 +16885,7 @@ int DetectFastPatternTest605(void)
     return result;
 }
 
-int DetectFastPatternTest606(void)
+static int DetectFastPatternTest606(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16935,13 +16894,13 @@ int DetectFastPatternTest606(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; depth:30; "
                                "content:\"two\"; fast_pattern:only; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP) &&
@@ -16958,7 +16917,7 @@ int DetectFastPatternTest606(void)
     return result;
 }
 
-int DetectFastPatternTest607(void)
+static int DetectFastPatternTest607(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16967,12 +16926,12 @@ int DetectFastPatternTest607(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_host; "
                                "content:\"two\"; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -16990,7 +16949,7 @@ int DetectFastPatternTest607(void)
     return result;
 }
 
-int DetectFastPatternTest608(void)
+static int DetectFastPatternTest608(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -16999,7 +16958,7 @@ int DetectFastPatternTest608(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_host; "
                                "content:!\"one\"; fast_pattern; http_host; distance:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17013,7 +16972,7 @@ int DetectFastPatternTest608(void)
     return result;
 }
 
-int DetectFastPatternTest609(void)
+static int DetectFastPatternTest609(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17022,7 +16981,7 @@ int DetectFastPatternTest609(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_host; "
                                "content:!\"one\"; fast_pattern; http_host; within:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17036,7 +16995,7 @@ int DetectFastPatternTest609(void)
     return result;
 }
 
-int DetectFastPatternTest610(void)
+static int DetectFastPatternTest610(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17045,7 +17004,7 @@ int DetectFastPatternTest610(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_host; "
                                "content:!\"one\"; fast_pattern; http_host; offset:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17059,7 +17018,7 @@ int DetectFastPatternTest610(void)
     return result;
 }
 
-int DetectFastPatternTest611(void)
+static int DetectFastPatternTest611(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17068,7 +17027,7 @@ int DetectFastPatternTest611(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_host; "
                                "content:!\"one\"; fast_pattern; http_host; depth:20; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17082,7 +17041,7 @@ int DetectFastPatternTest611(void)
     return result;
 }
 
-int DetectFastPatternTest612(void)
+static int DetectFastPatternTest612(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17091,13 +17050,13 @@ int DetectFastPatternTest612(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17114,7 +17073,7 @@ int DetectFastPatternTest612(void)
     return result;
 }
 
-int DetectFastPatternTest613(void)
+static int DetectFastPatternTest613(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17123,13 +17082,13 @@ int DetectFastPatternTest613(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; distance:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17146,7 +17105,7 @@ int DetectFastPatternTest613(void)
     return result;
 }
 
-int DetectFastPatternTest614(void)
+static int DetectFastPatternTest614(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17155,13 +17114,13 @@ int DetectFastPatternTest614(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; within:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17178,7 +17137,7 @@ int DetectFastPatternTest614(void)
     return result;
 }
 
-int DetectFastPatternTest615(void)
+static int DetectFastPatternTest615(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17187,13 +17146,13 @@ int DetectFastPatternTest615(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; offset:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17210,7 +17169,7 @@ int DetectFastPatternTest615(void)
     return result;
 }
 
-int DetectFastPatternTest616(void)
+static int DetectFastPatternTest616(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17219,13 +17178,13 @@ int DetectFastPatternTest616(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; depth:30; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17242,7 +17201,7 @@ int DetectFastPatternTest616(void)
     return result;
 }
 
-int DetectFastPatternTest617(void)
+static int DetectFastPatternTest617(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17251,13 +17210,13 @@ int DetectFastPatternTest617(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; distance:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17274,7 +17233,7 @@ int DetectFastPatternTest617(void)
     return result;
 }
 
-int DetectFastPatternTest618(void)
+static int DetectFastPatternTest618(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17283,13 +17242,13 @@ int DetectFastPatternTest618(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; within:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17306,7 +17265,7 @@ int DetectFastPatternTest618(void)
     return result;
 }
 
-int DetectFastPatternTest619(void)
+static int DetectFastPatternTest619(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17315,13 +17274,13 @@ int DetectFastPatternTest619(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; offset:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17338,7 +17297,7 @@ int DetectFastPatternTest619(void)
     return result;
 }
 
-int DetectFastPatternTest620(void)
+static int DetectFastPatternTest620(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17347,13 +17306,13 @@ int DetectFastPatternTest620(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; http_host; depth:10; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_CHOP &&
@@ -17373,7 +17332,7 @@ int DetectFastPatternTest620(void)
     return result;
 }
 
-int DetectFastPatternTest621(void)
+static int DetectFastPatternTest621(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17382,7 +17341,7 @@ int DetectFastPatternTest621(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:65977,4; http_host; "
                                "content:\"three\"; http_host; distance:10; sid:1;)");
@@ -17397,7 +17356,7 @@ int DetectFastPatternTest621(void)
     return result;
 }
 
-int DetectFastPatternTest622(void)
+static int DetectFastPatternTest622(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17406,7 +17365,7 @@ int DetectFastPatternTest622(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_host; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_host; "
                                "content:\"three\"; distance:10; http_host; sid:1;)");
@@ -17421,7 +17380,7 @@ int DetectFastPatternTest622(void)
     return result;
 }
 
-int DetectFastPatternTest623(void)
+static int DetectFastPatternTest623(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17430,7 +17389,7 @@ int DetectFastPatternTest623(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:\"two\"; fast_pattern:65534,4; http_host; "
                                "content:\"three\"; http_host; distance:10; sid:1;)");
@@ -17445,7 +17404,7 @@ int DetectFastPatternTest623(void)
     return result;
 }
 
-int DetectFastPatternTest624(void)
+static int DetectFastPatternTest624(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17454,13 +17413,13 @@ int DetectFastPatternTest624(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -17478,7 +17437,7 @@ int DetectFastPatternTest624(void)
     return result;
 }
 
-int DetectFastPatternTest625(void)
+static int DetectFastPatternTest625(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17487,7 +17446,7 @@ int DetectFastPatternTest625(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; distance:10; "
                                "content:\"three\"; http_host; sid:1;)");
@@ -17502,7 +17461,7 @@ int DetectFastPatternTest625(void)
     return result;
 }
 
-int DetectFastPatternTest626(void)
+static int DetectFastPatternTest626(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17511,7 +17470,7 @@ int DetectFastPatternTest626(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; within:10; "
                                "content:\"three\"; http_host; sid:1;)");
@@ -17526,7 +17485,7 @@ int DetectFastPatternTest626(void)
     return result;
 }
 
-int DetectFastPatternTest627(void)
+static int DetectFastPatternTest627(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17535,7 +17494,7 @@ int DetectFastPatternTest627(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; offset:10; "
                                "content:\"three\"; http_host; sid:1;)");
@@ -17550,7 +17509,7 @@ int DetectFastPatternTest627(void)
     return result;
 }
 
-int DetectFastPatternTest628(void)
+static int DetectFastPatternTest628(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17559,7 +17518,7 @@ int DetectFastPatternTest628(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; depth:10; "
                                "content:\"three\"; http_host; sid:1;)");
@@ -17574,7 +17533,7 @@ int DetectFastPatternTest628(void)
     return result;
 }
 
-int DetectFastPatternTest629(void)
+static int DetectFastPatternTest629(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17583,13 +17542,13 @@ int DetectFastPatternTest629(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_host; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_host; "
                                "content:\"three\"; http_host; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -17612,7 +17571,7 @@ int DetectFastPatternTest629(void)
 /* http_rawhost fast_pattern tests v */
 
 
-int DetectFastPatternTest630(void)
+static int DetectFastPatternTest630(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17621,13 +17580,13 @@ int DetectFastPatternTest630(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NEGATED &&
         ud->flags & DETECT_CONTENT_NOCASE &&
@@ -17649,7 +17608,7 @@ int DetectFastPatternTest630(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest631(void)
+static int DetectFastPatternTest631(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -17659,14 +17618,14 @@ int DetectFastPatternTest631(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_raw_host; nocase; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_host_buffer_id];
     if (sm != NULL) {
         if ( (((DetectContentData *)sm->ctx)->flags &
              DETECT_CONTENT_FAST_PATTERN) &&
@@ -17688,7 +17647,7 @@ int DetectFastPatternTest631(void)
 /**
  * \test Checks if a fast_pattern is registered in a Signature for uricontent.
  */
-int DetectFastPatternTest632(void)
+static int DetectFastPatternTest632(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -17698,14 +17657,14 @@ int DetectFastPatternTest632(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "msg:\"Testing fast_pattern\"; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_host_buffer_id];
     if (sm != NULL) {
         if ( (((DetectContentData *)sm->ctx)->flags &
               DETECT_CONTENT_FAST_PATTERN) &&
@@ -17723,7 +17682,7 @@ int DetectFastPatternTest632(void)
     return result;
 }
 
-int DetectFastPatternTest633(void)
+static int DetectFastPatternTest633(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -17733,12 +17692,12 @@ int DetectFastPatternTest633(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_host_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -17760,7 +17719,7 @@ int DetectFastPatternTest633(void)
     return result;
 }
 
-int DetectFastPatternTest634(void)
+static int DetectFastPatternTest634(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -17770,12 +17729,12 @@ int DetectFastPatternTest634(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"oneoneone\"; fast_pattern:3,4; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HRHHDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_raw_host_buffer_id];
     if (sm == NULL) {
         goto end;
     }
@@ -17798,7 +17757,7 @@ int DetectFastPatternTest634(void)
     return result;
 }
 
-int DetectFastPatternTest635(void)
+static int DetectFastPatternTest635(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17807,7 +17766,7 @@ int DetectFastPatternTest635(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; distance:10; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17821,7 +17780,7 @@ int DetectFastPatternTest635(void)
     return result;
 }
 
-int DetectFastPatternTest636(void)
+static int DetectFastPatternTest636(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17830,7 +17789,7 @@ int DetectFastPatternTest636(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; distance:10; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17844,7 +17803,7 @@ int DetectFastPatternTest636(void)
     return result;
 }
 
-int DetectFastPatternTest637(void)
+static int DetectFastPatternTest637(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17853,7 +17812,7 @@ int DetectFastPatternTest637(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; within:10; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17867,7 +17826,7 @@ int DetectFastPatternTest637(void)
     return result;
 }
 
-int DetectFastPatternTest638(void)
+static int DetectFastPatternTest638(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17876,7 +17835,7 @@ int DetectFastPatternTest638(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; within:10; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17890,7 +17849,7 @@ int DetectFastPatternTest638(void)
     return result;
 }
 
-int DetectFastPatternTest639(void)
+static int DetectFastPatternTest639(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17899,7 +17858,7 @@ int DetectFastPatternTest639(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; offset:10; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17913,7 +17872,7 @@ int DetectFastPatternTest639(void)
     return result;
 }
 
-int DetectFastPatternTest640(void)
+static int DetectFastPatternTest640(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17922,7 +17881,7 @@ int DetectFastPatternTest640(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; offset:10; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17936,7 +17895,7 @@ int DetectFastPatternTest640(void)
     return result;
 }
 
-int DetectFastPatternTest641(void)
+static int DetectFastPatternTest641(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17945,7 +17904,7 @@ int DetectFastPatternTest641(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; depth:10; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17959,7 +17918,7 @@ int DetectFastPatternTest641(void)
     return result;
 }
 
-int DetectFastPatternTest642(void)
+static int DetectFastPatternTest642(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17968,7 +17927,7 @@ int DetectFastPatternTest642(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; depth:10; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -17982,7 +17941,7 @@ int DetectFastPatternTest642(void)
     return result;
 }
 
-int DetectFastPatternTest643(void)
+static int DetectFastPatternTest643(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -17991,7 +17950,7 @@ int DetectFastPatternTest643(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"two\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -18005,7 +17964,7 @@ int DetectFastPatternTest643(void)
     return result;
 }
 
-int DetectFastPatternTest644(void)
+static int DetectFastPatternTest644(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18014,14 +17973,14 @@ int DetectFastPatternTest644(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\" one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; distance:30; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -18039,7 +17998,7 @@ int DetectFastPatternTest644(void)
     return result;
 }
 
-int DetectFastPatternTest645(void)
+static int DetectFastPatternTest645(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18048,13 +18007,13 @@ int DetectFastPatternTest645(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; within:30; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -18072,7 +18031,7 @@ int DetectFastPatternTest645(void)
     return result;
 }
 
-int DetectFastPatternTest646(void)
+static int DetectFastPatternTest646(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18081,13 +18040,13 @@ int DetectFastPatternTest646(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; offset:30; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -18105,7 +18064,7 @@ int DetectFastPatternTest646(void)
     return result;
 }
 
-int DetectFastPatternTest647(void)
+static int DetectFastPatternTest647(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18114,13 +18073,13 @@ int DetectFastPatternTest647(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; depth:30; nocase; "
                                "content:\"two\"; fast_pattern:only; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY &&
@@ -18138,7 +18097,7 @@ int DetectFastPatternTest647(void)
     return result;
 }
 
-int DetectFastPatternTest648(void)
+static int DetectFastPatternTest648(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18147,12 +18106,12 @@ int DetectFastPatternTest648(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:!\"one\"; fast_pattern; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_NEGATED &&
@@ -18171,7 +18130,7 @@ int DetectFastPatternTest648(void)
     return result;
 }
 
-int DetectFastPatternTest649(void)
+static int DetectFastPatternTest649(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18180,7 +18139,7 @@ int DetectFastPatternTest649(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_host; nocase; "
                                "content:!\"one\"; fast_pattern; http_raw_host; distance:20; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -18194,7 +18153,7 @@ int DetectFastPatternTest649(void)
     return result;
 }
 
-int DetectFastPatternTest650(void)
+static int DetectFastPatternTest650(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18203,7 +18162,7 @@ int DetectFastPatternTest650(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_host; nocase; "
                                "content:!\"one\"; fast_pattern; http_raw_host; within:20; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -18217,7 +18176,7 @@ int DetectFastPatternTest650(void)
     return result;
 }
 
-int DetectFastPatternTest651(void)
+static int DetectFastPatternTest651(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18226,7 +18185,7 @@ int DetectFastPatternTest651(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_host; nocase; "
                                "content:!\"one\"; fast_pattern; http_raw_host; offset:20; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -18240,7 +18199,7 @@ int DetectFastPatternTest651(void)
     return result;
 }
 
-int DetectFastPatternTest652(void)
+static int DetectFastPatternTest652(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18249,7 +18208,7 @@ int DetectFastPatternTest652(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"two\"; http_raw_host; nocase; "
                                "content:!\"one\"; fast_pattern; http_raw_host; depth:20; nocase; sid:1;)");
     if (de_ctx->sig_list != NULL)
@@ -18263,7 +18222,7 @@ int DetectFastPatternTest652(void)
     return result;
 }
 
-int DetectFastPatternTest653(void)
+static int DetectFastPatternTest653(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18272,13 +18231,13 @@ int DetectFastPatternTest653(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18296,7 +18255,7 @@ int DetectFastPatternTest653(void)
     return result;
 }
 
-int DetectFastPatternTest654(void)
+static int DetectFastPatternTest654(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18305,13 +18264,13 @@ int DetectFastPatternTest654(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; distance:30; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18329,7 +18288,7 @@ int DetectFastPatternTest654(void)
     return result;
 }
 
-int DetectFastPatternTest655(void)
+static int DetectFastPatternTest655(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18338,13 +18297,13 @@ int DetectFastPatternTest655(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; within:30; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18362,7 +18321,7 @@ int DetectFastPatternTest655(void)
     return result;
 }
 
-int DetectFastPatternTest656(void)
+static int DetectFastPatternTest656(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18371,13 +18330,13 @@ int DetectFastPatternTest656(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; offset:30; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18395,7 +18354,7 @@ int DetectFastPatternTest656(void)
     return result;
 }
 
-int DetectFastPatternTest657(void)
+static int DetectFastPatternTest657(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18404,13 +18363,13 @@ int DetectFastPatternTest657(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; depth:30; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18428,7 +18387,7 @@ int DetectFastPatternTest657(void)
     return result;
 }
 
-int DetectFastPatternTest658(void)
+static int DetectFastPatternTest658(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18437,13 +18396,13 @@ int DetectFastPatternTest658(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; distance:10; nocase; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18461,7 +18420,7 @@ int DetectFastPatternTest658(void)
     return result;
 }
 
-int DetectFastPatternTest659(void)
+static int DetectFastPatternTest659(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18470,13 +18429,13 @@ int DetectFastPatternTest659(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; within:10; nocase; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18494,7 +18453,7 @@ int DetectFastPatternTest659(void)
     return result;
 }
 
-int DetectFastPatternTest660(void)
+static int DetectFastPatternTest660(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18503,13 +18462,13 @@ int DetectFastPatternTest660(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; offset:10; nocase; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18527,7 +18486,7 @@ int DetectFastPatternTest660(void)
     return result;
 }
 
-int DetectFastPatternTest661(void)
+static int DetectFastPatternTest661(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18536,13 +18495,13 @@ int DetectFastPatternTest661(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; http_raw_host; depth:10; nocase; "
                                "content:\"oneonethree\"; fast_pattern:3,4; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         !(ud->flags & DETECT_CONTENT_FAST_PATTERN_ONLY) &&
@@ -18563,7 +18522,7 @@ int DetectFastPatternTest661(void)
     return result;
 }
 
-int DetectFastPatternTest662(void)
+static int DetectFastPatternTest662(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18572,7 +18531,7 @@ int DetectFastPatternTest662(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:65977,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; distance:10; nocase; sid:1;)");
@@ -18587,7 +18546,7 @@ int DetectFastPatternTest662(void)
     return result;
 }
 
-int DetectFastPatternTest663(void)
+static int DetectFastPatternTest663(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18596,7 +18555,7 @@ int DetectFastPatternTest663(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\";  http_raw_host; nocase; "
                                "content:\"oneonetwo\"; fast_pattern:3,65977; http_raw_host; nocase; "
                                "content:\"three\"; distance:10; http_raw_host; nocase; sid:1;)");
@@ -18611,7 +18570,7 @@ int DetectFastPatternTest663(void)
     return result;
 }
 
-int DetectFastPatternTest664(void)
+static int DetectFastPatternTest664(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18620,7 +18579,7 @@ int DetectFastPatternTest664(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:\"two\"; fast_pattern:65534,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; distance:10; nocase; sid:1;)");
@@ -18635,7 +18594,7 @@ int DetectFastPatternTest664(void)
     return result;
 }
 
-int DetectFastPatternTest665(void)
+static int DetectFastPatternTest665(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18644,13 +18603,13 @@ int DetectFastPatternTest665(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_NEGATED &&
@@ -18669,7 +18628,7 @@ int DetectFastPatternTest665(void)
     return result;
 }
 
-int DetectFastPatternTest666(void)
+static int DetectFastPatternTest666(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18678,7 +18637,7 @@ int DetectFastPatternTest666(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; distance:10; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
@@ -18693,7 +18652,7 @@ int DetectFastPatternTest666(void)
     return result;
 }
 
-int DetectFastPatternTest667(void)
+static int DetectFastPatternTest667(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18702,7 +18661,7 @@ int DetectFastPatternTest667(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; within:10; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
@@ -18717,7 +18676,7 @@ int DetectFastPatternTest667(void)
     return result;
 }
 
-int DetectFastPatternTest668(void)
+static int DetectFastPatternTest668(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18726,7 +18685,7 @@ int DetectFastPatternTest668(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; offset:10; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
@@ -18741,7 +18700,7 @@ int DetectFastPatternTest668(void)
     return result;
 }
 
-int DetectFastPatternTest669(void)
+static int DetectFastPatternTest669(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18750,7 +18709,7 @@ int DetectFastPatternTest669(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; depth:10; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
@@ -18765,7 +18724,7 @@ int DetectFastPatternTest669(void)
     return result;
 }
 
-int DetectFastPatternTest670(void)
+static int DetectFastPatternTest670(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -18774,13 +18733,13 @@ int DetectFastPatternTest670(void)
         goto end;
 
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, "alert icmp any any -> any any "
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any any "
                                "(content:\"one\"; http_raw_host; nocase; "
                                "content:!\"oneonetwo\"; fast_pattern:3,4; http_raw_host; nocase; "
                                "content:\"three\"; http_raw_host; nocase; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]->prev->ctx;
+    DetectContentData *ud = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_raw_host_buffer_id]->prev->ctx;
     if (ud->flags & DETECT_CONTENT_FAST_PATTERN &&
         ud->flags & DETECT_CONTENT_NOCASE &&
         ud->flags & DETECT_CONTENT_NEGATED &&
@@ -18807,16 +18766,14 @@ int DetectFastPatternTest670(void)
  * - if 2 unique patterns get unique ids.
  * - if 2 duplicate patterns, with no chop set get unique ids.
  */
-int DetectFastPatternTest671(void)
+static int DetectFastPatternTest671(void)
 {
     int no_of_sigs = 6;
-    int result = 0;
-    char *sigs[no_of_sigs];
+    const char *sigs[no_of_sigs];
     Signature *s[no_of_sigs];
-    Signature *sig = NULL;
     DetectEngineCtx *de_ctx = NULL;
     DetectContentData *cd = NULL;
-    SigMatch *sm = NULL;
+    SigMatchData *smd = NULL;
     int i = 0;
 
     sigs[0] = "alert tcp any any -> any any "
@@ -18833,91 +18790,63 @@ int DetectFastPatternTest671(void)
         "(content:\"onetwothreefour\"; fast_pattern:0,15; sid:6;)";
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        printf("DetectEngineCtxInit() failure\n");
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
-    i = 0;
-    s[i] = SigInit(de_ctx, sigs[i]);
-    de_ctx->sig_list = sig = s[i];
-    if (sig == NULL) {
-        printf("SigInit(de_ctx, sig1) failure\n");
-        goto end;
-    }
-    i++;
-    for ( ; i < no_of_sigs; i++) {
-        s[i] = SigInit(de_ctx, sigs[i]);
-        sig->next = s[i];
-        sig = sig->next;
-        if (sig == NULL) {
-            printf("SigInit(de_ctx, sig[%d]) failure\n", i);
-            goto end;
-        }
+    for (i = 0; i < no_of_sigs; i++) {
+        s[i] = DetectEngineAppendSig(de_ctx, sigs[i]);
+        FAIL_IF_NULL(s[i]);
     }
 
     SigGroupBuild(de_ctx);
 
-    sm = s[0]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 0) {
-        printf("sm = s[0]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[0]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 0);
 
-    sm = s[1]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 0) {
-        printf("sm = s[1]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[1]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 0);
 
-    sm = s[2]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 1) {
-        printf("sm = s[2]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[2]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 2);
 
-    sm = s[3]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 2) {
-        printf("sm = s[3]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[3]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 1);
 
-    sm = s[4]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 2) {
-        printf("sm = s[4]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[4]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 1);
 
-    sm = s[5]->sm_lists[DETECT_SM_LIST_PMATCH];
-    cd = (DetectContentData *)sm->ctx;
-    if (cd->id != 0) {
-        printf("sm = s[5]->sm_lists[DETECT_SM_LIST_PMATCH] failure\n");
-        goto end;
-    }
+    smd = s[5]->sm_arrays[DETECT_SM_LIST_PMATCH];
+    cd = (DetectContentData *)smd->ctx;
+    FAIL_IF(cd->id != 0);
 
-    result = 1;
-end:
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-        DetectEngineCtxFree(de_ctx);
-    }
-
-    return result;
+    DetectEngineCtxFree(de_ctx);
+    PASS;
 }
 
 #endif
 
 void DetectFastPatternRegisterTests(void)
 {
-
 #ifdef UNITTESTS
+    g_file_data_buffer_id = DetectBufferTypeGetByName("file_data");
+    g_http_method_buffer_id = DetectBufferTypeGetByName("http_method");
+    g_http_uri_buffer_id = DetectBufferTypeGetByName("http_uri");
+    g_http_ua_buffer_id = DetectBufferTypeGetByName("http_user_agent");
+    g_http_cookie_buffer_id = DetectBufferTypeGetByName("http_cookie");
+    g_http_host_buffer_id = DetectBufferTypeGetByName("http_host");
+    g_http_raw_host_buffer_id = DetectBufferTypeGetByName("http_raw_host");
+    g_http_stat_code_buffer_id = DetectBufferTypeGetByName("http_stat_code");
+    g_http_stat_msg_buffer_id = DetectBufferTypeGetByName("http_stat_msg");
+    g_http_header_buffer_id = DetectBufferTypeGetByName("http_header");
+    g_http_raw_header_buffer_id = DetectBufferTypeGetByName("http_raw_header");
+    g_http_client_body_buffer_id = DetectBufferTypeGetByName("http_client_body");
+    g_http_raw_uri_buffer_id = DetectBufferTypeGetByName("http_raw_uri");
+
     UtRegisterTest("DetectFastPatternTest01", DetectFastPatternTest01);
     UtRegisterTest("DetectFastPatternTest02", DetectFastPatternTest02);
     UtRegisterTest("DetectFastPatternTest03", DetectFastPatternTest03);
@@ -19344,7 +19273,7 @@ void DetectFastPatternRegisterTests(void)
     UtRegisterTest("DetectFastPatternTest413", DetectFastPatternTest413);
     UtRegisterTest("DetectFastPatternTest414", DetectFastPatternTest414);
     UtRegisterTest("DetectFastPatternTest415", DetectFastPatternTest415);
-    UtRegisterTest("DetectFastPatternTest416", DetectFastPatternTest415);
+    UtRegisterTest("DetectFastPatternTest416", DetectFastPatternTest416);
     UtRegisterTest("DetectFastPatternTest417", DetectFastPatternTest417);
     UtRegisterTest("DetectFastPatternTest418", DetectFastPatternTest418);
     UtRegisterTest("DetectFastPatternTest419", DetectFastPatternTest419);

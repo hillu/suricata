@@ -96,7 +96,7 @@ void HostFree(Host *h)
     }
 }
 
-Host *HostNew(Address *a)
+static Host *HostNew(Address *a)
 {
     Host *h = HostAlloc();
     if (h == NULL)
@@ -141,17 +141,14 @@ void HostInitConfig(char quiet)
     SC_ATOMIC_INIT(host_prune_idx);
     HostQueueInit(&host_spare_q);
 
-#ifndef AFLFUZZ_NO_RANDOM
-    unsigned int seed = RandomTimePreseed();
     /* set defaults */
-    host_config.hash_rand   = (int)( HOST_DEFAULT_HASHSIZE * (rand_r(&seed) / RAND_MAX + 1.0));
-#endif
+    host_config.hash_rand   = (uint32_t)RandomGet();
     host_config.hash_size   = HOST_DEFAULT_HASHSIZE;
     host_config.memcap      = HOST_DEFAULT_MEMCAP;
     host_config.prealloc    = HOST_DEFAULT_PREALLOC;
 
     /* Check if we have memcap and hash_size defined at config */
-    char *conf_val;
+    const char *conf_val;
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
@@ -210,7 +207,7 @@ void HostInitConfig(char quiet)
     (void) SC_ATOMIC_ADD(host_memuse, (host_config.hash_size * sizeof(HostHashRow)));
 
     if (quiet == FALSE) {
-        SCLogConfig("allocated %llu bytes of memory for the host hash... "
+        SCLogConfig("allocated %"PRIu64" bytes of memory for the host hash... "
                   "%" PRIu32 " buckets of size %" PRIuMAX "",
                   SC_ATOMIC_GET(host_memuse), host_config.hash_size,
                   (uintmax_t)sizeof(HostHashRow));
@@ -237,7 +234,7 @@ void HostInitConfig(char quiet)
     if (quiet == FALSE) {
         SCLogConfig("preallocated %" PRIu32 " hosts of size %" PRIu16 "",
                 host_spare_q.len, g_host_size);
-        SCLogConfig("host memory usage: %llu bytes, maximum: %"PRIu64,
+        SCLogConfig("host memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(host_memuse), host_config.memcap);
     }
 
@@ -252,7 +249,7 @@ void HostPrintStats (void)
     SCLogPerf("hostbits added: %" PRIu32 ", removed: %" PRIu32 ", max memory usage: %" PRIu32 "",
         hostbits_added, hostbits_removed, hostbits_memuse_max);
 #endif /* HOSTBITS_STATS */
-    SCLogPerf("host memory usage: %llu bytes, maximum: %"PRIu64,
+    SCLogPerf("host memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
             SC_ATOMIC_GET(host_memuse), host_config.memcap);
     return;
 }
@@ -348,7 +345,7 @@ void HostCleanup(void)
  *  hash_rand -- set at init time
  *  source address
  */
-uint32_t HostGetKey(Address *a)
+static inline uint32_t HostGetKey(Address *a)
 {
     uint32_t key;
 
@@ -427,7 +424,7 @@ static Host *HostGetNew(Address *a)
     return h;
 }
 
-void HostInit(Host *h, Address *a)
+static void HostInit(Host *h, Address *a)
 {
     COPY_ADDRESS(a, &h->a);
     (void) HostIncrUsecnt(h);

@@ -24,7 +24,8 @@
 
 #include "suricata-common.h"
 
-#include "util-detect-file-hash.h"
+#include "detect-engine.h"
+#include "detect-file-hash-common.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
@@ -32,7 +33,7 @@
 
 #ifndef HAVE_NSS
 
-static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, char *c)
+static int DetectFileMd5SetupNoSupport (DetectEngineCtx *a, Signature *b, const char *c)
 {
     SCLogError(SC_ERR_NO_MD5_SUPPORT, "no MD5 calculation support built in, needed for filemd5 keyword");
     return -1;
@@ -56,7 +57,9 @@ void DetectFileMd5Register(void)
 
 #else /* HAVE_NSS */
 
-static int DetectFileMd5Setup (DetectEngineCtx *, Signature *, char *);
+static int g_file_match_list_id = 0;
+
+static int DetectFileMd5Setup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFileMd5RegisterTests(void);
 
 /**
@@ -71,6 +74,8 @@ void DetectFileMd5Register(void)
     sigmatch_table[DETECT_FILEMD5].Setup = DetectFileMd5Setup;
     sigmatch_table[DETECT_FILEMD5].Free  = DetectFileHashFree;
     sigmatch_table[DETECT_FILEMD5].RegisterTests = DetectFileMd5RegisterTests;
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 
     SCLogDebug("registering filemd5 rule option");
     return;
@@ -87,13 +92,13 @@ void DetectFileMd5Register(void)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFileMd5Setup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFileMd5Setup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILEMD5);
+    return DetectFileHashSetup(de_ctx, s, str, DETECT_FILEMD5, g_file_match_list_id);
 }
 
 #ifdef UNITTESTS
-static int MD5MatchLookupString(ROHashTable *hash, char *string)
+static int MD5MatchLookupString(ROHashTable *hash, const char *string)
 {
     uint8_t md5[16];
     if (ReadHashString(md5, string, "file", 88, 32) == 1) {

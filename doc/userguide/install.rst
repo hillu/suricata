@@ -69,7 +69,7 @@ The following tools are required:
 
 For full features, also add:
 
-  libjansson, libnss, libgeoip, liblua5.1, libhiredis
+  libjansson, libnss, libgeoip, liblua5.1, libhiredis, libevent
 
 Ubuntu/Debian
 """""""""""""
@@ -85,7 +85,7 @@ Recommended::
     apt-get install libpcre3 libpcre3-dbg libpcre3-dev build-essential libpcap-dev   \
                     libnet1-dev libyaml-0-2 libyaml-dev pkg-config zlib1g zlib1g-dev \
                     libcap-ng-dev libcap-ng0 make libmagic-dev libjansson-dev        \
-                    libnss3-dev libgeoip-dev liblua5.1-dev libhiredis-dev
+                    libnss3-dev libgeoip-dev liblua5.1-dev libhiredis-dev libevent-dev
 
 Extra for iptables/nftables IPS integration::
 
@@ -107,7 +107,7 @@ To use it::
 
     sudo add-apt-repository ppa:oisf/suricata-stable
     sudo apt-get update
-    sudo sudo apt-get install suricata
+    sudo apt-get install suricata
 
 Debian
 ^^^^^^

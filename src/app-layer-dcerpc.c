@@ -143,7 +143,7 @@ void hexdump(/*Flow *f,*/ const void *buf, size_t len)
  * \brief printUUID function used to print UUID, Major and Minor Version Number
  * and if it was Accepted or Rejected in the BIND_ACK.
  */
-void printUUID(char *type, DCERPCUuidEntry *uuid)
+void printUUID(const char *type, DCERPCUuidEntry *uuid)
 {
     uint8_t i = 0;
     if (uuid == NULL) {
@@ -2018,7 +2018,59 @@ static void DCERPCStateFree(void *s)
 
     DCERPCCleanup(&sstate->dcerpc);
 
+    if (sstate->de_state != NULL) {
+        DetectEngineStateFree(sstate->de_state);
+    }
+
     SCFree(s);
+}
+
+static int DCERPCStateHasTxDetectState(void *state)
+{
+    DCERPCState *dce_state = (DCERPCState *)state;
+    if (dce_state->de_state)
+        return 1;
+    return 0;
+}
+
+static int DCERPCSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
+{
+    DCERPCState *dce_state = (DCERPCState *)state;
+    dce_state->de_state = de_state;
+    return 0;
+}
+
+static DetectEngineState *DCERPCGetTxDetectState(void *vtx)
+{
+    DCERPCState *dce_state = (DCERPCState *)vtx;
+    return dce_state->de_state;
+}
+
+static void DCERPCStateTransactionFree(void *state, uint64_t tx_id)
+{
+    /* do nothing */
+}
+
+static void *DCERPCGetTx(void *state, uint64_t tx_id)
+{
+    DCERPCState *dce_state = (DCERPCState *)state;
+    return dce_state;
+}
+
+static uint64_t DCERPCGetTxCnt(void *state)
+{
+    /* single tx */
+    return 1;
+}
+
+static int DCERPCGetAlstateProgressCompletionStatus(uint8_t direction)
+{
+    return 1;
+}
+
+static int DCERPCGetAlstateProgress(void *tx, uint8_t direction)
+{
+    return 0;
 }
 
 static int DCERPCRegisterPatternsForProtocolDetection(void)
@@ -2039,7 +2091,7 @@ static int DCERPCRegisterPatternsForProtocolDetection(void)
 
 void RegisterDCERPCParsers(void)
 {
-    char *proto_name = "dcerpc";
+    const char *proto_name = "dcerpc";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
         AppLayerProtoDetectRegisterProtocol(ALPROTO_DCERPC, proto_name);
@@ -2059,6 +2111,21 @@ void RegisterDCERPCParsers(void)
         AppLayerParserRegisterStateFuncs(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCStateAlloc,
                                          DCERPCStateFree);
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_DCERPC, STREAM_TOSERVER);
+
+
+        AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCStateTransactionFree);
+
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCStateHasTxDetectState,
+                                               DCERPCGetTxDetectState, DCERPCSetTxDetectState);
+
+        AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCGetTx);
+
+        AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCGetTxCnt);
+
+        AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_DCERPC, DCERPCGetAlstateProgress);
+
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DCERPC,
+                                                               DCERPCGetAlstateProgressCompletionStatus);
     } else {
         SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
                   "still on.", proto_name);
@@ -2077,7 +2144,7 @@ void RegisterDCERPCParsers(void)
 
 /* set this to 1 to see problem */
 
-int DCERPCParserTest01(void)
+static int DCERPCParserTest01(void)
 {
     int result = 1;
     Flow f;
@@ -2444,6 +2511,7 @@ int DCERPCParserTest01(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2536,7 +2604,7 @@ end:
 
 /** \test DCERPC Request decoding and opnum parsing.
 */
-int DCERPCParserTest02(void)
+static int DCERPCParserTest02(void)
 {
     int result = 1;
     Flow f;
@@ -2681,6 +2749,7 @@ int DCERPCParserTest02(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2739,7 +2808,7 @@ end:
 
 /** \test Test endianness handling
 */
-int DCERPCParserTest03(void)
+static int DCERPCParserTest03(void)
 {
     int result = 1;
     Flow f;
@@ -2884,6 +2953,7 @@ int DCERPCParserTest03(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -2936,7 +3006,7 @@ end:
 /**
  * \todo Needs to be rewritten
  */
-int DCERPCParserTest04(void)
+static int DCERPCParserTest04(void)
 {
     /* AWS - Disabled this test since clamav FPs on the payloads used.
      * We will have to rewrite this test with new payloads.  Will be done
@@ -4296,7 +4366,7 @@ end:
 /**
  * \test General test.
  */
-int DCERPCParserTest05(void)
+static int DCERPCParserTest05(void)
 {
     int result = 1;
     Flow f;
@@ -4336,6 +4406,7 @@ int DCERPCParserTest05(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4398,7 +4469,7 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed)
  */
-int DCERPCParserTest06(void)
+static int DCERPCParserTest06(void)
 {
     int result = 1;
     Flow f;
@@ -4511,6 +4582,7 @@ int DCERPCParserTest06(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4564,7 +4636,7 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest07(void)
+static int DCERPCParserTest07(void)
 {
     int result = 1;
     Flow f;
@@ -4597,6 +4669,7 @@ int DCERPCParserTest07(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4667,7 +4740,7 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest08(void)
+static int DCERPCParserTest08(void)
 {
     int result = 1;
     Flow f;
@@ -4690,6 +4763,7 @@ int DCERPCParserTest08(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4728,7 +4802,7 @@ end:
 /**
  * \test DCERPC fragmented bind PDU(one PDU which is frag'ed).
  */
-int DCERPCParserTest09(void)
+static int DCERPCParserTest09(void)
 {
     int result = 1;
     Flow f;
@@ -4751,6 +4825,7 @@ int DCERPCParserTest09(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4789,7 +4864,7 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest10(void)
+static int DCERPCParserTest10(void)
 {
     int result = 1;
     Flow f;
@@ -4826,6 +4901,7 @@ int DCERPCParserTest10(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4889,7 +4965,7 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest11(void)
+static int DCERPCParserTest11(void)
 {
     int result = 1;
     Flow f;
@@ -4927,6 +5003,7 @@ int DCERPCParserTest11(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -4994,7 +5071,7 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest12(void)
+static int DCERPCParserTest12(void)
 {
     int result = 1;
     Flow f;
@@ -5026,6 +5103,7 @@ int DCERPCParserTest12(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5076,7 +5154,7 @@ end:
  * \test Check if the parser accepts bind pdus that have context ids starting
  *       from a non-zero value.
  */
-int DCERPCParserTest13(void)
+static int DCERPCParserTest13(void)
 {
     int result = 1;
     Flow f;
@@ -5104,6 +5182,7 @@ int DCERPCParserTest13(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5161,7 +5240,7 @@ end:
 /**
  * \test Check for another endless loop with bind pdus.
  */
-int DCERPCParserTest14(void)
+static int DCERPCParserTest14(void)
 {
     int result = 1;
     Flow f;
@@ -5195,6 +5274,7 @@ int DCERPCParserTest14(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5227,7 +5307,7 @@ end:
 /**
  * \test Check for another endless loop for bind_ack pdus.
  */
-int DCERPCParserTest15(void)
+static int DCERPCParserTest15(void)
 {
     int result = 1;
     Flow f;
@@ -5257,6 +5337,7 @@ int DCERPCParserTest15(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5289,7 +5370,7 @@ end:
 /**
  * \test Check for correct internal ids for bind_acks.
  */
-int DCERPCParserTest16(void)
+static int DCERPCParserTest16(void)
 {
     int result = 1;
     Flow f;
@@ -5719,6 +5800,7 @@ int DCERPCParserTest16(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -5888,7 +5970,7 @@ end:
 /**
  * \test Check for correct internal ids for bind_acks + alter_contexts
  */
-int DCERPCParserTest17(void)
+static int DCERPCParserTest17(void)
 {
     int result = 1;
     Flow f;
@@ -5965,6 +6047,7 @@ int DCERPCParserTest17(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6082,7 +6165,7 @@ end:
 /**
  * \test DCERPC fragmented PDU.
  */
-int DCERPCParserTest18(void)
+static int DCERPCParserTest18(void)
 {
     int result = 1;
     Flow f;
@@ -6111,6 +6194,7 @@ int DCERPCParserTest18(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 
@@ -6161,7 +6245,7 @@ end:
     return result;
 }
 
-int DCERPCParserTest19(void)
+static int DCERPCParserTest19(void)
 {
     int result = 0;
     Flow f;
@@ -6377,6 +6461,7 @@ int DCERPCParserTest19(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 

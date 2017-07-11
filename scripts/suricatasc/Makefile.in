@@ -130,6 +130,8 @@ AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
 AUTOMAKE = @AUTOMAKE@
 AWK = @AWK@
+CARGO = @CARGO@
+CARGO_HOME = @CARGO_HOME@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
@@ -153,6 +155,8 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GCC_CFLAGS = @GCC_CFLAGS@
 GREP = @GREP@
+HAVE_CARGO = @HAVE_CARGO@
+HAVE_CARGO_VENDOR = @HAVE_CARGO_VENDOR@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
@@ -160,7 +164,8 @@ HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
-HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_PYTHON = @HAVE_PYTHON@
+HAVE_RUSTC = @HAVE_RUSTC@
 HAVE_SPHINXBUILD = @HAVE_SPHINXBUILD@
 HAVE_WGET = @HAVE_WGET@
 HTP_DIR = @HTP_DIR@
@@ -225,6 +230,8 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_LDADD = @RUST_LDADD@
+RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
 SECCFLAGS = @SECCFLAGS@
 SECLDFLAGS = @SECLDFLAGS@
 SED = @SED@
@@ -301,6 +308,11 @@ psdir = @psdir@
 pyexecdir = @pyexecdir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
+rust_config_comment = @rust_config_comment@
+rust_config_enabled = @rust_config_enabled@
+rust_config_exp_comment = @rust_config_exp_comment@
+rust_config_exp_enabled = @rust_config_exp_enabled@
+rust_vendor_comment = @rust_vendor_comment@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
@@ -423,9 +435,9 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
-@HAVE_PYTHON_FALSE@uninstall-local:
 @HAVE_PYTHON_FALSE@clean-local:
 @HAVE_PYTHON_FALSE@install-exec-local:
+@HAVE_PYTHON_FALSE@uninstall-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am
@@ -512,13 +524,13 @@ uninstall-am: uninstall-local
 
 @HAVE_PYTHON_TRUE@all-local:
 @HAVE_PYTHON_TRUE@	mkdir -p $(top_builddir)/scripts/suricatasc/src
-@HAVE_PYTHON_TRUE@	$(PYTHON) $(srcdir)/setup.py build;
+@HAVE_PYTHON_TRUE@	$(HAVE_PYTHON) $(srcdir)/setup.py build;
 
 @HAVE_PYTHON_TRUE@install-exec-local:
-@HAVE_PYTHON_TRUE@	$(PYTHON) $(srcdir)/setup.py install --prefix $(DESTDIR)$(prefix)
+@HAVE_PYTHON_TRUE@	$(HAVE_PYTHON) $(srcdir)/setup.py install --prefix $(DESTDIR)$(prefix)
 
 @HAVE_PYTHON_TRUE@clean-local:
-@HAVE_PYTHON_TRUE@	$(PYTHON) $(srcdir)/setup.py clean;
+@HAVE_PYTHON_TRUE@	$(HAVE_PYTHON) $(srcdir)/setup.py clean;
 @HAVE_PYTHON_TRUE@	rm -rf $(top_builddir)/scripts/suricatasc/build
 
 @HAVE_PYTHON_TRUE@uninstall-local:

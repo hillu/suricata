@@ -68,6 +68,9 @@ enum {
 
 SCEnumCharMap template_decoder_event_table[] = {
     {"EMPTY_MESSAGE", TEMPLATE_DECODER_EVENT_EMPTY_MESSAGE},
+
+    // event table must be NULL-terminated
+    { NULL, -1 },
 };
 
 static TemplateTransaction *TemplateTxAlloc(TemplateState *echo)
@@ -452,7 +455,7 @@ static int TemplateSetTxDetectState(void *state, void *vtx,
 
 void RegisterTemplateParsers(void)
 {
-    char *proto_name = "template";
+    const char *proto_name = "template";
 
     /* TEMPLATE_START_REMOVE */
     if (ConfGetNode("app-layer.protocols.template") == NULL) {

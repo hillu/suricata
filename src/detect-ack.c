@@ -43,9 +43,9 @@
 #include "util-debug.h"
 
 /* prototypes */
-static int DetectAckSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectAckSetup(DetectEngineCtx *, Signature *, const char *);
 static int DetectAckMatch(ThreadVars *, DetectEngineThreadCtx *,
-                          Packet *, Signature *, const SigMatchCtx *);
+                          Packet *, const Signature *, const SigMatchCtx *);
 static void DetectAckRegisterTests(void);
 static void DetectAckFree(void *);
 static int PrefilterSetupTcpAck(SigGroupHead *sgh);
@@ -79,7 +79,7 @@ void DetectAckRegister(void)
  * \retval 1 match
  */
 static int DetectAckMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                          Packet *p, Signature *s, const SigMatchCtx *ctx)
+                          Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectAckData *data = (const DetectAckData *)ctx;
 
@@ -103,7 +103,7 @@ static int DetectAckMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
+static int DetectAckSetup(DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
     DetectAckData *data = NULL;
     SigMatch *sm = NULL;
@@ -194,7 +194,7 @@ static int PrefilterSetupTcpAck(SigGroupHead *sgh)
 static _Bool PrefilterTcpAckIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_ACK:
                 return TRUE;
