@@ -26,7 +26,6 @@ Build-Depends: autotools-dev,
                python,
                zlib1g-dev | libz-dev,
 	       libhtp-dev
-Build-Conflicts: libhtp-dev
 X-Python-Version: >= 2.6
 Standards-Version: 3.9.8
 Homepage: http://www.suricata-ids.org/
