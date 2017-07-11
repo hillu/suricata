@@ -63,12 +63,10 @@
 #include "stream-tcp-private.h"
 #include "stream-tcp.h"
 
-int DetectHttpStatCodeMatch(ThreadVars *, DetectEngineThreadCtx *,
-                            Flow *, uint8_t , void *, Signature *,
-                            SigMatch *);
-static int DetectHttpStatCodeSetup(DetectEngineCtx *, Signature *, char *);
-void DetectHttpStatCodeRegisterTests(void);
-void DetectHttpStatCodeFree(void *);
+static int DetectHttpStatCodeSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectHttpStatCodeRegisterTests(void);
+static void DetectHttpStatCodeSetupCallback(Signature *);
+static int g_http_stat_code_buffer_id = 0;
 
 /**
  * \brief Registration function for keyword: http_stat_code
@@ -79,21 +77,26 @@ void DetectHttpStatCodeRegister (void)
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].desc = "content modifier to match only on HTTP stat-code-buffer";
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_stat-code";
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_STAT_CODE].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].Setup = DetectHttpStatCodeSetup;
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].Free  = NULL;
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].RegisterTests = DetectHttpStatCodeRegisterTests;
 
     sigmatch_table[DETECT_AL_HTTP_STAT_CODE].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_HTTP_STAT_CODE].flags |= SIGMATCH_PAYLOAD;
 
-    DetectMpmAppLayerRegister("http_stat_code", SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_HSCDMATCH, 4,
+    DetectAppLayerMpmRegister("http_stat_code", SIG_FLAG_TOCLIENT, 4,
             PrefilterTxHttpStatCodeRegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_HTTP, SIG_FLAG_TOCLIENT,
-            DETECT_SM_LIST_HSCDMATCH,
+    DetectAppLayerInspectEngineRegister("http_stat_code",
+            ALPROTO_HTTP, SIG_FLAG_TOCLIENT, HTP_RESPONSE_LINE,
             DetectEngineInspectHttpStatCode);
+
+    DetectBufferTypeSetDescriptionByName("http_stat_code",
+            "http response status code");
+
+    DetectBufferTypeRegisterSetupCallback("http_stat_code",
+            DetectHttpStatCodeSetupCallback);
+
+    g_http_stat_code_buffer_id = DetectBufferTypeGetByName("http_stat_code");
 }
 
 /**
@@ -107,13 +110,18 @@ void DetectHttpStatCodeRegister (void)
  * \retval -1 On failure
  */
 
-static int DetectHttpStatCodeSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectHttpStatCodeSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_STAT_CODE,
-                                                  DETECT_SM_LIST_HSCDMATCH,
-                                                  ALPROTO_HTTP,
-                                                  NULL);
+                                                  g_http_stat_code_buffer_id,
+                                                  ALPROTO_HTTP);
+}
+
+static void DetectHttpStatCodeSetupCallback(Signature *s)
+{
+    SCLogDebug("callback invoked by %u", s->id);
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
 }
 
 #ifdef UNITTESTS
@@ -123,7 +131,7 @@ static int DetectHttpStatCodeSetup(DetectEngineCtx *de_ctx, Signature *s, char *
  *       specified in the signature or rawbyes is specified or fast_pattern is
  *       provided in the signature.
  */
-int DetectHttpStatCodeTest01(void)
+static int DetectHttpStatCodeTest01(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -156,7 +164,7 @@ int DetectHttpStatCodeTest01(void)
         printf("sid 3 parse failed: ");
         goto end;
     }
-    if (!(((DetectContentData *)de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH]->ctx)->flags &
+    if (!(((DetectContentData *)de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id]->ctx)->flags &
         DETECT_CONTENT_FAST_PATTERN))
     {
         goto end;
@@ -173,7 +181,7 @@ end:
  * \test Checks if a http_stat_code is registered in a Signature and also checks
  *       the nocase
  */
-int DetectHttpStatCodeTest02(void)
+static int DetectHttpStatCodeTest02(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -194,7 +202,7 @@ int DetectHttpStatCodeTest02(void)
     }
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSCDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_code_buffer_id];
     if (sm == NULL) {
         printf("no sigmatch(es): ");
         goto end;

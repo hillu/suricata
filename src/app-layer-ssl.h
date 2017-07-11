@@ -96,6 +96,12 @@ enum {
 /* flag to indicate that handshake is done */
 #define SSL_AL_FLAG_HANDSHAKE_DONE              0x80000
 
+/* A session ID in the Client Hello message, indicating the client
+   wants to resume a session */
+#define SSL_AL_FLAG_SSL_CLIENT_SESSION_ID       0x100000
+/* Session resumed without a full handshake */
+#define SSL_AL_FLAG_SESSION_RESUMED             0x200000
+
 /* config flags */
 #define SSL_TLS_LOG_PEM                         (1 << 0)
 
@@ -149,6 +155,7 @@ typedef struct SSLStateConnp_ {
 
     char *cert0_subject;
     char *cert0_issuerdn;
+    char *cert0_serial;
     time_t cert0_not_before;
     time_t cert0_not_after;
     char *cert0_fingerprint;
@@ -183,6 +190,9 @@ typedef struct SSLState_ {
 
     /* specifies which loggers are done logging */
     uint32_t logged;
+
+    /* MPM/prefilter Id's */
+    uint64_t mpm_ids;
 
     /* there might be a better place to store this*/
     uint16_t hb_record_len;

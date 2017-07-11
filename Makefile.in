@@ -101,7 +101,7 @@ am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
  configure.lineno config.status.lineno
 mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = config.h
-CONFIG_CLEAN_FILES = suricata.yaml
+CONFIG_CLEAN_FILES = rust/.cargo/config suricata.yaml
 CONFIG_CLEAN_VPATH_FILES =
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
@@ -161,9 +161,9 @@ CTAGS = ctags
 CSCOPE = cscope
 DIST_SUBDIRS = $(SUBDIRS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/config.h.in \
-	$(srcdir)/suricata.yaml.in COPYING ChangeLog compile \
-	config.guess config.rpath config.sub install-sh ltmain.sh \
-	missing
+	$(srcdir)/suricata.yaml.in $(top_srcdir)/rust/.cargo/config.in \
+	COPYING ChangeLog compile config.guess config.rpath config.sub \
+	install-sh ltmain.sh missing
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 distdir = $(PACKAGE)-$(VERSION)
 top_distdir = $(distdir)
@@ -214,6 +214,8 @@ AUTOCONF = @AUTOCONF@
 AUTOHEADER = @AUTOHEADER@
 AUTOMAKE = @AUTOMAKE@
 AWK = @AWK@
+CARGO = @CARGO@
+CARGO_HOME = @CARGO_HOME@
 CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
@@ -237,6 +239,8 @@ EXEEXT = @EXEEXT@
 FGREP = @FGREP@
 GCC_CFLAGS = @GCC_CFLAGS@
 GREP = @GREP@
+HAVE_CARGO = @HAVE_CARGO@
+HAVE_CARGO_VENDOR = @HAVE_CARGO_VENDOR@
 HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
@@ -244,7 +248,8 @@ HAVE_GIT_CMD = @HAVE_GIT_CMD@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
-HAVE_PYTHON_CONFIG = @HAVE_PYTHON_CONFIG@
+HAVE_PYTHON = @HAVE_PYTHON@
+HAVE_RUSTC = @HAVE_RUSTC@
 HAVE_SPHINXBUILD = @HAVE_SPHINXBUILD@
 HAVE_WGET = @HAVE_WGET@
 HTP_DIR = @HTP_DIR@
@@ -309,6 +314,8 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_LDADD = @RUST_LDADD@
+RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
 SECCFLAGS = @SECCFLAGS@
 SECLDFLAGS = @SECLDFLAGS@
 SED = @SED@
@@ -385,6 +392,11 @@ psdir = @psdir@
 pyexecdir = @pyexecdir@
 pythondir = @pythondir@
 runstatedir = @runstatedir@
+rust_config_comment = @rust_config_comment@
+rust_config_enabled = @rust_config_enabled@
+rust_config_exp_comment = @rust_config_exp_comment@
+rust_config_exp_enabled = @rust_config_exp_enabled@
+rust_vendor_comment = @rust_vendor_comment@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
 srcdir = @srcdir@
@@ -403,7 +415,7 @@ EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
              reference.config
 
-SUBDIRS = $(HTP_DIR) src qa rules doc contrib scripts
+SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts
 CLEANFILES = stamp-h[0-9]*
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
@@ -457,6 +469,8 @@ $(srcdir)/config.h.in:  $(am__configure_deps)
 
 distclean-hdr:
 	-rm -f config.h stamp-h1
+rust/.cargo/config: $(top_builddir)/config.status $(top_srcdir)/rust/.cargo/config.in
+	cd $(top_builddir) && $(SHELL) ./config.status $@
 suricata.yaml: $(top_builddir)/config.status $(srcdir)/suricata.yaml.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
 

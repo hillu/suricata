@@ -72,7 +72,7 @@ void PrintENIPAL(ENIPTransaction *enip_data)
  * @param svc - the CIP service entry
  * * @param cipserviced - the CIP service rule
  */
-int CIPPathMatch(CIPServiceEntry *svc, DetectCipServiceData *cipserviced)
+static int CIPPathMatch(CIPServiceEntry *svc, DetectCipServiceData *cipserviced)
 {
     uint16_t class = 0;
     uint16_t attrib = 0;
@@ -161,7 +161,7 @@ int CIPPathMatch(CIPServiceEntry *svc, DetectCipServiceData *cipserviced)
  * * @param cipserviced - the CIP service rule
  */
 
-int CIPServiceMatch(ENIPTransaction *enip_data,
+static int CIPServiceMatch(ENIPTransaction *enip_data,
         DetectCipServiceData *cipserviced)
 {
     int count = 1;
@@ -217,16 +217,16 @@ int CIPServiceMatch(ENIPTransaction *enip_data,
  *
  *  \retval 0 no match or 1 match
  */
-int DetectEngineInspectCIP(ThreadVars *tv, DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags,
+int DetectEngineInspectCIP(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd, Flow *f, uint8_t flags,
         void *alstate, void *txv, uint64_t tx_id)
 {
     SCEnter();
 
 
     ENIPTransaction *tx = (ENIPTransaction *) txv;
-    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_CIP_MATCH];
-    DetectCipServiceData *cipserviced = (DetectCipServiceData *) sm->ctx;
+    DetectCipServiceData *cipserviced = (DetectCipServiceData *) smd->ctx;
 
     if (cipserviced == NULL)
     {
@@ -257,15 +257,15 @@ int DetectEngineInspectCIP(ThreadVars *tv, DetectEngineCtx *de_ctx,
  *  \retval 0 no match or 1 match
  */
 
-int DetectEngineInspectENIP(ThreadVars *tv, DetectEngineCtx *de_ctx,
-        DetectEngineThreadCtx *det_ctx, Signature *s, Flow *f, uint8_t flags,
-        void *alstate, void *txv, uint64_t tx_id)
+int DetectEngineInspectENIP(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
 {
     SCEnter();
 
     ENIPTransaction *tx = (ENIPTransaction *) txv;
-    SigMatch *sm = s->sm_lists[DETECT_SM_LIST_ENIP_MATCH];
-    DetectEnipCommandData *enipcmdd = (DetectEnipCommandData *) sm->ctx;
+    DetectEnipCommandData *enipcmdd = (DetectEnipCommandData *) smd->ctx;
 
     if (enipcmdd == NULL)
     {

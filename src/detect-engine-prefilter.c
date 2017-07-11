@@ -101,7 +101,7 @@ static inline void PrefilterTx(DetectEngineThreadCtx *det_ctx,
 
     void *alstate = p->flow->alstate;
     uint64_t idx = AppLayerParserGetTransactionInspectId(p->flow->alparser, flags);
-    const uint64_t total_txs = AppLayerParserGetTxCnt(ipproto, alproto, alstate);
+    const uint64_t total_txs = AppLayerParserGetTxCnt(p->flow, alstate);
 
     /* HACK test HTTP state here instead of in each engine */
     if (alproto == ALPROTO_HTTP) {
@@ -118,6 +118,7 @@ static inline void PrefilterTx(DetectEngineThreadCtx *det_ctx,
         if (tx == NULL)
             continue;
 
+        uint64_t mpm_ids = AppLayerParserGetTxMpmIDs(ipproto, alproto, tx);
         const int tx_progress = AppLayerParserGetStateProgress(ipproto, alproto, tx, flags);
         SCLogDebug("tx %p progress %d", tx, tx_progress);
 
@@ -127,21 +128,35 @@ static inline void PrefilterTx(DetectEngineThreadCtx *det_ctx,
                 goto next;
             if (engine->tx_min_progress > tx_progress)
                 goto next;
+            if (tx_progress > engine->tx_min_progress) {
+                if (mpm_ids & (1<<(engine->gid))) {
+                    goto next;
+                }
+            }
 
             PROFILING_PREFILTER_START(p);
             engine->cb.PrefilterTx(det_ctx, engine->pectx,
                     p, p->flow, tx, idx, flags);
             PROFILING_PREFILTER_END(p, engine->gid);
+
+            if (tx_progress > engine->tx_min_progress) {
+                mpm_ids |= (1<<(engine->gid));
+            }
         next:
             if (engine->is_last)
                 break;
             engine++;
         } while (1);
+
+        if (mpm_ids != 0) {
+            //SCLogNotice("tx %p Mpm IDs: %"PRIx64, tx, mpm_ids);
+            AppLayerParserSetTxMpmIDs(ipproto, alproto, tx, mpm_ids);
+        }
     }
 }
 
 void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh,
-        Packet *p, const uint8_t flags, int has_state)
+        Packet *p, const uint8_t flags, const bool has_state)
 {
     SCEnter();
 
@@ -165,8 +180,9 @@ void Prefilter(DetectEngineThreadCtx *det_ctx, const SigGroupHead *sgh,
 
     /* run payload inspecting engines */
     if (sgh->payload_engines &&
-        (p->payload_len > 0 || det_ctx->smsg != NULL) &&
-        !(p->flags & PKT_NOPAYLOAD_INSPECTION)) {
+        (p->payload_len || (p->flags & PKT_DETECT_HAS_STREAMDATA)) &&
+        !(p->flags & PKT_NOPAYLOAD_INSPECTION))
+    {
         PACKET_PROFILING_DETECT_START(p, PROF_DETECT_PF_PAYLOAD);
         PrefilterEngine *engine = sgh->payload_engines;
         while (1) {
@@ -571,6 +587,7 @@ static const PrefilterStore *PrefilterStoreGetStore(const uint32_t id)
     return store;
 }
 
+#ifdef PROFILING
 /** \warning slow */
 const char *PrefilterStoreGetName(const uint32_t id)
 {
@@ -589,3 +606,4 @@ const char *PrefilterStoreGetName(const uint32_t id)
     SCMutexUnlock(&g_prefilter_mutex);
     return name;
 }
+#endif

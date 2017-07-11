@@ -59,6 +59,8 @@
 #include "app-layer-parser.h"
 #include "util-pages.h"
 
+/* pcre named substring capture supports only 32byte names, A-z0-9 plus _
+ * and needs to start with non-numeric. */
 #define PARSE_CAPTURE_REGEX "\\(\\?P\\<([A-z]+)\\_([A-z0-9_]+)\\>"
 #define PARSE_REGEX         "(?<!\\\\)/(.*(?<!(?<!\\\\)\\\\))/([^\"]*)"
 
@@ -77,12 +79,9 @@ static pcre_extra *parse_capture_regex_study;
 static int pcre_use_jit = 1;
 #endif
 
-int DetectPcreMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, SigMatch *);
-int DetectPcreALMatchCookie(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
-int DetectPcreALMatchMethod(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m);
-static int DetectPcreSetup (DetectEngineCtx *, Signature *, char *);
-void DetectPcreFree(void *);
-void DetectPcreRegisterTests(void);
+static int DetectPcreSetup (DetectEngineCtx *, Signature *, const char *);
+static void DetectPcreFree(void *);
+static void DetectPcreRegisterTests(void);
 
 void DetectPcreRegister (void)
 {
@@ -90,12 +89,10 @@ void DetectPcreRegister (void)
     sigmatch_table[DETECT_PCRE].desc = "match on regular expression";
     sigmatch_table[DETECT_PCRE].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#pcre-perl-compatible-regular-expressions";
     sigmatch_table[DETECT_PCRE].Match = NULL;
-    sigmatch_table[DETECT_PCRE].AppLayerMatch = NULL;
     sigmatch_table[DETECT_PCRE].Setup = DetectPcreSetup;
     sigmatch_table[DETECT_PCRE].Free  = DetectPcreFree;
     sigmatch_table[DETECT_PCRE].RegisterTests  = DetectPcreRegisterTests;
-
-    sigmatch_table[DETECT_PCRE].flags |= SIGMATCH_PAYLOAD;
+    sigmatch_table[DETECT_PCRE].flags = (SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION);
 
     intmax_t val = 0;
 
@@ -171,9 +168,9 @@ void DetectPcreRegister (void)
  * \retval  1 Match.
  * \retval  0 No match.
  */
-int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
-                           SigMatch *sm, Packet *p, Flow *f, uint8_t *payload,
-                           uint32_t payload_len)
+int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, const Signature *s,
+                           const SigMatchData *smd, Packet *p, Flow *f,
+                           uint8_t *payload, uint32_t payload_len)
 {
     SCEnter();
 #define MAX_SUBSTRINGS 30
@@ -183,7 +180,7 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
     uint16_t len = 0;
     uint16_t capture_len = 0;
 
-    DetectPcreData *pe = (DetectPcreData *)sm->ctx;
+    DetectPcreData *pe = (DetectPcreData *)smd->ctx;
 
     if (pe->flags & DETECT_PCRE_RELATIVE) {
         ptr = payload + det_ctx->buffer_offset;
@@ -219,26 +216,50 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
             /* regex matched and we're not negated,
              * considering it a match */
 
-            SCLogDebug("ret %d capidx %u", ret, pe->capidx);
+            SCLogDebug("ret %d pe->idx %u", ret, pe->idx);
 
             /* see if we need to do substring capturing. */
-            if (ret > 1 && pe->capidx != 0) {
-                SCLogDebug("capturing");
-                const char *str_ptr;
-                ret = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, 1, &str_ptr);
-                if (ret) {
-                    if (pe->flags & DETECT_PCRE_CAPTURE_PKT) {
-                        if (p != NULL) {
-                            PktVarAdd(p, pe->capname, (uint8_t *)str_ptr, ret);
+            if (ret > 1 && pe->idx != 0) {
+                uint8_t x;
+                for (x = 0; x < pe->idx; x++) {
+                    SCLogDebug("capturing %u", x);
+                    const char *str_ptr;
+                    ret = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+1, &str_ptr);
+                    if (unlikely(ret == 0))
+                        continue;
+
+                    SCLogDebug("data %p/%u, type %u id %u p %p",
+                            str_ptr, ret, pe->captypes[x], pe->capids[x], p);
+
+                    if (pe->captypes[x] == VAR_TYPE_PKT_VAR_KV) {
+                        /* get the value, as first capture is the key */
+                        const char *str_ptr2;
+                        int ret2 = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+2, &str_ptr2);
+                        if (unlikely(ret2 == 0)) {
+                            break;
                         }
-                    } else if (pe->flags & DETECT_PCRE_CAPTURE_FLOW) {
-                        if (f != NULL) {
-                            /* store max 64k. Errors are ignored */
-                            capture_len = (ret < 0xffff) ? (uint16_t)ret : 0xffff;
-                            (void)DetectFlowvarStoreMatch(det_ctx, pe->capidx,
-                                    (uint8_t *)str_ptr, capture_len,
-                                    DETECT_FLOWVAR_TYPE_POSTMATCH);
-                        }
+                        /* key length is limited to 256 chars */
+                        uint16_t key_len = (ret < 0xff) ? (uint16_t)ret : 0xff;
+                        capture_len = (ret2 < 0xffff) ? (uint16_t)ret2 : 0xffff;
+
+                        (void)DetectVarStoreMatchKeyValue(det_ctx,
+                                (uint8_t *)str_ptr, key_len,
+                                (uint8_t *)str_ptr2, capture_len,
+                                DETECT_VAR_TYPE_PKT_POSTMATCH);
+
+                    } else if (pe->captypes[x] == VAR_TYPE_PKT_VAR) {
+                        /* store max 64k. Errors are ignored */
+                        capture_len = (ret < 0xffff) ? (uint16_t)ret : 0xffff;
+                        (void)DetectVarStoreMatch(det_ctx, pe->capids[x],
+                                (uint8_t *)str_ptr, capture_len,
+                                DETECT_VAR_TYPE_PKT_POSTMATCH);
+
+                    } else if (pe->captypes[x] == VAR_TYPE_FLOW_VAR && f != NULL) {
+                        /* store max 64k. Errors are ignored */
+                        capture_len = (ret < 0xffff) ? (uint16_t)ret : 0xffff;
+                        (void)DetectVarStoreMatch(det_ctx, pe->capids[x],
+                                (uint8_t *)str_ptr, capture_len,
+                                DETECT_VAR_TYPE_FLOW_POSTMATCH);
                     }
                 }
             }
@@ -286,7 +307,8 @@ static int DetectPcreHasUpperCase(const char *re)
     return 0;
 }
 
-static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr, int *sm_list)
+static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, const char *regexstr, int *sm_list,
+        char *capture_names, size_t capture_names_size, bool negate)
 {
     int ec;
     const char *eb;
@@ -297,33 +319,58 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
+    int check_host_header = 0;
+    char op_str[64] = "";
 
+    int cut_capture = 0;
+    char *fcap = strstr(regexstr, "flow:");
+    char *pcap = strstr(regexstr, "pkt:");
     /* take the size of the whole input as buffer size for the regex we will
      * extract below. Add 1 to please Coverity's alloc_strlen test. */
     size_t slen = strlen(regexstr) + 1;
+    if (fcap || pcap) {
+        SCLogDebug("regexstr %s", regexstr);
+
+        if (fcap && !pcap)
+            cut_capture = fcap - regexstr;
+        else if (pcap && !fcap)
+            cut_capture = pcap - regexstr;
+        else
+            cut_capture = MIN((pcap - regexstr), (fcap - regexstr));
+
+        SCLogDebug("cut_capture %d", cut_capture);
+
+        if (cut_capture > 1) {
+            int offset = cut_capture - 1;
+            while (offset) {
+                SCLogDebug("regexstr[offset] %c", regexstr[offset]);
+                if (regexstr[offset] == ',' || regexstr[offset] == ' ') {
+                    offset--;
+                }
+                else
+                    break;
+            }
+
+            if (cut_capture == (offset + 1)) {
+                SCLogDebug("missing separators, assume it's part of the regex");
+            } else {
+                slen = offset + 1;
+                strlcpy(capture_names, regexstr+cut_capture, capture_names_size);
+                if (capture_names[strlen(capture_names)-1] == '"')
+                    capture_names[strlen(capture_names)-1] = '\0';
+            }
+        }
+    }
+
     char re[slen];
-
-    char op_str[64] = "";
-    uint16_t pos = 0;
-    uint8_t negate = 0;
-
-    while (pos < slen && isspace((unsigned char)regexstr[pos])) {
-        pos++;
-    }
-
-    if (regexstr[pos] == '!') {
-        negate = 1;
-        pos++;
-    }
-
-    ret = pcre_exec(parse_regex, parse_regex_study, regexstr + pos, slen-pos,
+    ret = pcre_exec(parse_regex, parse_regex_study, regexstr, slen,
                     0, 0, ov, MAX_SUBSTRINGS);
     if (ret <= 0) {
         SCLogError(SC_ERR_PCRE_MATCH, "pcre parse error: %s", regexstr);
         goto error;
     }
 
-    res = pcre_copy_substring((char *)regexstr + pos, ov, MAX_SUBSTRINGS,
+    res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS,
             1, re, slen);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
@@ -331,7 +378,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
     }
 
     if (ret > 2) {
-        res = pcre_copy_substring((char *)regexstr + pos, ov, MAX_SUBSTRINGS,
+        res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS,
                 2, op_str, sizeof(op_str));
         if (res < 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
@@ -395,81 +442,107 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
 
                 /* buffer selection */
 
-                case 'U': /* snort's option */
+                case 'U': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'U' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_UMATCH);
+                    int list = DetectBufferTypeGetByName("http_uri");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'V':
+                }
+                case 'V': {
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'V' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HUADMATCH);
+                    int list = DetectBufferTypeGetByName("http_user_agent");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'W':
+                }
+                case 'W': {
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'W' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HHHDMATCH);
+                    int list = DetectBufferTypeGetByName("http_host");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
+                    check_host_header = 1;
                     break;
-                case 'Z':
+                }
+                case 'Z': {
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'Z' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HRHHDMATCH);
+                    int list = DetectBufferTypeGetByName("http_raw_host");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'H': /* snort's option */
+                }
+                case 'H': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'H' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HHDMATCH);
+                    int list = DetectBufferTypeGetByName("http_header");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'I': /* snort's option */
+                } case 'I': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'I' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HRUDMATCH);
+                    int list = DetectBufferTypeGetByName("http_raw_uri");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'D': /* snort's option */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HRHDMATCH);
+                }
+                case 'D': { /* snort's option */
+                    int list = DetectBufferTypeGetByName("http_raw_header");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'M': /* snort's option */
+                }
+                case 'M': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'M' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HMDMATCH);
+                    int list = DetectBufferTypeGetByName("http_method");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'C': /* snort's option */
+                }
+                case 'C': { /* snort's option */
                     if (pd->flags & DETECT_PCRE_RAWBYTES) {
                         SCLogError(SC_ERR_INVALID_SIGNATURE, "regex modifier 'C' inconsistent with 'B'");
                         goto error;
                     }
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HCDMATCH);
+                    int list = DetectBufferTypeGetByName("http_cookie");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'P':
+                }
+                case 'P': {
                     /* snort's option (http request body inspection) */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HCBDMATCH);
+                    int list = DetectBufferTypeGetByName("http_client_body");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'Q':
+                }
+                case 'Q': {
+                    int list = DetectBufferTypeGetByName("file_data");
                     /* suricata extension (http response body inspection) */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_FILEDATA);
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'Y':
+                }
+                case 'Y': {
                     /* snort's option */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HSMDMATCH);
+                    int list = DetectBufferTypeGetByName("http_stat_msg");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
-                case 'S':
+                }
+                case 'S': {
                     /* snort's option */
-                    *sm_list = DetectPcreSetList(*sm_list, DETECT_SM_LIST_HSCDMATCH);
+                    int list = DetectBufferTypeGetByName("http_stat_code");
+                    *sm_list = DetectPcreSetList(*sm_list, list);
                     break;
+                }
                 default:
                     SCLogError(SC_ERR_UNKNOWN_REGEX_MOD, "unknown regex modifier '%c'", *op);
                     goto error;
@@ -483,7 +556,7 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
     SCLogDebug("DetectPcreParse: \"%s\"", re);
 
     /* host header */
-    if (*sm_list == DETECT_SM_LIST_HHHDMATCH) {
+    if (check_host_header) {
         if (pd->flags & DETECT_PCRE_CASELESS) {
             SCLogWarning(SC_ERR_INVALID_SIGNATURE, "http host pcre(\"W\") "
                          "specified along with \"i(caseless)\" modifier.  "
@@ -506,13 +579,18 @@ static DetectPcreData *DetectPcreParse (DetectEngineCtx *de_ctx, char *regexstr,
      * If we fail because a capture group is later referenced (e.g., \1),
      * PCRE will let us know.
      */
-    pd->re = pcre_compile2(re, opts | PCRE_NO_AUTO_CAPTURE, &ec, &eb, &eo, NULL);
+    if (capture_names == NULL || strlen(capture_names) == 0)
+        opts |= PCRE_NO_AUTO_CAPTURE;
+
+    pd->re = pcre_compile2(re, opts, &ec, &eb, &eo, NULL);
     if (pd->re == NULL && ec == 15) { // reference to non-existent subpattern
+        opts &= ~PCRE_NO_AUTO_CAPTURE;
         pd->re = pcre_compile(re, opts, &eb, &eo, NULL);
     }
 
-    if(pd->re == NULL)  {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", regexstr, eo, eb);
+    if (pd->re == NULL)  {
+        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed "
+                "at offset %" PRId32 ": %s", regexstr, eo, eb);
         goto error;
     }
 
@@ -582,11 +660,74 @@ error:
 /** \internal
  *  \brief check if we need to extract capture settings and set them up if needed
  */
-static int DetectPcreParseCapture(char *regexstr, DetectEngineCtx *de_ctx, DetectPcreData *pd)
+static int DetectPcreParseCapture(const char *regexstr, DetectEngineCtx *de_ctx, DetectPcreData *pd,
+    char *capture_names)
 {
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
+    memset(&ov, 0, sizeof(ov));
     char type_str[16] = "";
+    const char *orig_right_edge = regexstr + strlen(regexstr);
+    char *name_array[DETECT_PCRE_CAPTURE_MAX] = { NULL };
+    int name_idx = 0;
+    int capture_cnt = 0;
+    int key = 0;
+
+    SCLogDebug("regexstr %s, pd %p", regexstr, pd);
+
+    ret = pcre_fullinfo(pd->re, pd->sd, PCRE_INFO_CAPTURECOUNT, &capture_cnt);
+    SCLogDebug("ret %d capture_cnt %d", ret, capture_cnt);
+    if (ret == 0 && capture_cnt && strlen(capture_names) > 0)
+    {
+        char *ptr = NULL;
+        while ((name_array[name_idx] = strtok_r(name_idx == 0 ? capture_names : NULL, " ,", &ptr))){
+            if (name_idx > capture_cnt) {
+                SCLogError(SC_ERR_VAR_LIMIT, "more pkt/flow "
+                        "var capture names than capturing substrings");
+                return -1;
+            }
+            SCLogDebug("name '%s'", name_array[name_idx]);
+
+            if (strcmp(name_array[name_idx], "pkt:key") == 0) {
+                key = 1;
+                SCLogDebug("key-value/key");
+
+                pd->captypes[pd->idx] = VAR_TYPE_PKT_VAR_KV;
+                SCLogDebug("id %u type %u", pd->capids[pd->idx], pd->captypes[pd->idx]);
+                pd->idx++;
+
+            } else if (key == 1 && strcmp(name_array[name_idx], "pkt:value") == 0) {
+                SCLogDebug("key-value/value");
+                key = 0;
+
+            /* kv error conditions */
+            } else if (key == 0 && strcmp(name_array[name_idx], "pkt:value") == 0) {
+                return -1;
+            } else if (key == 1) {
+                return -1;
+
+            } else if (strncmp(name_array[name_idx], "flow:", 5) == 0) {
+                pd->capids[pd->idx] = VarNameStoreSetupAdd(name_array[name_idx]+5, VAR_TYPE_FLOW_VAR);
+                pd->captypes[pd->idx] = VAR_TYPE_FLOW_VAR;
+                pd->idx++;
+
+            } else if (strncmp(name_array[name_idx], "pkt:", 4) == 0) {
+                pd->capids[pd->idx] = VarNameStoreSetupAdd(name_array[name_idx]+4, VAR_TYPE_PKT_VAR);
+                pd->captypes[pd->idx] = VAR_TYPE_PKT_VAR;
+                SCLogDebug("id %u type %u", pd->capids[pd->idx], pd->captypes[pd->idx]);
+                pd->idx++;
+
+            } else {
+                SCLogError(SC_ERR_VAR_LIMIT, " pkt/flow "
+                        "var capture names must start with 'pkt:' or 'flow:'");
+                return -1;
+            }
+
+            name_idx++;
+            if (name_idx >= DETECT_PCRE_CAPTURE_MAX)
+                break;
+        }
+    }
 
     /* take the size of the whole input as buffer size for the string we will
      * extract below. Add 1 to please Coverity's alloc_strlen test. */
@@ -597,146 +738,87 @@ static int DetectPcreParseCapture(char *regexstr, DetectEngineCtx *de_ctx, Detec
     if (de_ctx == NULL)
         goto error;
 
-    SCLogDebug("\'%s\'", regexstr);
+    while (1) {
+        SCLogDebug("\'%s\'", regexstr);
 
-    ret = pcre_exec(parse_capture_regex, parse_capture_regex_study, regexstr, strlen(regexstr), 0, 0, ov, MAX_SUBSTRINGS);
-    if (ret < 3) {
-        return 0;
-    }
+        ret = pcre_exec(parse_capture_regex, parse_capture_regex_study, regexstr, strlen(regexstr), 0, 0, ov, MAX_SUBSTRINGS);
+        if (ret < 3) {
+            return 0;
+        }
 
-    res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS, 1, type_str, sizeof(type_str));
-    if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
-        goto error;
-    }
-    res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS, 2, capture_str, cap_buffer_len);
-    if (res < 0) {
-        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
-        goto error;
-    }
-    if (strlen(capture_str) == 0 || strlen(type_str) == 0) {
-        goto error;
-    }
+        res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS, 1, type_str, sizeof(type_str));
+        if (res < 0) {
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
+            goto error;
+        }
+        res = pcre_copy_substring((char *)regexstr, ov, MAX_SUBSTRINGS, 2, capture_str, cap_buffer_len);
+        if (res < 0) {
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
+            goto error;
+        }
+        if (strlen(capture_str) == 0 || strlen(type_str) == 0) {
+            goto error;
+        }
 
-    SCLogDebug("type \'%s\'", type_str);
-    SCLogDebug("capture \'%s\'", capture_str);
+        SCLogDebug("type \'%s\'", type_str);
+        SCLogDebug("capture \'%s\'", capture_str);
 
-    pd->capname = SCStrdup(capture_str);
-    if (unlikely(pd->capname == NULL))
-        goto error;
+        if (pd->idx >= DETECT_PCRE_CAPTURE_MAX) {
+            SCLogError(SC_ERR_VAR_LIMIT, "rule can have maximally %d pkt/flow "
+                    "var captures", DETECT_PCRE_CAPTURE_MAX);
+            return -1;
+        }
 
-    if (strcmp(type_str, "pkt") == 0) {
-        pd->flags |= DETECT_PCRE_CAPTURE_PKT;
-    } else if (strcmp(type_str, "flow") == 0) {
-        pd->flags |= DETECT_PCRE_CAPTURE_FLOW;
-        SCLogDebug("flow capture");
+        if (strcmp(type_str, "pkt") == 0) {
+            pd->capids[pd->idx] = VarNameStoreSetupAdd((char *)capture_str, VAR_TYPE_PKT_VAR);
+            pd->captypes[pd->idx] = VAR_TYPE_PKT_VAR;
+            SCLogDebug("id %u type %u", pd->capids[pd->idx], pd->captypes[pd->idx]);
+            pd->idx++;
+        } else if (strcmp(type_str, "flow") == 0) {
+            pd->capids[pd->idx] = VarNameStoreSetupAdd((char *)capture_str, VAR_TYPE_FLOW_VAR);
+            pd->captypes[pd->idx] = VAR_TYPE_FLOW_VAR;
+            pd->idx++;
+        }
+
+        //SCLogNotice("pd->capname %s", pd->capname);
+        regexstr += ov[1];
+
+        if (regexstr >= orig_right_edge)
+            break;
     }
-    if (pd->capname != NULL) {
-        if (pd->flags & DETECT_PCRE_CAPTURE_PKT)
-            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, VAR_TYPE_PKT_VAR);
-        else if (pd->flags & DETECT_PCRE_CAPTURE_FLOW)
-            pd->capidx = VariableNameGetIdx(de_ctx, (char *)pd->capname, VAR_TYPE_FLOW_VAR);
-    }
-
-    SCLogDebug("pd->capname %s", pd->capname);
     return 0;
 
 error:
-    if (pd->capname != NULL) {
-        SCFree(pd->capname);
-        pd->capname = NULL;
-    }
     return -1;
 }
 
-static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexstr)
+static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, const char *regexstr)
 {
     SCEnter();
     DetectPcreData *pd = NULL;
     SigMatch *sm = NULL;
     int ret = -1;
     int parsed_sm_list = DETECT_SM_LIST_NOTSET;
+    char capture_names[1024] = "";
 
-    pd = DetectPcreParse(de_ctx, regexstr, &parsed_sm_list);
+    pd = DetectPcreParse(de_ctx, regexstr, &parsed_sm_list,
+            capture_names, sizeof(capture_names), s->init_data->negated);
     if (pd == NULL)
         goto error;
-    if (DetectPcreParseCapture(regexstr, de_ctx, pd) < 0)
+    if (DetectPcreParseCapture(regexstr, de_ctx, pd, capture_names) < 0)
         goto error;
 
-    if (parsed_sm_list == DETECT_SM_LIST_UMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HRUDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HCBDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_FILEDATA ||
-        parsed_sm_list == DETECT_SM_LIST_HHDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HRHDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HSMDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HSCDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HHHDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HRHHDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HMDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HCDMATCH ||
-        parsed_sm_list == DETECT_SM_LIST_HUADMATCH)
-    {
-        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-            SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "Invalid option.  "
-                       "Conflicting alprotos detected for this rule.  Http "
-                       "pcre modifier found along with a different protocol "
-                       "for the rule.");
-            goto error;
-        }
-        if (s->list != DETECT_SM_LIST_NOTSET) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "pcre found with http "
-                       "modifier set, with file_data/dce_stub_data sticky "
-                       "option set.");
-            goto error;
-        }
-    }
-
     int sm_list = -1;
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        if (s->list == DETECT_SM_LIST_FILEDATA) {
-            SCLogDebug("adding to http server body list because of file data");
-            AppLayerHtpEnableResponseBodyCallback();
-        } else if (s->list == DETECT_SM_LIST_DMATCH) {
-            SCLogDebug("adding to dmatch list because of dce_stub_data");
-        } else if (s->list == DETECT_SM_LIST_DNSQUERYNAME_MATCH) {
-            SCLogDebug("adding to DETECT_SM_LIST_DNSQUERYNAME_MATCH list because of dns_query");
-        }
+    if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
         s->flags |= SIG_FLAG_APPLAYER;
-        sm_list = s->list;
+        sm_list = s->init_data->list;
     } else {
         switch(parsed_sm_list) {
-            case DETECT_SM_LIST_HCBDMATCH:
-                AppLayerHtpEnableRequestBodyCallback();
-                s->flags |= SIG_FLAG_APPLAYER;
-                s->alproto = ALPROTO_HTTP;
-                sm_list = parsed_sm_list;
-                break;
-
-            case DETECT_SM_LIST_FILEDATA:
-                AppLayerHtpEnableResponseBodyCallback();
-                s->flags |= SIG_FLAG_APPLAYER;
-                s->alproto = ALPROTO_HTTP;
-                sm_list = parsed_sm_list;
-                break;
-
-            case DETECT_SM_LIST_UMATCH:
-            case DETECT_SM_LIST_HRUDMATCH:
-            case DETECT_SM_LIST_HHDMATCH:
-            case DETECT_SM_LIST_HRHDMATCH:
-            case DETECT_SM_LIST_HHHDMATCH:
-            case DETECT_SM_LIST_HRHHDMATCH:
-            case DETECT_SM_LIST_HSMDMATCH:
-            case DETECT_SM_LIST_HSCDMATCH:
-            case DETECT_SM_LIST_HCDMATCH:
-            case DETECT_SM_LIST_HMDMATCH:
-            case DETECT_SM_LIST_HUADMATCH:
-                s->flags |= SIG_FLAG_APPLAYER;
-                s->alproto = ALPROTO_HTTP;
-                sm_list = parsed_sm_list;
-                break;
             case DETECT_SM_LIST_NOTSET:
                 sm_list = DETECT_SM_LIST_PMATCH;
+                break;
+            default:
+                sm_list = parsed_sm_list;
                 break;
         }
     }
@@ -750,8 +832,9 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     sm->ctx = (void *)pd;
     SigMatchAppendSMToList(s, sm, sm_list);
 
-    if (pd->capidx != 0) {
-        if (DetectFlowvarPostMatchSetup(s, pd->capidx) < 0)
+    uint8_t x;
+    for (x = 0; x < pd->idx; x++) {
+        if (DetectFlowvarPostMatchSetup(s, pd->capids[x]) < 0)
             goto error_nofree;
     }
 
@@ -760,10 +843,9 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
 
     /* errors below shouldn't free pd */
 
-    SigMatch *prev_pm = SigMatchGetLastSMFromLists(s, 4,
-                                                   DETECT_CONTENT, sm->prev,
-                                                   DETECT_PCRE, sm->prev);
-    if (s->list == DETECT_SM_LIST_NOTSET && prev_pm == NULL) {
+    SigMatch *prev_pm = DetectGetLastSMByListPtr(s, sm->prev,
+            DETECT_CONTENT, DETECT_PCRE, -1);
+    if (s->init_data->list == DETECT_SM_LIST_NOTSET && prev_pm == NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "pcre with /R (relative) needs "
                 "preceeding match in the same buffer");
         goto error_nofree;
@@ -787,15 +869,13 @@ static int DetectPcreSetup (DetectEngineCtx *de_ctx, Signature *s, char *regexst
     SCReturnInt(ret);
 }
 
-void DetectPcreFree(void *ptr)
+static void DetectPcreFree(void *ptr)
 {
     if (ptr == NULL)
         return;
 
     DetectPcreData *pd = (DetectPcreData *)ptr;
 
-    if (pd->capname != NULL)
-        SCFree(pd->capname);
     if (pd->re != NULL)
         pcre_free(pd->re);
     if (pd->sd != NULL)
@@ -806,6 +886,9 @@ void DetectPcreFree(void *ptr)
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
+static int g_file_data_buffer_id = 0;
+static int g_http_header_buffer_id = 0;
+static int g_dce_stub_data_buffer_id = 0;
 
 /**
  * \test DetectPcreParseTest01 make sure we don't allow invalid opts 7.
@@ -814,12 +897,12 @@ static int DetectPcreParseTest01 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/blah/7";
+    const char *teststring = "/blah/7";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
@@ -833,12 +916,12 @@ static int DetectPcreParseTest02 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/blah/Ui$";
+    const char *teststring = "/blah/Ui$";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
@@ -852,12 +935,12 @@ static int DetectPcreParseTest03 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/blah/UNi";
+    const char *teststring = "/blah/UNi";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NOT_NULL(pd);
 
     DetectEngineCtxFree(de_ctx);
@@ -871,12 +954,12 @@ static int DetectPcreParseTest04 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/b\\\"lah/i";
+    const char *teststring = "/b\\\"lah/i";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -891,12 +974,12 @@ static int DetectPcreParseTest05 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/b(l|a)h/";
+    const char *teststring = "/b(l|a)h/";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -911,12 +994,12 @@ static int DetectPcreParseTest06 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/b(l|a)h/smi";
+    const char *teststring = "/b(l|a)h/smi";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -931,12 +1014,12 @@ static int DetectPcreParseTest07 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/blah/Ui";
+    const char *teststring = "/blah/Ui";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -951,12 +1034,12 @@ static int DetectPcreParseTest08 (void)
 {
     int result = 1;
     DetectPcreData *pd = NULL;
-    char *teststring = "/b(l|a)h/O";
+    const char *teststring = "/b(l|a)h/O";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -971,12 +1054,12 @@ static int DetectPcreParseTest08 (void)
 static int DetectPcreParseTest09 (void)
 {
     DetectPcreData *pd = NULL;
-    char *teststring = "/lala\\\\/";
+    const char *teststring = "/lala\\\\/";
     int list = DETECT_SM_LIST_NOTSET;
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF_NULL(de_ctx);
 
-    pd = DetectPcreParse(de_ctx, teststring, &list);
+    pd = DetectPcreParse(de_ctx, teststring, &list, NULL, 0, false);
     FAIL_IF_NULL(pd);
 
     DetectPcreFree(pd);
@@ -987,7 +1070,7 @@ static int DetectPcreParseTest09 (void)
 /**
  * \test Test pcre option for dce sig(yeah I'm bored of writing test titles).
  */
-int DetectPcreParseTest10(void)
+static int DetectPcreParseTest10(void)
 {
     Signature *s = SigAlloc();
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
@@ -996,7 +1079,7 @@ int DetectPcreParseTest10(void)
     s->alproto = ALPROTO_DCERPC;
 
     FAIL_IF_NOT(DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    FAIL_IF_NOT(s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
+    FAIL_IF_NOT(s->sm_lists[g_dce_stub_data_buffer_id] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
     SigFree(s);
 
@@ -1005,7 +1088,7 @@ int DetectPcreParseTest10(void)
 
     /* failure since we have no preceding content/pcre/bytejump */
     FAIL_IF_NOT(DetectPcreSetup(de_ctx, s, "/bamboo/") == 0);
-    FAIL_IF_NOT(s->sm_lists[DETECT_SM_LIST_DMATCH] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
+    FAIL_IF_NOT(s->sm_lists[g_dce_stub_data_buffer_id] == NULL && s->sm_lists[DETECT_SM_LIST_PMATCH] != NULL);
 
     SigFree(s);
     DetectEngineCtxFree(de_ctx);
@@ -1016,7 +1099,7 @@ int DetectPcreParseTest10(void)
 /**
  * \test Test pcre option for dce sig.
  */
-int DetectPcreParseTest11(void)
+static int DetectPcreParseTest11(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     Signature *s = NULL;
@@ -1033,9 +1116,9 @@ int DetectPcreParseTest11(void)
                                "pcre:/bamboo/R; sid:1;)");
     FAIL_IF(de_ctx == NULL);
     s = de_ctx->sig_list;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
-    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
+    FAIL_IF(s->sm_lists_tail[g_dce_stub_data_buffer_id] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[g_dce_stub_data_buffer_id]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[g_dce_stub_data_buffer_id]->ctx;
     FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE));
 
@@ -1046,9 +1129,9 @@ int DetectPcreParseTest11(void)
                       "pcre:/bamboo/R; sid:1;)");
     FAIL_IF_NULL(s->next);
     s = s->next;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
-    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
+    FAIL_IF(s->sm_lists_tail[g_dce_stub_data_buffer_id] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[g_dce_stub_data_buffer_id]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[g_dce_stub_data_buffer_id]->ctx;
     FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE));
 
@@ -1059,9 +1142,9 @@ int DetectPcreParseTest11(void)
                       "pcre:/bamboo/RB; sid:1;)");
     FAIL_IF(s->next == NULL);
     s = s->next;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] == NULL);
-    FAIL_IF_NOT(s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->type == DETECT_PCRE);
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_DMATCH]->ctx;
+    FAIL_IF(s->sm_lists_tail[g_dce_stub_data_buffer_id] == NULL);
+    FAIL_IF_NOT(s->sm_lists_tail[g_dce_stub_data_buffer_id]->type == DETECT_PCRE);
+    data = (DetectPcreData *)s->sm_lists_tail[g_dce_stub_data_buffer_id]->ctx;
     FAIL_IF(!(data->flags & DETECT_PCRE_RAWBYTES) ||
         !(data->flags & DETECT_PCRE_RELATIVE));
 
@@ -1070,7 +1153,7 @@ int DetectPcreParseTest11(void)
                       "content:\"one\"; pcre:/bamboo/; sid:1;)");
     FAIL_IF(s->next == NULL);
     s = s->next;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_DMATCH] != NULL);
+    FAIL_IF(s->sm_lists_tail[g_dce_stub_data_buffer_id] != NULL);
 
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
@@ -1098,11 +1181,11 @@ static int DetectPcreParseTest12(void)
     FAIL_IF (de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id] == NULL);
 
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id]->type != DETECT_PCRE);
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[g_file_data_buffer_id]->ctx;
     FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE));
 
@@ -1131,11 +1214,11 @@ static int DetectPcreParseTest13(void)
     FAIL_IF(de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id] == NULL);
 
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id]->type != DETECT_PCRE);
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[g_file_data_buffer_id]->ctx;
     FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
         !(data->flags & DETECT_PCRE_RELATIVE));
 
@@ -1164,11 +1247,11 @@ static int DetectPcreParseTest14(void)
     FAIL_IF(de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id] == NULL);
 
-    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->type != DETECT_PCRE);
+    FAIL_IF(s->sm_lists_tail[g_file_data_buffer_id]->type != DETECT_PCRE);
 
-    data = (DetectPcreData *)s->sm_lists_tail[DETECT_SM_LIST_FILEDATA]->ctx;
+    data = (DetectPcreData *)s->sm_lists_tail[g_file_data_buffer_id]->ctx;
     FAIL_IF(data->flags & DETECT_PCRE_RAWBYTES ||
         data->flags & DETECT_PCRE_RELATIVE);
 
@@ -1180,7 +1263,7 @@ static int DetectPcreParseTest14(void)
 }
 
 /** \test Check a signature with pcre relative method */
-int DetectPcreParseTest15(void)
+static int DetectPcreParseTest15(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1203,7 +1286,7 @@ int DetectPcreParseTest15(void)
 
 
 /** \test Check a signature with pcre relative cookie */
-int DetectPcreParseTest16(void)
+static int DetectPcreParseTest16(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1225,7 +1308,7 @@ int DetectPcreParseTest16(void)
 }
 
 /** \test Check a signature with pcre relative raw header */
-int DetectPcreParseTest17(void)
+static int DetectPcreParseTest17(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1247,7 +1330,7 @@ int DetectPcreParseTest17(void)
 }
 
 /** \test Check a signature with pcre relative header */
-int DetectPcreParseTest18(void)
+static int DetectPcreParseTest18(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1269,7 +1352,7 @@ int DetectPcreParseTest18(void)
 }
 
 /** \test Check a signature with pcre relative client-body */
-int DetectPcreParseTest19(void)
+static int DetectPcreParseTest19(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1291,7 +1374,7 @@ int DetectPcreParseTest19(void)
 }
 
 /** \test Check a signature with pcre relative raw uri */
-int DetectPcreParseTest20(void)
+static int DetectPcreParseTest20(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1313,7 +1396,7 @@ int DetectPcreParseTest20(void)
 }
 
 /** \test Check a signature with pcre relative uricontent */
-int DetectPcreParseTest21(void)
+static int DetectPcreParseTest21(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1335,7 +1418,7 @@ int DetectPcreParseTest21(void)
 }
 
 /** \test Check a signature with pcre relative http_uri */
-int DetectPcreParseTest22(void)
+static int DetectPcreParseTest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1357,7 +1440,7 @@ int DetectPcreParseTest22(void)
 }
 
 /** \test Check a signature with inconsistent pcre relative  */
-int DetectPcreParseTest23(void)
+static int DetectPcreParseTest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1379,7 +1462,7 @@ int DetectPcreParseTest23(void)
 }
 
 /** \test Check a signature with inconsistent pcre modifiers  */
-int DetectPcreParseTest24(void)
+static int DetectPcreParseTest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1400,7 +1483,7 @@ int DetectPcreParseTest24(void)
 }
 
 /** \test Check a signature with inconsistent pcre modifiers  */
-int DetectPcreParseTest25(void)
+static int DetectPcreParseTest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
 
@@ -1471,30 +1554,29 @@ static int DetectPcreTestSig01(void)
         "Host: two.example.org\r\n"
         "\r\n\r\n";
     uint16_t buflen = strlen((char *)buf);
-    TcpSession ssn;
     Packet *p = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
-    Flow f;
     AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
-    memset(&f, 0, sizeof(f));
     memset(&th_v, 0, sizeof(th_v));
-    memset(&ssn, 0, sizeof(TcpSession));
 
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    f.proto = IPPROTO_TCP;
-    f.flags |= FLOW_IPV4;
-    f.alproto = ALPROTO_HTTP;
+    StreamTcpInitConfig(TRUE);
 
     p = UTHBuildPacket(buf, buflen, IPPROTO_TCP);
-    p->flow = &f;
+    FAIL_IF_NULL(p);
+    p->tcph->th_seq = htonl(1000);
+    Flow *f = UTHBuildFlow(AF_INET, "192.168.1.5", "192.168.1.1", 41424, 80);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_TCP;
+    UTHAddSessionToFlow(f, 1000, 1000);
+    UTHAddStreamToFlow(f, 0, buf, buflen);
+
+    p->flow = f;
     p->flowflags |= FLOW_PKT_TOSERVER;
     p->flowflags |= FLOW_PKT_ESTABLISHED;
     p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-
-    StreamTcpInitConfig(TRUE);
+    f->alproto = ALPROTO_HTTP;
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     FAIL_IF(de_ctx == NULL);
@@ -1507,26 +1589,21 @@ static int DetectPcreTestSig01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    FLOWLOCK_WRLOCK(&f);
-    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+    int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP,
                                 STREAM_TOSERVER | STREAM_START, buf, buflen);
     FAIL_IF(r != 0);
-    FLOWLOCK_UNLOCK(&f);
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     FAIL_IF_NOT(PacketAlertCheck(p, 1) == 1);
 
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
-
+    AppLayerParserThreadCtxFree(alp_tctx);
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
+    UTHRemoveSessionFromFlow(f);
+    UTHFreeFlow(f);
+
     StreamTcpFreeConfig(TRUE);
-
-    FLOW_DESTROY(&f);
-
     UTHFreePackets(&p, 1);
     PASS;
 }
@@ -1857,7 +1934,7 @@ static int DetectPcreModifPTest05(void)
     PASS;
 }
 
-int DetectPcreTestSig06()
+static int DetectPcreTestSig06(void)
 {
     uint8_t *buf = (uint8_t *)
                     "lalala lalala\\ lala\n";
@@ -1878,7 +1955,7 @@ end:
 }
 
 /** \test anchored pcre */
-int DetectPcreTestSig07()
+static int DetectPcreTestSig07(void)
 {
     uint8_t *buf = (uint8_t *)
                     "lalala\n";
@@ -1894,7 +1971,7 @@ int DetectPcreTestSig07()
 }
 
 /** \test anchored pcre */
-int DetectPcreTestSig08()
+static int DetectPcreTestSig08(void)
 {
     /* test it also without ending in a newline "\n" */
     uint8_t *buf = (uint8_t *)
@@ -2624,7 +2701,7 @@ static int DetectPcreTxBodyChunksTest01(void)
     FAIL_IF(htp_state == NULL);
 
     /* hardcoded check of the transactions and it's client body chunks */
-    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
+    FAIL_IF(AppLayerParserGetTxCnt(&f, htp_state) != 2);
 
     htp_tx_t *t1 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 0);
     htp_tx_t *t2 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 1);
@@ -2793,7 +2870,7 @@ static int DetectPcreTxBodyChunksTest02(void)
     FAIL_IF(htp_state == NULL);
 
     /* hardcoded check of the transactions and it's client body chunks */
-    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
+    FAIL_IF(AppLayerParserGetTxCnt(&f, htp_state) != 2);
 
     htp_tx_t *t1 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 0);
     htp_tx_t *t2 = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_HTTP, htp_state, 1);
@@ -2967,7 +3044,7 @@ static int DetectPcreTxBodyChunksTest03(void)
     HtpState *htp_state = f.alstate;
     FAIL_IF(htp_state == NULL);
 
-    FAIL_IF(AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2);
+    FAIL_IF(AppLayerParserGetTxCnt(&f, htp_state) != 2);
 
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
@@ -3040,10 +3117,10 @@ static int DetectPcreFlowvarCapture01(void)
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; sid:1;)");
     FAIL_IF(s == NULL);
 
-    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
-    DetectPcreData *pd = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    FAIL_IF(s->sm_lists[g_http_header_buffer_id] == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next->type != DETECT_PCRE);
+    DetectPcreData *pd = (DetectPcreData *)s->sm_lists[g_http_header_buffer_id]->next->ctx;
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -3062,7 +3139,7 @@ static int DetectPcreFlowvarCapture01(void)
 
     FAIL_IF(!(PacketAlertCheck(p1, 1)));
 
-    FlowVar *fv = FlowVarGet(&f, pd->capidx);
+    FlowVar *fv = FlowVarGet(&f, pd->capids[0]);
     FAIL_IF(fv == NULL);
 
     FAIL_IF(fv->data.fv_str.value_len != ualen1);
@@ -3141,20 +3218,20 @@ static int DetectPcreFlowvarCapture02(void)
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; priority:1; sid:1;)");
     FAIL_IF(s == NULL);
 
-    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
-    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    FAIL_IF(s->sm_lists[g_http_header_buffer_id] == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next->type != DETECT_PCRE);
+    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[g_http_header_buffer_id]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; priority:3; sid:2;)");
     FAIL_IF(s == NULL);
 
-    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
-    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    FAIL_IF(s->sm_lists[g_http_header_buffer_id] == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next->type != DETECT_PCRE);
+    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[g_http_header_buffer_id]->next->ctx;
 
-    FAIL_IF(pd1->capidx != pd2->capidx);
+    FAIL_IF(pd1->capids[0] != pd2->capids[0]);
 
     SCSigRegisterSignatureOrderingFuncs(de_ctx);
     SCSigOrderSignatures(de_ctx);
@@ -3176,7 +3253,7 @@ static int DetectPcreFlowvarCapture02(void)
 
     FAIL_IF(!(PacketAlertCheck(p1, 1)));
 
-    FlowVar *fv = FlowVarGet(&f, pd1->capidx);
+    FlowVar *fv = FlowVarGet(&f, pd1->capids[0]);
     FAIL_IF(fv == NULL);
 
     if (fv->data.fv_str.value_len != ualen1) {
@@ -3257,20 +3334,20 @@ static int DetectPcreFlowvarCapture03(void)
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"User-Agent: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; content:\"xyz\"; http_header; priority:1; sid:1;)");
     FAIL_IF(s == NULL);
 
-    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
-    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    FAIL_IF(s->sm_lists[g_http_header_buffer_id] == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next->type != DETECT_PCRE);
+    DetectPcreData *pd1 = (DetectPcreData *)s->sm_lists[g_http_header_buffer_id]->next->ctx;
 
     s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any (content:\"Server: \"; http_header; pcre:\"/(?P<flow_ua>.*)\\r\\n/HR\"; content:\"xyz\"; http_header; priority:3; sid:2;)");
     FAIL_IF(s == NULL);
 
-    FAIL_IF(s->sm_lists[DETECT_SM_LIST_HHDMATCH] == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next == NULL ||
-        s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->type != DETECT_PCRE);
-    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[DETECT_SM_LIST_HHDMATCH]->next->ctx;
+    FAIL_IF(s->sm_lists[g_http_header_buffer_id] == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next == NULL ||
+        s->sm_lists[g_http_header_buffer_id]->next->type != DETECT_PCRE);
+    DetectPcreData *pd2 = (DetectPcreData *)s->sm_lists[g_http_header_buffer_id]->next->ctx;
 
-    FAIL_IF(pd1->capidx != pd2->capidx);
+    FAIL_IF(pd1->capids[0] != pd2->capids[0]);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
@@ -3289,7 +3366,7 @@ static int DetectPcreFlowvarCapture03(void)
 
     FAIL_IF(PacketAlertCheck(p1, 1));
 
-    FlowVar *fv = FlowVarGet(&f, pd1->capidx);
+    FlowVar *fv = FlowVarGet(&f, pd1->capids[0]);
     FAIL_IF(fv != NULL);
 
     if (alp_tctx != NULL)
@@ -3314,25 +3391,54 @@ static int DetectPcreParseHttpHost(void)
 
     FAIL_IF(de_ctx == NULL);
 
-    pd = DetectPcreParse(de_ctx, "/domain\\.com/W", &list);
+    pd = DetectPcreParse(de_ctx, "/domain\\.com/W", &list, NULL, 0, false);
     FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/dOmain\\.com/W", &list);
+    pd = DetectPcreParse(de_ctx, "/dOmain\\.com/W", &list, NULL, 0, false);
     FAIL_IF(pd != NULL);
 
     /* Uppercase meta characters are valid. */
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/domain\\D+\\.com/W", &list);
+    pd = DetectPcreParse(de_ctx, "/domain\\D+\\.com/W", &list, NULL, 0, false);
     FAIL_IF(pd == NULL);
     DetectPcreFree(pd);
 
     /* This should not parse as the first \ escapes the second \, then
      * we have a D. */
     list = DETECT_SM_LIST_NOTSET;
-    pd = DetectPcreParse(de_ctx, "/\\\\Ddomain\\.com/W", &list);
+    pd = DetectPcreParse(de_ctx, "/\\\\Ddomain\\.com/W", &list, NULL, 0, false);
     FAIL_IF(pd != NULL);
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
+}
+
+/**
+ * \brief Test parsing of capture extension
+ */
+static int DetectPcreParseCaptureTest(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF(de_ctx == NULL);
+
+    Signature *s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any "
+            "(content:\"Server: \"; http_header; pcre:\"/(.*)\\r\\n/HR, flow:somecapture\"; content:\"xyz\"; http_header; sid:1;)");
+    FAIL_IF(s == NULL);
+    s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any "
+            "(content:\"Server: \"; http_header; pcre:\"/(flow:.*)\\r\\n/HR\"; content:\"xyz\"; http_header; sid:2;)");
+    FAIL_IF(s == NULL);
+    s = DetectEngineAppendSig(de_ctx, "alert http any any -> any any "
+            "(content:\"Server: \"; http_header; pcre:\"/([a-z]+)([0-9]+)\\r\\n/HR, flow:somecapture, pkt:anothercap\"; content:\"xyz\"; http_header; sid:3;)");
+    FAIL_IF(s == NULL);
+
+    SigGroupBuild(de_ctx);
+
+    uint32_t capid = VarNameStoreLookupByName("somecapture", VAR_TYPE_FLOW_VAR);
+    FAIL_IF (capid != 1);
+    capid = VarNameStoreLookupByName("anothercap", VAR_TYPE_PKT_VAR);
+    FAIL_IF (capid != 2);
 
     DetectEngineCtxFree(de_ctx);
     PASS;
@@ -3343,9 +3449,13 @@ static int DetectPcreParseHttpHost(void)
 /**
  * \brief this function registers unit tests for DetectPcre
  */
-void DetectPcreRegisterTests(void)
+static void DetectPcreRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
+    g_file_data_buffer_id = DetectBufferTypeGetByName("file_data");
+    g_http_header_buffer_id = DetectBufferTypeGetByName("http_header");
+    g_dce_stub_data_buffer_id = DetectBufferTypeGetByName("dce_stub_data");
+
     UtRegisterTest("DetectPcreParseTest01", DetectPcreParseTest01);
     UtRegisterTest("DetectPcreParseTest02", DetectPcreParseTest02);
     UtRegisterTest("DetectPcreParseTest03", DetectPcreParseTest03);
@@ -3420,6 +3530,7 @@ void DetectPcreRegisterTests(void)
                    DetectPcreFlowvarCapture03);
 
     UtRegisterTest("DetectPcreParseHttpHost", DetectPcreParseHttpHost);
+    UtRegisterTest("DetectPcreParseCaptureTest", DetectPcreParseCaptureTest);
 
 #endif /* UNITTESTS */
 }

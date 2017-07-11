@@ -42,10 +42,15 @@
 #include "app-layer-parser.h"
 #include "app-layer-protos.h"
 #include "app-layer-dns-common.h"
+#include "detect-engine-dns.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 #include "util-validate.h"
+
+#ifdef HAVE_RUST
+#include "rust-dns-dns-gen.h"
+#endif
 
 /** \brief Do the content inspection & validation for a signature
  *
@@ -61,19 +66,37 @@
  *  \retval 1 match
  */
 int DetectEngineInspectDnsQueryName(ThreadVars *tv,
-                                  DetectEngineCtx *de_ctx,
-                                  DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, Flow *f, uint8_t flags,
-                                  void *alstate, void *txv, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id)
 {
-    DNSTransaction *tx = (DNSTransaction *)txv;
-    DNSQueryEntry *query = NULL;
     uint8_t *buffer;
-    uint16_t buffer_len;
+    uint32_t buffer_len;
     int r = 0;
 
     SCLogDebug("start");
 
+#ifdef HAVE_RUST
+    for (uint16_t i = 0;; i++) {
+        det_ctx->discontinue_matching = 0;
+        det_ctx->buffer_offset = 0;
+        det_ctx->inspection_recursion_counter = 0;
+
+        if (rs_dns_tx_get_query_name(txv, i, &buffer, &buffer_len)) {
+            r = DetectEngineContentInspection(de_ctx, det_ctx,
+                s, smd, f, buffer, buffer_len, 0,
+                DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
+            if (r == 1) {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+#else
+    DNSTransaction *tx = (DNSTransaction *)txv;
+    DNSQueryEntry *query = NULL;
     TAILQ_FOREACH(query, &tx->query_list, next) {
         SCLogDebug("tx %p query %p", tx, query);
         det_ctx->discontinue_matching = 0;
@@ -86,12 +109,13 @@ int DetectEngineInspectDnsQueryName(ThreadVars *tv,
         //PrintRawDataFp(stdout, buffer, buffer_len);
 
         r = DetectEngineContentInspection(de_ctx, det_ctx,
-                s, s->sm_lists[DETECT_SM_LIST_DNSQUERYNAME_MATCH],
+                s, smd,
                 f, buffer, buffer_len, 0,
                 DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
         if (r == 1)
             break;
     }
+#endif
     return r;
 }
 
@@ -109,8 +133,23 @@ static void PrefilterTxDnsQuery(DetectEngineThreadCtx *det_ctx,
         const uint64_t idx, const uint8_t flags)
 {
     SCEnter();
-
     const MpmCtx *mpm_ctx = (MpmCtx *)pectx;
+
+#ifdef HAVE_RUST
+    uint8_t *buffer;
+    uint32_t buffer_len;
+    for (uint16_t i = 0; i < 0xffff; i++) {
+        if (rs_dns_tx_get_query_name(txv, i, &buffer, &buffer_len)) {
+            if (buffer_len >= mpm_ctx->minlen) {
+                (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
+                    &det_ctx->mtcu, &det_ctx->pmq,
+                    buffer, buffer_len);
+            }
+        } else {
+            break;
+        }
+    }
+#else
     DNSTransaction *tx = (DNSTransaction *)txv;
     DNSQueryEntry *query = NULL;
 
@@ -127,6 +166,7 @@ static void PrefilterTxDnsQuery(DetectEngineThreadCtx *det_ctx,
                     buffer, buffer_len);
         }
     }
+#endif
 }
 
 int PrefilterTxDnsQueryRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
@@ -139,23 +179,19 @@ int PrefilterTxDnsQueryRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
 }
 
 int DetectEngineInspectDnsRequest(ThreadVars *tv,
-                                  DetectEngineCtx *de_ctx,
-                                  DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, Flow *f, uint8_t flags,
-                                  void *alstate, void *txv, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
 {
-    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, f, flags,
-                                          alstate, txv, tx_id,
-                                          DETECT_SM_LIST_DNSREQUEST_MATCH);
+    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, smd,
+                                          f, flags, alstate, txv, tx_id);
 }
 
 int DetectEngineInspectDnsResponse(ThreadVars *tv,
-                                   DetectEngineCtx *de_ctx,
-                                   DetectEngineThreadCtx *det_ctx,
-                                   Signature *s, Flow *f, uint8_t flags,
-                                   void *alstate, void *txv, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
 {
-    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, f, flags,
-                                          alstate, txv, tx_id,
-                                          DETECT_SM_LIST_DNSRESPONSE_MATCH);
+    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, smd,
+                                          f, flags, alstate, txv, tx_id);
 }

@@ -52,8 +52,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIPRepMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectIPRepSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectIPRepMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectIPRepSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectIPRepFree (void *);
 void IPRepRegisterTests(void);
 
@@ -166,7 +167,8 @@ static inline int RepMatch(uint8_t op, uint8_t val1, uint8_t val2)
  *         1: match
  *        -1: error
  */
-int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectIPRepData *rd = (const DetectIPRepData *)ctx;
     if (rd == NULL)
@@ -231,7 +233,7 @@ int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
     return 0;
 }
 
-int DetectIPRepSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+int DetectIPRepSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     DetectIPRepData *cd = NULL;
     SigMatch *sm = NULL;
@@ -376,7 +378,7 @@ void DetectIPRepFree (void *ptr)
 }
 
 #ifdef UNITTESTS
-FILE *DetectIPRepGenerateCategoriesDummy()
+static FILE *DetectIPRepGenerateCategoriesDummy(void)
 {
     FILE *fd = NULL;
     const char *buffer = "1,BadHosts,Know bad hosts";
@@ -388,7 +390,7 @@ FILE *DetectIPRepGenerateCategoriesDummy()
     return fd;
 }
 
-FILE *DetectIPRepGenerateCategoriesDummy2()
+static FILE *DetectIPRepGenerateCategoriesDummy2(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -402,7 +404,7 @@ FILE *DetectIPRepGenerateCategoriesDummy2()
     return fd;
 }
 
-FILE *DetectIPRepGenerateNetworksDummy()
+static FILE *DetectIPRepGenerateNetworksDummy(void)
 {
     FILE *fd = NULL;
     const char *buffer = "10.0.0.0/24,1,20";
@@ -414,7 +416,7 @@ FILE *DetectIPRepGenerateNetworksDummy()
     return fd;
 }
 
-FILE *DetectIPRepGenerateNetworksDummy2()
+static FILE *DetectIPRepGenerateNetworksDummy2(void)
 {
     FILE *fd = NULL;
     const char *buffer =

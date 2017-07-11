@@ -186,16 +186,14 @@ static int FTPParseRequestCommand(void *ftp_state, uint8_t *input,
     FtpState *fstate = (FtpState *)ftp_state;
     fstate->command = FTP_COMMAND_UNKNOWN;
 
-    if (input_len >= 4) {
-        if (SCMemcmpLowercase("port", input, 4) == 0) {
-            fstate->command = FTP_COMMAND_PORT;
-        }
-
-        /* else {
-         *     Add the ftp commands you need here
-         * }
-         */
+    if (input_len >= 4 && SCMemcmpLowercase("port", input, 4) == 0) {
+        fstate->command = FTP_COMMAND_PORT;
     }
+
+    if (input_len >= 8 && SCMemcmpLowercase("auth tls", input, 8) == 0) {
+        fstate->command = FTP_COMMAND_AUTH_TLS;
+    }
+
     return 1;
 }
 
@@ -268,6 +266,14 @@ static int FTPParseResponse(Flow *f, void *ftp_state, AppLayerParserState *pstat
                             uint8_t *input, uint32_t input_len,
                             void *local_data)
 {
+    FtpState *state = (FtpState *)ftp_state;
+
+    if (state->command == FTP_COMMAND_AUTH_TLS) {
+        if (input_len >= 4 && SCMemcmp("234 ", input, 4) == 0) {
+            AppLayerRequestProtocolTLSUpgrade(f);
+        }
+    }
+
     return 1;
 }
 
@@ -303,6 +309,13 @@ static void FTPStateFree(void *s)
         SCFree(fstate->line_state[0].db);
     if (fstate->line_state[1].db)
         SCFree(fstate->line_state[1].db);
+
+    //AppLayerDecoderEventsFreeEvents(&s->decoder_events);
+
+    if (fstate->de_state != NULL) {
+        DetectEngineStateFree(fstate->de_state);
+    }
+
     SCFree(s);
 #ifdef DEBUG
     SCMutexLock(&ftp_state_mem_lock);
@@ -312,8 +325,76 @@ static void FTPStateFree(void *s)
 #endif
 }
 
+static int FTPStateHasTxDetectState(void *state)
+{
+    FtpState *ssh_state = (FtpState *)state;
+    if (ssh_state->de_state)
+        return 1;
+    return 0;
+}
+
+static int FTPSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
+{
+    FtpState *ssh_state = (FtpState *)state;
+    ssh_state->de_state = de_state;
+    return 0;
+}
+
+static DetectEngineState *FTPGetTxDetectState(void *vtx)
+{
+    FtpState *ssh_state = (FtpState *)vtx;
+    return ssh_state->de_state;
+}
+
+static void FTPStateTransactionFree(void *state, uint64_t tx_id)
+{
+    /* do nothing */
+}
+
+static void *FTPGetTx(void *state, uint64_t tx_id)
+{
+    FtpState *ssh_state = (FtpState *)state;
+    return ssh_state;
+}
+
+static uint64_t FTPGetTxCnt(void *state)
+{
+    /* single tx */
+    return 1;
+}
+
+static int FTPGetAlstateProgressCompletionStatus(uint8_t direction)
+{
+    return FTP_STATE_FINISHED;
+}
+
+static int FTPGetAlstateProgress(void *tx, uint8_t direction)
+{
+    FtpState *ftp_state = (FtpState *)tx;
+
+    if (direction == STREAM_TOSERVER &&
+        ftp_state->command == FTP_COMMAND_PORT) {
+        return FTP_STATE_PORT_DONE;
+    }
+
+    /* TODO: figure out further progress handling */
+
+    return FTP_STATE_IN_PROGRESS;
+}
+
+
 static int FTPRegisterPatternsForProtocolDetection(void)
 {
+    if (AppLayerProtoDetectPMRegisterPatternCI(IPPROTO_TCP, ALPROTO_FTP,
+                                              "220 (", 5, 0, STREAM_TOCLIENT) < 0)
+    {
+        return -1;
+    }
+    if (AppLayerProtoDetectPMRegisterPatternCI(IPPROTO_TCP, ALPROTO_FTP,
+                                               "FEAT", 4, 0, STREAM_TOSERVER) < 0)
+    {
+        return -1;
+    }
     if (AppLayerProtoDetectPMRegisterPatternCI(IPPROTO_TCP, ALPROTO_FTP,
                                                "USER ", 5, 0, STREAM_TOSERVER) < 0)
     {
@@ -335,7 +416,7 @@ static int FTPRegisterPatternsForProtocolDetection(void)
 
 void RegisterFTPParsers(void)
 {
-    char *proto_name = "ftp";
+    const char *proto_name = "ftp";
 
     /** FTP */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
@@ -351,6 +432,20 @@ void RegisterFTPParsers(void)
                                      FTPParseResponse);
         AppLayerParserRegisterStateFuncs(IPPROTO_TCP, ALPROTO_FTP, FTPStateAlloc, FTPStateFree);
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP, ALPROTO_FTP, STREAM_TOSERVER | STREAM_TOCLIENT);
+
+        AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_FTP, FTPStateTransactionFree);
+
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_FTP, FTPStateHasTxDetectState,
+                                               FTPGetTxDetectState, FTPSetTxDetectState);
+
+        AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_FTP, FTPGetTx);
+
+        AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_FTP, FTPGetTxCnt);
+
+        AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_FTP, FTPGetAlstateProgress);
+
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_FTP,
+                                                               FTPGetAlstateProgressCompletionStatus);
     } else {
         SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
                   "still on.", proto_name);
@@ -374,7 +469,7 @@ void FTPAtExitPrintStats(void)
 #ifdef UNITTESTS
 
 /** \test Send a get request in one chunk. */
-int FTPParserTest01(void)
+static int FTPParserTest01(void)
 {
     int result = 1;
     Flow f;
@@ -389,6 +484,7 @@ int FTPParserTest01(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -425,7 +521,7 @@ end:
 }
 
 /** \test Send a splitted get request. */
-int FTPParserTest03(void)
+static int FTPParserTest03(void)
 {
     int result = 1;
     Flow f;
@@ -444,6 +540,7 @@ int FTPParserTest03(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -502,7 +599,7 @@ end:
 }
 
 /** \test See how it deals with an incomplete request. */
-int FTPParserTest06(void)
+static int FTPParserTest06(void)
 {
     int result = 1;
     Flow f;
@@ -517,6 +614,7 @@ int FTPParserTest06(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -555,7 +653,7 @@ end:
 }
 
 /** \test See how it deals with an incomplete request in multiple chunks. */
-int FTPParserTest07(void)
+static int FTPParserTest07(void)
 {
     int result = 1;
     Flow f;
@@ -572,6 +670,7 @@ int FTPParserTest07(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
 
@@ -622,7 +721,7 @@ end:
 
 /** \test Test case where chunks are smaller than the delim length and the
   *       last chunk is supposed to match the delim. */
-int FTPParserTest10(void)
+static int FTPParserTest10(void)
 {
     int result = 1;
     Flow f;
@@ -637,6 +736,7 @@ int FTPParserTest10(void)
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_TCP;
+    f.alproto = ALPROTO_FTP;
 
     StreamTcpInitConfig(TRUE);
 

@@ -59,9 +59,11 @@
 #include "detect-http-ua.h"
 #include "detect-engine-hua.h"
 
-int DetectHttpUASetup(DetectEngineCtx *, Signature *, char *);
-void DetectHttpUARegisterTests(void);
-void DetectHttpUAFree(void *);
+static int DetectHttpUASetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectHttpUARegisterTests(void);
+static void DetectHttpUAFree(void *);
+static void DetectHttpUASetupCallback(Signature *);
+static int g_http_ua_buffer_id = 0;
 
 /**
  * \brief Registers the keyword handlers for the "http_user_agent" keyword.
@@ -72,23 +74,26 @@ void DetectHttpUARegister(void)
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].desc = "content modifier to match only on the HTTP User-Agent header";
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_user-agent";
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Setup = DetectHttpUASetup;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Free  = DetectHttpUAFree;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].RegisterTests = DetectHttpUARegisterTests;
 
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].flags |= SIGMATCH_PAYLOAD ;
 
-    DetectMpmAppLayerRegister("http_user_agent", SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_HUADMATCH, 2,
+    DetectAppLayerMpmRegister("http_user_agent", SIG_FLAG_TOSERVER, 2,
             PrefilterTxUARegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_HTTP, SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_HUADMATCH,
+    DetectAppLayerInspectEngineRegister("http_user_agent",
+            ALPROTO_HTTP, SIG_FLAG_TOSERVER, HTP_REQUEST_HEADERS,
             DetectEngineInspectHttpUA);
 
-    return;
+    DetectBufferTypeSetDescriptionByName("http_user_agent",
+            "http user agent");
+
+    DetectBufferTypeRegisterSetupCallback("http_user_agent",
+            DetectHttpUASetupCallback);
+
+    g_http_ua_buffer_id = DetectBufferTypeGetByName("http_user_agent");
 }
 
 /**
@@ -104,13 +109,18 @@ void DetectHttpUARegister(void)
  * \retval  0 On success
  * \retval -1 On failure
  */
-int DetectHttpUASetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+int DetectHttpUASetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_USER_AGENT,
-                                                  DETECT_SM_LIST_HUADMATCH,
-                                                  ALPROTO_HTTP,
-                                                  NULL);
+                                                  g_http_ua_buffer_id,
+                                                  ALPROTO_HTTP);
+}
+
+static void DetectHttpUASetupCallback(Signature *s)
+{
+    SCLogDebug("callback invoked by %u", s->id);
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
 }
 
 /**
@@ -1384,7 +1394,7 @@ static int DetectHttpUATest14(void)
         goto end;
     }
 
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
+    if (AppLayerParserGetTxCnt(&f, htp_state) != 2) {
         printf("The http app layer doesn't have 2 transactions, but it should: ");
         goto end;
     }
@@ -1421,7 +1431,7 @@ end:
 
 
 
-int DetectHttpUATest22(void)
+static int DetectHttpUATest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1443,15 +1453,15 @@ int DetectHttpUATest22(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *cd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (cd1->flags != 0 || memcmp(cd1->content, "one", cd1->content_len) != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1476,7 +1486,7 @@ int DetectHttpUATest22(void)
     return result;
 }
 
-int DetectHttpUATest23(void)
+static int DetectHttpUATest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1498,15 +1508,15 @@ int DetectHttpUATest23(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1530,7 +1540,7 @@ int DetectHttpUATest23(void)
     return result;
 }
 
-int DetectHttpUATest24(void)
+static int DetectHttpUATest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1552,15 +1562,15 @@ int DetectHttpUATest24(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1584,7 +1594,7 @@ int DetectHttpUATest24(void)
     return result;
 }
 
-int DetectHttpUATest25(void)
+static int DetectHttpUATest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1607,15 +1617,15 @@ int DetectHttpUATest25(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != DETECT_PCRE_RELATIVE_NEXT ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1640,7 +1650,7 @@ int DetectHttpUATest25(void)
     return result;
 }
 
-int DetectHttpUATest26(void)
+static int DetectHttpUATest26(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1663,15 +1673,15 @@ int DetectHttpUATest26(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1697,7 +1707,7 @@ int DetectHttpUATest26(void)
     return result;
 }
 
-int DetectHttpUATest27(void)
+static int DetectHttpUATest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1723,7 +1733,7 @@ int DetectHttpUATest27(void)
     return result;
 }
 
-int DetectHttpUATest28(void)
+static int DetectHttpUATest28(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1746,15 +1756,15 @@ int DetectHttpUATest28(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1779,7 +1789,7 @@ int DetectHttpUATest28(void)
     return result;
 }
 
-int DetectHttpUATest29(void)
+static int DetectHttpUATest29(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1801,13 +1811,13 @@ int DetectHttpUATest29(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "one", huad1->content_len) != 0 ||
         huad2->flags != DETECT_CONTENT_DISTANCE ||
@@ -1823,7 +1833,7 @@ int DetectHttpUATest29(void)
     return result;
 }
 
-int DetectHttpUATest30(void)
+static int DetectHttpUATest30(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1845,13 +1855,13 @@ int DetectHttpUATest30(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "one", huad1->content_len) != 0 ||
         huad2->flags != DETECT_CONTENT_WITHIN ||
@@ -1867,7 +1877,7 @@ int DetectHttpUATest30(void)
     return result;
 }
 
-int DetectHttpUATest31(void)
+static int DetectHttpUATest31(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1891,7 +1901,7 @@ int DetectHttpUATest31(void)
     return result;
 }
 
-int DetectHttpUATest32(void)
+static int DetectHttpUATest32(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1915,7 +1925,7 @@ int DetectHttpUATest32(void)
     return result;
 }
 
-int DetectHttpUATest33(void)
+static int DetectHttpUATest33(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1939,7 +1949,7 @@ int DetectHttpUATest33(void)
     return result;
 }
 
-int DetectHttpUATest34(void)
+static int DetectHttpUATest34(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1961,21 +1971,21 @@ int DetectHttpUATest34(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         huad2->flags != DETECT_CONTENT_WITHIN ||
         memcmp(huad2->content, "two", huad2->content_len) != 0) {
@@ -1990,7 +2000,7 @@ int DetectHttpUATest34(void)
     return result;
 }
 
-int DetectHttpUATest35(void)
+static int DetectHttpUATest35(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2012,21 +2022,21 @@ int DetectHttpUATest35(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_PCRE ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_CONTENT) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_PCRE ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_CONTENT) {
 
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd2->flags != (DETECT_PCRE_RELATIVE) ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "two", huad1->content_len) != 0) {
@@ -2041,7 +2051,7 @@ int DetectHttpUATest35(void)
     return result;
 }
 
-int DetectHttpUATest36(void)
+static int DetectHttpUATest36(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2063,21 +2073,21 @@ int DetectHttpUATest36(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         huad2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(huad2->content, "two", huad2->content_len) != 0) {

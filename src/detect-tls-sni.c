@@ -49,12 +49,14 @@
 #include "app-layer.h"
 #include "app-layer-ssl.h"
 #include "detect-engine-tls.h"
+#include "detect-tls-sni.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-static int DetectTlsSniSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectTlsSniSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectTlsSniRegisterTests(void);
+static int g_tls_sni_buffer_id = 0;
 
 /**
  * \brief Registration function for keyword: tls_sni
@@ -65,21 +67,20 @@ void DetectTlsSniRegister(void)
     sigmatch_table[DETECT_AL_TLS_SNI].desc = "content modifier to match specifically and only on the TLS SNI buffer";
     sigmatch_table[DETECT_AL_TLS_SNI].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tls-sni";
     sigmatch_table[DETECT_AL_TLS_SNI].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_SNI].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_TLS_SNI].Setup = DetectTlsSniSetup;
     sigmatch_table[DETECT_AL_TLS_SNI].Free  = NULL;
     sigmatch_table[DETECT_AL_TLS_SNI].RegisterTests = DetectTlsSniRegisterTests;
 
     sigmatch_table[DETECT_AL_TLS_SNI].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_TLS_SNI].flags |= SIGMATCH_PAYLOAD;
 
-    DetectMpmAppLayerRegister("tls_sni", SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_TLSSNI_MATCH, 2,
+    DetectAppLayerMpmRegister("tls_sni", SIG_FLAG_TOSERVER, 2,
             PrefilterTxTlsSniRegister);
 
-    DetectAppLayerInspectEngineRegister(ALPROTO_TLS, SIG_FLAG_TOSERVER,
-            DETECT_SM_LIST_TLSSNI_MATCH,
+    DetectAppLayerInspectEngineRegister("tls_sni",
+            ALPROTO_TLS, SIG_FLAG_TOSERVER, 0,
             DetectEngineInspectTlsSni);
+
+    g_tls_sni_buffer_id = DetectBufferTypeGetByName("tls_sni");
 }
 
 
@@ -92,9 +93,9 @@ void DetectTlsSniRegister(void)
  *
  * \retval 0       On success
  */
-static int DetectTlsSniSetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsSniSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
-    s->list = DETECT_SM_LIST_TLSSNI_MATCH;
+    s->init_data->list = g_tls_sni_buffer_id;
     s->alproto = ALPROTO_TLS;
     return 0;
 }

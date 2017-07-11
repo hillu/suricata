@@ -45,6 +45,7 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 #include "output-json.h"
+#include "output-json-flow.h"
 
 #include "stream-tcp-private.h"
 
@@ -68,7 +69,7 @@ typedef struct JsonFlowLogThread_ {
 #define LOG_HTTP_EXTENDED 1
 #define LOG_HTTP_CUSTOM 2
 
-static json_t *CreateJSONHeaderFromFlow(Flow *f, char *event_type)
+static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type)
 {
     char timebuf[64];
     char srcip[46], dstip[46];
@@ -176,17 +177,8 @@ static json_t *CreateJSONHeaderFromFlow(Flow *f, char *event_type)
     return js;
 }
 
-/* JSON format logging */
-static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
+void JsonAddFlow(Flow *f, json_t *js, json_t *hjs)
 {
-#if 0
-    LogJsonFileCtx *flow_ctx = aft->flowlog_ctx;
-#endif
-    json_t *hjs = json_object();
-    if (hjs == NULL) {
-        return;
-    }
-
     json_object_set_new(js, "app_proto",
             json_string(AppProtoToString(f->alproto)));
     if (f->alproto_ts != f->alproto) {
@@ -196,6 +188,14 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
     if (f->alproto_tc != f->alproto) {
         json_object_set_new(js, "app_proto_tc",
                 json_string(AppProtoToString(f->alproto_tc)));
+    }
+    if (f->alproto_orig != f->alproto && f->alproto_orig != ALPROTO_UNKNOWN) {
+        json_object_set_new(js, "app_proto_orig",
+                json_string(AppProtoToString(f->alproto_orig)));
+    }
+    if (f->alproto_expect != f->alproto && f->alproto_expect != ALPROTO_UNKNOWN) {
+        json_object_set_new(js, "app_proto_expected",
+                json_string(AppProtoToString(f->alproto_expect)));
     }
 
     json_object_set_new(hjs, "pkts_toserver",
@@ -207,12 +207,26 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
     json_object_set_new(hjs, "bytes_toclient",
             json_integer(f->tosrcbytecnt));
 
-    char timebuf1[64], timebuf2[64];
-
+    char timebuf1[64];
     CreateIsoTimeString(&f->startts, timebuf1, sizeof(timebuf1));
-    CreateIsoTimeString(&f->lastts, timebuf2, sizeof(timebuf2));
-
     json_object_set_new(hjs, "start", json_string(timebuf1));
+}
+
+/* JSON format logging */
+static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
+{
+#if 0
+    LogJsonFileCtx *flow_ctx = aft->flowlog_ctx;
+#endif
+    json_t *hjs = json_object();
+    if (hjs == NULL) {
+        return;
+    }
+
+    JsonAddFlow(f, js, hjs);
+
+    char timebuf2[64];
+    CreateIsoTimeString(&f->lastts, timebuf2, sizeof(timebuf2));
     json_object_set_new(hjs, "end", json_string(timebuf2));
 
     int32_t age = f->lastts.tv_sec - f->startts.tv_sec;
@@ -291,7 +305,7 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
         JsonTcpFlags(ssn ? ssn->tcp_packet_flags : 0, tjs);
 
         if (ssn) {
-            char *tcp_state = NULL;
+            const char *tcp_state = NULL;
             switch (ssn->state) {
                 case TCP_NONE:
                     tcp_state = "none";
@@ -370,7 +384,7 @@ static void OutputFlowLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "flow.json"
-OutputCtx *OutputFlowLogInit(ConfNode *conf)
+static OutputCtx *OutputFlowLogInit(ConfNode *conf)
 {
     SCLogInfo("hi");
     LogFileCtx *file_ctx = LogFileNewCtx();
@@ -411,7 +425,7 @@ static void OutputFlowLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     OutputJsonCtx *ojc = parent_ctx->data;
 
@@ -435,7 +449,7 @@ OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonFlowLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonFlowLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonFlowLogThread *aft = SCMalloc(sizeof(JsonFlowLogThread));
     if (unlikely(aft == NULL))

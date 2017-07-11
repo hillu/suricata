@@ -24,6 +24,7 @@ The most common way to use this is through 'EVE', which is a firehose approach w
       #redis:
       #  server: 127.0.0.1
       #  port: 6379
+      #  async: true ## if redis replies are read asynchronously
       #  mode: list ## possible values: list (default), channel
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
@@ -80,6 +81,10 @@ The most common way to use this is through 'EVE', which is a firehose approach w
             #custom: [a, aaaa, cname, mx, ns, ptr, txt]
         - tls:
             extended: yes     # enable this for extended logging information
+            # custom allows to control which tls fields that are included
+            # in eve-log
+            #custom: [subject, issuer, fingerprint, sni, version, not_before, not_after, certificate, chain]
+
         - files:
             force-magic: no   # force logging magic on all logged files
             # force logging of checksums, available hash functions are md5,
@@ -134,6 +139,7 @@ Output types::
       #redis:
       #  server: 127.0.0.1
       #  port: 6379
+      #  async: true ## if redis replies are read asynchronously
       #  mode: list ## possible values: list (default), channel
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
@@ -157,10 +163,24 @@ Metadata::
             # payload-buffer-size: 4kb # max size of payload buffer to output in eve-log
             # payload-printable: yes   # enable dumping payload in printable (lossy) format
             # packet: yes              # enable dumping of packet (without stream segments)
+            # http-body: yes           # enable dumping of http body in Base64
+            # http-body-printable: yes # enable dumping of http body in printable format
+            metadata: yes              # add L7/applayer fields, flowbit and other vars to the alert
+
+Alternatively to the `metadata` key it is also possible to select the application
+layer metadata to output on a per application layer basis ::
+
+        - alert:
             http: yes                # enable dumping of http fields
             tls: yes                 # enable dumping of tls fields
             ssh: yes                 # enable dumping of ssh fields
             smtp: yes                # enable dumping of smtp fields
+            dnp3: yes                # enable dumping of dnp3 fields
+            flow: yes                # enable dumping of a partial flow entry
+            vars: yes                # enable dumping of flowbits and other vars
+
+The `vars` will enable dumping of a set of key/value based on flowbits and other vars
+such as named groups in regular expression.
 
 DNS
 ~~~
@@ -180,6 +200,68 @@ YAML::
 
 To reduce verbosity the output can be filtered by supplying the record types
 to be logged under ``custom``.
+
+TLS
+~~~
+
+TLS records are logged one record per session.
+
+YAML::
+
+        - tls:
+            extended: yes     # enable this for extended logging information
+            # custom allows to control which tls fields that are included
+            # in eve-log
+            #custom: [subject, issuer, serial, fingerprint, sni, version, not_before, not_after, certificate, chain]
+
+The default is to log certificate subject and issuer. If ``extended`` is
+enabled, then the log gets more verbose.
+
+By using ``custom`` it is possible to select which TLS fields to log.
+
+Date modifiers in filename
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+It is possible to use date modifiers in the eve-log filename.
+
+::
+
+   outputs:
+     - eve-log:
+         filename: eve-%s.json
+
+The example above adds epoch time to the filename. All the date modifiers from the
+C library should be supported. See the man page for ``strftime`` for all supported
+modifiers.
+
+Rotate log file
+~~~~~~~~~~~~~~~
+
+Eve-log can be configured to rotate based on time.
+
+::
+
+  outputs:
+    - eve-log:
+        filename: eve-%Y-%m-%d-%H:%M.json
+        rotate-interval: minute
+
+The example above creates a new log file each minute, where the filename contains
+a timestamp. Other supported ``rotate-interval`` values are ``hour`` and ``day``.
+
+In addition to this, it is also possible to specify the ``rotate-interval`` as a
+relative value. One example is to rotate the log file each X seconds.
+
+::
+
+  outputs:
+    - eve-log:
+        filename: eve-%Y-%m-%d-%H:%M:%S.json
+        rotate-interval: 30s
+
+The example above rotates eve-log each 30 seconds. This could be replaced with
+``30m`` to rotate every 30 minutes, ``30h`` to rotate every 30 hours, ``30d``
+to rotate every 30 days, or ``30w`` to rotate every 30 weeks.
 
 Multiple Logger Instances
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -246,3 +328,43 @@ For most output types, you can add multiple:
 
 Except for ``drop`` for which only a single logger instance is supported.
 
+File permissions
+~~~~~~~~~~~~~~~~
+
+Log file permissions can be set individually for each logger. ``filemode`` can be used to
+control the permissions of a log file, e.g.:
+
+::
+
+  outputs:
+    - eve-log:
+        enabled: yes
+        filename: eve.json
+        filemode: 600
+
+The example above sets the file permissions on ``eve.json`` to 600, which means that it is
+only readable and writable by the owner of the file.
+
+JSON flags
+~~~~~~~~~~
+
+Several flags can be specified to control the JSON output in EVE:
+
+::
+
+  outputs:
+    - eve-log:
+        json:
+          # Sort object keys in the same order as they were inserted
+          preserve-order: yes
+
+          # Make the output more compact
+          compact: yes
+
+          # Escape all unicode characters outside the ASCII range
+          ensure-ascii: yes
+
+          # Escape the '/' characters in string with '\/'
+          escape-slash: yes
+
+All these flags are enabled by default, and can be modified per EVE instance.

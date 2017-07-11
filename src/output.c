@@ -48,6 +48,7 @@
 #include "output-json-alert.h"
 #include "output-json-flow.h"
 #include "output-json-netflow.h"
+#include "log-cf-common.h"
 #include "log-droplog.h"
 #include "output-json-drop.h"
 #include "log-httplog.h"
@@ -67,9 +68,11 @@
 #include "log-tcp-data.h"
 #include "log-stats.h"
 #include "output-json.h"
+#include "output-json-nfs.h"
 #include "output-json-template.h"
 #include "output-lua.h"
 #include "output-json-dnp3.h"
+#include "output-json-vars.h"
 
 typedef struct RootLogger_ {
     ThreadInitFunc ThreadInit;
@@ -230,7 +233,7 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void OutputRegisterTxModuleWrapper(LoggerId id, const char *name,
+static void OutputRegisterTxModuleWrapper(LoggerId id, const char *name,
     const char *conf_name, OutputInitFunc InitFunc, AppProto alproto,
     TxLogger TxLogFunc, int tc_log_progress, int ts_log_progress,
     TxLoggerCondition TxLogCondition, ThreadInitFunc ThreadInit,
@@ -267,7 +270,7 @@ error:
     exit(EXIT_FAILURE);
 }
 
-void OutputRegisterTxSubModuleWrapper(LoggerId id, const char *parent_name,
+static void OutputRegisterTxSubModuleWrapper(LoggerId id, const char *parent_name,
     const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
     AppProto alproto, TxLogger TxLogFunc, int tc_log_progress,
     int ts_log_progress, TxLoggerCondition TxLogCondition,
@@ -849,22 +852,6 @@ void OutputDropLoggerDisable(void)
         drop_loggers--;
 }
 
-static int ssh_loggers = 0;
-
-int OutputSshLoggerEnable(void)
-{
-    if (ssh_loggers)
-        return -1;
-    ssh_loggers++;
-    return 0;
-}
-
-void OutputSshLoggerDisable(void)
-{
-    if (ssh_loggers)
-        ssh_loggers--;
-}
-
 /**
  * \brief Register a flag for file rotation notification.
  *
@@ -933,7 +920,7 @@ TmEcode OutputLoggerLog(ThreadVars *tv, Packet *p, void *thread_data)
     return TM_ECODE_OK;
 }
 
-TmEcode OutputLoggerThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode OutputLoggerThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     LoggerThreadStore *thread_store = SCCalloc(1, sizeof(*thread_store));
     if (thread_store == NULL) {
@@ -1040,6 +1027,9 @@ void OutputRegisterRootLoggers(void)
  */
 void OutputRegisterLoggers(void)
 {
+    /* custom format log*/
+    LogCustomFormatRegister();
+
     LuaLogRegister();
     /* fast log */
     AlertFastLogRegister();
@@ -1090,7 +1080,10 @@ void OutputRegisterLoggers(void)
 
     /* DNP3. */
     JsonDNP3LogRegister();
+    JsonVarsLogRegister();
 
+    /* NFS JSON logger. */
+    JsonNFSLogRegister();
     /* Template JSON logger. */
     JsonTemplateLogRegister();
 }

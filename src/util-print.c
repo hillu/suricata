@@ -168,7 +168,7 @@ void PrintRawDataFp(FILE *fp, const uint8_t *buf, uint32_t buflen)
 }
 
 void PrintRawDataToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32_t dst_buf_size,
-                          uint8_t *src_buf, uint32_t src_buf_len)
+                          const uint8_t *src_buf, uint32_t src_buf_len)
 {
     int ch = 0;
     uint32_t u = 0;
@@ -217,7 +217,7 @@ void PrintRawDataToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
 }
 
 void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32_t dst_buf_size,
-                          uint8_t *src_buf, uint32_t src_buf_len)
+                          const uint8_t *src_buf, const uint32_t src_buf_len)
 {
     uint32_t ch = 0;
     for (ch = 0; ch < src_buf_len; ch++) {
@@ -227,6 +227,7 @@ void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
                         src_buf[ch] == '\n' ||
                         src_buf[ch] == '\r') ? (uint8_t)src_buf[ch] : '.');
     }
+    dst_buf[dst_buf_size - 1] = 0;
 
     return;
 }

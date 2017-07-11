@@ -55,7 +55,7 @@ static FILE *packet_profile_csv_fp = NULL;
 extern int profiling_locks_enabled;
 extern int profiling_locks_output_to_file;
 extern char *profiling_locks_file_name;
-extern char *profiling_locks_file_mode;
+extern const char *profiling_locks_file_mode;
 
 typedef struct SCProfilePacketData_ {
     uint64_t min;
@@ -183,8 +183,7 @@ SCProfilingInit(void)
 
             const char *filename = ConfNodeLookupChildValue(conf, "filename");
             if (filename != NULL) {
-
-                char *log_dir;
+                const char *log_dir;
                 log_dir = ConfigGetLogDirectory();
 
                 snprintf(profiling_packets_file_name, sizeof(profiling_packets_file_name),
@@ -210,7 +209,7 @@ SCProfilingInit(void)
                     filename = "packet_profile.csv";
                 }
 
-                char *log_dir;
+                const char *log_dir;
                 log_dir = ConfigGetLogDirectory();
 
                 profiling_csv_file_name = SCMalloc(PATH_MAX);
@@ -256,8 +255,7 @@ SCProfilingInit(void)
 
             const char *filename = ConfNodeLookupChildValue(conf, "filename");
             if (filename != NULL) {
-                char *log_dir;
-                log_dir = ConfigGetLogDirectory();
+                const char *log_dir = ConfigGetLogDirectory();
 
                 profiling_locks_file_name = SCMalloc(PATH_MAX);
                 if (unlikely(profiling_locks_file_name == NULL)) {
@@ -959,7 +957,7 @@ static void SCProfilingUpdatePacketDetectRecord(PacketProfileDetectId id, uint8_
     pd->cnt ++;
 }
 
-void SCProfilingUpdatePacketDetectRecords(Packet *p)
+static void SCProfilingUpdatePacketDetectRecords(Packet *p)
 {
     PacketProfileDetectId i;
     for (i = 0; i < PROF_DETECT_SIZE; i++) {
@@ -1017,7 +1015,7 @@ static void SCProfilingUpdatePacketAppRecord(int alproto, uint8_t ipproto, PktPr
     pd->cnt ++;
 }
 
-void SCProfilingUpdatePacketAppRecords(Packet *p)
+static void SCProfilingUpdatePacketAppRecords(Packet *p)
 {
     int i;
     for (i = 0; i < ALPROTO_MAX; i++) {
@@ -1041,7 +1039,7 @@ void SCProfilingUpdatePacketAppRecords(Packet *p)
     }
 }
 
-void SCProfilingUpdatePacketTmmRecord(int module, uint8_t proto, PktProfilingTmmData *pdt, int ipver)
+static void SCProfilingUpdatePacketTmmRecord(int module, uint8_t proto, PktProfilingTmmData *pdt, int ipver)
 {
     if (pdt == NULL) {
         return;
@@ -1074,7 +1072,7 @@ void SCProfilingUpdatePacketTmmRecord(int module, uint8_t proto, PktProfilingTmm
 #endif
 }
 
-void SCProfilingUpdatePacketTmmRecords(Packet *p)
+static void SCProfilingUpdatePacketTmmRecords(Packet *p)
 {
     int i;
     for (i = 0; i < TMM_SIZE; i++) {
@@ -1312,7 +1310,9 @@ const char * PacketProfileDetectIdToString(PacketProfileDetectId id)
         CASE_CODE (PROF_DETECT_PF_TX);
         CASE_CODE (PROF_DETECT_PF_SORT1);
         CASE_CODE (PROF_DETECT_PF_SORT2);
-        CASE_CODE (PROF_DETECT_STATEFUL);
+        CASE_CODE (PROF_DETECT_STATEFUL_START);
+        CASE_CODE (PROF_DETECT_STATEFUL_CONT);
+        CASE_CODE (PROF_DETECT_STATEFUL_UPDATE);
         CASE_CODE (PROF_DETECT_ALERT);
         CASE_CODE (PROF_DETECT_CLEANUP);
         CASE_CODE (PROF_DETECT_GETSGH);
@@ -1360,6 +1360,7 @@ const char * PacketProfileLoggertIdToString(LoggerId id)
         CASE_CODE (LOGGER_JSON_STATS);
         CASE_CODE (LOGGER_PRELUDE);
         CASE_CODE (LOGGER_PCAP);
+        CASE_CODE (LOGGER_JSON_VARS);
         default:
             return "UNKNOWN";
     }

@@ -46,8 +46,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectITypeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectITypeSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectITypeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectITypeSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectITypeRegisterTests(void);
 void DetectITypeFree(void *);
 
@@ -115,7 +116,8 @@ static inline int ITypeMatch(const uint8_t ptype, const uint8_t mode,
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectITypeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectITypeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     if (PKT_IS_PSEUDOPKT(p))
         return 0;
@@ -142,7 +144,7 @@ int DetectITypeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
  * \retval itd pointer to DetectITypeData on success
  * \retval NULL on failure
  */
-DetectITypeData *DetectITypeParse(char *itypestr)
+static DetectITypeData *DetectITypeParse(const char *itypestr)
 {
     DetectITypeData *itd = NULL;
     char *args[3] = {NULL, NULL, NULL};
@@ -246,7 +248,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectITypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *itypestr)
+static int DetectITypeSetup(DetectEngineCtx *de_ctx, Signature *s, const char *itypestr)
 {
 
     DetectITypeData *itd = NULL;
@@ -344,7 +346,7 @@ static int PrefilterSetupIType(SigGroupHead *sgh)
 static _Bool PrefilterITypeIsPrefilterable(const Signature *s)
 {
     const SigMatch *sm;
-    for (sm = s->sm_lists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
         switch (sm->type) {
             case DETECT_ITYPE:
                 return TRUE;
@@ -361,7 +363,7 @@ static _Bool PrefilterITypeIsPrefilterable(const Signature *s)
 /**
  * \test DetectITypeParseTest01 is a test for setting a valid itype value
  */
-int DetectITypeParseTest01(void)
+static int DetectITypeParseTest01(void)
 {
     DetectITypeData *itd = NULL;
     int result = 0;
@@ -378,7 +380,7 @@ int DetectITypeParseTest01(void)
  * \test DetectITypeParseTest02 is a test for setting a valid itype value
  *       with ">" operator
  */
-int DetectITypeParseTest02(void)
+static int DetectITypeParseTest02(void)
 {
 DetectITypeData *itd = NULL;
     int result = 0;
@@ -395,7 +397,7 @@ DetectITypeData *itd = NULL;
  * \test DetectITypeParseTest03 is a test for setting a valid itype value
  *       with "<" operator
  */
-int DetectITypeParseTest03(void)
+static int DetectITypeParseTest03(void)
 {
     DetectITypeData *itd = NULL;
     int result = 0;
@@ -412,7 +414,7 @@ int DetectITypeParseTest03(void)
  * \test DetectITypeParseTest04 is a test for setting a valid itype value
  *       with "<>" operator
  */
-int DetectITypeParseTest04(void)
+static int DetectITypeParseTest04(void)
 {
 DetectITypeData *itd = NULL;
     int result = 0;
@@ -429,7 +431,7 @@ DetectITypeData *itd = NULL;
  * \test DetectITypeParseTest05 is a test for setting a valid itype value
  *       with spaces all around
  */
-int DetectITypeParseTest05(void)
+static int DetectITypeParseTest05(void)
 {
 DetectITypeData *itd = NULL;
     int result = 0;
@@ -446,7 +448,7 @@ DetectITypeData *itd = NULL;
  * \test DetectITypeParseTest06 is a test for setting a valid itype value
  *       with ">" operator and spaces all around
  */
-int DetectITypeParseTest06(void)
+static int DetectITypeParseTest06(void)
 {
 DetectITypeData *itd = NULL;
     int result = 0;
@@ -463,7 +465,7 @@ DetectITypeData *itd = NULL;
  * \test DetectITypeParseTest07 is a test for setting a valid itype value
  *       with "<>" operator and spaces all around
  */
-int DetectITypeParseTest07(void)
+static int DetectITypeParseTest07(void)
 {
 DetectITypeData *itd = NULL;
     int result = 0;
@@ -479,7 +481,7 @@ DetectITypeData *itd = NULL;
 /**
  * \test DetectITypeParseTest08 is a test for setting an invalid itype value
  */
-int DetectITypeParseTest08(void)
+static int DetectITypeParseTest08(void)
 {
     DetectITypeData *itd = NULL;
     itd = DetectITypeParse("> 8 <> 20");
@@ -494,7 +496,7 @@ int DetectITypeParseTest08(void)
  *       keyword by creating 5 rules and matching a crafted packet against
  *       them. 4 out of 5 rules shall trigger.
  */
-int DetectITypeMatchTest01(void)
+static int DetectITypeMatchTest01(void)
 {
 
     Packet *p = NULL;

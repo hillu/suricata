@@ -253,7 +253,7 @@ static int TmThreadTimeoutLoop(ThreadVars *tv, TmSlot *s)
 
  */
 
-void *TmThreadsSlotPktAcqLoop(void *td)
+static void *TmThreadsSlotPktAcqLoop(void *td)
 {
     /* block usr2.  usr2 to be handled by the main thread only */
     UtilSignalBlock(SIGUSR2);
@@ -390,7 +390,7 @@ error:
  *
  *  The loop runs in the caller's thread. No separate thread.
  */
-void *TmThreadsSlotPktAcqLoopAFL(void *td)
+static void *TmThreadsSlotPktAcqLoopAFL(void *td)
 {
     SCLogNotice("AFL mode starting");
 
@@ -504,7 +504,7 @@ error:
  * \todo Only the first "slot" currently makes the "post_pq" available
  *       to the thread module.
  */
-void *TmThreadsSlotVar(void *td)
+static void *TmThreadsSlotVar(void *td)
 {
     /* block usr2.  usr2 to be handled by the main thread only */
     UtilSignalBlock(SIGUSR2);
@@ -747,7 +747,7 @@ static void *TmThreadsManagement(void *td)
  *
  * \retval TmEcode TM_ECODE_OK on success; TM_ECODE_FAILED on failure.
  */
-TmEcode TmThreadSetSlots(ThreadVars *tv, char *name, void *(*fn_p)(void *))
+static TmEcode TmThreadSetSlots(ThreadVars *tv, const char *name, void *(*fn_p)(void *))
 {
     if (name == NULL) {
         if (fn_p == NULL) {
@@ -823,11 +823,11 @@ ThreadVars *TmThreadsGetTVContainingSlot(TmSlot *tm_slot)
  *
  * \retval The allocated TmSlot or NULL if there is an error
  */
-static inline TmSlot * _TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
+void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, const void *data)
 {
     TmSlot *slot = SCMalloc(sizeof(TmSlot));
     if (unlikely(slot == NULL))
-        return NULL;
+        return;
     memset(slot, 0, sizeof(TmSlot));
     SC_ATOMIC_INIT(slot->slot_data);
     slot->tv = tv;
@@ -862,26 +862,7 @@ static inline TmSlot * _TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *
             slot->id = b->id + 1;
         }
     }
-
-    return slot;
-}
-
-void TmSlotFree(TmSlot *tms)
-{
-    SC_ATOMIC_DESTROY(tms->slot_data);
-    SCFree(tms);
-}
-
-/**
- * \brief Appends a new entry to the slots.
- *
- * \param tv   TV the slot is attached to.
- * \param tm   TM to append.
- * \param data Data to be passed on to the slot init function.
- */
-void TmSlotSetFuncAppend(ThreadVars *tv, TmModule *tm, void *data)
-{
-    _TmSlotSetFuncAppend(tv, tm, data);
+    return;
 }
 
 /**
@@ -1137,8 +1118,8 @@ TmEcode TmThreadSetupOptions(ThreadVars *tv)
  *
  * \retval the newly created TV instance, or NULL on error
  */
-ThreadVars *TmThreadCreate(const char *name, char *inq_name, char *inqh_name,
-                           char *outq_name, char *outqh_name, char *slots,
+ThreadVars *TmThreadCreate(const char *name, const char *inq_name, const char *inqh_name,
+                           const char *outq_name, const char *outqh_name, const char *slots,
                            void * (*fn_p)(void *), int mucond)
 {
     ThreadVars *tv = NULL;
@@ -1258,9 +1239,9 @@ error:
  *
  * \retval the newly created TV instance, or NULL on error
  */
-ThreadVars *TmThreadCreatePacketHandler(const char *name, char *inq_name,
-                                        char *inqh_name, char *outq_name,
-                                        char *outqh_name, char *slots)
+ThreadVars *TmThreadCreatePacketHandler(const char *name, const char *inq_name,
+                                        const char *inqh_name, const char *outq_name,
+                                        const char *outqh_name, const char *slots)
 {
     ThreadVars *tv = NULL;
 
@@ -1316,7 +1297,7 @@ ThreadVars *TmThreadCreateMgmtThread(const char *name, void *(fn_p)(void *),
  *
  * \retval the newly created TV instance, or NULL on error
  */
-ThreadVars *TmThreadCreateMgmtThreadByName(const char *name, char *module,
+ThreadVars *TmThreadCreateMgmtThreadByName(const char *name, const char *module,
                                      int mucond)
 {
     ThreadVars *tv = NULL;
@@ -1349,7 +1330,7 @@ ThreadVars *TmThreadCreateMgmtThreadByName(const char *name, char *module,
  *
  * \retval the newly created TV instance, or NULL on error
  */
-ThreadVars *TmThreadCreateCmdThreadByName(const char *name, char *module,
+ThreadVars *TmThreadCreateCmdThreadByName(const char *name, const char *module,
                                      int mucond)
 {
     ThreadVars *tv = NULL;
@@ -1448,13 +1429,20 @@ void TmThreadRemove(ThreadVars *tv, int type)
  *
  * \param tv A ThreadVars instance corresponding to the thread that has to be
  *           killed.
+ *
+ * \retval r 1 killed succesfully
+ *           0 not yet ready, needs another look
  */
-void TmThreadKillThread(ThreadVars *tv)
+static int TmThreadKillThread(ThreadVars *tv)
 {
     int i = 0;
 
-    if (tv == NULL)
-        return;
+    BUG_ON(tv == NULL);
+
+    /* kill only once :) */
+    if (TmThreadsCheckFlag(tv, THV_DEAD)) {
+        return 1;
+    }
 
     if (tv->inq != NULL) {
         /* we wait till we dry out all the inq packets, before we
@@ -1463,8 +1451,8 @@ void TmThreadKillThread(ThreadVars *tv)
         if (!(strlen(tv->inq->name) == strlen("packetpool") &&
               strcasecmp(tv->inq->name, "packetpool") == 0)) {
             PacketQueue *q = &trans_q[tv->inq->id];
-            while (q->len != 0) {
-                usleep(1000);
+            if (q->len != 0) {
+                return 0;
             }
         }
     }
@@ -1475,15 +1463,7 @@ void TmThreadKillThread(ThreadVars *tv)
     TmThreadsSetFlag(tv, THV_DEINIT);
 
     /* to be sure, signal more */
-    int cnt = 0;
-    while (1) {
-        if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
-            SCLogDebug("signalled the thread %" PRId32 " times", cnt);
-            break;
-        }
-
-        cnt++;
-
+    if (!(TmThreadsCheckFlag(tv, THV_CLOSED))) {
         if (tv->InShutdownHandler != NULL) {
             tv->InShutdownHandler(tv);
         }
@@ -1500,8 +1480,7 @@ void TmThreadKillThread(ThreadVars *tv)
         if (tv->ctrl_cond != NULL ) {
             pthread_cond_broadcast(tv->ctrl_cond);
         }
-
-        usleep(100);
+        return 0;
     }
 
     if (tv->outctx != NULL) {
@@ -1511,14 +1490,15 @@ void TmThreadKillThread(ThreadVars *tv)
 
         if (tmqh->OutHandlerCtxFree != NULL) {
             tmqh->OutHandlerCtxFree(tv->outctx);
+            tv->outctx = NULL;
         }
     }
 
-    /* join it */
+    /* join it and flag it as dead */
     pthread_join(tv->t, NULL);
     SCLogDebug("thread %s stopped", tv->name);
-
-    return;
+    TmThreadsSetFlag(tv, THV_DEAD);
+    return 1;
 }
 
 /** \internal
@@ -1660,6 +1640,8 @@ again:
 
             /* wait for it to enter the 'flow loop' stage */
             while (!TmThreadsCheckFlag(tv, THV_FLOW_LOOP)) {
+                SCMutexUnlock(&tv_root_lock);
+
                 usleep(WAIT_TIME);
                 total_wait_time += WAIT_TIME / 1000000.0;
                 if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
@@ -1668,6 +1650,7 @@ again:
                                "Killing engine", tv->name);
                     exit(EXIT_FAILURE);
                 }
+                goto again;
             }
         }
 
@@ -1743,6 +1726,8 @@ again:
         }
 
         while (!TmThreadsCheckFlag(tv, THV_RUNNING_DONE)) {
+            SCMutexUnlock(&tv_root_lock);
+
             usleep(WAIT_TIME);
             total_wait_time += WAIT_TIME / 1000000.0;
             if (total_wait_time > THREAD_KILL_MAX_WAIT_TIME) {
@@ -1751,6 +1736,7 @@ again:
                         "Killing engine", tv->name);
                 exit(EXIT_FAILURE);
             }
+            goto again;
         }
 
         tv = tv->next;
@@ -1792,18 +1778,27 @@ TmSlot *TmThreadGetFirstTmSlotForPartialPattern(const char *tm_name)
     return slots;
 }
 
+#define MIN_WAIT_TIME 100
 void TmThreadKillThreadsFamily(int family)
 {
     ThreadVars *tv = NULL;
+    unsigned int sleep = MIN_WAIT_TIME;
 
-    if ((family < 0) || (family >= TVT_MAX))
-        return;
+    BUG_ON((family < 0) || (family >= TVT_MAX));
 
+again:
     SCMutexLock(&tv_root_lock);
     tv = tv_root[family];
 
     while (tv) {
-        TmThreadKillThread(tv);
+        int r = TmThreadKillThread(tv);
+        if (r == 0) {
+            SCMutexUnlock(&tv_root_lock);
+            usleep(sleep);
+            sleep += MIN_WAIT_TIME; /* slowly back off */
+            goto again;
+        }
+        sleep = MIN_WAIT_TIME; /* reset */
 
         tv = tv->next;
     }
@@ -1821,7 +1816,7 @@ void TmThreadKillThreads(void)
     return;
 }
 
-void TmThreadFree(ThreadVars *tv)
+static void TmThreadFree(ThreadVars *tv)
 {
     TmSlot *s;
     TmSlot *ps;
@@ -2123,36 +2118,56 @@ TmEcode TmThreadWaitOnThreadInit(void)
     uint16_t mgt_num = 0;
     uint16_t ppt_num = 0;
 
+    uint64_t slept = 0;
+
+again:
     SCMutexLock(&tv_root_lock);
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
         while (tv != NULL) {
-            char started = FALSE;
-            while (started == FALSE) {
-                if (TmThreadsCheckFlag(tv, THV_INIT_DONE)) {
-                    started = TRUE;
-                } else {
-                    /* sleep a little to give the thread some
-                     * time to finish initialization */
-                    usleep(100);
-                }
+            if (TmThreadsCheckFlag(tv, (THV_CLOSED|THV_DEAD))) {
+                SCMutexUnlock(&tv_root_lock);
 
-                if (TmThreadsCheckFlag(tv, THV_FAILED)) {
-                    SCMutexUnlock(&tv_root_lock);
-                    SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" failed to "
-                            "initialize.", tv->name);
-                    return TM_ECODE_FAILED;
-                }
-                if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
-                    SCMutexUnlock(&tv_root_lock);
-                    SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" closed on "
-                            "initialization.", tv->name);
-                    return TM_ECODE_FAILED;
-                }
+                SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" failed to "
+                        "initialize: flags %04x", tv->name,
+                        SC_ATOMIC_GET(tv->flags));
+                return TM_ECODE_FAILED;
             }
 
-            if (i == TVT_MGMT) mgt_num++;
-            else if (i == TVT_PPT) ppt_num++;
+            if (!(TmThreadsCheckFlag(tv, THV_INIT_DONE))) {
+                SCMutexUnlock(&tv_root_lock);
+
+                if (slept > (120*1000000)) {
+                    SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" failed to "
+                            "initialize in time: flags %04x", tv->name,
+                            SC_ATOMIC_GET(tv->flags));
+                    return TM_ECODE_FAILED;
+                }
+
+                /* sleep a little to give the thread some
+                 * time to finish initialization */
+                usleep(100);
+                slept += 100;
+                goto again;
+            }
+
+            if (TmThreadsCheckFlag(tv, THV_FAILED)) {
+                SCMutexUnlock(&tv_root_lock);
+                SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" failed to "
+                        "initialize.", tv->name);
+                return TM_ECODE_FAILED;
+            }
+            if (TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                SCMutexUnlock(&tv_root_lock);
+                SCLogError(SC_ERR_THREAD_INIT, "thread \"%s\" closed on "
+                        "initialization.", tv->name);
+                return TM_ECODE_FAILED;
+            }
+
+            if (i == TVT_MGMT)
+                mgt_num++;
+            else if (i == TVT_PPT)
+                ppt_num++;
 
             tv = tv->next;
         }

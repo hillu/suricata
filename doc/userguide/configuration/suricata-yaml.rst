@@ -267,6 +267,7 @@ integration with 3rd party tools like logstash.
       #redis:
       #  server: 127.0.0.1
       #  port: 6379
+      #  async: true ## if redis replies are read asynchronously
       #  mode: list ## possible values: list (default), channel
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
@@ -323,6 +324,9 @@ integration with 3rd party tools like logstash.
             #custom: [a, aaaa, cname, mx, ns, ptr, txt]
         - tls:
             extended: yes     # enable this for extended logging information
+            # output TLS transaction where the session is resumed using a
+            # session id
+            #session-resumption: no
         - files:
             force-magic: no   # force logging magic on all logged files
             # force logging of checksums, available hash functions are md5,
@@ -359,66 +363,71 @@ For more advanced configuration options, see :ref:`Eve JSON Output <eve-json-out
 
 The format is documented in :ref:`Eve JSON Format <eve-json-format>`.
 
-Log output for use with Barnyard (unified.log)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-This log only supports IPv4. Its information will be stored in the
-default logging directory.  This log is designed to be stored in a
-binary format on the hard disc, where it will be further processed by
-Barnyard. Barnyard can store the output in a database, so Suricata can
-work on other important tasks. Barnyard can add the files in the
-Mysql-database, send them to Sguil or several other output options.
-
-There is a size-limit to the log-file: If Suricata generates an alert,
-it stores this alert in a unified-file. Suricata keeps continuing
-doing that, until the file has reached its limit. Which in the default
-case is at 32 MB. At that point Suricata generates a new file and the
-process starts all over again. Barnyard keeps on processing these
-files. To prevent Suricata from filling up the hard disc, a size limit
-is enforced. When the limit is reached, the file will 'role-over',
-creating a new file. Barnyard removes old files. To every file,
-Suricata adds a time stamp, so it is easy to see which one came first
-and which one is the latter.
-
-::
-
-  -Unified-log:                     #The log-name.
-     enabled: no                    #This log is not enabled. Set 'yes' to enable.
-     filename: unified.log          #The name of the file in the default logging directory.
-     limit: 32                      #The file size limit in megabytes.
-
-This output option has been removed in Suricata 1.1rc1 (see ticket
-#353).
-
-Alert output for use with Barnyard (unified.alert)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-This log only supports IPv4. Its information will be stored in the
-default logging directory.  For further information read the above
-information about ( 2) unified.log)
-
-::
-
-  -Unified-alert:                 #The log-name.
-     enabled: no                  #This log is not enabled. Set 'yes' to enable.
-     filename: unified.alert      #The name of the file in the default logging directory.
-     limit: 32                    #The file size limit in megabytes.
-
-This output option has been removed in Suricata 1.1rc1 (see ticket #353).
-
 Alert output for use with Barnyard2 (unified2.alert)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-This log also supports IPv6 in addition to IPv4. It's information will
-be stored in the default logging directory.  For further information
-read the above information about 2. unified.log.
+This log format is a binary format compatible with the unified2 output
+of another popular IDS format and is designed for use with Barnyard2
+or other tools that consume the unified2 log format.
+
+By default a file with the given filename and a timestamp (unix epoch
+format) will be created until the file hits the configured size limit,
+then a new file, with a new timestamp will be created. It is the job
+of other tools, such as Barnyard2 to cleanup old unified2 files.
+
+If the `nostamp` option is set the log file will not have a timestamp
+appended. The file will be re-opened on SIGHUP like other log files
+allowing external log rotation tools to work as expected. However, if
+the limit is reach the file will be deleted and re-opened.
+
+This output supports IPv6 and IPv4 events.
 
 ::
 
-  - unified2-alert:               #The log-name.
-      enabled: yes                #This log is enabled. Set 'no' to disable.
-      filename: unified2.alert    #The name of the file in the default logging directory.
-      limit: 32                   #The file size limit in megabytes.
+  - unified2-alert:
+      enabled: yes
+
+      # The filename to log to in the default log directory. A
+      # timestamp in unix epoch time will be appended to the filename
+      # unless nostamp is set to yes.
+      filename: unified2.alert
+
+      # File size limit.  Can be specified in kb, mb, gb.  Just a number
+      # is parsed as bytes.
+      #limit: 32mb
+
+      # By default unified2 log files have the file creation time (in
+      # unix epoch format) appended to the filename. Set this to yes to
+      # disable this behaviour.
+      #nostamp: no
+
+      # Sensor ID field of unified2 alerts.
+      #sensor-id: 0
+
+      # Include payload of packets related to alerts. Defaults to true, set to
+      # false if payload is not required.
+      #payload: yes
+
+      # HTTP X-Forwarded-For support by adding the unified2 extra header or
+      # overwriting the source or destination IP address (depending on flow
+      # direction) with the one reported in the X-Forwarded-For HTTP header.
+      # This is helpful when reviewing alerts for traffic that is being reverse
+      # or forward proxied.
+      xff:
+        enabled: no
+        # Two operation modes are available, "extra-data" and "overwrite". Note
+        # that in the "overwrite" mode, if the reported IP address in the HTTP
+        # X-Forwarded-For header is of a different version of the packet
+        # received, it will fall-back to "extra-data" mode.
+        mode: extra-data
+        # Two proxy deployments are supported, "reverse" and "forward". In
+        # a "reverse" deployment the IP address used is the last one, in a
+        # "forward" deployment the first IP address is used.
+        deployment: reverse
+        # Header name where the actual IP address will be reported, if more
+        # than one IP address is present, the last IP address will be the
+        # one taken into consideration.
+        header: X-Forwarded-For
 
 This alert output needs Barnyard2.
 
@@ -1241,11 +1250,8 @@ option can be set off by entering 'no' instead of 'yes'.
 ::
 
   stream:
-    memcap: 33554432              #Amount of flow-information (in bytes) to keep in memory.
-    checksum_validation: yes      #Validate packet checksum, reject packets with invalid checksums.
-
-The option 'max_sessions' is the limit for concurrent sessions. It
-prevents Suricata from using all memory for sessions.
+    memcap: 64mb                # Max memory usage (in bytes) for TCP session tracking
+    checksum_validation: yes    # Validate packet checksum, reject packets with invalid checksums.
 
 To mitigate Suricata from being overloaded by fast session creation,
 the option prealloc_sessions instructs Suricata to keep a number of
@@ -1253,7 +1259,7 @@ sessions ready in memory.
 
 A TCP-session starts with the three-way-handshake. After that, data
 can be send en received. A session can last a long time. It can happen
-that Suricata will be running after a few sessions have already been
+that Suricata will be started after a few TCP sessions have already been
 started. This way, Suricata misses the original setup of those
 sessions. This setup always includes a lot of information. If you want
 Suricata to check the stream from that time on, you can do so by
@@ -1277,11 +1283,15 @@ anomalies in streams. See :ref:`host-os-policy`.
 
 ::
 
-    max_sessions: 262144         # 256k concurrent sessions
     prealloc_sessions: 32768     # 32k sessions prealloc'd
     midstream: false             # do not allow midstream session pickups
     async_oneside: false         # do not enable async stream handling
     inline: no                   # stream inline mode
+    drop-invalid: yes            # drop invalid packets
+
+The 'drop-invalid' option can be set to no to avoid blocking packets that are
+seen invalid by the streaming engine. This can be useful to cover some weird cases
+seen in some layer 2 IPS setup.
 
 **Example 11   Normal/IDS mode**
 
@@ -1303,19 +1313,55 @@ Suricata inspects traffic in a sliding window manner.
 
 .. image:: suricata-yaml/Inline_reassembly_unackd_data.png
 
-The reassembly-engine has to keep packets in memory to be able to make
-a reassembled stream. It can make use of the amount of bytes set
-below. Reassembling a stream is an expensive operation. In the option
-depth you can set the depth (in a stream) of the reassembling. By
-default this is 1MB.
+The reassembly-engine has to keep data segments in memory in order to
+be able to reconstruct a stream. To avoid resource starvation a memcap
+is used to limit the memory used.
+
+Reassembling a stream is an expensive operation. With the option depth
+you can control how far into a stream reassembly is done. By default
+this is 1MB. This setting can be overridden per stream by the protocol
+parsers that do file extraction.
+
+Inspection of reassembled data is done in chunks. The size of these
+chunks is set with ``toserver_chunk_size`` and ``toclient_chunk_size``.
+To avoid making the borders predictable, the sizes van be varied by
+adding in a random factor.
 
 ::
 
     reassembly:
-      memcap: 67108864             #Amount of packets (in bytes) to keep in memory.
-      depth: 1048576               #The depth of the reassembling.
-      toserver_chunk_size: 2560    # inspect raw stream in chunks of at least this size
-      toclient_chunk_size: 2560    # inspect raw stream in chunks of at least
+      memcap: 256mb             # Memory reserved for stream data reconstruction (in bytes)
+      depth: 1mb                # The depth of the reassembling.
+      toserver_chunk_size: 2560 # inspect raw stream in chunks of at least this size
+      toclient_chunk_size: 2560 # inspect raw stream in chunks of at least
+      randomize-chunk-size: yes
+      #randomize-chunk-range: 10
+
+'Raw' reassembly is done for inspection by simple ``content``, ``pcre``
+keywords use and other payload inspection not done on specific protocol
+buffers like ``http_uri``. This type of reassembly can be turned off:
+
+::
+
+    reassembly:
+      raw: no
+
+Incoming segments are stored in a list in the stream. To avoid constant
+memory allocations a per-thread pool is used.
+
+::
+
+    reassembly:
+      segment-prealloc: 2048    # pre-alloc 2k segments per thread
+
+Resending different data on the same sequence number is a way to confuse
+network inspection.
+
+::
+
+    reassembly:
+      check-overlap-different-data: true
+
 
 *Example 15        Stream reassembly*
 

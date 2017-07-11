@@ -99,35 +99,44 @@ int ThresholdHostHasThreshold(Host *host)
  *
  */
 const DetectThresholdData *SigGetThresholdTypeIter(const Signature *sig,
-        Packet *p, const SigMatch **psm, int list)
+        Packet *p, const SigMatchData **psm, int list)
 {
-    const SigMatch *sm = NULL;
+    const SigMatchData *smd = NULL;
     const DetectThresholdData *tsh = NULL;
 
     if (sig == NULL)
         return NULL;
 
     if (*psm == NULL) {
-        sm = sig->sm_lists_tail[list];
+        smd = sig->sm_arrays[list];
     } else {
         /* Iteration in progress, using provided value */
-        sm = *psm;
+        smd = *psm;
     }
 
     if (p == NULL)
         return NULL;
 
-    while (sm != NULL) {
-        if (sm->type == DETECT_THRESHOLD || sm->type == DETECT_DETECTION_FILTER) {
-            tsh = (DetectThresholdData *)sm->ctx;
-            *psm = sm->prev;
+    while (1) {
+        if (smd->type == DETECT_THRESHOLD ||
+            smd->type == DETECT_DETECTION_FILTER)
+        {
+            tsh = (DetectThresholdData *)smd->ctx;
+
+            if (smd->is_last) {
+                *psm = NULL;
+            } else {
+                *psm = smd + 1;
+            }
             return tsh;
         }
 
-        sm = sm->prev;
+        if (smd->is_last) {
+            break;
+        }
+        smd++;
     }
     *psm = NULL;
-
     return NULL;
 }
 
@@ -212,7 +221,7 @@ static DetectThresholdEntry *ThresholdHostLookupEntry(Host *h, uint32_t sid, uin
     return e;
 }
 
-int ThresholdHandlePacketSuppress(Packet *p, const DetectThresholdData *td, uint32_t sid, uint32_t gid)
+static int ThresholdHandlePacketSuppress(Packet *p, const DetectThresholdData *td, uint32_t sid, uint32_t gid)
 {
     int ret = 0;
     DetectAddress *m = NULL;
@@ -277,7 +286,7 @@ static inline void RateFilterSetAction(Packet *p, PacketAlert *pa, uint8_t new_a
  *  \retval 1 normal match
  *  \retval 0 no match
  */
-int ThresholdHandlePacketHost(Host *h, Packet *p, const DetectThresholdData *td,
+static int ThresholdHandlePacketHost(Host *h, Packet *p, const DetectThresholdData *td,
         uint32_t sid, uint32_t gid, PacketAlert *pa)
 {
     int ret = 0;

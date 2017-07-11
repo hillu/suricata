@@ -56,7 +56,7 @@ typedef struct OutputTxLogger_ {
     uint32_t id;
     int tc_log_progress;
     int ts_log_progress;
-    TmEcode (*ThreadInit)(ThreadVars *, void *, void **);
+    TmEcode (*ThreadInit)(ThreadVars *, const void *, void **);
     TmEcode (*ThreadDeinit)(ThreadVars *, void *);
     void (*ThreadExitPrintStats)(ThreadVars *, void *);
 } OutputTxLogger;
@@ -136,19 +136,11 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
     }
 
     OutputLoggerThreadData *op_thread_data = (OutputLoggerThreadData *)thread_data;
-    OutputTxLogger *logger = list;
-    OutputLoggerThreadStore *store = op_thread_data->store;
-
-    BUG_ON(logger == NULL && store != NULL);
-    BUG_ON(logger != NULL && store == NULL);
-    BUG_ON(logger == NULL && store == NULL);
-
     if (p->flow == NULL)
         return TM_ECODE_OK;
 
     Flow * const f = p->flow;
-
-    AppProto alproto = f->alproto;
+    const AppProto alproto = f->alproto;
 
     if (AppLayerParserProtocolIsTxAware(p->proto, alproto) == 0)
         goto end;
@@ -161,7 +153,9 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
         goto end;
     }
 
-    uint64_t total_txs = AppLayerParserGetTxCnt(p->proto, alproto, alstate);
+    const uint8_t ts_disrupt_flags = FlowGetDisruptionFlags(f, STREAM_TOSERVER);
+    const uint8_t tc_disrupt_flags = FlowGetDisruptionFlags(f, STREAM_TOCLIENT);
+    const uint64_t total_txs = AppLayerParserGetTxCnt(f, alstate);
     uint64_t tx_id = AppLayerParserGetTransactionLogId(f->alparser);
     uint64_t max_id = tx_id;
     int logged = 0;
@@ -182,17 +176,21 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
         }
 
         int tx_progress_ts = AppLayerParserGetStateProgress(p->proto, alproto,
-                tx, FlowGetDisruptionFlags(f, STREAM_TOSERVER));
+                tx, ts_disrupt_flags);
 
         int tx_progress_tc = AppLayerParserGetStateProgress(p->proto, alproto,
-                tx, FlowGetDisruptionFlags(f, STREAM_TOCLIENT));
+                tx, tc_disrupt_flags);
 
         SCLogDebug("tx_progress_ts %d tx_progress_tc %d",
                 tx_progress_ts, tx_progress_tc);
 
-        // call each logger here (pseudo code)
-        logger = list;
-        store = op_thread_data->store;
+        const OutputTxLogger *logger = list;
+        const OutputLoggerThreadStore *store = op_thread_data->store;
+#ifdef DEBUG_VALIDATION
+        BUG_ON(logger == NULL && store != NULL);
+        BUG_ON(logger != NULL && store == NULL);
+        BUG_ON(logger == NULL && store == NULL);
+#endif
         while (logger && store) {
             BUG_ON(logger->LogFunc == NULL);
 
@@ -204,8 +202,7 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
 
                 number_of_loggers++;
 
-                if (AppLayerParserGetTxLogged(p->proto, alproto, alstate, tx,
-                        logger->id)) {
+                if (AppLayerParserGetTxLogged(f, alstate, tx, logger->id)) {
                     SCLogDebug("logger has already logged this transaction");
                     loggers_that_logged++;
                     goto next;
@@ -246,9 +243,10 @@ static TmEcode OutputTxLog(ThreadVars *tv, Packet *p, void *thread_data)
 next:
             logger = logger->next;
             store = store->next;
-
+#ifdef DEBUG_VALIDATION
             BUG_ON(logger == NULL && store != NULL);
             BUG_ON(logger != NULL && store == NULL);
+#endif
         }
 
         /* If all loggers logged set a flag and update the last tx_id
@@ -279,7 +277,7 @@ end:
 /** \brief thread init for the tx logger
  *  This will run the thread init functions for the individual registered
  *  loggers */
-static TmEcode OutputTxLogThreadInit(ThreadVars *tv, void *initdata, void **data)
+static TmEcode OutputTxLogThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     OutputLoggerThreadData *td = SCMalloc(sizeof(*td));
     if (td == NULL)

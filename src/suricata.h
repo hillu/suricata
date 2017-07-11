@@ -47,7 +47,6 @@
  *  - ::Packet: Data relative to an individual packet with information about
  *  linked structure such as the ::Flow the ::Packet belongs to.
  *  - ::Flow: Information about a flow for example a TCP session
- *  - ::StreamMsg: structure containing the reassembled data
  *
  *  \subsection runmode Running mode
  *
@@ -71,7 +70,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "3.2.2"
+#define PROG_VER "4.0.0-rc1"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -140,14 +139,14 @@ typedef struct SCInstance_ {
     char pcap_dev[128];
     char *sig_file;
     int sig_file_exclusive;
-    char *pid_filename;
+    const char *pid_filename;
     char *regex_arg;
 
     char *keyword_info;
     char *runmode_custom_mode;
 #ifndef OS_WIN32
-    char *user_name;
-    char *group_name;
+    const char *user_name;
+    const char *group_name;
     uint8_t do_setuid;
     uint8_t do_setgid;
     uint32_t userid;
@@ -162,16 +161,17 @@ typedef struct SCInstance_ {
 
     struct timeval start_time;
 
-    char *log_dir;
+    const char *log_dir;
     const char *progname; /**< pointer to argv[0] */
     const char *conf_filename;
 } SCInstance;
 
 
 /* memset to zeros, and mutex init! */
-void GlobalsInitPreConfig();
+void GlobalsInitPreConfig(void);
 
 extern volatile uint8_t suricata_ctl_flags;
+extern int g_disable_randomness;
 
 /* uppercase to lowercase conversion lookup table */
 uint8_t g_u8_lowercasetable[256];
@@ -194,10 +194,12 @@ int RunmodeGetCurrent(void);
 int IsRuleReloadSet(int quiet);
 
 extern int run_mode;
+extern int run_mode_offline;
 
 void PreRunInit(const int runmode);
 void PreRunPostPrivsDropInit(const int runmode);
 void PostRunDeinit(const int runmode, struct timeval *start_time);
+void RegisterAllModules(void);
 
 #endif /* __SURICATA_H__ */
 

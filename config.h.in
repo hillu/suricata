@@ -57,6 +57,9 @@
 /* Define to 1 if you have the <assert.h> header file. */
 #undef HAVE_ASSERT_H
 
+/* Define to 1 if you have the `clock_gettime' function. */
+#undef HAVE_CLOCK_GETTIME
+
 /* Define to 1 if you have the <ctype.h> header file. */
 #undef HAVE_CTYPE_H
 
@@ -124,6 +127,12 @@
 
 /* Define to 1 if you have the `dag' library (-ldag). */
 #undef HAVE_LIBDAG
+
+/* libevent available */
+#undef HAVE_LIBEVENT
+
+/* Define to 1 if you have the `event_pthreads' library (-levent_pthreads). */
+#undef HAVE_LIBEVENT_PTHREADS
 
 /* Define to 1 if you have the `GeoIP' library (-lGeoIP). */
 #undef HAVE_LIBGEOIP
@@ -314,6 +323,12 @@
    and to 0 otherwise. */
 #undef HAVE_REALLOC
 
+/* Enable Rust language */
+#undef HAVE_RUST
+
+/* Enable support for experimental Rust parsers */
+#undef HAVE_RUST_EXTERNAL
+
 /* Define to 1 if you have the <sched.h> header file. */
 #undef HAVE_SCHED_H
 
@@ -383,6 +398,9 @@
 /* Define to 1 if you have the <sys/prctl.h> header file. */
 #undef HAVE_SYS_PRCTL_H
 
+/* Define to 1 if you have the <sys/resource.h> header file. */
+#undef HAVE_SYS_RESOURCE_H
+
 /* Define to 1 if you have the <sys/socket.h> header file. */
 #undef HAVE_SYS_SOCKET_H
 
@@ -413,6 +431,9 @@
 /* Define to 1 if you have the <w32api/wtypes.h> header file. */
 #undef HAVE_W32API_WTYPES_H
 
+/* Define to 1 if you have the <wincrypt.h> header file. */
+#undef HAVE_WINCRYPT_H
+
 /* Define to 1 if you have the <windows.h> header file. */
 #undef HAVE_WINDOWS_H
 
@@ -427,9 +448,6 @@
 
 /* Enable FreeBSD IPFW support for inline IDP */
 #undef IPFW
-
-/* (libpcap version 0.x) */
-#undef LIBPCAP_VERSION_MAJOR
 
 /* Define to the sub-directory where libtool stores uninstalled libraries. */
 #undef LT_OBJDIR
