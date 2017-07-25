@@ -20,6 +20,11 @@ ifneq (,$(findstring $(ARCH),$(HYPERSCAN_ARCHS)))
 	ENABLE_HYPERSCAN="--enable-libhs"
 endif
 
+CI ?= $(shell $(CURDIR)/debian/building-in-ci.sh)
+ifeq ($(CI),true)
+        ENABLE_UNITTESTS="--enable-unittests"
+endif
+
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \
 	--enable-gccprotect --disable-gccmarch-native \
 	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
@@ -28,7 +33,8 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 	--enable-geoip --enable-hiredis \
 	--enable-non-bundled-htp \
 	$(ENABLE_LUAJIT) \
-	$(ENABLE_HYPERSCAN)
+	$(ENABLE_HYPERSCAN) \
+	$(ENABLE_UNITTESTS)
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)

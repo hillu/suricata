@@ -44,3 +44,7 @@ Restrictions: needs-root, isolation-container, allow-stderr
 Tests: systemd-service-test.sh
 Depends: @, systemd, procps
 Restrictions: needs-root, isolation-container, allow-stderr
+
+Tests: suricata -u
+Depends: @, @builddeps@, procps
+Restrictions: needs-root, isolation-container, build-needed
