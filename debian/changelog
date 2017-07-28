@@ -1,4 +1,4 @@
-suricata (4.0.0-1) unstable; urgency=medium
+suricata (1:4.0.0-1) unstable; urgency=medium
 
   * [636f10f] d/rules: actually use dh-systemd (Closes: #861732)
   * [c728ed0] d/rules: cleanup comments
@@ -10,6 +10,7 @@ suricata (4.0.0-1) unstable; urgency=medium
   * [c831659] suricata: support for internal unittest in autopktest
   * [557ded7] New upstream version 4.0.0
   * [5d41b6c] d/t/control: the internal suricata unittest is a command test
+  * [7f4feaa] d/changelog: add missing entry for 4.0.0-beta1-1~exp1
 
  -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 28 Jul 2017 05:29:48 +0200
 
