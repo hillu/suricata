@@ -106,6 +106,8 @@ static int StreamTcpHandleTimestamp(TcpSession * , Packet *);
 static int StreamTcpValidateRst(TcpSession * , Packet *);
 static inline int StreamTcpValidateAck(TcpSession *ssn, TcpStream *, Packet *);
 
+extern int g_detect_disabled;
+
 static PoolThread *ssn_pool = NULL;
 static SCMutex ssn_pool_mutex = SCMUTEX_INITIALIZER; /**< init only, protect initializing and growing pool */
 #ifdef DEBUG
@@ -2444,10 +2446,6 @@ static int StreamTcpPacketStateEstablished(ThreadVars *tv, Packet *p,
 
         SCLogDebug("ssn %p: SYN/ACK packet on state ESTABLISHED... resent. "
                 "Likely due server not receiving final ACK in 3whs", ssn);
-
-        /* resetting state to TCP_SYN_RECV as we should get another ACK now */
-        StreamTcpPacketSetState(p, ssn, TCP_SYN_RECV);
-        SCLogDebug("ssn %p: =~ ssn state is now reset to TCP_SYN_RECV", ssn);
         return 0;
 
     } else if (p->tcph->th_flags & TH_SYN) {
@@ -4658,6 +4656,15 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
             if (StreamTcpBypassEnabled()) {
                 PacketBypassCallback(p);
             }
+
+        /* if stream is dead and we have no detect engine at all, bypass. */
+        } else if (g_detect_disabled &&
+                (ssn->client.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                (ssn->server.flags & STREAMTCP_STREAM_FLAG_NOREASSEMBLY) &&
+                StreamTcpBypassEnabled())
+        {
+            SCLogDebug("bypass as stream is dead and we have no rules");
+            PacketBypassCallback(p);
         }
     }
 

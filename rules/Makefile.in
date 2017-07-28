@@ -230,6 +230,7 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
 SECCFLAGS = @SECCFLAGS@
@@ -333,7 +334,8 @@ modbus-events.rules \
 app-layer-events.rules \
 files.rules \
 dnp3-events.rules \
-ntp-events.rules
+ntp-events.rules \
+nfs-events.rules
 
 all: all-am
 

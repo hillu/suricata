@@ -1051,35 +1051,42 @@ static int SSLv2Decode(uint8_t direction, SSLState *ssl_state,
                                 break;
                         }
 
+                        /* fall through */
                     case 4:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
 
+                        /* fall through */
                     case 5:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
 
+                        /* fall through */
                     case 6:
                         input++;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
 
+                        /* fall through */
                     case 7:
                         ssl_state->curr_connp->session_id_length = *(input++) << 8;
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
 
+                        /* fall through */
                     case 8:
                         ssl_state->curr_connp->session_id_length |= *(input++);
                         ssl_state->curr_connp->bytes_processed++;
                         if (--input_len == 0)
                             break;
+
+                        /* fall through */
                 }
             }
 
@@ -1222,11 +1229,11 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
             if (direction) {
                 ssl_state->flags |= SSL_AL_FLAG_SERVER_CHANGE_CIPHER_SPEC;
 
-		int server_cert_seen = ssl_state->server_connp.cert0_issuerdn != NULL && \
-				       ssl_state->server_connp.cert0_subject != NULL;
-		if (!server_cert_seen && (ssl_state->flags & SSL_AL_FLAG_SSL_CLIENT_SESSION_ID) != 0) {
-		    ssl_state->flags |= SSL_AL_FLAG_SESSION_RESUMED;
-		}
+                int server_cert_seen = (ssl_state->server_connp.cert0_issuerdn != NULL &&
+                                        ssl_state->server_connp.cert0_subject != NULL);
+                if (!server_cert_seen && (ssl_state->flags & SSL_AL_FLAG_SSL_CLIENT_SESSION_ID) != 0) {
+                    ssl_state->flags |= SSL_AL_FLAG_SESSION_RESUMED;
+                }
 
             } else {
                 ssl_state->flags |= SSL_AL_FLAG_CLIENT_CHANGE_CIPHER_SPEC;

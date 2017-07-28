@@ -217,6 +217,13 @@ pub const PRIO_USER: ::c_int = 2;
 pub const PRIO_MIN: ::c_int = -20;
 pub const PRIO_MAX: ::c_int = 20;
 
+pub const IPPROTO_ICMP: ::c_int = 1;
+pub const IPPROTO_ICMPV6: ::c_int = 58;
+pub const IPPROTO_TCP: ::c_int = 6;
+pub const IPPROTO_UDP: ::c_int = 17;
+pub const IPPROTO_IP: ::c_int = 0;
+pub const IPPROTO_IPV6: ::c_int = 41;
+
 cfg_if! {
     if #[cfg(dox)] {
         // on dox builds don't pull in anything
@@ -251,6 +258,10 @@ cfg_if! {
     } else if #[cfg(target_os = "fuchsia")] {
         #[link(name = "c")]
         #[link(name = "mxio")]
+        extern {}
+    } else if #[cfg(target_env = "newlib")] {
+        #[link(name = "c")]
+        #[link(name = "m")]
         extern {}
     } else {
         #[link(name = "c")]
@@ -438,6 +449,9 @@ extern {
                   -> ::c_int;
     pub fn execvp(c: *const c_char,
                   argv: *const *const c_char) -> ::c_int;
+    pub fn fexecve(fd: ::c_int, argv: *const *const c_char,
+                   envp: *const *const c_char)
+                   -> ::c_int;
     pub fn fork() -> pid_t;
     pub fn fpathconf(filedes: ::c_int, name: ::c_int) -> c_long;
     pub fn getcwd(buf: *mut c_char, size: ::size_t) -> *mut c_char;
@@ -648,6 +662,10 @@ extern {
     pub fn pthread_condattr_init(attr: *mut pthread_condattr_t) -> ::c_int;
     pub fn pthread_condattr_destroy(attr: *mut pthread_condattr_t) -> ::c_int;
     #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
+               link_name = "pthread_rwlock_init$UNIX2003")]
+    pub fn pthread_rwlock_init(lock: *mut pthread_rwlock_t,
+                               attr: *const pthread_rwlockattr_t) -> ::c_int;
+    #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
                link_name = "pthread_rwlock_destroy$UNIX2003")]
     pub fn pthread_rwlock_destroy(lock: *mut pthread_rwlock_t) -> ::c_int;
     #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
@@ -665,6 +683,9 @@ extern {
     #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
                link_name = "pthread_rwlock_unlock$UNIX2003")]
     pub fn pthread_rwlock_unlock(lock: *mut pthread_rwlock_t) -> ::c_int;
+    pub fn pthread_rwlockattr_init(attr: *mut pthread_rwlockattr_t) -> ::c_int;
+    pub fn pthread_rwlockattr_destroy(attr: *mut pthread_rwlockattr_t)
+                                      -> ::c_int;
     #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
                link_name = "pthread_sigmask$UNIX2003")]
     pub fn pthread_sigmask(how: ::c_int, set: *const sigset_t,
@@ -856,6 +877,7 @@ extern {
                      termios: *const ::termios) -> ::c_int;
     pub fn tcflow(fd: ::c_int, action: ::c_int) -> ::c_int;
     pub fn tcflush(fd: ::c_int, action: ::c_int) -> ::c_int;
+    pub fn tcgetsid(fd: ::c_int) -> ::pid_t;
     pub fn tcsendbreak(fd: ::c_int, duration: ::c_int) -> ::c_int;
     pub fn mkstemp(template: *mut ::c_char) -> ::c_int;
     pub fn mkdtemp(template: *mut ::c_char) -> *mut ::c_char;
@@ -880,6 +902,9 @@ cfg_if! {
     if #[cfg(target_env = "uclibc")] {
         mod uclibc;
         pub use self::uclibc::*;
+    } else if #[cfg(target_env = "newlib")] {
+        mod newlib;
+        pub use self::newlib::*;
     } else if #[cfg(any(target_os = "linux",
                         target_os = "android",
                         target_os = "emscripten",

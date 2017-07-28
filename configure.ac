@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 4.0.0-rc1)
+    AC_INIT(suricata, 4.0.0)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
@@ -130,7 +130,7 @@
     AC_CHECK_HEADERS([linux/ethtool.h linux/sockios.h])
     AC_CHECK_HEADER(glob.h,,[AC_ERROR(glob.h not found ...)])
     AC_CHECK_HEADERS([dirent.h fnmatch.h])
-    AC_CHECK_HEADERS([sys/resource.h])
+    AC_CHECK_HEADERS([sys/resource.h sys/types.h sys/un.h])
 
     AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h linux/if_arp.h], [], [],
     [[#ifdef HAVE_SYS_SOCKET_H
@@ -139,13 +139,13 @@
         #endif
     ]])
 
-    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h w32api/wtypes.h wincrypt.h], [], [],
+    AC_CHECK_HEADERS([windows.h winsock2.h ws2tcpip.h w32api/wtypes.h], [], [],
                     [[
                         #ifndef _X86_
                         #define _X86_
                         #endif
                      ]])
-    AC_CHECK_HEADERS([w32api/winbase.h], [], [],
+    AC_CHECK_HEADERS([w32api/winbase.h wincrypt.h], [], [],
                     [[
                         #ifndef _X86_
                         #define _X86_
@@ -192,6 +192,7 @@
 
     e_magic_file=""
     e_magic_file_comment="#"
+    PCAP_LIB_NAME="pcap"
     case "$host" in
         *-*-*freebsd*)
             LUA_PC_NAME="lua-5.1"
@@ -221,11 +222,13 @@
             CFLAGS="${CFLAGS} -DOS_WIN32"
             LDFLAGS="${LDFLAGS} -lws2_32"
             WINDOWS_PATH="yes"
+            PCAP_LIB_NAME="wpcap"
             ;;
         *-*-cygwin)
             LUA_PC_NAME="lua"
             LUA_LIB_NAME="lua"
             WINDOWS_PATH="yes"
+            PCAP_LIB_NAME="wpcap"
             ;;
         *-*-solaris*)
             AC_MSG_WARN([support for Solaris/Illumos/SunOS is experimental])
@@ -1079,7 +1082,7 @@
     AC_CHECK_HEADERS([pcap.h pcap/pcap.h pcap/bpf.h])
 
     LIBPCAP=""
-    AC_CHECK_LIB(pcap, pcap_open_live,, LIBPCAP="no")
+    AC_CHECK_LIB(${PCAP_LIB_NAME}, pcap_open_live,, LIBPCAP="no")
     if test "$LIBPCAP" = "no"; then
         echo
         echo "   ERROR!  libpcap library not found, go get it"
@@ -1096,7 +1099,7 @@
     #To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
     #see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
     TMPLIBS="${LIBS}"
-    AC_CHECK_LIB(pcap, pcap_activate,, LPCAPVTEST="no")
+    AC_CHECK_LIB(${PCAP_LIB_NAME}, pcap_activate,, LPCAPVTEST="no")
     if test "$LPCAPVTEST" = "no"; then
         echo
         echo "   ERROR!  libpcap library too old, need at least 1+, "
@@ -1121,7 +1124,7 @@
     #To prevent duping the lib link we reset LIBS after this check. Setting action-if-found to NULL doesn't seem to work
     #see: http://blog.flameeyes.eu/2008/04/29/i-consider-ac_check_lib-harmful
     TMPLIBS="${LIBS}"
-    AC_CHECK_LIB(pcap, pcap_set_buffer_size,, LPCAPSBUFF="no")
+    AC_CHECK_LIB(${PCAP_LIB_NAME}, pcap_set_buffer_size,, LPCAPSBUFF="no")
     if test "$LPCAPSBUFF" != "no"; then
         AC_DEFINE([HAVE_PCAP_SET_BUFF],[1],(libpcap has pcap_set_buffer_size function))
     fi
@@ -1978,6 +1981,14 @@
     if test "x$enable_rust" != "xyes"; then
       enable_rust="no"
     else
+      # Rust require jansson (json support).
+      if test "x$enable_jansson" = "xno"; then
+        echo ""
+        echo "   ERROR! Rust support requires jansson."
+        echo ""
+        exit 1
+      fi
+
       AC_PATH_PROG(HAVE_CARGO, cargo, "no")
       AC_PATH_PROG(HAVE_RUSTC, rustc, "no")
 
@@ -2055,6 +2066,13 @@
       fi
     fi
     AM_CONDITIONAL([HAVE_CARGO_VENDOR], [test "x$HAVE_CARGO_VENDOR" != "xno"])
+
+    AC_ARG_ENABLE(rust_strict,
+           AS_HELP_STRING([--enable-rust-strict], [Rust warnings as errors]),,[enable_rust_strict=no])
+    AS_IF([test "x$enable_rust_strict" = "xyes"], [
+        RUST_FEATURES="strict"
+    ])
+    AC_SUBST(RUST_FEATURES)
 
 # get revision
     if test -f ./revision; then
@@ -2135,7 +2153,7 @@ AC_SUBST(CONFIGURE_SYSCONDIR)
 AC_SUBST(CONFIGURE_LOCALSTATEDIR)
 AC_SUBST(PACKAGE_VERSION)
 
-AC_OUTPUT(Makefile src/Makefile rust/Makefile rust/Cargo.toml rust/.cargo/config qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile doc/userguide/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile contrib/tile_pcie_logd/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc)
+AC_OUTPUT(Makefile src/Makefile rust/Makefile rust/Cargo.toml rust/.cargo/config qa/Makefile qa/coccinelle/Makefile rules/Makefile doc/Makefile doc/userguide/Makefile contrib/Makefile contrib/file_processor/Makefile contrib/file_processor/Action/Makefile contrib/file_processor/Processor/Makefile contrib/tile_pcie_logd/Makefile suricata.yaml scripts/Makefile scripts/suricatasc/Makefile scripts/suricatasc/suricatasc etc/Makefile etc/suricata.logrotate etc/suricata.service)
 
 SURICATA_BUILD_CONF="Suricata Configuration:
   AF_PACKET support:                       ${enable_af_packet}
@@ -2169,6 +2187,7 @@ SURICATA_BUILD_CONF="Suricata Configuration:
 
   Rust support (experimental):             ${enable_rust}
   Experimental Rust parsers:               ${enable_rust_experimental}
+  Rust strict mode:                        ${enable_rust_strict}
 
   Suricatasc install:                      ${enable_python}
 

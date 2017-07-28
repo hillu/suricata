@@ -192,9 +192,6 @@
 /* Define to 1 if you have the `nss3' library (-lnss3). */
 #undef HAVE_LIBNSS3
 
-/* Define to 1 if you have the `pcap' library (-lpcap). */
-#undef HAVE_LIBPCAP
-
 /* Define to 1 if you have the `pcre' library (-lpcre). */
 #undef HAVE_LIBPCRE
 
@@ -415,6 +412,9 @@
 
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
+
+/* Define to 1 if you have the <sys/un.h> header file. */
+#undef HAVE_SYS_UN_H
 
 /* Define to 1 if you have the <time.h> header file. */
 #undef HAVE_TIME_H
