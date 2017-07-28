@@ -1,3 +1,18 @@
+suricata (4.0.0-1) unstable; urgency=medium
+
+  * [636f10f] d/rules: actually use dh-systemd (Closes: #861732)
+  * [c728ed0] d/rules: cleanup comments
+  * [f0d9adb] suricata: switch to src:libhtp instead of the bundled one
+  * [fa5f8be] New upstream version 4.0.0-rc1
+  * [fac7566] suricata: remove Build-Conflict with libhtp-dev
+  * [1bce782] suricata: explicit build-dep on new src:libhtp
+  * [f3aec1c] d/suricata.preinst: use strict mode (Closes: #866280)
+  * [c831659] suricata: support for internal unittest in autopktest
+  * [557ded7] New upstream version 4.0.0
+  * [5d41b6c] d/t/control: the internal suricata unittest is a command test
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 28 Jul 2017 05:29:48 +0200
+
 suricata (3.2.1-1) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
