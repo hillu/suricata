@@ -1378,7 +1378,7 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
                 PacketAlertAppend(det_ctx, s, p, 0, alert_flags);
         } else {
             /* apply actions even if not alerting */
-            DetectSignatureApplyActions(p, s);
+            DetectSignatureApplyActions(p, s, alert_flags);
         }
 next:
         DetectVarProcessList(det_ctx, pflow, p);
@@ -1446,7 +1446,8 @@ end:
 
 /** \brief Apply action(s) and Set 'drop' sig info,
  *         if applicable */
-void DetectSignatureApplyActions(Packet *p, const Signature *s)
+void DetectSignatureApplyActions(Packet *p,
+        const Signature *s, const uint8_t alert_flags)
 {
     PACKET_UPDATE_ACTION(p, s->action);
 
@@ -1456,6 +1457,14 @@ void DetectSignatureApplyActions(Packet *p, const Signature *s)
             p->alerts.drop.action = s->action;
             p->alerts.drop.s = (Signature *)s;
         }
+    } else if (s->action & ACTION_PASS) {
+        /* if an stream/app-layer match we enforce the pass for the flow */
+        if ((p->flow != NULL) &&
+                (alert_flags & (PACKET_ALERT_FLAG_STATE_MATCH|PACKET_ALERT_FLAG_STREAM_MATCH)))
+        {
+            FlowSetNoPacketInspectionFlag(p->flow);
+        }
+
     }
 }
 
@@ -2203,102 +2212,6 @@ static void SigInitStandardMpmFactoryContexts(DetectEngineCtx *de_ctx)
     DetectMpmInitializeAppMpms(de_ctx);
 
     return;
-}
-
-/** \brief get max dsize "depth"
- *  \param s signature to get dsize value from
- *  \retval depth or negative value
- */
-static int SigParseGetMaxDsize(Signature *s)
-{
-    if (s->flags & SIG_FLAG_DSIZE && s->init_data->dsize_sm != NULL) {
-        DetectDsizeData *dd = (DetectDsizeData *)s->init_data->dsize_sm->ctx;
-
-        switch (dd->mode) {
-            case DETECTDSIZE_LT:
-            case DETECTDSIZE_EQ:
-                return dd->dsize;
-            case DETECTDSIZE_RA:
-                return dd->dsize2;
-            case DETECTDSIZE_GT:
-            default:
-                SCReturnInt(-2);
-        }
-    }
-    SCReturnInt(-1);
-}
-
-/** \brief set prefilter dsize pair
- *  \param s signature to get dsize value from
- */
-static void SigParseSetDsizePair(Signature *s)
-{
-    if (s->flags & SIG_FLAG_DSIZE && s->init_data->dsize_sm != NULL) {
-        DetectDsizeData *dd = (DetectDsizeData *)s->init_data->dsize_sm->ctx;
-
-        uint16_t low = 0;
-        uint16_t high = 65535;
-
-        switch (dd->mode) {
-            case DETECTDSIZE_LT:
-                low = 0;
-                high = dd->dsize;
-                break;
-            case DETECTDSIZE_EQ:
-                low = dd->dsize;
-                high = dd->dsize;
-                break;
-            case DETECTDSIZE_RA:
-                low = dd->dsize;
-                high = dd->dsize2;
-                break;
-            case DETECTDSIZE_GT:
-                low = dd->dsize;
-                high = 65535;
-                break;
-        }
-        s->dsize_low = low;
-        s->dsize_high = high;
-
-        SCLogDebug("low %u, high %u", low, high);
-    }
-}
-
-/**
- *  \brief Apply dsize as depth to content matches in the rule
- *  \param s signature to get dsize value from
- */
-static void SigParseApplyDsizeToContent(Signature *s)
-{
-    SCEnter();
-
-    if (s->flags & SIG_FLAG_DSIZE) {
-        SigParseSetDsizePair(s);
-
-        int dsize = SigParseGetMaxDsize(s);
-        if (dsize < 0) {
-            /* nothing to do */
-            return;
-        }
-
-        SigMatch *sm = s->init_data->smlists[DETECT_SM_LIST_PMATCH];
-        for ( ; sm != NULL;  sm = sm->next) {
-            if (sm->type != DETECT_CONTENT) {
-                continue;
-            }
-
-            DetectContentData *cd = (DetectContentData *)sm->ctx;
-            if (cd == NULL) {
-                continue;
-            }
-
-            if (cd->depth == 0 || cd->depth >= dsize) {
-                cd->depth = (uint16_t)dsize;
-                SCLogDebug("updated %u, content %u to have depth %u "
-                        "because of dsize.", s->id, cd->id, cd->depth);
-            }
-        }
-    }
 }
 
 /** \brief Pure-PCRE or bytetest rule */
@@ -3661,8 +3574,12 @@ int SigGroupBuild(DetectEngineCtx *de_ctx)
     }
 #endif
 
-    DetectMpmPrepareBuiltinMpms(de_ctx);
-    DetectMpmPrepareAppMpms(de_ctx);
+    int r = DetectMpmPrepareBuiltinMpms(de_ctx);
+    r |= DetectMpmPrepareAppMpms(de_ctx);
+    if (r != 0) {
+        SCLogError(SC_ERR_DETECT_PREPARE, "initializing the detection engine failed");
+        exit(EXIT_FAILURE);
+    }
 
     if (SigMatchPrepare(de_ctx) != 0) {
         SCLogError(SC_ERR_DETECT_PREPARE, "initializing the detection engine failed");

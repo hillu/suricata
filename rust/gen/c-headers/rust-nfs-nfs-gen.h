@@ -40,6 +40,9 @@ int8_t rs_nfs3_tx_get_logged(NFSState * _state, NFSTransaction * tx, uint32_t lo
 uint8_t rs_nfs3_state_has_detect_state(NFSState * state);
 void rs_nfs3_state_set_tx_detect_state(NFSState * state, NFSTransaction * tx, DetectEngineState * de_state);
 DetectEngineState * rs_nfs3_state_get_tx_detect_state(NFSTransaction * tx);
+uint8_t rs_nfs_state_has_events(NFSState * state);
+AppLayerDecoderEvents * rs_nfs_state_get_events(NFSState * state, uint64_t tx_id);
+int8_t rs_nfs_state_get_event_info(const char * event_name, int * event_id, AppLayerEventType * event_type);
 uint8_t rs_nfs3_tx_get_procedures(NFSTransaction * tx, uint16_t i, uint32_t * procedure);
 void rs_nfs_tx_get_version(NFSTransaction * tx, uint32_t * version);
 void rs_nfs3_init(SuricataFileContext * context);

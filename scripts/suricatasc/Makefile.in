@@ -230,6 +230,7 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
 SECCFLAGS = @SECCFLAGS@
@@ -435,9 +436,9 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
+@HAVE_PYTHON_FALSE@uninstall-local:
 @HAVE_PYTHON_FALSE@clean-local:
 @HAVE_PYTHON_FALSE@install-exec-local:
-@HAVE_PYTHON_FALSE@uninstall-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am

@@ -213,8 +213,13 @@ static int LuaPacketLoggerAlerts(ThreadVars *tv, void *thread_data, const Packet
 
         lua_getglobal(td->lua_ctx->luastate, "log");
 
+        void *txptr = NULL;
+        if (p->flow && p->flow->alstate && (pa->flags & PACKET_ALERT_FLAG_TX))
+            txptr = AppLayerParserGetTx(p->proto, p->flow->alproto, p->flow->alstate, pa->tx_id);
+
         LuaStateSetThreadVars(td->lua_ctx->luastate, tv);
         LuaStateSetPacket(td->lua_ctx->luastate, (Packet *)p);
+        LuaStateSetTX(td->lua_ctx->luastate, txptr);
         LuaStateSetFlow(td->lua_ctx->luastate, p->flow);
         LuaStateSetPacketAlert(td->lua_ctx->luastate, (PacketAlert *)pa);
 
@@ -684,7 +689,11 @@ static OutputCtx *OutputLuaLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     }
 
     char path[PATH_MAX] = "";
-    snprintf(path, sizeof(path),"%s%s%s", dir, strlen(dir) ? "/" : "", conf->val);
+    int ret = snprintf(path, sizeof(path),"%s%s%s", dir, strlen(dir) ? "/" : "", conf->val);
+    if (ret < 0 || ret == sizeof(path)) {
+        SCLogError(SC_ERR_SPRINTF,"failed to construct lua script path");
+        goto error;
+    }
     SCLogDebug("script full path %s", path);
 
     SCMutexLock(&lua_ctx->m);

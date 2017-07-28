@@ -10,6 +10,7 @@ pub type ino_t = u32;
 pub type blkcnt_t = i32;
 pub type blksize_t = i32;
 pub type nlink_t = u32;
+pub type __u64 = ::c_ulonglong;
 
 s! {
     pub struct aiocb {
@@ -228,6 +229,9 @@ pub const __SIZEOF_PTHREAD_CONDATTR_T: usize = 4;
 pub const __SIZEOF_PTHREAD_MUTEX_T: usize = 24;
 pub const __SIZEOF_PTHREAD_RWLOCK_T: usize = 32;
 pub const __SIZEOF_PTHREAD_MUTEXATTR_T: usize = 4;
+pub const __SIZEOF_PTHREAD_RWLOCKATTR_T: usize = 8;
+
+pub const O_LARGEFILE: ::c_int = 0x2000;
 
 pub const RLIM_INFINITY: ::rlim_t = 0x7fffffff;
 

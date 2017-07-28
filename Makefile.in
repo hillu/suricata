@@ -314,6 +314,7 @@ PYTHON_PLATFORM = @PYTHON_PLATFORM@
 PYTHON_PREFIX = @PYTHON_PREFIX@
 PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
 SECCFLAGS = @SECCFLAGS@
@@ -415,7 +416,7 @@ EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
              reference.config
 
-SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts
+SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts etc
 CLEANFILES = stamp-h[0-9]*
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
