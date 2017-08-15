@@ -5,5 +5,4 @@
 # Compulsory line, this is a version 3 file
 version=3
 
-http://suricata-ids.org/download/ [^"]*/download/suricata-([\d\.]*)\.tar\.gz \
-	debian debian/repack
+http://downloads.suricata-ids.org/ suricata-([\d\.]*)\.tar\.gz
