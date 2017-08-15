@@ -1,3 +1,12 @@
+suricata (1:4.0.0-2) unstable; urgency=medium
+
+  * [449b4202] d/t/control: running suricata unittest requires
+    geoip-database installed
+  * [0bd02487] d/building-in-ci.sh: be more robust
+  * [edd49e4a] d/watch: more robust approach for upstream tarball generation
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 15 Aug 2017 13:45:45 +0200
+
 suricata (1:4.0.0-1) unstable; urgency=medium
 
   * [636f10f] d/rules: actually use dh-systemd (Closes: #861732)
