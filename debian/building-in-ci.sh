@@ -4,6 +4,8 @@
 
 REGEXPS="debci autopkgtest adt"
 
+set -e
+
 walk()
 {
 	pid=$1
