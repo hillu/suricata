@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>
 Build-Depends: autotools-dev,
-               debhelper (>= 9),
+               debhelper (>= 9.20160114),
                dh-autoreconf,
                dh-systemd,
                libcap-ng-dev,
@@ -66,15 +66,3 @@ Description: Integration package between suricata and oinkmaster
  .
  This package contains the integration bits between suricata and oinkmaster
  to allow easy automated ruleset updates.
-
-Package: suricata-dbg
-Section: debug
-Architecture: any
-Priority: extra
-Depends: suricata (= ${binary:Version}), ${misc:Depends}, ${shlibs:Depends}
-Description: Next Generation Intrusion Detection and Prevention Tool - debug symbols
- Suricata is a network Intrusion Detection System (IDS). It is based on
- rules (and is fully compatible with snort rules) to detect a variety of
- attacks / probes by searching packet content.
- .
- This package contains the debug symbols for Suricata.

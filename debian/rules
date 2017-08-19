@@ -48,7 +48,7 @@ override_dh_auto_install:
 	rm -rf $(SURICATA_DESTDIR)/usr/share/doc/suricata/*
 
 override_dh_strip:
-	dh_strip --dbg-package=suricata-dbg
+	dh_strip --dbgsym-migration='suricata-dbg (<< 1:4.0.0-2~)'
 
 override_dh_auto_test:
 	# do nothing
