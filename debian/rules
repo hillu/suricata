@@ -50,5 +50,7 @@ override_dh_auto_install:
 override_dh_strip:
 	dh_strip --dbg-package=suricata-dbg
 
+override_dh_auto_test:
+	# do nothing
 %:
 	dh $@ --parallel --with autotools-dev,autoreconf,python2,systemd
