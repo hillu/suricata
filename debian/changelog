@@ -1,6 +1,7 @@
 suricata (1:4.0.0-3) UNRELEASED; urgency=medium
 
   * Add support for asynchronous Redis support via libevent.
+    Closes: #872908
 
  -- Sascha Steinbiss <satta@debian.org>  Tue, 22 Aug 2017 14:22:53 +0200
 
