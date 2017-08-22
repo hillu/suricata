@@ -9,7 +9,7 @@ export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
 ARCH ?= $(shell dpkg --print-architecture)
 DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
 
-LUAJIT_ARCHS = i386 amd64 powerpc mips armel armhf
+LUAJIT_ARCHS = i386 amd64 powerpc mips mipsel armel armhf
 HYPERSCAN_ARCHS = i386 amd64 hurd-i386 kfreebsd-amd64 x32
 
 ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
