@@ -1,3 +1,9 @@
+suricata (1:4.0.0-3) UNRELEASED; urgency=medium
+
+  * Add support for asynchronous Redis support via libevent.
+
+ -- Sascha Steinbiss <satta@debian.org>  Tue, 22 Aug 2017 14:22:53 +0200
+
 suricata (1:4.0.0-2) unstable; urgency=medium
 
   * [449b4202] d/t/control: running suricata unittest requires

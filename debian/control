@@ -8,6 +8,7 @@ Build-Depends: autotools-dev,
                dh-autoreconf,
                dh-systemd,
                libcap-ng-dev,
+               libevent-dev,
                libgeoip-dev,
                libhiredis-dev,
                libjansson-dev,
@@ -25,8 +26,8 @@ Build-Depends: autotools-dev,
                libyaml-dev,
                python,
                zlib1g-dev | libz-dev,
-	       libhtp-dev (>= 1:0.5.25),
-	       procps
+               libhtp-dev (>= 1:0.5.25),
+               procps
 X-Python-Version: >= 2.6
 Standards-Version: 4.0.1
 Homepage: https://www.suricata-ids.org/
