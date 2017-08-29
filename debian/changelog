@@ -1,11 +1,22 @@
-suricata (1:4.0.0-3) UNRELEASED; urgency=medium
+suricata (1:4.0.0-3) unstable; urgency=medium
 
-  * Add support for asynchronous Redis support via libevent.
-    Closes: #872908
-  * Enable luajit support on mipsel.
-    Closes: #858545
+  [ Arturo Borrero Gonzalez ]
+  * [aa53ce82] suricata-oinkmaster-updater.8: fix typo
+  * [2d171d5a] suricata-oinkmaster-updater.8: clarify paragraph
+  * [90c76777] d/rules: disable dh_auto_test
+  * [5b311761] suricata: switch to use dbgsym package
+  * [9b12c48d] d/control: bump std-versions to 4.0.1
 
- -- Sascha Steinbiss <satta@debian.org>  Tue, 22 Aug 2017 14:22:53 +0200
+  [ Sascha Steinbiss ]
+  * [c353985a] enable libevent support (Closes: #872908)
+  * [49ff3181] enable luajit on mipsel (Closes: #858545)
+
+  [ Arturo Borrero Gonzalez ]
+  * [50ab7eae] suricata.service: update online docs link
+  * [5098fd7b] d/control: add dh-python to build-deps
+  * [f070d160] d/watch: implement signature verification
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 29 Aug 2017 23:22:48 +0200
 
 suricata (1:4.0.0-2) unstable; urgency=medium
 
