@@ -45,6 +45,6 @@ Tests: systemd-service-test.sh
 Depends: @, systemd, procps
 Restrictions: needs-root, isolation-container, allow-stderr
 
-Test-Command: suricata -u
+Test-Command: src/suricata -u
 Depends: @, @builddeps@, procps, geoip-database
 Restrictions: needs-root, isolation-container, build-needed
