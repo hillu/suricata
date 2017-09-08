@@ -1,3 +1,11 @@
+suricata (1:4.0.0-4) unstable; urgency=medium
+
+  * [93ee9030] d/control: enable libluajit-5.1-dev build-dep on mipsel
+    (Closes: #873832)
+  * [9527fe94] d/t/control: run suricata -u from the source tree
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 08 Sep 2017 06:06:47 +0200
+
 suricata (1:4.0.0-3) unstable; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
