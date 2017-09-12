@@ -47,4 +47,4 @@ Restrictions: needs-root, isolation-container, allow-stderr
 
 Test-Command: src/suricata -u
 Depends: @, @builddeps@, procps, geoip-database
-Restrictions: needs-root, isolation-container, build-needed
+Restrictions: needs-root, isolation-container, build-needed, allow-stderr
