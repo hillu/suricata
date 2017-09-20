@@ -1,3 +1,9 @@
+suricata (1:4.0.0-5) unstable; urgency=medium
+
+  * [392c5b2] d/t/control: allow-stderr for the internal unittest test
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 20 Sep 2017 20:27:12 +0200
+
 suricata (1:4.0.0-4) unstable; urgency=medium
 
   * [93ee9030] d/control: enable libluajit-5.1-dev build-dep on mipsel
