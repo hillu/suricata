@@ -54,4 +54,4 @@ override_dh_strip:
 override_dh_auto_test:
 	# do nothing
 %:
-	dh $@ --parallel --with autotools-dev,autoreconf,python2,systemd
+	dh $@ --parallel --with autotools-dev,python2

@@ -4,9 +4,7 @@ Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>
 Build-Depends: autotools-dev,
-               debhelper (>= 9.20160114),
-               dh-autoreconf,
-               dh-systemd,
+               debhelper (>= 10),
 	       dh-python,
                libcap-ng-dev,
                libevent-dev,
