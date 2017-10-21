@@ -1,3 +1,12 @@
+suricata (1:4.0.1-1) unstable; urgency=medium
+
+  * [72d28e5] d/control: upgrade std-version to 4.1.0
+  * [ea1e317] d/control: upgrade std-version to 4.1.1
+  * [14fea39] d/: switch to debhelper compat 10
+  * [a4715b8] New upstream version 4.0.1
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Sat, 21 Oct 2017 12:09:27 +0200
+
 suricata (1:4.0.0-5) unstable; urgency=medium
 
   * [392c5b2] d/t/control: allow-stderr for the internal unittest test
