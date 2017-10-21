@@ -183,20 +183,20 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	detect-engine-proto.$(OBJEXT) detect-engine-profile.$(OBJEXT) \
 	detect-engine-siggroup.$(OBJEXT) \
 	detect-engine-sigorder.$(OBJEXT) detect-engine-state.$(OBJEXT) \
-	detect-engine-tag.$(OBJEXT) detect-engine-template.$(OBJEXT) \
-	detect-engine-threshold.$(OBJEXT) detect-engine-uri.$(OBJEXT) \
-	detect-fast-pattern.$(OBJEXT) detect-file-data.$(OBJEXT) \
-	detect-file-hash-common.$(OBJEXT) detect-fileext.$(OBJEXT) \
-	detect-filemagic.$(OBJEXT) detect-filemd5.$(OBJEXT) \
-	detect-filesha1.$(OBJEXT) detect-filesha256.$(OBJEXT) \
-	detect-filename.$(OBJEXT) detect-filesize.$(OBJEXT) \
-	detect-filestore.$(OBJEXT) detect-flags.$(OBJEXT) \
-	detect-flowbits.$(OBJEXT) detect-flow.$(OBJEXT) \
-	detect-flowint.$(OBJEXT) detect-flowvar.$(OBJEXT) \
-	detect-fragbits.$(OBJEXT) detect-fragoffset.$(OBJEXT) \
-	detect-ftpbounce.$(OBJEXT) detect-geoip.$(OBJEXT) \
-	detect-gid.$(OBJEXT) detect-hostbits.$(OBJEXT) \
-	detect-http-accept.$(OBJEXT) detect-http-accept-enc.$(OBJEXT) \
+	detect-engine-tag.$(OBJEXT) detect-engine-threshold.$(OBJEXT) \
+	detect-engine-uri.$(OBJEXT) detect-fast-pattern.$(OBJEXT) \
+	detect-file-data.$(OBJEXT) detect-file-hash-common.$(OBJEXT) \
+	detect-fileext.$(OBJEXT) detect-filemagic.$(OBJEXT) \
+	detect-filemd5.$(OBJEXT) detect-filesha1.$(OBJEXT) \
+	detect-filesha256.$(OBJEXT) detect-filename.$(OBJEXT) \
+	detect-filesize.$(OBJEXT) detect-filestore.$(OBJEXT) \
+	detect-flags.$(OBJEXT) detect-flowbits.$(OBJEXT) \
+	detect-flow.$(OBJEXT) detect-flowint.$(OBJEXT) \
+	detect-flowvar.$(OBJEXT) detect-fragbits.$(OBJEXT) \
+	detect-fragoffset.$(OBJEXT) detect-ftpbounce.$(OBJEXT) \
+	detect-geoip.$(OBJEXT) detect-gid.$(OBJEXT) \
+	detect-hostbits.$(OBJEXT) detect-http-accept.$(OBJEXT) \
+	detect-http-accept-enc.$(OBJEXT) \
 	detect-http-accept-lang.$(OBJEXT) \
 	detect-http-client-body.$(OBJEXT) \
 	detect-http-connection.$(OBJEXT) \
@@ -323,7 +323,8 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-memrchr.$(OBJEXT) util-misc.$(OBJEXT) \
 	util-mpm-ac-bs.$(OBJEXT) util-mpm-ac.$(OBJEXT) \
 	util-mpm-ac-tile.$(OBJEXT) util-mpm-ac-tile-small.$(OBJEXT) \
-	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) util-pages.$(OBJEXT) \
+	util-mpm-hs.$(OBJEXT) util-mpm.$(OBJEXT) \
+	util-napatech.$(OBJEXT) util-pages.$(OBJEXT) \
 	util-path.$(OBJEXT) util-pidfile.$(OBJEXT) util-pool.$(OBJEXT) \
 	util-pool-thread.$(OBJEXT) util-prefilter.$(OBJEXT) \
 	util-print.$(OBJEXT) util-privs.$(OBJEXT) \
@@ -761,7 +762,6 @@ detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine-state.c detect-engine-state.h \
 detect-engine-tag.c detect-engine-tag.h \
-detect-engine-template.c detect-engine-template.h \
 detect-engine-threshold.c detect-engine-threshold.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-fast-pattern.c detect-fast-pattern.h \
@@ -1045,6 +1045,7 @@ util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
 util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
+util-napatech.c util-napatech.h \
 util-optimize.h \
 util-pages.c util-pages.h \
 util-path.c util-path.h \
@@ -1350,7 +1351,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-sigorder.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-state.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-tag.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-template.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-threshold.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-tls.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/detect-engine-uri.Po@am__quote@
@@ -1637,6 +1637,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-ac.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm-hs.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-mpm.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-napatech.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pages.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-path.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-pidfile.Po@am__quote@

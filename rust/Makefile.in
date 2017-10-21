@@ -446,8 +446,8 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
-@HAVE_RUST_FALSE@clean-local:
 @HAVE_RUST_FALSE@distclean-local:
+@HAVE_RUST_FALSE@clean-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am
@@ -554,7 +554,8 @@ uninstall-am:
 @HAVE_RUST_TRUE@		CARGO_HOME=$(CARGO_HOME) $(CARGO) test
 
 @HAVE_RUST_TRUE@Cargo.lock: Cargo.toml
-@HAVE_RUST_TRUE@	CARGO_HOME=$(CARGO_HOME) $(CARGO) generate-lockfile
+@HAVE_RUST_TRUE@	cd $(top_srcdir)/rust && \
+@HAVE_RUST_TRUE@		CARGO_HOME=$(CARGO_HOME) $(CARGO) generate-lockfile
 
 @HAVE_CARGO_VENDOR_TRUE@@HAVE_RUST_TRUE@vendor:
 @HAVE_CARGO_VENDOR_TRUE@@HAVE_RUST_TRUE@	CARGO_HOME=$(CARGO_HOME) $(CARGO) vendor > /dev/null

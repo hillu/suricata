@@ -444,8 +444,11 @@ TcpReassemblyThreadCtx *StreamTcpReassembleInitThreadCtx(ThreadVars *tv)
                 ra_ctx->segment_thread_pool_id);
     }
     SCMutexUnlock(&segment_thread_pool_mutex);
-    if (ra_ctx->segment_thread_pool_id < 0 || segment_thread_pool == NULL)
-        abort();
+    if (ra_ctx->segment_thread_pool_id < 0 || segment_thread_pool == NULL) {
+        SCLogError(SC_ERR_MEM_ALLOC, "failed to setup/expand stream segment pool. Expand stream.reassembly.memcap?");
+        StreamTcpReassembleFreeThreadCtx(ra_ctx);
+        SCReturnPtr(NULL, "TcpReassemblyThreadCtx");
+    }
 
     SCReturnPtr(ra_ctx, "TcpReassemblyThreadCtx");
 }
@@ -1030,6 +1033,7 @@ static int ReassembleUpdateAppLayer (ThreadVars *tv,
     int r = AppLayerHandleTCPData(tv, ra_ctx, p, p->flow, ssn, stream,
             (uint8_t *)mydata, mydata_len,
             StreamGetAppLayerFlags(ssn, stream, p, dir));
+    AppLayerProfilingStore(ra_ctx->app_tctx, p);
 
     /* see if we can update the progress */
     if (r == 0 && mydata_len > 0 &&

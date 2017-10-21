@@ -294,7 +294,7 @@ void TmModuleReceiveAFPRegister (void)
     tmm_modules[TMM_RECEIVEAFP].PktAcqLoop = ReceiveAFPLoop;
     tmm_modules[TMM_RECEIVEAFP].PktAcqBreakLoop = NULL;
     tmm_modules[TMM_RECEIVEAFP].ThreadExitPrintStats = ReceiveAFPThreadExitStats;
-    tmm_modules[TMM_RECEIVEAFP].ThreadDeinit = NULL;
+    tmm_modules[TMM_RECEIVEAFP].ThreadDeinit = ReceiveAFPThreadDeinit;
     tmm_modules[TMM_RECEIVEAFP].RegisterTests = NULL;
     tmm_modules[TMM_RECEIVEAFP].cap_flags = SC_CAP_NET_RAW;
     tmm_modules[TMM_RECEIVEAFP].flags = TM_FLAG_RECEIVE_TM;
@@ -2041,28 +2041,32 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
             break;
     }
 
-    TmEcode rc;
-    rc = AFPSetBPFFilter(ptv);
+    TmEcode rc = AFPSetBPFFilter(ptv);
     if (rc == TM_ECODE_FAILED) {
         SCLogError(SC_ERR_AFP_CREATE, "Set AF_PACKET bpf filter \"%s\" failed.", ptv->bpf_filter);
-        goto frame_err;
+        ret = AFP_FATAL_ERROR;
+        goto socket_err;
     }
 
     /* Init is ok */
     AFPSwitchState(ptv, AFP_STATE_UP);
     return 0;
 
-frame_err:
-    if (ptv->flags & AFP_TPACKET_V3) {
-        if (ptv->ring_v3)
-            SCFree(ptv->ring_v3);
-    } else {
-        if (ptv->ring_v2)
-            SCFree(ptv->ring_v2);
-    }
 socket_err:
     close(ptv->socket);
     ptv->socket = -1;
+    if (ptv->flags & AFP_TPACKET_V3) {
+        if (ptv->ring_v3) {
+            SCFree(ptv->ring_v3);
+            ptv->ring_v3 = NULL;
+        }
+    } else {
+        if (ptv->ring_v2) {
+            SCFree(ptv->ring_v2);
+            ptv->ring_v2 = NULL;
+        }
+    }
+
 error:
     return -ret;
 }
@@ -2096,6 +2100,7 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
 
     if (filter.bf_insns == NULL) {
         SCLogError(SC_ERR_AFP_CREATE, "Filter badly setup.");
+        pcap_freecode(&filter);
         return TM_ECODE_FAILED;
     }
 
@@ -2104,6 +2109,7 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
 
     rc = setsockopt(ptv->socket, SOL_SOCKET, SO_ATTACH_FILTER, &fcode, sizeof(fcode));
 
+    pcap_freecode(&filter);
     if(rc == -1) {
         SCLogError(SC_ERR_AFP_CREATE, "Failed to attach filter: %s", strerror(errno));
         return TM_ECODE_FAILED;
@@ -2111,7 +2117,6 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
 
     return TM_ECODE_OK;
 }
-
 
 /**
  * \brief Init function for ReceiveAFP.
@@ -2272,6 +2277,7 @@ TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data)
 
     ptv->bpf_filter = NULL;
 
+    SCFree(ptv);
     SCReturnInt(TM_ECODE_OK);
 }
 

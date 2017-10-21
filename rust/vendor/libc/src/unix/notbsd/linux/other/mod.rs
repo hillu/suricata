@@ -247,6 +247,8 @@ pub const EREMOTEIO: ::c_int = 121;
 pub const SOCK_STREAM: ::c_int = 1;
 pub const SOCK_DGRAM: ::c_int = 2;
 pub const SOCK_SEQPACKET: ::c_int = 5;
+pub const SOCK_DCCP: ::c_int = 6;
+pub const SOCK_PACKET: ::c_int = 10;
 
 pub const TCP_COOKIE_TRANSACTIONS: ::c_int = 15;
 pub const TCP_THIN_LINEAR_TIMEOUTS: ::c_int = 16;
@@ -258,6 +260,27 @@ pub const TCP_QUEUE_SEQ: ::c_int = 21;
 pub const TCP_REPAIR_OPTIONS: ::c_int = 22;
 pub const TCP_FASTOPEN: ::c_int = 23;
 pub const TCP_TIMESTAMP: ::c_int = 24;
+
+/* DCCP socket options */
+pub const DCCP_SOCKOPT_PACKET_SIZE: ::c_int = 1;
+pub const DCCP_SOCKOPT_SERVICE: ::c_int = 2;
+pub const DCCP_SOCKOPT_CHANGE_L: ::c_int = 3;
+pub const DCCP_SOCKOPT_CHANGE_R: ::c_int = 4;
+pub const DCCP_SOCKOPT_GET_CUR_MPS: ::c_int = 5;
+pub const DCCP_SOCKOPT_SERVER_TIMEWAIT: ::c_int = 6;
+pub const DCCP_SOCKOPT_SEND_CSCOV: ::c_int = 10;
+pub const DCCP_SOCKOPT_RECV_CSCOV: ::c_int = 11;
+pub const DCCP_SOCKOPT_AVAILABLE_CCIDS: ::c_int = 12;
+pub const DCCP_SOCKOPT_CCID: ::c_int = 13;
+pub const DCCP_SOCKOPT_TX_CCID: ::c_int = 14;
+pub const DCCP_SOCKOPT_RX_CCID: ::c_int = 15;
+pub const DCCP_SOCKOPT_QPOLICY_ID: ::c_int = 16;
+pub const DCCP_SOCKOPT_QPOLICY_TXQLEN: ::c_int = 17;
+pub const DCCP_SOCKOPT_CCID_RX_INFO: ::c_int = 128;
+pub const DCCP_SOCKOPT_CCID_TX_INFO: ::c_int = 192;
+
+/// maximum number of services provided on the same listening port
+pub const DCCP_SERVICE_LIST_MAX_LEN: ::c_int = 32;
 
 pub const SIGTTIN: ::c_int = 21;
 pub const SIGTTOU: ::c_int = 22;
@@ -385,8 +408,6 @@ pub const VEOF: usize = 4;
 
 pub const CPU_SETSIZE: ::c_int = 0x400;
 
-pub const QFMT_VFS_V1: ::c_int = 4;
-
 pub const PTRACE_TRACEME: ::c_uint = 0;
 pub const PTRACE_PEEKTEXT: ::c_uint = 1;
 pub const PTRACE_PEEKDATA: ::c_uint = 2;
@@ -410,13 +431,8 @@ pub const PTRACE_INTERRUPT: ::c_uint = 0x4207;
 pub const PTRACE_LISTEN: ::c_uint = 0x4208;
 pub const PTRACE_PEEKSIGINFO: ::c_uint = 0x4209;
 
-pub const MADV_DODUMP: ::c_int = 17;
-pub const MADV_DONTDUMP: ::c_int = 16;
-
 pub const EPOLLWAKEUP: ::c_int = 0x20000000;
 
-pub const MADV_HUGEPAGE: ::c_int = 14;
-pub const MADV_NOHUGEPAGE: ::c_int = 15;
 pub const MAP_HUGETLB: ::c_int = 0x040000;
 
 pub const SEEK_DATA: ::c_int = 3;
@@ -522,6 +538,11 @@ pub const TIOCM_RNG: ::c_int = 0x080;
 pub const TIOCM_DSR: ::c_int = 0x100;
 pub const TIOCM_CD: ::c_int = TIOCM_CAR;
 pub const TIOCM_RI: ::c_int = TIOCM_RNG;
+
+#[doc(hidden)]
+pub const AF_MAX: ::c_int = 42;
+#[doc(hidden)]
+pub const PF_MAX: ::c_int = AF_MAX;
 
 cfg_if! {
     if #[cfg(any(target_arch = "arm", target_arch = "x86",

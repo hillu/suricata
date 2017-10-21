@@ -5,7 +5,6 @@ pub type ino_t = u64;
 pub type off_t = i64;
 pub type blkcnt_t = i64;
 
-pub type blksize_t = c_long;
 pub type fsblkcnt_t = ::c_ulonglong;
 pub type fsfilcnt_t = ::c_ulonglong;
 pub type rlim_t = ::c_ulonglong;
@@ -36,18 +35,6 @@ s! {
         pub sa_mask: ::sigset_t,
         pub sa_flags: ::c_int,
         pub sa_restorer: ::dox::Option<extern fn()>,
-    }
-
-    pub struct ipc_perm {
-        pub __ipc_perm_key: ::key_t,
-        pub uid: ::uid_t,
-        pub gid: ::gid_t,
-        pub cuid: ::uid_t,
-        pub cgid: ::gid_t,
-        pub mode: ::mode_t,
-        pub __seq: ::c_int,
-        __unused1: ::c_long,
-        __unused2: ::c_long
     }
 
     pub struct termios {
@@ -140,6 +127,9 @@ pub const RLIMIT_NLIMITS: ::c_int = 16;
 
 pub const MAP_ANONYMOUS: ::c_int = MAP_ANON;
 
+pub const SOCK_DCCP: ::c_int = 6;
+pub const SOCK_PACKET: ::c_int = 10;
+
 pub const TCP_COOKIE_TRANSACTIONS: ::c_int = 15;
 pub const TCP_THIN_LINEAR_TIMEOUTS: ::c_int = 16;
 pub const TCP_THIN_DUPACK: ::c_int = 17;
@@ -159,8 +149,6 @@ pub const __SIZEOF_PTHREAD_RWLOCKATTR_T: usize = 8;
 
 pub const CPU_SETSIZE: ::c_int = 128;
 
-pub const QFMT_VFS_V1: ::c_int = 4;
-
 pub const PTRACE_TRACEME: ::c_int = 0;
 pub const PTRACE_PEEKTEXT: ::c_int = 1;
 pub const PTRACE_PEEKDATA: ::c_int = 2;
@@ -171,8 +159,14 @@ pub const PTRACE_POKEUSER: ::c_int = 6;
 pub const PTRACE_CONT: ::c_int = 7;
 pub const PTRACE_KILL: ::c_int = 8;
 pub const PTRACE_SINGLESTEP: ::c_int = 9;
+pub const PTRACE_GETREGS: ::c_int = 12;
+pub const PTRACE_SETREGS: ::c_int = 13;
+pub const PTRACE_GETFPREGS: ::c_int = 14;
+pub const PTRACE_SETFPREGS: ::c_int = 15;
 pub const PTRACE_ATTACH: ::c_int = 16;
 pub const PTRACE_DETACH: ::c_int = 17;
+pub const PTRACE_GETFPXREGS: ::c_int = 18;
+pub const PTRACE_SETFPXREGS: ::c_int = 19;
 pub const PTRACE_SYSCALL: ::c_int = 24;
 pub const PTRACE_SETOPTIONS: ::c_int = 0x4200;
 pub const PTRACE_GETEVENTMSG: ::c_int = 0x4201;
@@ -185,30 +179,7 @@ pub const PTRACE_INTERRUPT: ::c_int = 0x4207;
 pub const PTRACE_LISTEN: ::c_int = 0x4208;
 pub const PTRACE_PEEKSIGINFO: ::c_int = 0x4209;
 
-pub const PTRACE_O_EXITKILL: ::c_int = 1048576;
-pub const PTRACE_O_TRACECLONE: ::c_int = 8;
-pub const PTRACE_O_TRACEEXEC: ::c_int = 16;
-pub const PTRACE_O_TRACEEXIT: ::c_int = 64;
-pub const PTRACE_O_TRACEFORK: ::c_int = 2;
-pub const PTRACE_O_TRACESYSGOOD: ::c_int = 1;
-pub const PTRACE_O_TRACEVFORK: ::c_int = 4;
-pub const PTRACE_O_TRACEVFORKDONE: ::c_int = 32;
-pub const PTRACE_O_SUSPEND_SECCOMP: ::c_int = 2097152;
-
-pub const MADV_DODUMP: ::c_int = 17;
-pub const MADV_DONTDUMP: ::c_int = 16;
-
 pub const EPOLLWAKEUP: ::c_int = 0x20000000;
-
-pub const MADV_HUGEPAGE: ::c_int = 14;
-pub const MADV_NOHUGEPAGE: ::c_int = 15;
-
-pub const PTRACE_GETFPREGS: ::c_uint = 14;
-pub const PTRACE_SETFPREGS: ::c_uint = 15;
-pub const PTRACE_GETFPXREGS: ::c_uint = 18;
-pub const PTRACE_SETFPXREGS: ::c_uint = 19;
-pub const PTRACE_GETREGS: ::c_uint = 12;
-pub const PTRACE_SETREGS: ::c_uint = 13;
 
 pub const EFD_NONBLOCK: ::c_int = ::O_NONBLOCK;
 
@@ -231,8 +202,6 @@ pub const CLOCK_TAI: ::clockid_t = 11;
 pub const MCL_CURRENT: ::c_int = 0x0001;
 pub const MCL_FUTURE: ::c_int = 0x0002;
 
-pub const SIGSTKSZ: ::size_t = 8192;
-pub const MINSIGSTKSZ: ::size_t = 2048;
 pub const CBAUD: ::tcflag_t = 0o0010017;
 pub const TAB1: ::c_int = 0x00000800;
 pub const TAB2: ::c_int = 0x00001000;
@@ -339,9 +308,7 @@ cfg_if! {
         pub use self::b64::*;
     } else if #[cfg(any(target_arch = "x86",
                         target_arch = "mips",
-                        target_arch = "arm",
-                        target_arch = "asmjs",
-                        target_arch = "wasm32"))] {
+                        target_arch = "arm"))] {
         mod b32;
         pub use self::b32::*;
     } else { }
