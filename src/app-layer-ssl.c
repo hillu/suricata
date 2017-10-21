@@ -132,7 +132,7 @@ SslConfig ssl_config;
 #define TLS_HB_REQUEST                  1
 #define TLS_HB_RESPONSE                 2
 
-#define SSL_PACKET_MAX_RECORDS        255
+#define SSL_RECORD_MINIMUM_LENGTH       6
 
 #define HAS_SPACE(n) ((uint32_t)((input) + (n) - (initial_input)) > (uint32_t)(input_len)) ?  0 : 1
 
@@ -406,7 +406,7 @@ invalid_length:
 }
 
 static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
-                                   uint32_t input_len)
+                                   uint32_t input_len, uint8_t direction)
 {
     void *ptmp;
     uint8_t *initial_input = input;
@@ -441,6 +441,12 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
             break;
 
         case SSLV3_HS_CERTIFICATE:
+            /* For now, only decode the server certificate */
+            if (direction == 0) {
+                SCLogDebug("Incorrect SSL Record type sent in the toserver "
+                           "direction!");
+                break;
+            }
             if (ssl_state->curr_connp->trec == NULL) {
                 ssl_state->curr_connp->trec_len =
                         2 * ssl_state->curr_connp->record_length +
@@ -584,7 +590,7 @@ static int SSLv3ParseHandshakeType(SSLState *ssl_state, uint8_t *input,
 }
 
 static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
-                                       uint32_t input_len)
+                                       uint32_t input_len, uint8_t direction)
 {
     uint8_t *initial_input = input;
     int retval;
@@ -637,7 +643,7 @@ static int SSLv3ParseHandshakeProtocol(SSLState *ssl_state, uint8_t *input,
             /* fall through */
     }
 
-    retval = SSLv3ParseHandshakeType(ssl_state, input, input_len);
+    retval = SSLv3ParseHandshakeType(ssl_state, input, input_len, direction);
     if (retval < 0) {
         return retval;
     }
@@ -1280,7 +1286,8 @@ static int SSLv3Decode(uint8_t direction, SSLState *ssl_state,
                 return -1;
             }
 
-            retval = SSLv3ParseHandshakeProtocol(ssl_state, input + parsed, input_len);
+            retval = SSLv3ParseHandshakeProtocol(ssl_state, input + parsed,
+                                                 input_len, direction);
             if (retval < 0) {
                 SSLSetEvent(ssl_state,
                         TLS_DECODER_EVENT_INVALID_HANDSHAKE_MESSAGE);
@@ -1385,7 +1392,7 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
 {
     SSLState *ssl_state = (SSLState *)alstate;
     int retval = 0;
-    uint8_t counter = 0;
+    uint32_t counter = 0;
 
     int32_t input_len = (int32_t)ilen;
 
@@ -1411,8 +1418,9 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
     }
 
     /* if we have more than one record */
+    uint32_t max_records = MAX((input_len / SSL_RECORD_MINIMUM_LENGTH),1);
     while (input_len > 0) {
-        if (counter++ == SSL_PACKET_MAX_RECORDS) {
+        if (counter > max_records) {
             SCLogDebug("Looks like we have looped quite a bit. Reset state "
                        "and get out of here");
             SSLParserReset(ssl_state);
@@ -1515,6 +1523,8 @@ static int SSLDecode(Flow *f, uint8_t direction, void *alstate, AppLayerParserSt
 
                 break;
         } /* switch (ssl_state->curr_connp->bytes_processed) */
+
+        counter++;
     } /* while (input_len) */
 
     /* mark handshake as done if we have subject and issuer */

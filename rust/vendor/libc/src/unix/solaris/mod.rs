@@ -208,6 +208,8 @@ s! {
         pub ai_family: ::c_int,
         pub ai_socktype: ::c_int,
         pub ai_protocol: ::c_int,
+        #[cfg(target_arch = "sparc64")]
+        __sparcv9_pad: ::c_int,
         pub ai_addrlen: ::socklen_t,
         pub ai_canonname: *mut ::c_char,
         pub ai_addr: *mut ::sockaddr,
@@ -589,6 +591,9 @@ pub const WSTOPPED: ::c_int = WUNTRACED;
 pub const WCONTINUED: ::c_int = 0x08;
 pub const WNOWAIT: ::c_int = 0x80;
 
+pub const AT_FDCWD: ::c_int = 0xffd19553;
+pub const AT_SYMLINK_NOFOLLOW: ::c_int = 0x1000;
+
 // Solaris defines a great many more of these; we only expose the
 // standardized ones.
 pub const P_PID: idtype_t = 0;
@@ -764,6 +769,13 @@ pub const GLOB_NOSPACE : ::c_int = -2;
 pub const GLOB_ABORTED : ::c_int = -1;
 pub const GLOB_NOMATCH : ::c_int = -3;
 
+pub const POLLIN: ::c_short = 0x1;
+pub const POLLPRI: ::c_short = 0x2;
+pub const POLLOUT: ::c_short = 0x4;
+pub const POLLERR: ::c_short = 0x8;
+pub const POLLHUP: ::c_short = 0x10;
+pub const POLLNVAL: ::c_short = 0x20;
+
 pub const POSIX_MADV_NORMAL: ::c_int = 0;
 pub const POSIX_MADV_RANDOM: ::c_int = 1;
 pub const POSIX_MADV_SEQUENTIAL: ::c_int = 2;
@@ -773,7 +785,7 @@ pub const POSIX_MADV_DONTNEED: ::c_int = 4;
 pub const PTHREAD_CREATE_JOINABLE: ::c_int = 0;
 pub const PTHREAD_CREATE_DETACHED: ::c_int = 0x40;
 pub const PTHREAD_PROCESS_SHARED: ::c_int = 1;
-pub const PTHREAD_PROCESS_PRIVATE: ::c_int = 0;
+pub const PTHREAD_PROCESS_PRIVATE: ::c_ushort = 0;
 pub const PTHREAD_STACK_MIN: ::size_t = 4096;
 
 pub const SIGSTKSZ: ::size_t = 8192;
@@ -788,8 +800,8 @@ pub const SIGSTKSZ: ::size_t = 8192;
 //   blob/HEAD/usr/src/uts/common/sys/time_impl.h
 // Confusing! CLOCK_HIGHRES==CLOCK_MONOTONIC==4
 // __CLOCK_REALTIME0==0 is an obsoleted version of CLOCK_REALTIME==3
-pub const CLOCK_REALTIME: clockid_t = 3;
-pub const CLOCK_MONOTONIC: clockid_t = 4;
+pub const CLOCK_REALTIME: ::clockid_t = 3;
+pub const CLOCK_MONOTONIC: ::clockid_t = 4;
 pub const TIMER_RELTIME: ::c_int = 0;
 pub const TIMER_ABSTIME: ::c_int = 1;
 
@@ -1098,6 +1110,7 @@ pub const RTLD_DEFAULT: *mut ::c_void = -2isize as *mut ::c_void;
 pub const RTLD_SELF: *mut ::c_void = -3isize as *mut ::c_void;
 pub const RTLD_PROBE: *mut ::c_void = -4isize as *mut ::c_void;
 
+pub const RTLD_LAZY: ::c_int = 0x1;
 pub const RTLD_NOW: ::c_int = 0x2;
 pub const RTLD_NOLOAD: ::c_int = 0x4;
 pub const RTLD_GLOBAL: ::c_int = 0x100;
@@ -1171,13 +1184,13 @@ extern {
     pub fn ioctl(fildes: ::c_int, request: ::c_int, ...) -> ::c_int;
     pub fn mprotect(addr: *const ::c_void, len: ::size_t, prot: ::c_int)
                     -> ::c_int;
-    pub fn clock_getres(clk_id: clockid_t, tp: *mut ::timespec) -> ::c_int;
-    pub fn clock_gettime(clk_id: clockid_t, tp: *mut ::timespec) -> ::c_int;
-    pub fn clock_nanosleep(clk_id: clockid_t,
+    pub fn clock_getres(clk_id: ::clockid_t, tp: *mut ::timespec) -> ::c_int;
+    pub fn clock_gettime(clk_id: ::clockid_t, tp: *mut ::timespec) -> ::c_int;
+    pub fn clock_nanosleep(clk_id: ::clockid_t,
                            flags: ::c_int,
                            rqtp: *const ::timespec,
                            rmtp:  *mut ::timespec) -> ::c_int;
-    pub fn clock_settime(clk_id: clockid_t, tp: *const ::timespec) -> ::c_int;
+    pub fn clock_settime(clk_id: ::clockid_t, tp: *const ::timespec) -> ::c_int;
     pub fn getnameinfo(sa: *const ::sockaddr,
                        salen: ::socklen_t,
                        host: *mut ::c_char,
@@ -1185,20 +1198,8 @@ extern {
                        serv: *mut ::c_char,
                        sevlen: ::socklen_t,
                        flags: ::c_int) -> ::c_int;
-    #[link_name = "__posix_getpwnam_r"]
-    pub fn getpwnam_r(name: *const ::c_char,
-                      pwd: *mut passwd,
-                      buf: *mut ::c_char,
-                      buflen: ::size_t,
-                      result: *mut *mut passwd) -> ::c_int;
-
-    #[link_name = "__posix_getpwuid_r"]
-    pub fn getpwuid_r(uid: ::uid_t,
-                      pwd: *mut passwd,
-                      buf: *mut ::c_char,
-                      buflen: ::size_t,
-                      result: *mut *mut passwd) -> ::c_int;
     pub fn setpwent();
+    pub fn endpwent();
     pub fn getpwent() -> *mut passwd;
     pub fn fdatasync(fd: ::c_int) -> ::c_int;
     pub fn nl_langinfo_l(item: ::nl_item, locale: ::locale_t) -> *mut ::c_char;
@@ -1223,10 +1224,14 @@ extern {
     pub fn sethostname(name: *const ::c_char, len: ::size_t) -> ::c_int;
     pub fn if_nameindex() -> *mut if_nameindex;
     pub fn if_freenameindex(ptr: *mut if_nameindex);
+    pub fn pthread_create(native: *mut ::pthread_t,
+                          attr: *const ::pthread_attr_t,
+                          f: extern fn(*mut ::c_void) -> *mut ::c_void,
+                          value: *mut ::c_void) -> ::c_int;
     pub fn pthread_condattr_getclock(attr: *const pthread_condattr_t,
                                      clock_id: *mut clockid_t) -> ::c_int;
     pub fn pthread_condattr_setclock(attr: *mut pthread_condattr_t,
-                                     clock_id: clockid_t) -> ::c_int;
+                                     clock_id: ::clockid_t) -> ::c_int;
     pub fn sem_timedwait(sem: *mut sem_t,
                          abstime: *const ::timespec) -> ::c_int;
     pub fn pthread_mutex_timedlock(lock: *mut pthread_mutex_t,
@@ -1255,11 +1260,15 @@ extern {
 
     pub fn msync(addr: *mut ::c_void, len: ::size_t, flags: ::c_int) -> ::c_int;
 
+    pub fn memalign(align: ::size_t, size: ::size_t) -> *mut ::c_void;
+
     pub fn recvfrom(socket: ::c_int, buf: *mut ::c_void, len: ::size_t,
                     flags: ::c_int, addr: *mut ::sockaddr,
                     addrlen: *mut ::socklen_t) -> ::ssize_t;
     pub fn mkstemps(template: *mut ::c_char, suffixlen: ::c_int) -> ::c_int;
     pub fn futimes(fd: ::c_int, times: *const ::timeval) -> ::c_int;
+    pub fn utimensat(dirfd: ::c_int, path: *const ::c_char,
+                     times: *const ::timespec, flag: ::c_int) -> ::c_int;
     pub fn nl_langinfo(item: ::nl_item) -> *mut ::c_char;
 
     pub fn bind(socket: ::c_int, address: *const ::sockaddr,
@@ -1288,4 +1297,62 @@ extern {
     pub fn port_getn(port: ::c_int, pe_list: *mut port_event, max: ::c_uint,
                      nget: *mut ::c_uint, timeout: *const ::timespec)
                      -> ::c_int;
+    pub fn fexecve(fd: ::c_int, argv: *const *const ::c_char,
+                   envp: *const *const ::c_char)
+                   -> ::c_int;
+    #[cfg_attr(target_os = "solaris", link_name = "__posix_getgrgid_r")]
+    pub fn getgrgid_r(uid: ::uid_t,
+                      grp: *mut ::group,
+                      buf: *mut ::c_char,
+                      buflen: ::size_t,
+                      result: *mut *mut ::group) -> ::c_int;
+    #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
+               link_name = "sigaltstack$UNIX2003")]
+    #[cfg_attr(target_os = "netbsd", link_name = "__sigaltstack14")]
+    pub fn sigaltstack(ss: *const stack_t,
+                       oss: *mut stack_t) -> ::c_int;
+    pub fn sem_close(sem: *mut sem_t) -> ::c_int;
+    pub fn getdtablesize() -> ::c_int;
+    #[cfg_attr(target_os = "solaris", link_name = "__posix_getgrnam_r")]
+    pub fn getgrnam_r(name: *const ::c_char,
+                      grp: *mut ::group,
+                      buf: *mut ::c_char,
+                      buflen: ::size_t,
+                      result: *mut *mut ::group) -> ::c_int;
+    #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
+               link_name = "pthread_sigmask$UNIX2003")]
+    pub fn pthread_sigmask(how: ::c_int, set: *const sigset_t,
+                           oldset: *mut sigset_t) -> ::c_int;
+    pub fn sem_open(name: *const ::c_char, oflag: ::c_int, ...) -> *mut sem_t;
+    pub fn getgrnam(name: *const ::c_char) -> *mut ::group;
+    pub fn pthread_kill(thread: ::pthread_t, sig: ::c_int) -> ::c_int;
+    pub fn sem_unlink(name: *const ::c_char) -> ::c_int;
+    pub fn daemon(nochdir: ::c_int, noclose: ::c_int) -> ::c_int;
+    #[cfg_attr(target_os = "netbsd", link_name = "__getpwnam_r50")]
+    #[cfg_attr(target_os = "solaris", link_name = "__posix_getpwnam_r")]
+    pub fn getpwnam_r(name: *const ::c_char,
+                      pwd: *mut passwd,
+                      buf: *mut ::c_char,
+                      buflen: ::size_t,
+                      result: *mut *mut passwd) -> ::c_int;
+    #[cfg_attr(target_os = "netbsd", link_name = "__getpwuid_r50")]
+    #[cfg_attr(target_os = "solaris", link_name = "__posix_getpwuid_r")]
+    pub fn getpwuid_r(uid: ::uid_t,
+                      pwd: *mut passwd,
+                      buf: *mut ::c_char,
+                      buflen: ::size_t,
+                      result: *mut *mut passwd) -> ::c_int;
+    #[cfg_attr(all(target_os = "macos", target_arch ="x86"),
+               link_name = "sigwait$UNIX2003")]
+    #[cfg_attr(target_os = "solaris", link_name = "__posix_sigwait")]
+    pub fn sigwait(set: *const sigset_t,
+                   sig: *mut ::c_int) -> ::c_int;
+    pub fn pthread_atfork(prepare: Option<unsafe extern fn()>,
+                          parent: Option<unsafe extern fn()>,
+                          child: Option<unsafe extern fn()>) -> ::c_int;
+    pub fn getgrgid(gid: ::gid_t) -> *mut ::group;
+    #[cfg_attr(all(target_os = "macos", target_arch = "x86"),
+               link_name = "popen$UNIX2003")]
+    pub fn popen(command: *const c_char,
+                 mode: *const c_char) -> *mut ::FILE;
 }

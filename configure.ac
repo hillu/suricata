@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 4.0.0)
+    AC_INIT(suricata, 4.0.1)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
@@ -1917,8 +1917,8 @@
                         echo "  To enable it install libevent"
                         echo
                         echo "   Ubuntu: apt-get install libevent-dev"
-                        echo "   Fedora: dnf install event-devel"
-                        echo "   RHEL/CentOS: yum install event-devel"
+                        echo "   Fedora: dnf install libevent-devel"
+                        echo "   RHEL/CentOS: yum install libevent-devel"
                         echo
                    fi
                    if test "$HAVE_LIBEVENT_PTHREADS" = "no"; then

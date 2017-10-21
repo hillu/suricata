@@ -152,7 +152,9 @@ outputs:
       #  server: 127.0.0.1
       #  port: 6379
       #  async: true ## if redis replies are read asynchronously
-      #  mode: list ## possible values: list (default), channel
+      #  mode: list ## possible values: list|lpush (default), rpush, channel|publish
+      #             ## lpush and rpush are using a Redis list. "list" is an alias for lpush
+      #             ## publish is using a Redis channel. "channel" is an alias for publish
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
       # 'batch-size' events. This should lower the latency induced by network
@@ -1667,6 +1669,8 @@ ipfw:
 napatech:
     # The Host Buffer Allowance for all streams
     # (-1 = OFF, 1 - 100 = percentage of the host buffer that can be held back)
+    # This may be enabled when sharing streams with another application.
+    # Otherwise, it should be turned off.
     hba: -1
 
     # use_all_streams set to "yes" will query the Napatech service for all configured
@@ -1674,8 +1678,11 @@ napatech:
     # will be used.
     use-all-streams: yes
 
-    # The streams to listen on
-    streams: [1, 2, 3]
+    # The streams to listen on.  This can be either:
+    #   a list of individual streams (e.g. streams: [0,1,2,3])
+    # or
+    #   a range of streams (e.g. streams: ["0-3"])
+    streams: ["0-3"]
 
 # Tilera mpipe configuration. for use on Tilera TILE-Gx.
 mpipe:
