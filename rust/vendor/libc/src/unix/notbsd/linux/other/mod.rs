@@ -1,6 +1,3 @@
-pub type fsblkcnt_t = ::c_ulong;
-pub type fsfilcnt_t = ::c_ulong;
-pub type rlim_t = c_ulong;
 pub type __priority_which_t = ::c_uint;
 
 s! {
@@ -17,7 +14,7 @@ s! {
         __error_code: ::c_int,
         __return_value: ::ssize_t,
         pub aio_offset: off_t,
-        #[cfg(target_pointer_width = "32")]
+        #[cfg(all(not(target_arch = "x86_64"), target_pointer_width = "32"))]
         __unused1: [::c_char; 4],
         __glibc_reserved: [::c_char; 32]
     }
@@ -44,20 +41,24 @@ s! {
 
         #[cfg(any(target_arch = "aarch64",
                   target_arch = "sparc64",
-                  target_pointer_width = "32"))]
+                  all(target_pointer_width = "32",
+                      not(target_arch = "x86_64"))))]
         pub ut_session: ::c_long,
         #[cfg(any(target_arch = "aarch64",
                   target_arch = "sparc64",
-                  target_pointer_width = "32"))]
+                  all(target_pointer_width = "32",
+                      not(target_arch = "x86_64"))))]
         pub ut_tv: ::timeval,
 
         #[cfg(not(any(target_arch = "aarch64",
                       target_arch = "sparc64",
-                      target_pointer_width = "32")))]
+                      all(target_pointer_width = "32",
+                          not(target_arch = "x86_64")))))]
         pub ut_session: ::int32_t,
         #[cfg(not(any(target_arch = "aarch64",
                       target_arch = "sparc64",
-                      target_pointer_width = "32")))]
+                      all(target_pointer_width = "32",
+                          not(target_arch = "x86_64")))))]
         pub ut_tv: __timeval,
 
         pub ut_addr_v6: [::int32_t; 4],
@@ -84,6 +85,9 @@ s! {
         pub si_errno: ::c_int,
         pub si_code: ::c_int,
         pub _pad: [::c_int; 29],
+        #[cfg(target_arch = "x86_64")]
+        _align: [u64; 0],
+        #[cfg(not(target_arch = "x86_64"))]
         _align: [usize; 0],
     }
 
@@ -568,13 +572,6 @@ extern {
 
 #[link(name = "util")]
 extern {
-    pub fn sysctl(name: *mut ::c_int,
-                  namelen: ::c_int,
-                  oldp: *mut ::c_void,
-                  oldlenp: *mut ::size_t,
-                  newp: *mut ::c_void,
-                  newlen: ::size_t)
-                  -> ::c_int;
     pub fn ioctl(fd: ::c_int, request: ::c_ulong, ...) -> ::c_int;
     pub fn backtrace(buf: *mut *mut ::c_void,
                      sz: ::c_int) -> ::c_int;
