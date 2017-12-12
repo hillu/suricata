@@ -41,7 +41,11 @@ if [ "$QEMU" != "" ]; then
 
   # Do the standard rigamarole of cross-compiling an executable and then the
   # script to run just executes the binary.
-  cargo build --manifest-path libc-test/Cargo.toml --target $TARGET --tests
+  cargo build \
+    --manifest-path libc-test/Cargo.toml \
+    --target $TARGET \
+    --test main
+  rm $CARGO_TARGET_DIR/$TARGET/debug/main-*.d
   cp $CARGO_TARGET_DIR/$TARGET/debug/main-* $tmpdir/mount/libc-test
   echo 'exec $1/libc-test' > $tmpdir/mount/run.sh
 
@@ -68,4 +72,11 @@ if [ "$QEMU" != "" ]; then
   exec grep "^PASSED .* tests" $CARGO_TARGET_DIR/out.log
 fi
 
-exec cargo test --manifest-path libc-test/Cargo.toml --target $TARGET
+# FIXME: x86_64-unknown-linux-gnux32 fail to compile wihout --release
+# See https://github.com/rust-lang/rust/issues/45417
+opt=
+if [ "$TARGET" = "x86_64-unknown-linux-gnux32" ]; then
+  opt="--release"
+fi
+
+exec cargo test $opt --manifest-path libc-test/Cargo.toml --target $TARGET

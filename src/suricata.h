@@ -70,7 +70,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "4.0.1"
+#define PROG_VER "4.0.3"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -194,7 +194,6 @@ int RunmodeGetCurrent(void);
 int IsRuleReloadSet(int quiet);
 
 extern int run_mode;
-extern int run_mode_offline;
 
 void PreRunInit(const int runmode);
 void PreRunPostPrivsDropInit(const int runmode);

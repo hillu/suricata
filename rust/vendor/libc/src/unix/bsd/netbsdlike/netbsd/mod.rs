@@ -346,6 +346,24 @@ pub const SO_TIMESTAMP: ::c_int = 0x2000;
 pub const SO_OVERFLOWED: ::c_int = 0x1009;
 pub const SO_NOHEADER: ::c_int = 0x100a;
 
+// https://github.com/NetBSD/src/blob/trunk/sys/net/if.h#L373
+pub const IFF_UP: ::c_int = 0x0001; // interface is up
+pub const IFF_BROADCAST: ::c_int = 0x0002; // broadcast address valid
+pub const IFF_DEBUG: ::c_int = 0x0004; // turn on debugging
+pub const IFF_LOOPBACK: ::c_int = 0x0008; // is a loopback net
+pub const IFF_POINTOPOINT: ::c_int = 0x0010; // interface is point-to-point link
+pub const IFF_NOTRAILERS: ::c_int = 0x0020; // avoid use of trailers
+pub const IFF_RUNNING: ::c_int = 0x0040; // resources allocated
+pub const IFF_NOARP: ::c_int = 0x0080; // no address resolution protocol
+pub const IFF_PROMISC: ::c_int = 0x0100; // receive all packets
+pub const IFF_ALLMULTI: ::c_int = 0x0200; // receive all multicast packets
+pub const IFF_OACTIVE: ::c_int = 0x0400; // transmission in progress
+pub const IFF_SIMPLEX: ::c_int = 0x0800; // can't hear own transmissions
+pub const IFF_LINK0: ::c_int = 0x1000; // per link layer defined bit
+pub const IFF_LINK1: ::c_int = 0x2000; // per link layer defined bit
+pub const IFF_LINK2: ::c_int = 0x4000; // per link layer defined bit
+pub const IFF_MULTICAST: ::c_int = 0x8000; // supports multicast
+
 // sys/netinet/in.h
 // Protocols (RFC 1700)
 // NOTE: These are in addition to the constants defined in src/unix/mod.rs
@@ -649,13 +667,13 @@ pub const PTHREAD_MUTEX_ERRORCHECK: ::c_int = 1;
 pub const PTHREAD_MUTEX_RECURSIVE: ::c_int = 2;
 pub const PTHREAD_MUTEX_DEFAULT: ::c_int = PTHREAD_MUTEX_NORMAL;
 
-pub const EVFILT_AIO: ::int32_t = 2;
-pub const EVFILT_PROC: ::int32_t = 4;
-pub const EVFILT_READ: ::int32_t = 0;
-pub const EVFILT_SIGNAL: ::int32_t = 5;
-pub const EVFILT_TIMER: ::int32_t = 6;
-pub const EVFILT_VNODE: ::int32_t = 3;
-pub const EVFILT_WRITE: ::int32_t = 1;
+pub const EVFILT_AIO: ::uint32_t = 2;
+pub const EVFILT_PROC: ::uint32_t = 4;
+pub const EVFILT_READ: ::uint32_t = 0;
+pub const EVFILT_SIGNAL: ::uint32_t = 5;
+pub const EVFILT_TIMER: ::uint32_t = 6;
+pub const EVFILT_VNODE: ::uint32_t = 3;
+pub const EVFILT_WRITE: ::uint32_t = 1;
 
 pub const EV_ADD: ::uint32_t = 0x1;
 pub const EV_DELETE: ::uint32_t = 0x2;
@@ -838,6 +856,11 @@ pub const KERN_PROC_UID: ::c_int = 5;
 pub const KERN_PROC_RUID: ::c_int = 6;
 pub const KERN_PROC_GID: ::c_int = 7;
 pub const KERN_PROC_RGID: ::c_int = 8;
+pub const KERN_PROC_ARGV: ::c_int = 1;
+pub const KERN_PROC_NARGV: ::c_int = 2;
+pub const KERN_PROC_ENV: ::c_int = 3;
+pub const KERN_PROC_NENV: ::c_int = 4;
+pub const KERN_PROC_PATHNAME: ::c_int = 5;
 
 pub const EAI_SYSTEM: ::c_int = 11;
 
