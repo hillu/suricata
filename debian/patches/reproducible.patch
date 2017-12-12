@@ -9,7 +9,7 @@ Last-Update: 2016-09-05
 
 --- a/configure.ac
 +++ b/configure.ac
-@@ -2043,7 +2043,8 @@
+@@ -2229,7 +2229,8 @@
  echo
  echo "$SURICATA_BUILD_CONF"
  echo "printf(" >src/build-info.h

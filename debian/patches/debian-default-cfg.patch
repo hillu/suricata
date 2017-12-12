@@ -8,7 +8,7 @@ Last-Update: 2016-12-01
 
 --- a/suricata.yaml.in
 +++ b/suricata.yaml.in
-@@ -952,8 +952,8 @@
+@@ -996,8 +996,8 @@
  # activated in live capture mode. You can use the filename variable to set
  # the file name of the socket.
  unix-command:
@@ -32,7 +32,7 @@ Last-Update: 2016-12-01
  
 --- a/configure.ac
 +++ b/configure.ac
-@@ -1959,7 +1959,7 @@
+@@ -2138,7 +2138,7 @@
    EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
    EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
    EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
