@@ -27,7 +27,7 @@ Build-Depends: debhelper (>= 10),
                libhtp-dev (>= 1:0.5.25),
                procps
 X-Python-Version: >= 2.6
-Standards-Version: 4.1.1
+Standards-Version: 4.1.2
 Homepage: https://www.suricata-ids.org/
 Vcs-Browser: https://anonscm.debian.org/cgit/pkg-suricata/pkg-suricata.git
 Vcs-Git: https://alioth.debian.org/anonscm/git/pkg-suricata/pkg-suricata.git
