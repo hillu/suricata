@@ -1,3 +1,14 @@
+suricata (1:4.0.3-1) unstable; urgency=medium
+
+  [ Sascha Steinbiss ]
+  * [aece4d6] New upstream version 4.0.3
+  * [c23b64f] refresh patches
+
+  [ Arturo Borrero Gonzalez ]
+  * [7f077ca] d/control: bump std-version to 4.1.2
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 13 Dec 2017 11:42:18 +0100
+
 suricata (1:4.0.1-2) unstable; urgency=medium
 
   * [d9998f8] suricata-oinkmaster.conf: update ETOPEN ruleset for suricata 4.0.0
