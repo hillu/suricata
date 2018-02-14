@@ -285,11 +285,8 @@ static void SignalHandlerSigterm(/*@unused@*/ int sig)
  */
 static void SignalHandlerSigusr2(int sig)
 {
-    if (sigusr2_count < 16) {
+    if (sigusr2_count < 2)
         sigusr2_count++;
-    } else {
-        SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Too many USR2 signals pending, ignoring new ones!");
-    }
 }
 
 /**
@@ -2595,7 +2592,7 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
     if (suri->checksum_validation == -1) {
         const char *cv = NULL;
-        if (ConfGet("capture.checksum-validation", &cv) == 1) {
+        if (ConfGetValue("capture.checksum-validation", &cv) == 1) {
             if (strcmp(cv, "none") == 0) {
                 suri->checksum_validation = 0;
             } else if (strcmp(cv, "all") == 0) {
@@ -2633,7 +2630,7 @@ static int PostConfLoadedSetup(SCInstance *suri)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    if (ConfGet("host-mode", &hostmode) == 1) {
+    if (ConfGetValue("host-mode", &hostmode) == 1) {
         if (!strcmp(hostmode, "router")) {
             host_mode = SURI_HOST_IS_ROUTER;
         } else if (!strcmp(hostmode, "sniffer-only")) {

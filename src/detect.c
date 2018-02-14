@@ -255,6 +255,11 @@ char *DetectLoadCompleteSigPath(const DetectEngineCtx *de_ctx, const char *sig_f
     char *path = NULL;
     char varname[128];
 
+    if (sig_file == NULL) {
+        SCLogError(SC_ERR_INVALID_ARGUMENTS,"invalid sig_file argument - NULL");
+        return NULL;
+    }
+
     if (strlen(de_ctx->config_prefix) > 0) {
         snprintf(varname, sizeof(varname), "%s.default-rule-path",
                 de_ctx->config_prefix);
@@ -1482,10 +1487,7 @@ static void DetectFlow(ThreadVars *tv,
                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
                        Packet *p)
 {
-    /* No need to perform any detection on this packet, if the the given flag is set.*/
-    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
-        (PACKET_TEST_ACTION(p, ACTION_DROP)))
-    {
+    if (p->flags & PKT_NOPACKET_INSPECTION) {
         /* hack: if we are in pass the entire flow mode, we need to still
          * update the inspect_id forward. So test for the condition here,
          * and call the update code if necessary. */

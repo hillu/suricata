@@ -93,7 +93,7 @@ host_triplet = @host@
 @HAVE_RUST_EXTERNAL_TRUE@@HAVE_RUST_TRUE@am__append_4 = experimental
 
 # Can only include the headers if we have Python to generate them.
-@HAVE_PYTHON_TRUE@am__append_5 = gen/c-headers
+@HAVE_PYTHON_TRUE@@HAVE_RUST_TRUE@am__append_5 = gen/c-headers
 subdir = rust
 ACLOCAL_M4 = $(top_srcdir)/aclocal.m4
 am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
@@ -446,8 +446,8 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
-@HAVE_RUST_FALSE@distclean-local:
 @HAVE_RUST_FALSE@clean-local:
+@HAVE_RUST_FALSE@distclean-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am
@@ -560,11 +560,11 @@ uninstall-am:
 @HAVE_CARGO_VENDOR_TRUE@@HAVE_RUST_TRUE@vendor:
 @HAVE_CARGO_VENDOR_TRUE@@HAVE_RUST_TRUE@	CARGO_HOME=$(CARGO_HOME) $(CARGO) vendor > /dev/null
 @HAVE_CARGO_VENDOR_FALSE@@HAVE_RUST_TRUE@vendor:
+@HAVE_PYTHON_TRUE@@HAVE_RUST_TRUE@gen/c-headers:
+@HAVE_PYTHON_TRUE@@HAVE_RUST_TRUE@	cd $(top_srcdir)/rust && $(HAVE_PYTHON) ./gen-c-headers.py
+@HAVE_PYTHON_FALSE@@HAVE_RUST_TRUE@gen/c-headers:
 
-@HAVE_RUST_FALSE@all-local clean-local check vendor:
-@HAVE_PYTHON_TRUE@gen/c-headers:
-@HAVE_PYTHON_TRUE@	cd $(top_srcdir)/rust && $(HAVE_PYTHON) ./gen-c-headers.py
-@HAVE_PYTHON_FALSE@gen/c-headers:
+@HAVE_RUST_FALSE@all-local clean-local check vendor gen/c-headers:
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

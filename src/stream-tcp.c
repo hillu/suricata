@@ -317,9 +317,13 @@ int StreamTcpInlineDropInvalid(void)
  */
 static int RandomGetWrap(void)
 {
-    long int r = RandomGet();
-    int r_int = r % (long int)RAND_MAX;
-    return abs(r_int);
+    unsigned long r;
+
+    do {
+        r = RandomGet();
+    } while(r >= ULONG_MAX - (ULONG_MAX % RAND_MAX));
+
+    return r % RAND_MAX;
 }
 
 /** \brief          To initialize the stream global configuration data
@@ -363,7 +367,7 @@ void StreamTcpInitConfig(char quiet)
     }
 
     const char *temp_stream_memcap_str;
-    if (ConfGet("stream.memcap", &temp_stream_memcap_str) == 1) {
+    if (ConfGetValue("stream.memcap", &temp_stream_memcap_str) == 1) {
         if (ParseSizeStringU64(temp_stream_memcap_str, &stream_config.memcap) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing stream.memcap "
                        "from conf file - %s.  Killing engine",
@@ -408,7 +412,7 @@ void StreamTcpInitConfig(char quiet)
     }
 
     const char *temp_stream_inline_str;
-    if (ConfGet("stream.inline", &temp_stream_inline_str) == 1) {
+    if (ConfGetValue("stream.inline", &temp_stream_inline_str) == 1) {
         int inl = 0;
 
         /* checking for "auto" and falling back to boolean to provide
@@ -471,7 +475,7 @@ void StreamTcpInitConfig(char quiet)
     }
 
     const char *temp_stream_reassembly_memcap_str;
-    if (ConfGet("stream.reassembly.memcap", &temp_stream_reassembly_memcap_str) == 1) {
+    if (ConfGetValue("stream.reassembly.memcap", &temp_stream_reassembly_memcap_str) == 1) {
         if (ParseSizeStringU64(temp_stream_reassembly_memcap_str,
                                &stream_config.reassembly_memcap) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing "
@@ -489,7 +493,7 @@ void StreamTcpInitConfig(char quiet)
     }
 
     const char *temp_stream_reassembly_depth_str;
-    if (ConfGet("stream.reassembly.depth", &temp_stream_reassembly_depth_str) == 1) {
+    if (ConfGetValue("stream.reassembly.depth", &temp_stream_reassembly_depth_str) == 1) {
         if (ParseSizeStringU32(temp_stream_reassembly_depth_str,
                                &stream_config.reassembly_depth) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing "
@@ -516,7 +520,7 @@ void StreamTcpInitConfig(char quiet)
 
     if (randomize) {
         const char *temp_rdrange;
-        if (ConfGet("stream.reassembly.randomize-chunk-range",
+        if (ConfGetValue("stream.reassembly.randomize-chunk-range",
                     &temp_rdrange) == 1) {
             if (ParseSizeStringU16(temp_rdrange, &rdrange) < 0) {
                 SCLogError(SC_ERR_SIZE_PARSE, "Error parsing "
@@ -534,7 +538,7 @@ void StreamTcpInitConfig(char quiet)
     }
 
     const char *temp_stream_reassembly_toserver_chunk_size_str;
-    if (ConfGet("stream.reassembly.toserver-chunk-size",
+    if (ConfGetValue("stream.reassembly.toserver-chunk-size",
                 &temp_stream_reassembly_toserver_chunk_size_str) == 1) {
         if (ParseSizeStringU16(temp_stream_reassembly_toserver_chunk_size_str,
                                &stream_config.reassembly_toserver_chunk_size) < 0) {
@@ -556,7 +560,7 @@ void StreamTcpInitConfig(char quiet)
                    (r * 1.0 / RAND_MAX - 0.5) * rdrange / 100);
     }
     const char *temp_stream_reassembly_toclient_chunk_size_str;
-    if (ConfGet("stream.reassembly.toclient-chunk-size",
+    if (ConfGetValue("stream.reassembly.toclient-chunk-size",
                 &temp_stream_reassembly_toclient_chunk_size_str) == 1) {
         if (ParseSizeStringU16(temp_stream_reassembly_toclient_chunk_size_str,
                                &stream_config.reassembly_toclient_chunk_size) < 0) {
@@ -1785,6 +1789,7 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
             return 0;
         }
 
+        bool ack_indicates_missed_3whs_ack_packet = false;
         /* Check if the ACK received is in right direction. But when we have
          * picked up a mid stream session after missing the initial SYN pkt,
          * in this case the ACK packet can arrive from either client (normal
@@ -1797,12 +1802,33 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
                 SCLogDebug("ssn %p: ACK received on midstream SYN/ACK "
                         "pickup session",ssn);
                 /* fall through */
-            } else {
-                SCLogDebug("ssn %p: ACK received in the wrong direction",
-                        ssn);
 
-                StreamTcpSetEvent(p, STREAM_3WHS_ACK_IN_WRONG_DIR);
-                return -1;
+            } else {
+                /* if we missed traffic between the S/SA and the current
+                 * 'wrong direction' ACK, we could end up here. In IPS
+                 * reject it. But in IDS mode we continue.
+                 *
+                 * IPS rejects as it should see all packets, so pktloss
+                 * should lead to retransmissions. As this can also be
+                 * pattern for MOTS/MITM injection attacks, we need to be
+                 * careful.
+                 */
+                if (StreamTcpInlineMode()) {
+                    if (p->payload_len > 0 &&
+                            SEQ_EQ(TCP_GET_ACK(p), ssn->client.last_ack) &&
+                            SEQ_EQ(TCP_GET_SEQ(p), ssn->server.next_seq)) {
+                        /* packet loss is possible but unlikely here */
+                        SCLogDebug("ssn %p: possible data injection", ssn);
+                        StreamTcpSetEvent(p, STREAM_3WHS_ACK_DATA_INJECT);
+                        return -1;
+                    }
+
+                    SCLogDebug("ssn %p: ACK received in the wrong direction",
+                            ssn);
+                    StreamTcpSetEvent(p, STREAM_3WHS_ACK_IN_WRONG_DIR);
+                    return -1;
+                }
+                ack_indicates_missed_3whs_ack_packet = true;
             }
         }
 
@@ -1936,6 +1962,25 @@ static int StreamTcpPacketStateSynRecv(ThreadVars *tv, Packet *p,
 
             StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
                     &ssn->client, p, pq);
+
+        /* toclient packet: after having missed the 3whs's final ACK */
+        } else if (ack_indicates_missed_3whs_ack_packet &&
+                SEQ_EQ(TCP_GET_ACK(p), ssn->client.last_ack) &&
+                SEQ_EQ(TCP_GET_SEQ(p), ssn->server.next_seq))
+        {
+            SCLogDebug("ssn %p: packet fits perfectly after a missed 3whs-ACK", ssn);
+
+            StreamTcpUpdateNextSeq(ssn, &ssn->server, (TCP_GET_SEQ(p) + p->payload_len));
+
+            ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
+            ssn->server.next_win = ssn->server.last_ack + ssn->server.window;
+
+            StreamTcpPacketSetState(p, ssn, TCP_ESTABLISHED);
+            SCLogDebug("ssn %p: =~ ssn state is now TCP_ESTABLISHED", ssn);
+
+            StreamTcpReassembleHandleSegment(tv, stt->ra_ctx, ssn,
+                    &ssn->server, p, pq);
+
         } else {
             SCLogDebug("ssn %p: wrong seq nr on packet", ssn);
 
@@ -2170,7 +2215,7 @@ static int HandleEstablishedPacketToClient(ThreadVars *tv, TcpSession *ssn, Pack
     if ((ssn->flags & STREAMTCP_FLAG_MIDSTREAM) &&
             (ssn->flags & STREAMTCP_FLAG_MIDSTREAM_ESTABLISHED))
     {
-        ssn->server.window = TCP_GET_WINDOW(p);
+        ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
         ssn->server.next_win = ssn->server.last_ack + ssn->server.window;
         ssn->flags &= ~STREAMTCP_FLAG_MIDSTREAM_ESTABLISHED;
         SCLogDebug("ssn %p: adjusted midstream ssn->server.next_win to "
@@ -4695,6 +4740,10 @@ error:
     }
 
     if (StreamTcpInlineDropInvalid()) {
+        /* disable payload inspection as we're dropping this packet
+         * anyway. Doesn't disable all detection, so we can still
+         * match on the stream event that was set. */
+        DecodeSetNoPayloadInspectionFlag(p);
         PACKET_DROP(p);
     }
     SCReturnInt(-1);
