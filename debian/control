@@ -3,7 +3,7 @@ Section: net
 Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>
-Build-Depends: debhelper (>= 10),
+Build-Depends: debhelper (>= 11),
 	       dh-python,
                libcap-ng-dev,
                libevent-dev,
