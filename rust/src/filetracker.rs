@@ -89,14 +89,18 @@ impl FileTransferTracker {
         }
     }
 
+    pub fn is_done(&self) -> bool {
+        self.file_open == false
+    }
+
     fn open(&mut self, config: &'static SuricataFileContext,
             files: &mut FileContainer, flags: u16, name: &[u8]) -> i32
     {
         let r = files.file_open(config, &self.track_id, name, flags);
         if r == 0 {
             files.file_set_txid_on_last_file(self.tx_id);
+            self.file_open = true;
         }
-        self.file_open = true;
         r
     }
 
@@ -110,7 +114,7 @@ impl FileTransferTracker {
     }
 
     pub fn trunc (&mut self, files: &mut FileContainer, flags: u16) {
-        if self.file_is_truncated {
+        if self.file_is_truncated || !self.file_open {
             return;
         }
         let myflags = flags | 1; // TODO util-file.c::FILE_TRUNCATED
@@ -159,9 +163,13 @@ impl FileTransferTracker {
             self.open(config, files, flags, name);
         }
 
-        let res = self.update(files, flags, data, 0);
-        SCLogDebug!("NEW CHUNK: update res {:?}", res);
-        res
+        if self.file_open == true {
+            let res = self.update(files, flags, data, 0);
+            SCLogDebug!("NEW CHUNK: update res {:?}", res);
+            return res;
+        }
+
+        0
     }
 
     /// update the file tracker
@@ -204,7 +212,10 @@ impl FileTransferTracker {
                         -2  => {
                             self.file_is_truncated = true;
                         },
-                        _ => { panic!("append failed with code {}", res); },
+                        _ => {
+                            SCLogDebug!("got error so truncing file");
+                            self.file_is_truncated = true;
+                        },
                     }
 
                     self.tracked += self.chunk_left as u64;
@@ -250,7 +261,8 @@ impl FileTransferTracker {
                                             self.file_is_truncated = true;
                                         },
                                         _ => {
-                                            panic!("append failed: files.file_append() returned {}", res);
+                                            SCLogDebug!("got error so truncing file");
+                                            self.file_is_truncated = true;
                                         },
                                     }
 
@@ -288,7 +300,10 @@ impl FileTransferTracker {
                         -2  => {
                             self.file_is_truncated = true;
                         },
-                        _ => { panic!("append failed with code {}", res); },
+                        _ => {
+                            SCLogDebug!("got error so truncing file");
+                            self.file_is_truncated = true;
+                        },
                     }
                     self.tracked += data.len() as u64;
                 } else {

@@ -684,6 +684,16 @@ pub const TIOCMSET: ::c_int = 0x5418;
 pub const FIONREAD: ::c_int = 0x541B;
 pub const TIOCCONS: ::c_int = 0x541D;
 
+pub const ST_RDONLY: ::c_ulong = 1;
+pub const ST_NOSUID: ::c_ulong = 2;
+pub const ST_NODEV: ::c_ulong = 4;
+pub const ST_NOEXEC: ::c_ulong = 8;
+pub const ST_SYNCHRONOUS: ::c_ulong = 16;
+pub const ST_MANDLOCK: ::c_ulong = 64;
+pub const ST_NOATIME: ::c_ulong = 1024;
+pub const ST_NODIRATIME: ::c_ulong = 2048;
+pub const ST_RELATIME: ::c_ulong = 4096;
+
 pub const RTLD_NOLOAD: ::c_int = 0x4;
 
 pub const SEM_FAILED: *mut sem_t = 0 as *mut sem_t;
@@ -791,7 +801,17 @@ pub const B3000000: ::speed_t = 0o010015;
 pub const B3500000: ::speed_t = 0o010016;
 pub const B4000000: ::speed_t = 0o010017;
 
+pub const EAI_AGAIN: ::c_int = 2;
+pub const EAI_BADFLAGS: ::c_int = 3;
+pub const EAI_FAIL: ::c_int = 4;
+pub const EAI_FAMILY: ::c_int = 5;
+pub const EAI_MEMORY: ::c_int = 6;
+pub const EAI_NODATA: ::c_int = 7;
+pub const EAI_NONAME: ::c_int = 8;
+pub const EAI_SERVICE: ::c_int = 9;
+pub const EAI_SOCKTYPE: ::c_int = 10;
 pub const EAI_SYSTEM: ::c_int = 11;
+pub const EAI_OVERFLOW: ::c_int = 14;
 
 pub const NETLINK_ROUTE: ::c_int = 0;
 pub const NETLINK_UNUSED: ::c_int = 1;
@@ -850,6 +870,10 @@ pub const NETLINK_TX_RING: ::c_int = 7;
 
 pub const GRND_NONBLOCK: ::c_uint = 0x0001;
 pub const GRND_RANDOM: ::c_uint = 0x0002;
+
+pub const SECCOMP_MODE_DISABLED: ::c_uint = 0;
+pub const SECCOMP_MODE_STRICT: ::c_uint = 1;
+pub const SECCOMP_MODE_FILTER: ::c_uint = 2;
 
 pub const NLA_F_NESTED: ::c_int = 1 << 15;
 pub const NLA_F_NET_BYTEORDER: ::c_int = 1 << 14;

@@ -210,6 +210,7 @@ pub const S_ISGID: ::c_int = 0x400;
 pub const S_ISVTX: ::c_int = 0x200;
 
 pub const IF_NAMESIZE: ::size_t = 16;
+pub const IFNAMSIZ: ::size_t = IF_NAMESIZE;
 
 pub const LOG_EMERG: ::c_int = 0;
 pub const LOG_ALERT: ::c_int = 1;
@@ -766,6 +767,8 @@ extern {
     pub fn gmtime(time_p: *const time_t) -> *mut tm;
     #[cfg_attr(target_os = "netbsd", link_name = "__locatime50")]
     pub fn localtime(time_p: *const time_t) -> *mut tm;
+    #[cfg_attr(target_os = "netbsd", link_name = "__difftime50")]
+    pub fn difftime(time1: time_t, time0: time_t) -> ::c_double;
 
     #[cfg_attr(target_os = "netbsd", link_name = "__mknod50")]
     pub fn mknod(pathname: *const ::c_char, mode: ::mode_t,

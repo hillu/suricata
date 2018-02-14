@@ -95,9 +95,8 @@ pub static mut SURICATA_NFS3_FILE_CONFIG: Option<&'static SuricataFileContext> =
 #[repr(u32)]
 pub enum NFSEvent {
     MalformedData = 0,
-    /* remove 'Padding' when more events are added. Rustc 1.7 won't
-     *   accept a single field enum with repr(u32) */
-    Padding,
+    NonExistingVersion = 1,
+    UnsupportedVersion = 2,
 }
 
 #[derive(Debug)]
@@ -320,11 +319,14 @@ pub struct NFSState {
     tx_id: u64,
 
     pub de_state_count: u64,
+}
 
-    // HACK flag state if tx has been marked complete in a direction
-    // this way we can skip a lot of looping in output-tx.c
-    //pub ts_txs_updated: bool,
-    //pub tc_txs_updated: bool,
+/// Implement Drop for NFSState as transactions need to do some
+/// explicit cleanup.
+impl Drop for NFSState {
+    fn drop(&mut self) {
+        self.free();
+    }
 }
 
 impl NFSState {
@@ -350,11 +352,12 @@ impl NFSState {
             events:0,
             tx_id:0,
             de_state_count:0,
-            //ts_txs_updated:false,
-            //tc_txs_updated:false,
         }
     }
     pub fn free(&mut self) {
+        while self.transactions.len() > 0 {
+            self.free_tx_at_index(0);
+        }
         self.files.free();
     }
 
@@ -450,8 +453,6 @@ impl NFSState {
                 //SCLogNotice!("process_reply_record: not TX found for XID {}", r.hdr.xid);
             },
         }
-
-        //self.tc_txs_updated = true;
     }
 
     fn process_request_record_lookup<'b>(&mut self, r: &RpcPacket<'b>, xidmap: &mut NFSRequestXidMap) {
@@ -629,7 +630,6 @@ impl NFSState {
                         },
                         None => { },
                     }
-                    //self.ts_txs_updated = true;
                 },
                 IResult::Incomplete(_) => {
                     self.set_event(NFSEvent::MalformedData);
@@ -649,7 +649,6 @@ impl NFSState {
             tx.file_name = xidmap.file_name.to_vec();
             tx.nfs_version = r.progver as u16;
             tx.file_handle = xidmap.file_handle.to_vec();
-            //self.ts_txs_updated = true;
 
             if r.procedure == NFSPROC3_RENAME {
                 tx.type_data = Some(NFSTransactionTypeData::RENAME(aux_file_name));
@@ -741,7 +740,6 @@ impl NFSState {
             tx.file_name = xidmap.file_name.to_vec();
             tx.file_handle = xidmap.file_handle.to_vec();
             tx.nfs_version = r.progver as u16;
-            //self.ts_txs_updated = true;
 
             if r.procedure == NFSPROC3_RENAME {
                 tx.type_data = Some(NFSTransactionTypeData::RENAME(aux_file_name));
@@ -1061,15 +1059,24 @@ impl NFSState {
         }
 
         match xidmap.progver {
-            3 => {
-                SCLogDebug!("NFSv3 reply record");
-                return self.process_reply_record_v3(r, &mut xidmap);
-            },
             2 => {
                 SCLogDebug!("NFSv2 reply record");
                 return self.process_reply_record_v2(r, &xidmap);
             },
-            _ => { panic!("unsupported NFS version"); },
+            3 => {
+                SCLogDebug!("NFSv3 reply record");
+                return self.process_reply_record_v3(r, &mut xidmap);
+            },
+            4 => {
+                SCLogDebug!("NFSv4 unsupported");
+                self.set_event(NFSEvent::UnsupportedVersion);
+                return 0;
+            },
+            _ => {
+                SCLogDebug!("Invalid NFS version");
+                self.set_event(NFSEvent::NonExistingVersion);
+                return 0;
+            },
         }
     }
 
@@ -1161,6 +1168,16 @@ impl NFSState {
 
                 tdf.chunk_count += 1;
                 let cs = tdf.file_tracker.update(files, flags, data, gap_size);
+                /* see if we need to close the tx */
+                if tdf.file_tracker.is_done() {
+                    if direction == STREAM_TOCLIENT {
+                        tx.response_done = true;
+                        SCLogDebug!("TX {} response is done now that the file track is ready", tx.id);
+                    } else {
+                        tx.request_done = true;
+                        SCLogDebug!("TX {} request is done now that the file track is ready", tx.id);
+                    }
+                }
                 cs
             },
             None => { 0 },
@@ -1222,6 +1239,9 @@ impl NFSState {
 
         }
 
+        let is_partial = reply.data.len() < reply.count as usize;
+        SCLogDebug!("partial data? {}", is_partial);
+
         let found = match self.get_file_tx_by_handle(&file_handle, STREAM_TOCLIENT) {
             Some((tx, files, flags)) => {
                 let ref mut tdf = match tx.type_data {
@@ -1230,14 +1250,21 @@ impl NFSState {
                 };
                 filetracker_newchunk(&mut tdf.file_tracker, files, flags,
                         &file_name, reply.data, chunk_offset,
-                        reply.count, fill_bytes as u8, reply.eof, &r.hdr.xid);
+                        reply.count, fill_bytes as u8, is_last, &r.hdr.xid);
                 tdf.chunk_count += 1;
                 if is_last {
                     tdf.file_last_xid = r.hdr.xid;
                     tx.rpc_response_status = r.reply_state;
                     tx.nfs_response_status = reply.status;
                     tx.is_last = true;
-                    tx.response_done = true;
+                    tx.request_done = true;
+
+                    /* if this is a partial record we will close the tx
+                     * when we've received the final data */
+                    if !is_partial {
+                        tx.response_done = true;
+                        SCLogDebug!("TX {} is DONE", tx.id);
+                    }
                 }
                 true
             },
@@ -1251,7 +1278,7 @@ impl NFSState {
             };
             filetracker_newchunk(&mut tdf.file_tracker, files, flags,
                     &file_name, reply.data, chunk_offset,
-                    reply.count, fill_bytes as u8, reply.eof, &r.hdr.xid);
+                    reply.count, fill_bytes as u8, is_last, &r.hdr.xid);
             tx.procedure = NFSPROC3_READ;
             tx.xid = r.hdr.xid;
             tx.is_first = true;
@@ -1260,13 +1287,17 @@ impl NFSState {
                 tx.rpc_response_status = r.reply_state;
                 tx.nfs_response_status = reply.status;
                 tx.is_last = true;
-                tx.response_done = true;
+                tx.request_done = true;
+
+                /* if this is a partial record we will close the tx
+                 * when we've received the final data */
+                if !is_partial {
+                    tx.response_done = true;
+                    SCLogDebug!("TX {} is DONE", tx.id);
+                }
             }
         }
 
-        //if is_last {
-        //    self.tc_txs_updated = true;
-        //}
         if !self.is_udp {
             self.tc_chunk_xid = r.hdr.xid;
             self.tc_chunk_left = (reply.count as u32 + fill_bytes) - reply.data.len() as u32;
@@ -1685,9 +1716,9 @@ pub extern "C" fn rs_nfs3_state_free(state: *mut libc::c_void) {
     nfs3_state.free();
 }
 
-/// C binding parse a DNS request. Returns 1 on success, -1 on failure.
+/// C binding parse a NFS TCP request. Returns 1 on success, -1 on failure.
 #[no_mangle]
-pub extern "C" fn rs_nfs3_parse_request(_flow: *mut Flow,
+pub extern "C" fn rs_nfs_parse_request(_flow: *mut Flow,
                                        state: &mut NFSState,
                                        _pstate: *mut libc::c_void,
                                        input: *mut libc::uint8_t,
@@ -1698,13 +1729,6 @@ pub extern "C" fn rs_nfs3_parse_request(_flow: *mut Flow,
     let buf = unsafe{std::slice::from_raw_parts(input, input_len as usize)};
     SCLogDebug!("parsing {} bytes of request data", input_len);
 
-    if buf.as_ptr().is_null() && input_len > 0 {
-        if state.parse_tcp_data_ts_gap(input_len as u32) == 0 {
-            return 1
-        }
-        return -1
-    }
-
     if state.parse_tcp_data_ts(buf) == 0 {
         1
     } else {
@@ -1713,7 +1737,19 @@ pub extern "C" fn rs_nfs3_parse_request(_flow: *mut Flow,
 }
 
 #[no_mangle]
-pub extern "C" fn rs_nfs3_parse_response(_flow: *mut Flow,
+pub extern "C" fn rs_nfs_parse_request_tcp_gap(
+                                        state: &mut NFSState,
+                                        input_len: libc::uint32_t)
+                                        -> libc::int8_t
+{
+    if state.parse_tcp_data_ts_gap(input_len as u32) == 0 {
+        return 1;
+    }
+    return -1;
+}
+
+#[no_mangle]
+pub extern "C" fn rs_nfs_parse_response(_flow: *mut Flow,
                                         state: &mut NFSState,
                                         _pstate: *mut libc::c_void,
                                         input: *mut libc::uint8_t,
@@ -1724,18 +1760,23 @@ pub extern "C" fn rs_nfs3_parse_response(_flow: *mut Flow,
     SCLogDebug!("parsing {} bytes of response data", input_len);
     let buf = unsafe{std::slice::from_raw_parts(input, input_len as usize)};
 
-    if buf.as_ptr().is_null() && input_len > 0 {
-        if state.parse_tcp_data_tc_gap(input_len as u32) == 0 {
-            return 1
-        }
-        return -1
-    }
-
     if state.parse_tcp_data_tc(buf) == 0 {
         1
     } else {
         -1
     }
+}
+
+#[no_mangle]
+pub extern "C" fn rs_nfs_parse_response_tcp_gap(
+                                        state: &mut NFSState,
+                                        input_len: libc::uint32_t)
+                                        -> libc::int8_t
+{
+    if state.parse_tcp_data_tc_gap(input_len as u32) == 0 {
+        return 1;
+    }
+    return -1;
 }
 
 /// C binding parse a DNS request. Returns 1 on success, -1 on failure.
@@ -1831,30 +1872,6 @@ pub extern "C" fn rs_nfs3_tx_get_alstate_progress(tx: &mut NFSTransaction,
         return 0;
     }
 }
-
-/*
-#[no_mangle]
-pub extern "C" fn rs_nfs3_get_txs_updated(state: &mut NFSState,
-                                          direction: u8) -> bool
-{
-    if direction == STREAM_TOSERVER {
-        return state.ts_txs_updated;
-    } else {
-        return state.tc_txs_updated;
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn rs_nfs3_reset_txs_updated(state: &mut NFSState,
-                                            direction: u8)
-{
-    if direction == STREAM_TOSERVER {
-        state.ts_txs_updated = false;
-    } else {
-        state.tc_txs_updated = false;
-    }
-}
-*/
 
 #[no_mangle]
 pub extern "C" fn rs_nfs3_tx_set_logged(_state: &mut NFSState,

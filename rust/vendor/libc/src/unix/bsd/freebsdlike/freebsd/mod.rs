@@ -62,6 +62,14 @@ s! {
         pub ip6: *mut ::in6_addr,
     }
 
+    pub struct mq_attr {
+        pub mq_flags: ::c_long,
+        pub mq_maxmsg: ::c_long,
+        pub mq_msgsize: ::c_long,
+        pub mq_curmsgs: ::c_long,
+        __reserved: [::c_long; 4]
+    }
+
     pub struct sigevent {
         pub sigev_notify: ::c_int,
         pub sigev_signo: ::c_int,
@@ -135,6 +143,17 @@ s! {
         pub cr_groups: [::gid_t;16],
         __cr_unused1: *mut ::c_void,
     }
+
+    pub struct sockaddr_dl {
+        pub sdl_len: ::c_uchar,
+        pub sdl_family: ::c_uchar,
+        pub sdl_index: ::c_ushort,
+        pub sdl_type: ::c_uchar,
+        pub sdl_nlen: ::c_uchar,
+        pub sdl_alen: ::c_uchar,
+        pub sdl_slen: ::c_uchar,
+        pub sdl_data: [::c_char; 46],
+    }
 }
 
 pub const SIGEV_THREAD_ID: ::c_int = 4;
@@ -153,6 +172,10 @@ pub const O_TTY_INIT: ::c_int = 0x00080000;
 pub const F_GETLK: ::c_int = 11;
 pub const F_SETLK: ::c_int = 12;
 pub const F_SETLKW: ::c_int = 13;
+pub const ENOTCAPABLE: ::c_int = 93;
+pub const ECAPMODE: ::c_int = 94;
+pub const ENOTRECOVERABLE: ::c_int = 95;
+pub const EOWNERDEAD: ::c_int = 96;
 pub const ELAST: ::c_int = 96;
 pub const RLIMIT_NPTS: ::c_int = 11;
 pub const RLIMIT_SWAP: ::c_int = 12;
@@ -433,15 +456,15 @@ pub const IFF_LOOPBACK: ::c_int = 0x8; // (i) is a loopback net
 pub const IFF_POINTOPOINT: ::c_int = 0x10; // (i) is a point-to-point link
 // 0x20           was IFF_SMART
 pub const IFF_RUNNING: ::c_int = 0x40; // (d) resources allocated
-#[deprecated(since="0.2.34",
-             note="please use the portable `IFF_RUNNING` constant instead")]
+#[doc(hidden)]
+// IFF_DRV_RUNNING is deprecated.  Use the portable `IFF_RUNNING` instead
 pub const IFF_DRV_RUNNING: ::c_int = 0x40;
 pub const IFF_NOARP: ::c_int = 0x80; // (n) no address resolution protocol
 pub const IFF_PROMISC: ::c_int = 0x100; // (n) receive all packets
 pub const IFF_ALLMULTI: ::c_int = 0x200; // (n) receive all multicast packets
 pub const IFF_OACTIVE: ::c_int = 0x400; // (d) tx hardware queue is full
-#[deprecated(since="0.2.34",
-             note="please use the portable `IFF_OACTIVE` constant instead")]
+#[doc(hidden)]
+// IFF_DRV_OACTIVE is deprecated.  Use the portable `IFF_OACTIVE` instead
 pub const IFF_DRV_OACTIVE: ::c_int = 0x400;
 pub const IFF_SIMPLEX: ::c_int = 0x800; // (i) can't hear own transmissions
 pub const IFF_LINK0: ::c_int = 0x1000; // per link layer defined bit

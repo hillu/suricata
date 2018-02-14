@@ -448,6 +448,21 @@ s! {
         pub p_memsz: Elf64_Xword,
         pub p_align: Elf64_Xword,
     }
+
+    pub struct ucred {
+        pub pid: ::pid_t,
+        pub uid: ::uid_t,
+        pub gid: ::gid_t,
+    }
+
+    pub struct mntent {
+        pub mnt_fsname: *mut ::c_char,
+        pub mnt_dir: *mut ::c_char,
+        pub mnt_type: *mut ::c_char,
+        pub mnt_opts: *mut ::c_char,
+        pub mnt_freq: ::c_int,
+        pub mnt_passno: ::c_int,
+    }
 }
 
 pub const ABDAY_1: ::nl_item = 0x20000;
@@ -720,6 +735,28 @@ pub const IFF_LOWER_UP: ::c_int = 0x10000;
 pub const IFF_DORMANT: ::c_int = 0x20000;
 pub const IFF_ECHO: ::c_int = 0x40000;
 
+// linux/if_tun.h
+// Read queue size
+pub const TUN_READQ_SIZE: ::c_short = 500;
+// TUN device type flags: deprecated. Use IFF_TUN/IFF_TAP instead.
+pub const TUN_TUN_DEV: ::c_short   = IFF_TUN;
+pub const TUN_TAP_DEV: ::c_short   = IFF_TAP;
+pub const TUN_TYPE_MASK: ::c_short = 0x000f;
+// TUNSETIFF ifr flags
+pub const IFF_TUN: ::c_short        = 0x0001;
+pub const IFF_TAP: ::c_short        = 0x0002;
+pub const IFF_NO_PI: ::c_short      = 0x1000;
+// This flag has no real effect
+pub const IFF_ONE_QUEUE: ::c_short    = 0x2000;
+pub const IFF_VNET_HDR: ::c_short     = 0x4000;
+pub const IFF_TUN_EXCL: ::c_short     = 0x8000;
+pub const IFF_MULTI_QUEUE: ::c_short  = 0x0100;
+pub const IFF_ATTACH_QUEUE: ::c_short = 0x0200;
+pub const IFF_DETACH_QUEUE: ::c_short = 0x0400;
+// read-only flag
+pub const IFF_PERSIST: ::c_short  = 0x0800;
+pub const IFF_NOFILTER: ::c_short = 0x1000;
+
 pub const ST_RDONLY: ::c_ulong = 1;
 pub const ST_NOSUID: ::c_ulong = 2;
 pub const ST_NODEV: ::c_ulong = 4;
@@ -903,10 +940,12 @@ pub const EAI_BADFLAGS: ::c_int = -1;
 pub const EAI_NONAME: ::c_int = -2;
 pub const EAI_AGAIN: ::c_int = -3;
 pub const EAI_FAIL: ::c_int = -4;
+pub const EAI_NODATA: ::c_int = -5;
 pub const EAI_FAMILY: ::c_int = -6;
 pub const EAI_SOCKTYPE: ::c_int = -7;
 pub const EAI_SERVICE: ::c_int = -8;
 pub const EAI_MEMORY: ::c_int = -10;
+pub const EAI_SYSTEM: ::c_int = -11;
 pub const EAI_OVERFLOW: ::c_int = -12;
 
 pub const NI_NUMERICHOST: ::c_int = 1;
@@ -918,8 +957,6 @@ pub const NI_DGRAM: ::c_int = 16;
 pub const SYNC_FILE_RANGE_WAIT_BEFORE: ::c_uint = 1;
 pub const SYNC_FILE_RANGE_WRITE: ::c_uint = 2;
 pub const SYNC_FILE_RANGE_WAIT_AFTER: ::c_uint = 4;
-
-pub const EAI_SYSTEM: ::c_int = -11;
 
 pub const AIO_CANCELED: ::c_int = 0;
 pub const AIO_NOTCANCELED: ::c_int = 1;
@@ -1056,6 +1093,10 @@ pub const PR_CAP_AMBIENT_CLEAR_ALL: ::c_int = 4;
 pub const GRND_NONBLOCK: ::c_uint = 0x0001;
 pub const GRND_RANDOM: ::c_uint = 0x0002;
 
+pub const SECCOMP_MODE_DISABLED: ::c_uint = 0;
+pub const SECCOMP_MODE_STRICT: ::c_uint = 1;
+pub const SECCOMP_MODE_FILTER: ::c_uint = 2;
+
 pub const ITIMER_REAL: ::c_int = 0;
 pub const ITIMER_VIRTUAL: ::c_int = 1;
 pub const ITIMER_PROF: ::c_int = 2;
@@ -1104,6 +1145,98 @@ pub const PT_LOOS: u32 = 0x60000000;
 pub const PT_GNU_EH_FRAME: u32 = 0x6474e550;
 pub const PT_GNU_STACK: u32 = 0x6474e551;
 pub const PT_GNU_RELRO: u32 = 0x6474e552;
+
+// linux/if_ether.h
+pub const ETH_ALEN: ::c_int = 6;
+pub const ETH_HLEN: ::c_int = 14;
+pub const ETH_ZLEN: ::c_int = 60;
+pub const ETH_DATA_LEN: ::c_int = 1500;
+pub const ETH_FRAME_LEN: ::c_int = 1514;
+pub const ETH_FCS_LEN: ::c_int = 4;
+
+// These are the defined Ethernet Protocol ID's.
+pub const ETH_P_LOOP: ::c_int = 0x0060;
+pub const ETH_P_PUP: ::c_int = 0x0200;
+pub const ETH_P_PUPAT: ::c_int = 0x0201;
+pub const ETH_P_IP: ::c_int = 0x0800;
+pub const ETH_P_X25: ::c_int = 0x0805;
+pub const ETH_P_ARP: ::c_int = 0x0806;
+pub const ETH_P_BPQ: ::c_int = 0x08FF;
+pub const ETH_P_IEEEPUP: ::c_int = 0x0a00;
+pub const ETH_P_IEEEPUPAT: ::c_int = 0x0a01;
+pub const ETH_P_BATMAN: ::c_int = 0x4305;
+pub const ETH_P_DEC: ::c_int = 0x6000;
+pub const ETH_P_DNA_DL: ::c_int = 0x6001;
+pub const ETH_P_DNA_RC: ::c_int = 0x6002;
+pub const ETH_P_DNA_RT: ::c_int = 0x6003;
+pub const ETH_P_LAT: ::c_int = 0x6004;
+pub const ETH_P_DIAG: ::c_int = 0x6005;
+pub const ETH_P_CUST: ::c_int = 0x6006;
+pub const ETH_P_SCA: ::c_int = 0x6007;
+pub const ETH_P_TEB: ::c_int = 0x6558;
+pub const ETH_P_RARP: ::c_int = 0x8035;
+pub const ETH_P_ATALK: ::c_int = 0x809B;
+pub const ETH_P_AARP: ::c_int = 0x80F3;
+pub const ETH_P_8021Q: ::c_int = 0x8100;
+pub const ETH_P_IPX: ::c_int = 0x8137;
+pub const ETH_P_IPV6: ::c_int = 0x86DD;
+pub const ETH_P_PAUSE: ::c_int = 0x8808;
+pub const ETH_P_SLOW: ::c_int = 0x8809;
+pub const ETH_P_WCCP: ::c_int = 0x883E;
+pub const ETH_P_MPLS_UC: ::c_int = 0x8847;
+pub const ETH_P_MPLS_MC: ::c_int = 0x8848;
+pub const ETH_P_ATMMPOA: ::c_int = 0x884c;
+pub const ETH_P_PPP_DISC: ::c_int = 0x8863;
+pub const ETH_P_PPP_SES: ::c_int = 0x8864;
+pub const ETH_P_LINK_CTL: ::c_int = 0x886c;
+pub const ETH_P_ATMFATE: ::c_int = 0x8884;
+pub const ETH_P_PAE: ::c_int = 0x888E;
+pub const ETH_P_AOE: ::c_int = 0x88A2;
+pub const ETH_P_8021AD: ::c_int = 0x88A8;
+pub const ETH_P_802_EX1: ::c_int = 0x88B5;
+pub const ETH_P_TIPC: ::c_int = 0x88CA;
+pub const ETH_P_MACSEC: ::c_int = 0x88E5;
+pub const ETH_P_8021AH: ::c_int = 0x88E7;
+pub const ETH_P_MVRP: ::c_int = 0x88F5;
+pub const ETH_P_1588: ::c_int = 0x88F7;
+pub const ETH_P_PRP: ::c_int = 0x88FB;
+pub const ETH_P_FCOE: ::c_int = 0x8906;
+pub const ETH_P_TDLS: ::c_int = 0x890D;
+pub const ETH_P_FIP: ::c_int = 0x8914;
+pub const ETH_P_80221: ::c_int = 0x8917;
+pub const ETH_P_LOOPBACK: ::c_int = 0x9000;
+pub const ETH_P_QINQ1: ::c_int = 0x9100;
+pub const ETH_P_QINQ2: ::c_int = 0x9200;
+pub const ETH_P_QINQ3: ::c_int = 0x9300;
+pub const ETH_P_EDSA: ::c_int = 0xDADA;
+pub const ETH_P_AF_IUCV: ::c_int = 0xFBFB;
+
+pub const ETH_P_802_3_MIN: ::c_int = 0x0600;
+
+// Non DIX types. Won't clash for 1500 types.
+pub const ETH_P_802_3: ::c_int = 0x0001;
+pub const ETH_P_AX25: ::c_int = 0x0002;
+pub const ETH_P_ALL: ::c_int = 0x0003;
+pub const ETH_P_802_2: ::c_int = 0x0004;
+pub const ETH_P_SNAP: ::c_int = 0x0005;
+pub const ETH_P_DDCMP: ::c_int = 0x0006;
+pub const ETH_P_WAN_PPP: ::c_int = 0x0007;
+pub const ETH_P_PPP_MP: ::c_int = 0x0008;
+pub const ETH_P_LOCALTALK: ::c_int = 0x0009;
+pub const ETH_P_CANFD: ::c_int = 0x000D;
+pub const ETH_P_PPPTALK: ::c_int = 0x0010;
+pub const ETH_P_TR_802_2: ::c_int = 0x0011;
+pub const ETH_P_MOBITEX: ::c_int = 0x0015;
+pub const ETH_P_CONTROL: ::c_int = 0x0016;
+pub const ETH_P_IRDA: ::c_int = 0x0017;
+pub const ETH_P_ECONET: ::c_int = 0x0018;
+pub const ETH_P_HDLC: ::c_int = 0x0019;
+pub const ETH_P_ARCNET: ::c_int = 0x001A;
+pub const ETH_P_DSA: ::c_int = 0x001B;
+pub const ETH_P_TRAILER: ::c_int = 0x001C;
+pub const ETH_P_PHONET: ::c_int = 0x00F5;
+pub const ETH_P_IEEE802154: ::c_int = 0x00F6;
+pub const ETH_P_CAIF: ::c_int = 0x00F7;
 
 f! {
     pub fn CPU_ZERO(cpuset: &mut cpu_set_t) -> () {
@@ -1570,6 +1703,14 @@ extern {
         ) -> ::c_int>,
         data: *mut ::c_void
     ) -> ::c_int;
+
+    pub fn setmntent(filename: *const ::c_char,
+                     ty: *const ::c_char) -> *mut ::FILE;
+    pub fn getmntent(stream: *mut ::FILE) -> *mut ::mntent;
+    pub fn addmntent(stream: *mut ::FILE, mnt: *const ::mntent) -> ::c_int;
+    pub fn endmntent(streamp: *mut ::FILE) -> ::c_int;
+    pub fn hasmntopt(mnt: *const ::mntent,
+                     opt: *const ::c_char) -> *mut ::c_char;
 }
 
 cfg_if! {

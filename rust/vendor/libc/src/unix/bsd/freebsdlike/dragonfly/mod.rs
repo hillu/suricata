@@ -72,6 +72,13 @@ s! {
         pub node: [u8; 6],
     }
 
+    pub struct mq_attr {
+        pub mq_flags: ::c_long,
+        pub mq_maxmsg: ::c_long,
+        pub mq_msgsize: ::c_long,
+        pub mq_curmsgs: ::c_long,
+    }
+
     pub struct sigevent {
         pub sigev_notify: ::c_int,
         // The union is 8-byte in size, so it is aligned at a 8-byte offset.
@@ -167,6 +174,19 @@ s! {
         pub ifm_flags: ::c_int,
         pub ifm_index: ::c_ushort,
         pub ifm_data: if_data,
+    }
+
+    pub struct sockaddr_dl {
+        pub sdl_len: ::c_uchar,
+        pub sdl_family: ::c_uchar,
+        pub sdl_index: ::c_ushort,
+        pub sdl_type: ::c_uchar,
+        pub sdl_nlen: ::c_uchar,
+        pub sdl_alen: ::c_uchar,
+        pub sdl_slen: ::c_uchar,
+        pub sdl_data: [::c_char; 12],
+        pub sdl_rcf: ::c_ushort,
+        pub sdl_route: [::c_ushort; 16],
     }
 }
 

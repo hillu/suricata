@@ -1,6 +1,6 @@
 [package]
 name = "suricata"
-version = "4.0.3"
+version = "4.0.4"
 
 [lib]
 crate-type = ["staticlib"]

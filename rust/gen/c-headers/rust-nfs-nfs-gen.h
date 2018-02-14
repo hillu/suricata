@@ -24,8 +24,10 @@
 
 void * rs_nfs3_state_new(void);
 void rs_nfs3_state_free(void * state);
-int8_t rs_nfs3_parse_request(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
-int8_t rs_nfs3_parse_response(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
+int8_t rs_nfs_parse_request(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
+int8_t rs_nfs_parse_request_tcp_gap(NFSState * state, uint32_t input_len);
+int8_t rs_nfs_parse_response(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
+int8_t rs_nfs_parse_response_tcp_gap(NFSState * state, uint32_t input_len);
 int8_t rs_nfs3_parse_request_udp(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
 int8_t rs_nfs3_parse_response_udp(Flow * _flow, NFSState * state, void * _pstate, uint8_t * input, uint32_t input_len, void * _data);
 uint64_t rs_nfs3_state_get_tx_count(NFSState * state);
@@ -33,8 +35,6 @@ NFSTransaction * rs_nfs3_state_get_tx(NFSState * state, uint64_t tx_id);
 void rs_nfs3_state_tx_free(NFSState * state, uint64_t tx_id);
 int rs_nfs3_state_progress_completion_status(uint8_t _direction);
 uint8_t rs_nfs3_tx_get_alstate_progress(NFSTransaction * tx, uint8_t direction);
-bool rs_nfs3_get_txs_updated(NFSState * state, uint8_t direction);
-void rs_nfs3_reset_txs_updated(NFSState * state, uint8_t direction);
 void rs_nfs3_tx_set_logged(NFSState * _state, NFSTransaction * tx, uint32_t logger);
 int8_t rs_nfs3_tx_get_logged(NFSState * _state, NFSTransaction * tx, uint32_t logger);
 uint8_t rs_nfs3_state_has_detect_state(NFSState * state);
