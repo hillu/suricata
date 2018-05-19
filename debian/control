@@ -26,7 +26,6 @@ Build-Depends: debhelper (>= 11),
                zlib1g-dev | libz-dev,
                libhtp-dev (>= 1:0.5.25),
                procps
-X-Python-Version: >= 2.6
 Standards-Version: 4.1.3
 Homepage: https://www.suricata-ids.org/
 Vcs-Browser: https://salsa.debian.org/pkg-suricata-team/pkg-suricata
