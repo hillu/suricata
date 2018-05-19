@@ -1,6 +1,6 @@
 From: Arturo Borrero Gonzalez <arturo@debian.org>
 Subject: Patch to make the suricata build reproducible
- This patch makes some changes to the suricata buid to make it reproducible
+ This patch makes some changes to the suricata build to make it reproducible
  .
  Currently, it only filters out the -fdebug-prefix-map CFLAG which embeds
  the build path.

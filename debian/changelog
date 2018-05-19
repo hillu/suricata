@@ -7,6 +7,7 @@ suricata (1:4.0.4-2) UNRELEASED; urgency=medium
   * Add patches to fix building on ia64.
     Thanks to Jason Duerstock and Adrian Bunk for the patches.
     Closes: #890432
+  * Fix spelling in debian/patches/reproducible.patch.
 
  -- Sascha Steinbiss <satta@debian.org>  Sat, 19 May 2018 14:00:14 +0200
 
