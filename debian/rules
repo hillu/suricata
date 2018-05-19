@@ -53,4 +53,4 @@ override_dh_strip:
 override_dh_auto_test:
 	# do nothing
 %:
-	dh $@ --parallel --with python2
+	dh $@ --with python2
