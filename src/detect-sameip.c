@@ -38,8 +38,8 @@
 #include "util-unittest-helper.h"
 
 static int DetectSameipMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                             Signature *, const SigMatchCtx *);
-static int DetectSameipSetup(DetectEngineCtx *, Signature *, char *);
+                             const Signature *, const SigMatchCtx *);
+static int DetectSameipSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectSameipRegisterTests(void);
 
 /**
@@ -50,7 +50,7 @@ void DetectSameipRegister(void)
 {
     sigmatch_table[DETECT_SAMEIP].name = "sameip";
     sigmatch_table[DETECT_SAMEIP].desc = "check if the IP address of the source is the same as the IP address of the destination";
-    sigmatch_table[DETECT_SAMEIP].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#sameip";
+    sigmatch_table[DETECT_SAMEIP].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#sameip";
     sigmatch_table[DETECT_SAMEIP].Match = DetectSameipMatch;
     sigmatch_table[DETECT_SAMEIP].Setup = DetectSameipSetup;
     sigmatch_table[DETECT_SAMEIP].Free = NULL;
@@ -71,7 +71,7 @@ void DetectSameipRegister(void)
  * \retval 1 match
  */
 static int DetectSameipMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                             Packet *p, Signature *s, const SigMatchCtx *ctx)
+                             Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     return CMP_ADDR(&p->src, &p->dst) ? 1 : 0;
 }
@@ -87,7 +87,7 @@ static int DetectSameipMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectSameipSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
+static int DetectSameipSetup(DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
     SigMatch *sm = NULL;
 
@@ -119,7 +119,7 @@ error:
  * \internal
  * \brief This test tests sameip success and failure.
  */
-static int DetectSameipSigTest01Real(int mpm_type)
+static int DetectSameipSigTest01(void)
 {
     uint8_t *buf = (uint8_t *)
                     "GET / HTTP/1.0\r\n"
@@ -144,7 +144,6 @@ static int DetectSameipSigTest01Real(int mpm_type)
         goto end;
     }
 
-    de_ctx->mpm_matcher = mpm_type;
     de_ctx->flags |= DE_QUIET;
 
     de_ctx->sig_list = SigInit(de_ctx,
@@ -182,30 +181,6 @@ end:
     return result;
 }
 
-/**
- * \test DetectSameipSigTest01B2g tests sameip under B2g MPM
- */
-static int DetectSameipSigTest01B2g(void)
-{
-    return DetectSameipSigTest01Real(MPM_B2G);
-}
-
-/**
- * \test DetectSameipSigTest01B2g tests sameip under B3g MPM
- */
-static int DetectSameipSigTest01B3g(void)
-{
-    return DetectSameipSigTest01Real(MPM_B3G);
-}
-
-/**
- * \test DetectSameipSigTest01B2g tests sameip under WuManber MPM
- */
-static int DetectSameipSigTest01Wm(void)
-{
-    return DetectSameipSigTest01Real(MPM_WUMANBER);
-}
-
 #endif /* UNITTESTS */
 
 /**
@@ -215,8 +190,6 @@ static int DetectSameipSigTest01Wm(void)
 static void DetectSameipRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectSameipSigTest01B2g", DetectSameipSigTest01B2g, 1);
-    UtRegisterTest("DetectSameipSigTest01B3g", DetectSameipSigTest01B3g, 1);
-    UtRegisterTest("DetectSameipSigTest01Wm", DetectSameipSigTest01Wm, 1);
+    UtRegisterTest("DetectSameipSigTest01", DetectSameipSigTest01);
 #endif /* UNITTESTS */
 }

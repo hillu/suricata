@@ -30,11 +30,17 @@
 #include "suricata-common.h"
 #include "threadvars.h"
 #include "decode-events.h"
+#include "flow-worker.h"
 
 #ifdef __SC_CUDA_SUPPORT__
 #include "util-cuda-buffer.h"
 #include "util-cuda-vars.h"
 #endif /* __SC_CUDA_SUPPORT__ */
+
+#ifdef HAVE_NAPATECH
+#include "util-napatech.h"
+#endif /* HAVE_NAPATECH */
+
 
 typedef enum {
     CHECKSUM_VALIDATION_DISABLE,
@@ -53,6 +59,7 @@ enum PktSrcEnum {
     PKT_SRC_DEFRAG,
     PKT_SRC_STREAM_TCP_STREAM_END_PSEUDO,
     PKT_SRC_FFR,
+    PKT_SRC_STREAM_TCP_DETECTLOG_FLUSH,
 };
 
 #include "source-nflog.h"
@@ -103,15 +110,17 @@ void AppLayerDecoderEventsFreeEvents(AppLayerDecoderEvents **events);
 typedef struct Address_ {
     char family;
     union {
-        uint32_t       address_un_data32[4]; /* type-specific field */
-        uint16_t       address_un_data16[8]; /* type-specific field */
-        uint8_t        address_un_data8[16]; /* type-specific field */
+        uint32_t        address_un_data32[4]; /* type-specific field */
+        uint16_t        address_un_data16[8]; /* type-specific field */
+        uint8_t         address_un_data8[16]; /* type-specific field */
+        struct in6_addr address_un_in6;
     } address;
 } Address;
 
 #define addr_data32 address.address_un_data32
 #define addr_data16 address.address_un_data16
 #define addr_data8  address.address_un_data8
+#define addr_in6addr    address.address_un_in6
 
 #define COPY_ADDRESS(a, b) do {                    \
         (b)->family = (a)->family;                 \
@@ -205,6 +214,8 @@ typedef struct Address_ {
 #define GET_IPV4_SRC_ADDR_PTR(p) ((p)->src.addr_data32)
 #define GET_IPV4_DST_ADDR_PTR(p) ((p)->dst.addr_data32)
 
+#define GET_IPV6_SRC_IN6ADDR(p) ((p)->src.addr_in6addr)
+#define GET_IPV6_DST_IN6ADDR(p) ((p)->dst.addr_in6addr)
 #define GET_IPV6_SRC_ADDR(p) ((p)->src.addr_data32)
 #define GET_IPV6_DST_ADDR(p) ((p)->dst.addr_data32)
 #define GET_TCP_SRC_PORT(p)  ((p)->sp)
@@ -259,7 +270,7 @@ typedef struct PacketAlert_ {
     SigIntId num; /* Internal num, used for sorting */
     uint8_t action; /* Internal num, used for sorting */
     uint8_t flags;
-    struct Signature_ *s;
+    const struct Signature_ *s;
     uint64_t tx_id;
 } PacketAlert;
 
@@ -273,6 +284,8 @@ typedef struct PacketAlert_ {
 #define PACKET_ALERT_FLAG_STREAM_MATCH  0x04
 /** alert is in a tx, tx_id set */
 #define PACKET_ALERT_FLAG_TX            0x08
+/** action was changed by rate_filter */
+#define PACKET_ALERT_RATE_FILTER_MODIFIED   0x10
 
 #define PACKET_ALERT_MAX 15
 
@@ -295,12 +308,14 @@ typedef struct PacketEngineEvents_ {
 } PacketEngineEvents;
 
 typedef struct PktVar_ {
-    char *name;
+    uint32_t id;
     struct PktVar_ *next; /* right now just implement this as a list,
                            * in the long run we have thing of something
                            * faster. */
-    uint8_t *value;
+    uint16_t key_len;
     uint16_t value_len;
+    uint8_t *key;
+    uint8_t *value;
 } PktVar;
 
 #ifdef PROFILING
@@ -325,6 +340,11 @@ typedef struct PktProfilingTmmData_ {
 #endif
 } PktProfilingTmmData;
 
+typedef struct PktProfilingData_ {
+    uint64_t ticks_start;
+    uint64_t ticks_end;
+} PktProfilingData;
+
 typedef struct PktProfilingDetectData_ {
     uint64_t ticks_start;
     uint64_t ticks_end;
@@ -335,14 +355,32 @@ typedef struct PktProfilingAppData_ {
     uint64_t ticks_spent;
 } PktProfilingAppData;
 
+typedef struct PktProfilingLoggerData_ {
+    uint64_t ticks_start;
+    uint64_t ticks_end;
+    uint64_t ticks_spent;
+} PktProfilingLoggerData;
+
+typedef struct PktProfilingPrefilterEngine_ {
+    uint64_t ticks_spent;
+} PktProfilingPrefilterEngine;
+
+typedef struct PktProfilingPrefilterData_ {
+    PktProfilingPrefilterEngine *engines;
+    uint32_t size;          /**< array size */
+} PktProfilingPrefilterData;
+
 /** \brief Per pkt stats storage */
 typedef struct PktProfiling_ {
     uint64_t ticks_start;
     uint64_t ticks_end;
 
     PktProfilingTmmData tmm[TMM_SIZE];
+    PktProfilingData flowworker[PROFILE_FLOWWORKER_SIZE];
     PktProfilingAppData app[ALPROTO_MAX];
     PktProfilingDetectData detect[PROF_DETECT_SIZE];
+    PktProfilingLoggerData logger[LOGGER_SIZE];
+    PktProfilingPrefilterData prefilter;
     uint64_t proto_detect;
 } PktProfiling;
 
@@ -399,6 +437,10 @@ typedef struct Packet_
 
     struct Flow_ *flow;
 
+    /* raw hash value for looking up the flow, will need to modulated to the
+     * hash size still */
+    uint32_t flow_hash;
+
     struct timeval ts;
 
     union {
@@ -429,6 +471,9 @@ typedef struct Packet_
 
     /** The release function for packet structure and data */
     void (*ReleasePacket)(struct Packet_ *);
+    /** The function triggering bypass the flow in the capture method.
+     * Return 1 for success and 0 on error */
+    int (*BypassPacketsFlow)(struct Packet_ *);
 
     /* pkt vars */
     PktVar *pktvar;
@@ -456,10 +501,12 @@ typedef struct Packet_
     /* Can only be one of TCP, UDP, ICMP at any given time */
     union {
         TCPVars tcpvars;
-        UDPVars udpvars;
         ICMPV4Vars icmpv4vars;
         ICMPV6Vars icmpv6vars;
-    };
+    } l4vars;
+#define tcpvars     l4vars.tcpvars
+#define icmpv4vars  l4vars.icmpv4vars
+#define icmpv6vars  l4vars.icmpv6vars
 
     TCPHdr *tcph;
 
@@ -517,10 +564,6 @@ typedef struct Packet_
     /** data linktype in host order */
     int datalink;
 
-    /* used to hold flowbits only if debuglog is enabled */
-    int debuglog_flowbits_names_len;
-    const char **debuglog_flowbits_names;
-
     /* tunnel/encapsulation handling */
     struct Packet_ *root; /* in case of tunnel this is a ptr
                            * to the 'real' packet, the one we
@@ -552,6 +595,9 @@ typedef struct Packet_
 #ifdef __SC_CUDA_SUPPORT__
     CudaPacketVars cuda_pkt_vars;
 #endif
+#ifdef HAVE_NAPATECH
+    NapatechPacketVars ntpv;
+#endif
 }
 #ifdef HAVE_MPIPE
     /* mPIPE requires packet buffers to be aligned to 128 byte boundaries. */
@@ -559,7 +605,12 @@ typedef struct Packet_
 #endif
 Packet;
 
-#define DEFAULT_PACKET_SIZE (1500 + ETHERNET_HEADER_LEN)
+/** highest mtu of the interfaces we monitor */
+extern int g_default_mtu;
+#define DEFAULT_MTU 1500
+#define MINIMUM_MTU 68      /**< ipv4 minimum: rfc791 */
+
+#define DEFAULT_PACKET_SIZE (DEFAULT_MTU + ETHERNET_HEADER_LEN)
 /* storage: maximum ip packet size + link header */
 #define MAX_PAYLOAD_SIZE (IPV6_HEADER_LEN + 65536 + 28)
 uint32_t default_packet_size;
@@ -608,6 +659,7 @@ typedef struct DecodeThreadVars_
     uint16_t counter_gre;
     uint16_t counter_vlan;
     uint16_t counter_vlan_qinq;
+    uint16_t counter_ieee8021ah;
     uint16_t counter_pppoe;
     uint16_t counter_teredo;
     uint16_t counter_mpls;
@@ -625,6 +677,11 @@ typedef struct DecodeThreadVars_
     uint16_t counter_defrag_max_hit;
 
     uint16_t counter_flow_memcap;
+
+    uint16_t counter_flow_tcp;
+    uint16_t counter_flow_udp;
+    uint16_t counter_flow_icmp4;
+    uint16_t counter_flow_icmp6;
 
      uint16_t counter_invalid_events[DECODE_EVENT_PACKET_MAX];
     /* thread data for flow logging api: only used at forced
@@ -647,6 +704,10 @@ typedef struct CaptureStats_ {
 
 void CaptureStatsUpdate(ThreadVars *tv, CaptureStats *s, const Packet *p);
 void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
+
+#define PACKET_CLEAR_L4VARS(p) do {                         \
+        memset(&(p)->l4vars, 0x00, sizeof((p)->l4vars));    \
+    } while (0)
 
 /**
  *  \brief reset these to -1(indicates that the packet is fresh from the queue)
@@ -750,6 +811,7 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
         (p)->vlanh[1] = NULL;                   \
         (p)->payload = NULL;                    \
         (p)->payload_len = 0;                   \
+        (p)->BypassPacketsFlow = NULL;          \
         (p)->pktlen = 0;                        \
         (p)->alerts.cnt = 0;                    \
         (p)->alerts.drop.action = 0;            \
@@ -821,26 +883,14 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
      ((p)->action |= a)); \
 } while (0)
 
-#define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
+#define TUNNEL_INCR_PKT_RTV_NOLOCK(p) do {                                          \
         ((p)->root ? (p)->root->tunnel_rtv_cnt++ : (p)->tunnel_rtv_cnt++);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
     } while (0)
 
 #define TUNNEL_INCR_PKT_TPR(p) do {                                                 \
         SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
         ((p)->root ? (p)->root->tunnel_tpr_cnt++ : (p)->tunnel_tpr_cnt++);          \
         SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR_NOLOCK(p) do {                                          \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
     } while (0)
 
 #define TUNNEL_PKT_RTV(p) ((p)->root ? (p)->root->tunnel_rtv_cnt : (p)->tunnel_rtv_cnt)
@@ -878,6 +928,7 @@ int PacketCopyData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketSetData(Packet *p, uint8_t *pktdata, int pktlen);
 int PacketCopyDataOffset(Packet *p, int offset, uint8_t *data, int datalen);
 const char *PktSrcToString(enum PktSrcEnum pkt_src);
+void PacketBypassCallback(Packet *p);
 
 DecodeThreadVars *DecodeThreadVarsAlloc(ThreadVars *);
 void DecodeThreadVarsFree(ThreadVars *, DecodeThreadVars *);
@@ -904,8 +955,24 @@ int DecodeGRE(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, P
 int DecodeVLAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeMPLS(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
 int DecodeERSPAN(ThreadVars *, DecodeThreadVars *, Packet *, uint8_t *, uint16_t, PacketQueue *);
+int DecodeTEMPLATE(ThreadVars *, DecodeThreadVars *, Packet *, const uint8_t *, uint16_t, PacketQueue *);
+
+#ifdef UNITTESTS
+void DecodeIPV6FragHeader(Packet *p, uint8_t *pkt,
+                          uint16_t hdrextlen, uint16_t plen,
+                          uint16_t prev_hdrextlen);
+#endif
 
 void AddressDebugPrint(Address *);
+
+#ifdef AFLFUZZ_DECODER
+typedef int (*DecoderFunc)(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
+         uint8_t *pkt, uint16_t len, PacketQueue *pq);
+
+int DecoderParseDataFromFile(char *filename, DecoderFunc Decoder);
+int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
+#endif
+void DecodeGlobalConfig(void);
 
 /** \brief Set the No payload inspection Flag for the packet.
  *
@@ -957,6 +1024,10 @@ void AddressDebugPrint(Address *);
     } \
     r; \
 })
+
+#ifndef IPPROTO_IPIP
+#define IPPROTO_IPIP 4
+#endif
 
 /* older libcs don't contain a def for IPPROTO_DCCP
  * inside of <netinet/in.h>
@@ -1012,6 +1083,9 @@ void AddressDebugPrint(Address *);
 #define LINKTYPE_LINUX_SLL  113
 #define LINKTYPE_PPP        9
 #define LINKTYPE_RAW        DLT_RAW
+/* http://www.tcpdump.org/linktypes.html defines DLT_RAW as 101, yet others don't.
+ * Libpcap on at least OpenBSD returns 101 as datalink type for RAW pcaps though. */
+#define LINKTYPE_RAW2       101
 #define PPP_OVER_GRE        11
 #define VLAN_OVER_GRE       13
 
@@ -1042,10 +1116,58 @@ void AddressDebugPrint(Address *);
 #define PKT_IS_INVALID                  (1<<20)
 #define PKT_PROFILE                     (1<<21)
 
+/** indication by decoder that it feels the packet should be handled by
+ *  flow engine: Packet::flow_hash will be set */
+#define PKT_WANTS_FLOW                  (1<<22)
+
+/** protocol detection done */
+#define PKT_PROTO_DETECT_TS_DONE        (1<<23)
+#define PKT_PROTO_DETECT_TC_DONE        (1<<24)
+
+#define PKT_REBUILT_FRAGMENT            (1<<25)     /**< Packet is rebuilt from
+                                                     * fragments. */
+#define PKT_DETECT_HAS_STREAMDATA       (1<<26)     /**< Set by Detect() if raw stream data is available. */
+
+#define PKT_PSEUDO_DETECTLOG_FLUSH      (1<<27)     /**< Detect/log flush for protocol upgrade */
+
+
 /** \brief return 1 if the packet is a pseudo packet */
-#define PKT_IS_PSEUDOPKT(p) ((p)->flags & PKT_PSEUDO_STREAM_END)
+#define PKT_IS_PSEUDOPKT(p) \
+    ((p)->flags & (PKT_PSEUDO_STREAM_END|PKT_PSEUDO_DETECTLOG_FLUSH))
 
 #define PKT_SET_SRC(p, src_val) ((p)->pkt_src = src_val)
+
+/** \brief return true if *this* packet needs to trigger a verdict.
+ *
+ *  If we have the root packet, and we have none outstanding,
+ *  we can verdict now.
+ *
+ *  If we have a upper layer packet, it's the only one and root
+ *  is already processed, we can verdict now.
+ *
+ *  Otherwise, a future packet will issue the verdict.
+ */
+static inline bool VerdictTunnelPacket(Packet *p)
+{
+    bool verdict = true;
+    SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
+    SCMutexLock(m);
+    const uint16_t outstanding = TUNNEL_PKT_TPR(p) - TUNNEL_PKT_RTV(p);
+    SCLogDebug("tunnel: outstanding %u", outstanding);
+
+    /* if there are packets outstanding, we won't verdict this one */
+    if (IS_TUNNEL_ROOT_PKT(p) && !IS_TUNNEL_PKT_VERDICTED(p) && !outstanding) {
+        // verdict
+        SCLogDebug("root %p: verdict", p);
+    } else if (!IS_TUNNEL_ROOT_PKT(p) && outstanding == 1 && p->root && IS_TUNNEL_PKT_VERDICTED(p->root)) {
+        // verdict
+        SCLogDebug("tunnel %p: verdict", p);
+    } else {
+        verdict = false;
+    }
+    SCMutexUnlock(m);
+    return verdict;
+}
 
 #endif /* __DECODE_H__ */
 

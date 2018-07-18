@@ -49,6 +49,8 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 
+#ifndef HAVE_RUST
+
 #define DEFAULT_LOG_FILENAME "dns.log"
 
 #define MODULE_NAME "LogDnsLog"
@@ -96,10 +98,8 @@ static void LogQuery(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dst
             " [**] %s [**] %s:%" PRIu16 " -> %s:%" PRIu16 "\n",
             record, srcip, sp, dstip, dp);
 
-    SCMutexLock(&hlog->file_ctx->fp_mutex);
     hlog->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
         MEMBUFFER_OFFSET(aft->buffer), hlog->file_ctx);
-    SCMutexUnlock(&hlog->file_ctx->fp_mutex);
 }
 
 static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *dstip, Port sp, Port dp, DNSTransaction *tx, DNSAnswerEntry *entry)
@@ -138,11 +138,11 @@ static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *ds
                 " [**] %s [**] TTL %u [**] ", record, entry->ttl);
 
         uint8_t *ptr = (uint8_t *)((uint8_t *)entry + sizeof(DNSAnswerEntry) + entry->fqdn_len);
-        if (entry->type == DNS_RECORD_TYPE_A) {
+        if (entry->type == DNS_RECORD_TYPE_A && entry->data_len == 4) {
             char a[16] = "";
             PrintInet(AF_INET, (const void *)ptr, a, sizeof(a));
             MemBufferWriteString(aft->buffer, "%s", a);
-        } else if (entry->type == DNS_RECORD_TYPE_AAAA) {
+        } else if (entry->type == DNS_RECORD_TYPE_AAAA && entry->data_len == 16) {
             char a[46];
             PrintInet(AF_INET6, (const void *)ptr, a, sizeof(a));
             MemBufferWriteString(aft->buffer, "%s", a);
@@ -159,18 +159,16 @@ static void LogAnswer(LogDnsLogThread *aft, char *timebuf, char *srcip, char *ds
             " [**] %s:%" PRIu16 " -> %s:%" PRIu16 "\n",
             srcip, sp, dstip, dp);
 
-    SCMutexLock(&hlog->file_ctx->fp_mutex);
     hlog->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
         MEMBUFFER_OFFSET(aft->buffer), hlog->file_ctx);
-    SCMutexUnlock(&hlog->file_ctx->fp_mutex);
 }
 
-static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p, Flow *f,
-    void *state, void *tx, uint64_t tx_id)
+static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p,
+    Flow *f, void *state, void *tx, uint64_t tx_id, uint8_t direction)
 {
     LogDnsLogThread *aft = (LogDnsLogThread *)data;
     DNSTransaction *dns_tx = (DNSTransaction *)tx;
-    SCLogDebug("pcap_cnt %ju", p->pcap_cnt);
+    SCLogDebug("pcap_cnt %"PRIu64, p->pcap_cnt);
     char timebuf[64];
     CreateTimeString(&p->ts, timebuf, sizeof(timebuf));
 
@@ -214,24 +212,26 @@ static int LogDnsLogger(ThreadVars *tv, void *data, const Packet *p, Flow *f,
         dp = p->sp;
     }
 
-    DNSQueryEntry *query = NULL;
-    TAILQ_FOREACH(query, &dns_tx->query_list, next) {
-        LogQuery(aft, timebuf, dstip, srcip, dp, sp, dns_tx, query);
-    }
+    if (direction == STREAM_TOSERVER) {
+        DNSQueryEntry *query = NULL;
+        TAILQ_FOREACH(query, &dns_tx->query_list, next) {
+            LogQuery(aft, timebuf, dstip, srcip, dp, sp, dns_tx, query);
+        }
+    } else if (direction == STREAM_TOCLIENT) {
+        if (dns_tx->rcode)
+            LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
+        if (dns_tx->recursion_desired)
+            LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
 
-    if (dns_tx->rcode)
-        LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
-    if (dns_tx->recursion_desired)
-        LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, NULL);
+        DNSAnswerEntry *entry = NULL;
+        TAILQ_FOREACH(entry, &dns_tx->answer_list, next) {
+            LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, entry);
+        }
 
-    DNSAnswerEntry *entry = NULL;
-    TAILQ_FOREACH(entry, &dns_tx->answer_list, next) {
-        LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, entry);
-    }
-
-    entry = NULL;
-    TAILQ_FOREACH(entry, &dns_tx->authority_list, next) {
-        LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, entry);
+        entry = NULL;
+        TAILQ_FOREACH(entry, &dns_tx->authority_list, next) {
+            LogAnswer(aft, timebuf, srcip, dstip, sp, dp, dns_tx, entry);
+        }
     }
 
     aft->dns_cnt++;
@@ -239,7 +239,19 @@ end:
     return 0;
 }
 
-static TmEcode LogDnsLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static int LogDnsRequestLogger(ThreadVars *tv, void *data, const Packet *p,
+    Flow *f, void *state, void *tx, uint64_t tx_id)
+{
+    return LogDnsLogger(tv, data, p, f, state, tx, tx_id, STREAM_TOSERVER);
+}
+
+static int LogDnsResponseLogger(ThreadVars *tv, void *data, const Packet *p,
+    Flow *f, void *state, void *tx, uint64_t tx_id)
+{
+    return LogDnsLogger(tv, data, p, f, state, tx, tx_id, STREAM_TOCLIENT);
+}
+
+static TmEcode LogDnsLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogDnsLogThread *aft = SCMalloc(sizeof(LogDnsLogThread));
     if (unlikely(aft == NULL))
@@ -248,7 +260,7 @@ static TmEcode LogDnsLogThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for DNSLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for LogDNSLog.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -344,19 +356,22 @@ static OutputCtx *LogDnsLogInitCtx(ConfNode *conf)
     return output_ctx;
 }
 
-void TmModuleLogDnsLogRegister (void)
-{
-    tmm_modules[TMM_LOGDNSLOG].name = MODULE_NAME;
-    tmm_modules[TMM_LOGDNSLOG].ThreadInit = LogDnsLogThreadInit;
-    tmm_modules[TMM_LOGDNSLOG].ThreadExitPrintStats = LogDnsLogExitPrintStats;
-    tmm_modules[TMM_LOGDNSLOG].ThreadDeinit = LogDnsLogThreadDeinit;
-    tmm_modules[TMM_LOGDNSLOG].RegisterTests = NULL;
-    tmm_modules[TMM_LOGDNSLOG].cap_flags = 0;
-    tmm_modules[TMM_LOGDNSLOG].flags = TM_FLAG_LOGAPI_TM;
+#endif /* !HAVE_RUST */
 
-    OutputRegisterTxModule(MODULE_NAME, "dns-log", LogDnsLogInitCtx,
-            ALPROTO_DNS, LogDnsLogger);
+void LogDnsLogRegister (void)
+{
+#ifndef HAVE_RUST
+    /* Request logger. */
+    OutputRegisterTxModuleWithProgress(LOGGER_DNS, MODULE_NAME, "dns-log",
+        LogDnsLogInitCtx, ALPROTO_DNS, LogDnsRequestLogger, 0, 1,
+        LogDnsLogThreadInit, LogDnsLogThreadDeinit, LogDnsLogExitPrintStats);
+
+    /* Response logger. */
+    OutputRegisterTxModuleWithProgress(LOGGER_DNS, MODULE_NAME, "dns-log",
+        LogDnsLogInitCtx, ALPROTO_DNS, LogDnsResponseLogger, 1, 1,
+        LogDnsLogThreadInit, LogDnsLogThreadDeinit, LogDnsLogExitPrintStats);
 
     /* enable the logger for the app layer */
     SCLogDebug("registered %s", MODULE_NAME);
+#endif /* !HAVE_RUST */
 }

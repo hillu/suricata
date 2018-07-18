@@ -40,20 +40,21 @@
 #define ASN1_CLASS_CONTEXTSPEC 2
 #define ASN1_CLASS_PRIVATE     3
 
-#define ASN1_UNKNOWN        0
-#define ASN1_BOOLEAN     0x01
-#define ASN1_INTEGER     0x02
-#define ASN1_BITSTRING   0x03
-#define ASN1_OCTETSTRING 0x04
-#define ASN1_NULL        0x05
-#define ASN1_OID         0x06
-#define ASN1_UTF8STRING  0x0c
-#define ASN1_SEQUENCE    0x10
-#define ASN1_SET         0x11
-#define ASN1_PRINTSTRING 0x13
-#define ASN1_T61STRING   0x14
-#define ASN1_IA5STRING   0x16
-#define ASN1_UTCTIME     0x17
+#define ASN1_UNKNOWN            0
+#define ASN1_BOOLEAN         0x01
+#define ASN1_INTEGER         0x02
+#define ASN1_BITSTRING       0x03
+#define ASN1_OCTETSTRING     0x04
+#define ASN1_NULL            0x05
+#define ASN1_OID             0x06
+#define ASN1_UTF8STRING      0x0c
+#define ASN1_SEQUENCE        0x10
+#define ASN1_SET             0x11
+#define ASN1_PRINTSTRING     0x13
+#define ASN1_T61STRING       0x14
+#define ASN1_IA5STRING       0x16
+#define ASN1_UTCTIME         0x17
+#define ASN1_GENERALIZEDTIME 0x18
 
 typedef struct Asn1ElementType_ {
 	uint8_t cls:2;
@@ -89,8 +90,14 @@ typedef struct Asn1Generic_ {
 #define ERR_DER_UNSUPPORTED_STRING    0x05
 /* Missing field or element */
 #define ERR_DER_MISSING_ELEMENT       0x06
+/* Generic error */
+#define ERR_DER_RECURSION_LIMIT       0x07
 
-Asn1Generic * DecodeDer(const unsigned char *buffer, uint32_t size, uint32_t *errcode);
+Asn1Generic * DecodeDer(const unsigned char *buffer, uint32_t size, uint32_t *errcode) __attribute__((nonnull));
 void DerFree(Asn1Generic *a);
+
+#ifdef AFLFUZZ_DER
+int DerParseDataFromFile(char *filename);
+#endif
 
 #endif /* __UTIL_DECODE_DER_H__ */

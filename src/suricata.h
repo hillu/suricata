@@ -47,7 +47,6 @@
  *  - ::Packet: Data relative to an individual packet with information about
  *  linked structure such as the ::Flow the ::Packet belongs to.
  *  - ::Flow: Information about a flow for example a TCP session
- *  - ::StreamMsg: structure containing the reassembled data
  *
  *  \subsection runmode Running mode
  *
@@ -71,7 +70,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "3.0.1"
+#define PROG_VER "4.0.5"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -85,11 +84,17 @@
 #define DEFAULT_PID_BASENAME "suricata.pid"
 #define DEFAULT_PID_FILENAME DEFAULT_PID_DIR DEFAULT_PID_BASENAME
 
+#define DOC_URL "http://suricata.readthedocs.io/en/"
+
+#if defined RELEASE
+#define DOC_VERSION PROG_VER
+#else
+#define DOC_VERSION "latest"
+#endif
+
 /* runtime engine control flags */
 #define SURICATA_STOP    (1 << 0)   /**< gracefully stop the engine: process all
                                      outstanding packets first */
-#define SURICATA_KILL    (1 << 1)   /**< shut down asap, discarding outstanding
-                                     packets. */
 #define SURICATA_DONE    (1 << 2)   /**< packets capture ended */
 
 /* Engine stage/status*/
@@ -119,6 +124,8 @@ enum {
 #define IS_SURI_HOST_MODE_SNIFFER_ONLY(host_mode)  ((host_mode) == SURI_HOST_IS_SNIFFER_ONLY)
 #define IS_SURI_HOST_MODE_ROUTER(host_mode)  ((host_mode) == SURI_HOST_IS_ROUTER)
 
+#include "runmodes.h"
+
 /* queue's between various other threads
  * XXX move to the TmQueue structure later
  */
@@ -127,19 +134,19 @@ PacketQueue trans_q[256];
 SCDQDataQueue data_queues[256];
 
 typedef struct SCInstance_ {
-    int run_mode;
+    enum RunModes run_mode;
 
     char pcap_dev[128];
     char *sig_file;
     int sig_file_exclusive;
-    char *pid_filename;
+    const char *pid_filename;
     char *regex_arg;
 
     char *keyword_info;
     char *runmode_custom_mode;
 #ifndef OS_WIN32
-    char *user_name;
-    char *group_name;
+    const char *user_name;
+    const char *group_name;
     uint8_t do_setuid;
     uint8_t do_setgid;
     uint32_t userid;
@@ -154,19 +161,20 @@ typedef struct SCInstance_ {
 
     struct timeval start_time;
 
-    char *log_dir;
+    const char *log_dir;
+    const char *progname; /**< pointer to argv[0] */
+    const char *conf_filename;
 } SCInstance;
 
 
 /* memset to zeros, and mutex init! */
-void GlobalInits();
+void GlobalsInitPreConfig(void);
 
 extern volatile uint8_t suricata_ctl_flags;
+extern int g_disable_randomness;
 
 /* uppercase to lowercase conversion lookup table */
 uint8_t g_u8_lowercasetable[256];
-
-extern char *conf_filename;
 
 /* marco to do the actual lookup */
 //#define u8_tolower(c) g_u8_lowercasetable[(c)]
@@ -179,7 +187,6 @@ extern char *conf_filename;
 #define u8_tolower(c) tolower((uint8_t)(c))
 
 void EngineStop(void);
-void EngineKill(void);
 void EngineDone(void);
 
 int RunmodeIsUnittests(void);
@@ -187,6 +194,11 @@ int RunmodeGetCurrent(void);
 int IsRuleReloadSet(int quiet);
 
 extern int run_mode;
+
+void PreRunInit(const int runmode);
+void PreRunPostPrivsDropInit(const int runmode);
+void PostRunDeinit(const int runmode, struct timeval *start_time);
+void RegisterAllModules(void);
 
 #endif /* __SURICATA_H__ */
 

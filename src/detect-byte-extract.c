@@ -89,54 +89,30 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectByteExtractMatch(ThreadVars *, DetectEngineThreadCtx *,
-                           Packet *, Signature *, SigMatch *);
-int DetectByteExtractSetup(DetectEngineCtx *, Signature *, char *);
-void DetectByteExtractRegisterTests(void);
-void DetectByteExtractFree(void *);
+static int DetectByteExtractSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectByteExtractRegisterTests(void);
+static void DetectByteExtractFree(void *);
 
 /**
  * \brief Registers the keyword handlers for the "byte_extract" keyword.
  */
 void DetectByteExtractRegister(void)
 {
-    const char *eb;
-    int eo;
-    int opts = 0;
-
     sigmatch_table[DETECT_BYTE_EXTRACT].name = "byte_extract";
     sigmatch_table[DETECT_BYTE_EXTRACT].Match = NULL;
-    sigmatch_table[DETECT_BYTE_EXTRACT].AppLayerMatch = NULL;
     sigmatch_table[DETECT_BYTE_EXTRACT].Setup = DetectByteExtractSetup;
     sigmatch_table[DETECT_BYTE_EXTRACT].Free = DetectByteExtractFree;
     sigmatch_table[DETECT_BYTE_EXTRACT].RegisterTests = DetectByteExtractRegisterTests;
 
-    sigmatch_table[DETECT_BYTE_EXTRACT].flags |= SIGMATCH_PAYLOAD;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed "
-                   "at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    return;
- error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
-int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, SigMatch *sm,
-                             Signature *s, uint8_t *payload,
+int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, const SigMatchData *smd,
+                             const Signature *s, uint8_t *payload,
                              uint16_t payload_len, uint64_t *value,
                              uint8_t endian)
 {
-    DetectByteExtractData *data = (DetectByteExtractData *)sm->ctx;
+    DetectByteExtractData *data = (DetectByteExtractData *)smd->ctx;
     uint8_t *ptr = NULL;
     int32_t len = 0;
     uint64_t val = 0;
@@ -217,16 +193,7 @@ int DetectByteExtractDoMatch(DetectEngineThreadCtx *det_ctx, SigMatch *sm,
     det_ctx->buffer_offset = ptr - payload;
 
     *value = val;
-
-    return 1;
-}
-
-
-int DetectByteExtractMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
-                           Packet *p, Signature *s, SigMatch *m)
-{
-    goto end;
- end:
+    SCLogDebug("extracted value is %"PRIu64, val);
     return 1;
 }
 
@@ -239,7 +206,7 @@ int DetectByteExtractMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx,
  * \param bed On success an instance containing the parsed data.
  *            On failure, NULL.
  */
-static inline DetectByteExtractData *DetectByteExtractParse(char *arg)
+static inline DetectByteExtractData *DetectByteExtractParse(const char *arg)
 {
     DetectByteExtractData *bed = NULL;
 #define MAX_SUBSTRINGS 100
@@ -537,7 +504,7 @@ static inline DetectByteExtractData *DetectByteExtractParse(char *arg)
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     SigMatch *sm = NULL;
     SigMatch *prev_pm = NULL;
@@ -549,31 +516,17 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
         goto error;
 
     int sm_list;
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        if (s->list == DETECT_SM_LIST_FILEDATA) {
-            if (data->endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE) {
-                SCLogError(SC_ERR_INVALID_SIGNATURE, "dce byte_extract specified "
-                           "with file_data option set.");
-                goto error;
-            }
-            AppLayerHtpEnableResponseBodyCallback();
-        }
-        sm_list = s->list;
-        s->flags |= SIG_FLAG_APPLAYER;
+    if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        sm_list = s->init_data->list;
+
         if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
-            prev_pm = SigMatchGetLastSMFromLists(s, 4,
-                                                 DETECT_CONTENT, s->sm_lists_tail[sm_list],
-                                                 DETECT_PCRE, s->sm_lists_tail[sm_list]);
+            prev_pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, DETECT_PCRE, -1);
         }
     } else if (data->endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE) {
         if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
-            prev_pm = SigMatchGetLastSMFromLists(s, 12,
-                                                 DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                                 DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                                 DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                                 DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                                 DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                                 DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+            prev_pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, DETECT_PCRE,
+                    DETECT_BYTETEST, DETECT_BYTEJUMP, DETECT_BYTE_EXTRACT,
+                    DETECT_ISDATAAT, -1);
             if (prev_pm == NULL) {
                 sm_list = DETECT_SM_LIST_PMATCH;
             } else {
@@ -589,96 +542,10 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
         s->flags |= SIG_FLAG_APPLAYER;
 
     } else if (data->flags & DETECT_BYTE_EXTRACT_FLAG_RELATIVE) {
-        prev_pm = SigMatchGetLastSMFromLists(s, 168,
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                             DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
+        prev_pm = DetectGetLastSMFromLists(s,
+                DETECT_CONTENT, DETECT_PCRE,
+                DETECT_BYTETEST, DETECT_BYTEJUMP, DETECT_BYTE_EXTRACT,
+                DETECT_ISDATAAT, -1);
         if (prev_pm == NULL) {
             sm_list = DETECT_SM_LIST_PMATCH;
         } else {
@@ -694,12 +561,9 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     }
 
     if (data->endian == DETECT_BYTE_EXTRACT_ENDIAN_DCE) {
-        if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_DCERPC) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Non dce alproto sig has "
-                       "byte_extract with dce enabled");
+        if (DetectSignatureSetAppProto(s, ALPROTO_DCERPC) != 0)
             goto error;
-        }
-        s->alproto = ALPROTO_DCERPC;
+
         if ((data->flags & DETECT_BYTE_EXTRACT_FLAG_STRING) ||
             (data->base == DETECT_BYTE_EXTRACT_BASE_DEC) ||
             (data->base == DETECT_BYTE_EXTRACT_BASE_HEX) ||
@@ -710,8 +574,8 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
         }
     }
 
-    SigMatch *prev_bed_sm = SigMatchGetLastSMFromLists(s, 2,
-                                                       DETECT_BYTE_EXTRACT, s->sm_lists_tail[sm_list]);
+    SigMatch *prev_bed_sm = DetectGetLastSMByListId(s, sm_list,
+            DETECT_BYTE_EXTRACT, -1);
     if (prev_bed_sm == NULL)
         data->local_id = 0;
     else
@@ -755,7 +619,7 @@ int DetectByteExtractSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
  *
  * \param ptr Instance of DetectByteExtractData to be freed.
  */
-void DetectByteExtractFree(void *ptr)
+static void DetectByteExtractFree(void *ptr)
 {
     if (ptr != NULL) {
         DetectByteExtractData *bed = ptr;
@@ -775,13 +639,14 @@ void DetectByteExtractFree(void *ptr)
  *
  * \retval A pointer to the SigMatch if found, otherwise NULL.
  */
-SigMatch *DetectByteExtractRetrieveSMVar(const char *arg, Signature *s)
+SigMatch *DetectByteExtractRetrieveSMVar(const char *arg, const Signature *s)
 {
     DetectByteExtractData *bed = NULL;
     int list;
+    const int nlists = DetectBufferTypeMaxId();
 
-    for (list = 0; list < DETECT_SM_LIST_MAX; list++) {
-        SigMatch *sm = s->sm_lists[list];
+    for (list = 0; list < nlists; list++) {
+        SigMatch *sm = s->init_data->smlists[list];
         while (sm != NULL) {
             if (sm->type == DETECT_BYTE_EXTRACT) {
                 bed = (DetectByteExtractData *)sm->ctx;
@@ -800,7 +665,10 @@ SigMatch *DetectByteExtractRetrieveSMVar(const char *arg, Signature *s)
 
 #ifdef UNITTESTS
 
-int DetectByteExtractTest01(void)
+static int g_file_data_buffer_id = 0;
+static int g_http_uri_buffer_id = 0;
+
+static int DetectByteExtractTest01(void)
 {
     int result = 0;
 
@@ -826,7 +694,7 @@ int DetectByteExtractTest01(void)
     return result;
 }
 
-int DetectByteExtractTest02(void)
+static int DetectByteExtractTest02(void)
 {
     int result = 0;
 
@@ -852,7 +720,7 @@ int DetectByteExtractTest02(void)
     return result;
 }
 
-int DetectByteExtractTest03(void)
+static int DetectByteExtractTest03(void)
 {
     int result = 0;
 
@@ -878,7 +746,7 @@ int DetectByteExtractTest03(void)
     return result;
 }
 
-int DetectByteExtractTest04(void)
+static int DetectByteExtractTest04(void)
 {
     int result = 0;
 
@@ -905,7 +773,7 @@ int DetectByteExtractTest04(void)
     return result;
 }
 
-int DetectByteExtractTest05(void)
+static int DetectByteExtractTest05(void)
 {
     int result = 0;
 
@@ -931,7 +799,7 @@ int DetectByteExtractTest05(void)
     return result;
 }
 
-int DetectByteExtractTest06(void)
+static int DetectByteExtractTest06(void)
 {
     int result = 0;
 
@@ -957,7 +825,7 @@ int DetectByteExtractTest06(void)
     return result;
 }
 
-int DetectByteExtractTest07(void)
+static int DetectByteExtractTest07(void)
 {
     int result = 0;
 
@@ -983,7 +851,7 @@ int DetectByteExtractTest07(void)
     return result;
 }
 
-int DetectByteExtractTest08(void)
+static int DetectByteExtractTest08(void)
 {
     int result = 0;
 
@@ -1009,7 +877,7 @@ int DetectByteExtractTest08(void)
     return result;
 }
 
-int DetectByteExtractTest09(void)
+static int DetectByteExtractTest09(void)
 {
     int result = 0;
 
@@ -1035,7 +903,7 @@ int DetectByteExtractTest09(void)
     return result;
 }
 
-int DetectByteExtractTest10(void)
+static int DetectByteExtractTest10(void)
 {
     int result = 0;
 
@@ -1061,7 +929,7 @@ int DetectByteExtractTest10(void)
     return result;
 }
 
-int DetectByteExtractTest11(void)
+static int DetectByteExtractTest11(void)
 {
     int result = 0;
 
@@ -1087,7 +955,7 @@ int DetectByteExtractTest11(void)
     return result;
 }
 
-int DetectByteExtractTest12(void)
+static int DetectByteExtractTest12(void)
 {
     int result = 0;
 
@@ -1114,7 +982,7 @@ int DetectByteExtractTest12(void)
     return result;
 }
 
-int DetectByteExtractTest13(void)
+static int DetectByteExtractTest13(void)
 {
     int result = 0;
 
@@ -1142,7 +1010,7 @@ int DetectByteExtractTest13(void)
     return result;
 }
 
-int DetectByteExtractTest14(void)
+static int DetectByteExtractTest14(void)
 {
     int result = 0;
 
@@ -1170,7 +1038,7 @@ int DetectByteExtractTest14(void)
     return result;
 }
 
-int DetectByteExtractTest15(void)
+static int DetectByteExtractTest15(void)
 {
     int result = 0;
 
@@ -1198,7 +1066,7 @@ int DetectByteExtractTest15(void)
     return result;
 }
 
-int DetectByteExtractTest16(void)
+static int DetectByteExtractTest16(void)
 {
     int result = 0;
 
@@ -1227,7 +1095,7 @@ int DetectByteExtractTest16(void)
     return result;
 }
 
-int DetectByteExtractTest17(void)
+static int DetectByteExtractTest17(void)
 {
     int result = 0;
 
@@ -1244,7 +1112,7 @@ int DetectByteExtractTest17(void)
     return result;
 }
 
-int DetectByteExtractTest18(void)
+static int DetectByteExtractTest18(void)
 {
     int result = 0;
 
@@ -1262,7 +1130,7 @@ int DetectByteExtractTest18(void)
     return result;
 }
 
-int DetectByteExtractTest19(void)
+static int DetectByteExtractTest19(void)
 {
     int result = 0;
 
@@ -1280,7 +1148,7 @@ int DetectByteExtractTest19(void)
     return result;
 }
 
-int DetectByteExtractTest20(void)
+static int DetectByteExtractTest20(void)
 {
     int result = 0;
 
@@ -1298,7 +1166,7 @@ int DetectByteExtractTest20(void)
     return result;
 }
 
-int DetectByteExtractTest21(void)
+static int DetectByteExtractTest21(void)
 {
     int result = 0;
 
@@ -1316,7 +1184,7 @@ int DetectByteExtractTest21(void)
     return result;
 }
 
-int DetectByteExtractTest22(void)
+static int DetectByteExtractTest22(void)
 {
     int result = 0;
 
@@ -1334,7 +1202,7 @@ int DetectByteExtractTest22(void)
     return result;
 }
 
-int DetectByteExtractTest23(void)
+static int DetectByteExtractTest23(void)
 {
     int result = 0;
 
@@ -1352,7 +1220,7 @@ int DetectByteExtractTest23(void)
     return result;
 }
 
-int DetectByteExtractTest24(void)
+static int DetectByteExtractTest24(void)
 {
     int result = 0;
 
@@ -1369,7 +1237,7 @@ int DetectByteExtractTest24(void)
     return result;
 }
 
-int DetectByteExtractTest25(void)
+static int DetectByteExtractTest25(void)
 {
     int result = 0;
 
@@ -1386,7 +1254,7 @@ int DetectByteExtractTest25(void)
     return result;
 }
 
-int DetectByteExtractTest26(void)
+static int DetectByteExtractTest26(void)
 {
     int result = 0;
 
@@ -1404,7 +1272,7 @@ int DetectByteExtractTest26(void)
     return result;
 }
 
-int DetectByteExtractTest27(void)
+static int DetectByteExtractTest27(void)
 {
     int result = 0;
 
@@ -1422,7 +1290,7 @@ int DetectByteExtractTest27(void)
     return result;
 }
 
-int DetectByteExtractTest28(void)
+static int DetectByteExtractTest28(void)
 {
     int result = 0;
 
@@ -1437,7 +1305,7 @@ int DetectByteExtractTest28(void)
     return result;
 }
 
-int DetectByteExtractTest29(void)
+static int DetectByteExtractTest29(void)
 {
     int result = 0;
 
@@ -1452,7 +1320,7 @@ int DetectByteExtractTest29(void)
     return result;
 }
 
-int DetectByteExtractTest30(void)
+static int DetectByteExtractTest30(void)
 {
     int result = 0;
 
@@ -1467,7 +1335,7 @@ int DetectByteExtractTest30(void)
     return result;
 }
 
-int DetectByteExtractTest31(void)
+static int DetectByteExtractTest31(void)
 {
     int result = 0;
 
@@ -1482,7 +1350,7 @@ int DetectByteExtractTest31(void)
     return result;
 }
 
-int DetectByteExtractTest32(void)
+static int DetectByteExtractTest32(void)
 {
     int result = 0;
 
@@ -1497,7 +1365,7 @@ int DetectByteExtractTest32(void)
     return result;
 }
 
-int DetectByteExtractTest33(void)
+static int DetectByteExtractTest33(void)
 {
     int result = 0;
 
@@ -1512,7 +1380,7 @@ int DetectByteExtractTest33(void)
     return result;
 }
 
-int DetectByteExtractTest34(void)
+static int DetectByteExtractTest34(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1588,7 +1456,7 @@ int DetectByteExtractTest34(void)
     return result;
 }
 
-int DetectByteExtractTest35(void)
+static int DetectByteExtractTest35(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1676,7 +1544,7 @@ int DetectByteExtractTest35(void)
     return result;
 }
 
-int DetectByteExtractTest36(void)
+static int DetectByteExtractTest36(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1764,7 +1632,7 @@ int DetectByteExtractTest36(void)
     return result;
 }
 
-int DetectByteExtractTest37(void)
+static int DetectByteExtractTest37(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1818,7 +1686,7 @@ int DetectByteExtractTest37(void)
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -1865,7 +1733,7 @@ int DetectByteExtractTest37(void)
     return result;
 }
 
-int DetectByteExtractTest38(void)
+static int DetectByteExtractTest38(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1931,7 +1799,7 @@ int DetectByteExtractTest38(void)
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -1965,7 +1833,7 @@ int DetectByteExtractTest38(void)
     return result;
 }
 
-int DetectByteExtractTest39(void)
+static int DetectByteExtractTest39(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2019,7 +1887,7 @@ int DetectByteExtractTest39(void)
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -2066,7 +1934,7 @@ int DetectByteExtractTest39(void)
     return result;
 }
 
-int DetectByteExtractTest40(void)
+static int DetectByteExtractTest40(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2132,7 +2000,7 @@ int DetectByteExtractTest40(void)
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -2166,7 +2034,7 @@ int DetectByteExtractTest40(void)
     return result;
 }
 
-int DetectByteExtractTest41(void)
+static int DetectByteExtractTest41(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2267,7 +2135,7 @@ int DetectByteExtractTest41(void)
     return result;
 }
 
-int DetectByteExtractTest42(void)
+static int DetectByteExtractTest42(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2364,7 +2232,7 @@ int DetectByteExtractTest42(void)
     if (sm->next != NULL)
         goto end;
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -2418,7 +2286,7 @@ int DetectByteExtractTest42(void)
     return result;
 }
 
-int DetectByteExtractTest43(void)
+static int DetectByteExtractTest43(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2516,7 +2384,7 @@ int DetectByteExtractTest43(void)
     return result;
 }
 
-int DetectByteExtractTest44(void)
+static int DetectByteExtractTest44(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2639,7 +2507,7 @@ int DetectByteExtractTest44(void)
     return result;
 }
 
-int DetectByteExtractTest45(void)
+static int DetectByteExtractTest45(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2738,7 +2606,7 @@ int DetectByteExtractTest45(void)
     return result;
 }
 
-int DetectByteExtractTest46(void)
+static int DetectByteExtractTest46(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2861,7 +2729,7 @@ int DetectByteExtractTest46(void)
     return result;
 }
 
-int DetectByteExtractTest47(void)
+static int DetectByteExtractTest47(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2961,7 +2829,7 @@ int DetectByteExtractTest47(void)
     return result;
 }
 
-int DetectByteExtractTest48(void)
+static int DetectByteExtractTest48(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3050,7 +2918,7 @@ int DetectByteExtractTest48(void)
     if (strncmp((char *)cd->content, "four", cd->content_len) != 0 ||
         cd->flags != (DETECT_CONTENT_DISTANCE_BE |
                       DETECT_CONTENT_DISTANCE |
-                      DETECT_CONTENT_RELATIVE_NEXT) ||
+                      DETECT_CONTENT_DISTANCE_NEXT) ||
         cd->distance != bed1->local_id ||
         cd->depth != 0 ||
         cd->offset != 0) {
@@ -3089,7 +2957,7 @@ int DetectByteExtractTest48(void)
     return result;
 }
 
-int DetectByteExtractTest49(void)
+static int DetectByteExtractTest49(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3190,7 +3058,7 @@ int DetectByteExtractTest49(void)
     return result;
 }
 
-int DetectByteExtractTest50(void)
+static int DetectByteExtractTest50(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3279,7 +3147,7 @@ int DetectByteExtractTest50(void)
     if (strncmp((char *)cd->content, "four", cd->content_len) != 0 ||
         cd->flags != (DETECT_CONTENT_WITHIN_BE |
                       DETECT_CONTENT_WITHIN|
-                      DETECT_CONTENT_RELATIVE_NEXT) ||
+                      DETECT_CONTENT_WITHIN_NEXT) ||
         cd->within != bed1->local_id ||
         cd->depth != 0 ||
         cd->offset != 0 ||
@@ -3320,7 +3188,7 @@ int DetectByteExtractTest50(void)
     return result;
 }
 
-int DetectByteExtractTest51(void)
+static int DetectByteExtractTest51(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3418,7 +3286,7 @@ int DetectByteExtractTest51(void)
     return result;
 }
 
-int DetectByteExtractTest52(void)
+static int DetectByteExtractTest52(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3539,7 +3407,7 @@ int DetectByteExtractTest52(void)
     return result;
 }
 
-int DetectByteExtractTest53(void)
+static int DetectByteExtractTest53(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3636,7 +3504,7 @@ int DetectByteExtractTest53(void)
     return result;
 }
 
-int DetectByteExtractTest54(void)
+static int DetectByteExtractTest54(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3754,7 +3622,7 @@ int DetectByteExtractTest54(void)
     return result;
 }
 
-int DetectByteExtractTest55(void)
+static int DetectByteExtractTest55(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3868,7 +3736,7 @@ int DetectByteExtractTest55(void)
     return result;
 }
 
-int DetectByteExtractTest56(void)
+static int DetectByteExtractTest56(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -3903,7 +3771,7 @@ int DetectByteExtractTest56(void)
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -4016,7 +3884,7 @@ int DetectByteExtractTest56(void)
     return result;
 }
 
-int DetectByteExtractTest57(void)
+static int DetectByteExtractTest57(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4075,7 +3943,7 @@ int DetectByteExtractTest57(void)
     if (sm->next != NULL)
         goto end;
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -4181,7 +4049,7 @@ int DetectByteExtractTest57(void)
     return result;
 }
 
-int DetectByteExtractTest58(void)
+static int DetectByteExtractTest58(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4314,7 +4182,7 @@ int DetectByteExtractTest58(void)
     return result;
 }
 
-int DetectByteExtractTest59(void)
+static int DetectByteExtractTest59(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4448,7 +4316,7 @@ int DetectByteExtractTest59(void)
     return result;
 }
 
-int DetectByteExtractTest60(void)
+static int DetectByteExtractTest60(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4538,12 +4406,12 @@ int DetectByteExtractTest60(void)
     if (sm->next != NULL)
         goto end;
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_UMATCH] == NULL) {
+    if (s->sm_lists_tail[g_http_uri_buffer_id] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -4591,7 +4459,7 @@ int DetectByteExtractTest60(void)
     return result;
 }
 
-int DetectByteExtractTest61(void)
+static int DetectByteExtractTest61(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -4668,12 +4536,12 @@ int DetectByteExtractTest61(void)
     if (sm->next != NULL)
         goto end;
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_UMATCH] == NULL) {
+    if (s->sm_lists_tail[g_http_uri_buffer_id] == NULL) {
         result = 0;
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_UMATCH];
+    sm = s->sm_lists[g_http_uri_buffer_id];
     if (sm->type != DETECT_CONTENT) {
         result = 0;
         goto end;
@@ -4755,11 +4623,11 @@ static int DetectByteExtractTest62(void)
         goto end;
     }
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_FILEDATA] == NULL) {
+    if (s->sm_lists_tail[g_file_data_buffer_id] == NULL) {
         goto end;
     }
 
-    sm = s->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = s->sm_lists[g_file_data_buffer_id];
     if (sm->type != DETECT_BYTE_EXTRACT) {
         result = 0;
         goto end;
@@ -4786,7 +4654,7 @@ static int DetectByteExtractTest62(void)
     return result;
 }
 
-int DetectByteExtractTest63(void)
+static int DetectByteExtractTest63(void)
 {
     int result = 0;
 
@@ -4812,7 +4680,7 @@ int DetectByteExtractTest63(void)
     return result;
 }
 
-int DetectByteExtractTestParseNoBase(void)
+static int DetectByteExtractTestParseNoBase(void)
 {
     int result = 0;
 
@@ -4854,83 +4722,86 @@ int DetectByteExtractTestParseNoBase(void)
 
 #endif /* UNITTESTS */
 
-void DetectByteExtractRegisterTests(void)
+static void DetectByteExtractRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectByteExtractTest01", DetectByteExtractTest01, 1);
-    UtRegisterTest("DetectByteExtractTest02", DetectByteExtractTest02, 1);
-    UtRegisterTest("DetectByteExtractTest03", DetectByteExtractTest03, 1);
-    UtRegisterTest("DetectByteExtractTest04", DetectByteExtractTest04, 1);
-    UtRegisterTest("DetectByteExtractTest05", DetectByteExtractTest05, 1);
-    UtRegisterTest("DetectByteExtractTest06", DetectByteExtractTest06, 1);
-    UtRegisterTest("DetectByteExtractTest07", DetectByteExtractTest07, 1);
-    UtRegisterTest("DetectByteExtractTest08", DetectByteExtractTest08, 1);
-    UtRegisterTest("DetectByteExtractTest09", DetectByteExtractTest09, 1);
-    UtRegisterTest("DetectByteExtractTest10", DetectByteExtractTest10, 1);
-    UtRegisterTest("DetectByteExtractTest11", DetectByteExtractTest11, 1);
-    UtRegisterTest("DetectByteExtractTest12", DetectByteExtractTest12, 1);
-    UtRegisterTest("DetectByteExtractTest13", DetectByteExtractTest13, 1);
-    UtRegisterTest("DetectByteExtractTest14", DetectByteExtractTest14, 1);
-    UtRegisterTest("DetectByteExtractTest15", DetectByteExtractTest15, 1);
-    UtRegisterTest("DetectByteExtractTest16", DetectByteExtractTest16, 1);
-    UtRegisterTest("DetectByteExtractTest17", DetectByteExtractTest17, 1);
-    UtRegisterTest("DetectByteExtractTest18", DetectByteExtractTest18, 1);
-    UtRegisterTest("DetectByteExtractTest19", DetectByteExtractTest19, 1);
-    UtRegisterTest("DetectByteExtractTest20", DetectByteExtractTest20, 1);
-    UtRegisterTest("DetectByteExtractTest21", DetectByteExtractTest21, 1);
-    UtRegisterTest("DetectByteExtractTest22", DetectByteExtractTest22, 1);
-    UtRegisterTest("DetectByteExtractTest23", DetectByteExtractTest23, 1);
-    UtRegisterTest("DetectByteExtractTest24", DetectByteExtractTest24, 1);
-    UtRegisterTest("DetectByteExtractTest25", DetectByteExtractTest25, 1);
-    UtRegisterTest("DetectByteExtractTest26", DetectByteExtractTest26, 1);
-    UtRegisterTest("DetectByteExtractTest27", DetectByteExtractTest27, 1);
-    UtRegisterTest("DetectByteExtractTest28", DetectByteExtractTest28, 1);
-    UtRegisterTest("DetectByteExtractTest29", DetectByteExtractTest29, 1);
-    UtRegisterTest("DetectByteExtractTest30", DetectByteExtractTest30, 1);
-    UtRegisterTest("DetectByteExtractTest31", DetectByteExtractTest31, 1);
-    UtRegisterTest("DetectByteExtractTest32", DetectByteExtractTest32, 1);
-    UtRegisterTest("DetectByteExtractTest33", DetectByteExtractTest33, 1);
-    UtRegisterTest("DetectByteExtractTest34", DetectByteExtractTest34, 1);
-    UtRegisterTest("DetectByteExtractTest35", DetectByteExtractTest35, 1);
-    UtRegisterTest("DetectByteExtractTest36", DetectByteExtractTest36, 1);
-    UtRegisterTest("DetectByteExtractTest37", DetectByteExtractTest37, 1);
-    UtRegisterTest("DetectByteExtractTest38", DetectByteExtractTest38, 1);
-    UtRegisterTest("DetectByteExtractTest39", DetectByteExtractTest39, 1);
-    UtRegisterTest("DetectByteExtractTest40", DetectByteExtractTest40, 1);
-    UtRegisterTest("DetectByteExtractTest41", DetectByteExtractTest41, 1);
-    UtRegisterTest("DetectByteExtractTest42", DetectByteExtractTest42, 1);
+    g_file_data_buffer_id = DetectBufferTypeGetByName("file_data");
+    g_http_uri_buffer_id = DetectBufferTypeGetByName("http_uri");
 
-    UtRegisterTest("DetectByteExtractTest43", DetectByteExtractTest43, 1);
-    UtRegisterTest("DetectByteExtractTest44", DetectByteExtractTest44, 1);
+    UtRegisterTest("DetectByteExtractTest01", DetectByteExtractTest01);
+    UtRegisterTest("DetectByteExtractTest02", DetectByteExtractTest02);
+    UtRegisterTest("DetectByteExtractTest03", DetectByteExtractTest03);
+    UtRegisterTest("DetectByteExtractTest04", DetectByteExtractTest04);
+    UtRegisterTest("DetectByteExtractTest05", DetectByteExtractTest05);
+    UtRegisterTest("DetectByteExtractTest06", DetectByteExtractTest06);
+    UtRegisterTest("DetectByteExtractTest07", DetectByteExtractTest07);
+    UtRegisterTest("DetectByteExtractTest08", DetectByteExtractTest08);
+    UtRegisterTest("DetectByteExtractTest09", DetectByteExtractTest09);
+    UtRegisterTest("DetectByteExtractTest10", DetectByteExtractTest10);
+    UtRegisterTest("DetectByteExtractTest11", DetectByteExtractTest11);
+    UtRegisterTest("DetectByteExtractTest12", DetectByteExtractTest12);
+    UtRegisterTest("DetectByteExtractTest13", DetectByteExtractTest13);
+    UtRegisterTest("DetectByteExtractTest14", DetectByteExtractTest14);
+    UtRegisterTest("DetectByteExtractTest15", DetectByteExtractTest15);
+    UtRegisterTest("DetectByteExtractTest16", DetectByteExtractTest16);
+    UtRegisterTest("DetectByteExtractTest17", DetectByteExtractTest17);
+    UtRegisterTest("DetectByteExtractTest18", DetectByteExtractTest18);
+    UtRegisterTest("DetectByteExtractTest19", DetectByteExtractTest19);
+    UtRegisterTest("DetectByteExtractTest20", DetectByteExtractTest20);
+    UtRegisterTest("DetectByteExtractTest21", DetectByteExtractTest21);
+    UtRegisterTest("DetectByteExtractTest22", DetectByteExtractTest22);
+    UtRegisterTest("DetectByteExtractTest23", DetectByteExtractTest23);
+    UtRegisterTest("DetectByteExtractTest24", DetectByteExtractTest24);
+    UtRegisterTest("DetectByteExtractTest25", DetectByteExtractTest25);
+    UtRegisterTest("DetectByteExtractTest26", DetectByteExtractTest26);
+    UtRegisterTest("DetectByteExtractTest27", DetectByteExtractTest27);
+    UtRegisterTest("DetectByteExtractTest28", DetectByteExtractTest28);
+    UtRegisterTest("DetectByteExtractTest29", DetectByteExtractTest29);
+    UtRegisterTest("DetectByteExtractTest30", DetectByteExtractTest30);
+    UtRegisterTest("DetectByteExtractTest31", DetectByteExtractTest31);
+    UtRegisterTest("DetectByteExtractTest32", DetectByteExtractTest32);
+    UtRegisterTest("DetectByteExtractTest33", DetectByteExtractTest33);
+    UtRegisterTest("DetectByteExtractTest34", DetectByteExtractTest34);
+    UtRegisterTest("DetectByteExtractTest35", DetectByteExtractTest35);
+    UtRegisterTest("DetectByteExtractTest36", DetectByteExtractTest36);
+    UtRegisterTest("DetectByteExtractTest37", DetectByteExtractTest37);
+    UtRegisterTest("DetectByteExtractTest38", DetectByteExtractTest38);
+    UtRegisterTest("DetectByteExtractTest39", DetectByteExtractTest39);
+    UtRegisterTest("DetectByteExtractTest40", DetectByteExtractTest40);
+    UtRegisterTest("DetectByteExtractTest41", DetectByteExtractTest41);
+    UtRegisterTest("DetectByteExtractTest42", DetectByteExtractTest42);
 
-    UtRegisterTest("DetectByteExtractTest45", DetectByteExtractTest45, 1);
-    UtRegisterTest("DetectByteExtractTest46", DetectByteExtractTest46, 1);
+    UtRegisterTest("DetectByteExtractTest43", DetectByteExtractTest43);
+    UtRegisterTest("DetectByteExtractTest44", DetectByteExtractTest44);
 
-    UtRegisterTest("DetectByteExtractTest47", DetectByteExtractTest47, 1);
-    UtRegisterTest("DetectByteExtractTest48", DetectByteExtractTest48, 1);
+    UtRegisterTest("DetectByteExtractTest45", DetectByteExtractTest45);
+    UtRegisterTest("DetectByteExtractTest46", DetectByteExtractTest46);
 
-    UtRegisterTest("DetectByteExtractTest49", DetectByteExtractTest49, 1);
-    UtRegisterTest("DetectByteExtractTest50", DetectByteExtractTest50, 1);
+    UtRegisterTest("DetectByteExtractTest47", DetectByteExtractTest47);
+    UtRegisterTest("DetectByteExtractTest48", DetectByteExtractTest48);
 
-    UtRegisterTest("DetectByteExtractTest51", DetectByteExtractTest51, 1);
-    UtRegisterTest("DetectByteExtractTest52", DetectByteExtractTest52, 1);
+    UtRegisterTest("DetectByteExtractTest49", DetectByteExtractTest49);
+    UtRegisterTest("DetectByteExtractTest50", DetectByteExtractTest50);
 
-    UtRegisterTest("DetectByteExtractTest53", DetectByteExtractTest53, 1);
-    UtRegisterTest("DetectByteExtractTest54", DetectByteExtractTest54, 1);
+    UtRegisterTest("DetectByteExtractTest51", DetectByteExtractTest51);
+    UtRegisterTest("DetectByteExtractTest52", DetectByteExtractTest52);
 
-    UtRegisterTest("DetectByteExtractTest55", DetectByteExtractTest55, 1);
-    UtRegisterTest("DetectByteExtractTest56", DetectByteExtractTest56, 1);
-    UtRegisterTest("DetectByteExtractTest57", DetectByteExtractTest57, 1);
+    UtRegisterTest("DetectByteExtractTest53", DetectByteExtractTest53);
+    UtRegisterTest("DetectByteExtractTest54", DetectByteExtractTest54);
 
-    UtRegisterTest("DetectByteExtractTest58", DetectByteExtractTest58, 1);
-    UtRegisterTest("DetectByteExtractTest59", DetectByteExtractTest59, 1);
-    UtRegisterTest("DetectByteExtractTest60", DetectByteExtractTest60, 1);
-    UtRegisterTest("DetectByteExtractTest61", DetectByteExtractTest61, 1);
-    UtRegisterTest("DetectByteExtractTest62", DetectByteExtractTest62, 1);
-    UtRegisterTest("DetectByteExtractTest63", DetectByteExtractTest63, 1);
+    UtRegisterTest("DetectByteExtractTest55", DetectByteExtractTest55);
+    UtRegisterTest("DetectByteExtractTest56", DetectByteExtractTest56);
+    UtRegisterTest("DetectByteExtractTest57", DetectByteExtractTest57);
+
+    UtRegisterTest("DetectByteExtractTest58", DetectByteExtractTest58);
+    UtRegisterTest("DetectByteExtractTest59", DetectByteExtractTest59);
+    UtRegisterTest("DetectByteExtractTest60", DetectByteExtractTest60);
+    UtRegisterTest("DetectByteExtractTest61", DetectByteExtractTest61);
+    UtRegisterTest("DetectByteExtractTest62", DetectByteExtractTest62);
+    UtRegisterTest("DetectByteExtractTest63", DetectByteExtractTest63);
 
     UtRegisterTest("DetectByteExtractTestParseNoBase",
-        DetectByteExtractTestParseNoBase, 1);
+                   DetectByteExtractTestParseNoBase);
 #endif /* UNITTESTS */
 
     return;

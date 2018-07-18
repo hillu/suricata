@@ -1,4 +1,4 @@
-/* Copyright (C) 2015 Open Information Security Foundation
+/* Copyright (C) 2015-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,45 +15,99 @@
  * 02110-1301, USA.
  */
 
+/*
+ * TODO: Update the \author in this file and detect-template-buffer.h.
+ * TODO: Update description in the \file section below.
+ * TODO: Remove SCLogNotice statements or convert to debug.
+ */
+
 /**
- * \file Set up of the "template_buffer" keyword to allow content inspections
- *    on the decoded template application layer buffers.
+ * \file
+ *
+ * \author FirstName LastName <yourname@domain>
+ *
+ * Set up of the "template_buffer" keyword to allow content
+ * inspections on the decoded template application layer buffers.
  */
 
 #include "suricata-common.h"
 #include "conf.h"
 #include "detect.h"
+#include "detect-parse.h"
+#include "detect-engine.h"
+#include "detect-engine-content-inspection.h"
 #include "app-layer-template.h"
+#include "detect-template-buffer.h"
 
-static int DetectTemplateBufferSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectTemplateBufferSetup(DetectEngineCtx *, Signature *, const char *);
+static int DetectEngineInspectTemplateBuffer(ThreadVars *tv,
+    DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+    const Signature *s, const SigMatchData *smd,
+    Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id);
 static void DetectTemplateBufferRegisterTests(void);
+static int g_template_buffer_id = 0;
 
 void DetectTemplateBufferRegister(void)
 {
+    /* TEMPLATE_START_REMOVE */
     if (ConfGetNode("app-layer.protocols.template") == NULL) {
         return;
     }
-
+    /* TEMPLATE_END_REMOVE */
     sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].name = "template_buffer";
     sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].desc =
         "Template content modififier to match on the template buffers";
-    sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].alproto = ALPROTO_TEMPLATE;
     sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].Setup = DetectTemplateBufferSetup;
     sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].RegisterTests =
         DetectTemplateBufferRegisterTests;
 
     sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_TEMPLATE_BUFFER].flags |= SIGMATCH_PAYLOAD;
+
+    /* register inspect engines */
+    DetectAppLayerInspectEngineRegister("template_buffer",
+            ALPROTO_TEMPLATE, SIG_FLAG_TOSERVER, 0,
+            DetectEngineInspectTemplateBuffer);
+    DetectAppLayerInspectEngineRegister("template_buffer",
+            ALPROTO_TEMPLATE, SIG_FLAG_TOCLIENT, 0,
+            DetectEngineInspectTemplateBuffer);
+
+    g_template_buffer_id = DetectBufferTypeGetByName("template_buffer");
 
     SCLogNotice("Template application layer detect registered.");
 }
 
 static int DetectTemplateBufferSetup(DetectEngineCtx *de_ctx, Signature *s,
-    char *str)
+    const char *str)
 {
-    s->list = DETECT_SM_LIST_TEMPLATE_BUFFER_MATCH;
-    s->alproto = ALPROTO_TEMPLATE;
+    s->init_data->list = g_template_buffer_id;
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TEMPLATE) != 0)
+        return -1;
+
     return 0;
+}
+
+static int DetectEngineInspectTemplateBuffer(ThreadVars *tv,
+    DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+    const Signature *s, const SigMatchData *smd,
+    Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
+{
+    TemplateTransaction *tx = (TemplateTransaction *)txv;
+    int ret = 0;
+
+    if (flags & STREAM_TOSERVER && tx->request_buffer != NULL) {
+        ret = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
+            f, tx->request_buffer, tx->request_buffer_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
+    }
+    else if (flags & STREAM_TOCLIENT && tx->response_buffer != NULL) {
+        ret = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
+            f, tx->response_buffer, tx->response_buffer_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
+    }
+
+    SCLogNotice("Returning %d.", ret);
+    return ret;
 }
 
 #ifdef UNITTESTS
@@ -77,8 +131,6 @@ static int DetectTemplateBufferTest(void)
     ThreadVars tv;
     Signature *s;
 
-    int result = 0;
-
     uint8_t request[] = "Hello World!";
 
     /* Setup flow. */
@@ -97,9 +149,7 @@ static int DetectTemplateBufferTest(void)
     StreamTcpInitConfig(TRUE);
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
 
     /* This rule should match. */
     s = DetectEngineAppendSig(de_ctx,
@@ -107,9 +157,7 @@ static int DetectTemplateBufferTest(void)
         "msg:\"TEMPLATE Test Rule\"; "
         "template_buffer; content:\"World!\"; "
         "sid:1; rev:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     /* This rule should not match. */
     s = DetectEngineAppendSig(de_ctx,
@@ -117,33 +165,23 @@ static int DetectTemplateBufferTest(void)
         "msg:\"TEMPLATE Test Rule\"; "
         "template_buffer; content:\"W0rld!\"; "
         "sid:2; rev:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&tv, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    AppLayerParserParse(alp_tctx, &f, ALPROTO_TEMPLATE, STREAM_TOSERVER,
-        request, sizeof(request));
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TEMPLATE,
+                        STREAM_TOSERVER, request, sizeof(request));
+    FLOWLOCK_UNLOCK(&f);
 
     /* Check that we have app-layer state. */
-    if (f.alstate == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(f.alstate);
 
     SigMatchSignatures(&tv, de_ctx, det_ctx, p);
-    if (!PacketAlertCheck(p, 1)) {
-        goto end;
-    }
-    if (PacketAlertCheck(p, 2)) {
-        goto end;
-    }
+    FAIL_IF(!PacketAlertCheck(p, 1));
+    FAIL_IF(PacketAlertCheck(p, 2));
 
-    result = 1;
-end:
     /* Cleanup. */
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
@@ -157,7 +195,7 @@ end:
     FLOW_DESTROY(&f);
     UTHFreePacket(p);
 
-    return result;
+    PASS;
 }
 
 #endif
@@ -165,6 +203,6 @@ end:
 static void DetectTemplateBufferRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectTemplateBufferTest", DetectTemplateBufferTest, 1);
+    UtRegisterTest("DetectTemplateBufferTest", DetectTemplateBufferTest);
 #endif /* UNITTESTS */
 }

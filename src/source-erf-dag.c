@@ -33,10 +33,11 @@
 #include "util-privs.h"
 #include "util-device.h"
 #include "tmqh-packetpool.h"
+#include "source-erf-dag.h"
 
 #ifndef HAVE_DAG
 
-TmEcode NoErfDagSupportExit(ThreadVars *, void *, void **);
+TmEcode NoErfDagSupportExit(ThreadVars *, const void *, void **);
 
 void
 TmModuleReceiveErfDagRegister(void)
@@ -65,7 +66,7 @@ TmModuleDecodeErfDagRegister(void)
 }
 
 TmEcode
-NoErfDagSupportExit(ThreadVars *tv, void *initdata, void **data)
+NoErfDagSupportExit(ThreadVars *tv, const void *initdata, void **data)
 {
     SCLogError(SC_ERR_DAG_NOSUPPORT,
         "Error creating thread %s: you do not have support for DAG cards "
@@ -75,7 +76,6 @@ NoErfDagSupportExit(ThreadVars *tv, void *initdata, void **data)
 
 #else /* Implied we do have DAG support */
 
-#include "source-erf-dag.h"
 #include <dagapi.h>
 
 /* Minimum amount of data to read from the DAG at a time. */
@@ -342,7 +342,7 @@ ReceiveErfDagLoop(ThreadVars *tv, void *data, void *slot)
     dtv->slot = s->slot_next;
 
     while (1) {
-        if (suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL)) {
+        if (suricata_ctl_flags & SURICATA_STOP) {
             SCReturnInt(TM_ECODE_OK);
         }
 

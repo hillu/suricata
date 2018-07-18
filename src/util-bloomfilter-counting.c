@@ -31,7 +31,7 @@
 /* type: 1, 2 or 4 for 8, 16, or 32 bit counters
  *
  */
-BloomFilterCounting *BloomFilterCountingInit(uint32_t size, uint8_t type, uint8_t iter, uint32_t (*Hash)(void *, uint16_t, uint8_t, uint32_t)) {
+BloomFilterCounting *BloomFilterCountingInit(uint32_t size, uint8_t type, uint8_t iter, uint32_t (*Hash)(const void *, uint16_t, uint8_t, uint32_t)) {
     BloomFilterCounting *bf = NULL;
 
     if (iter == 0)
@@ -96,7 +96,7 @@ void BloomFilterCountingPrint(BloomFilterCounting *bf)
     printf("-----------------------------------------\n");
 }
 
-int BloomFilterCountingAdd(BloomFilterCounting *bf, void *data, uint16_t datalen)
+int BloomFilterCountingAdd(BloomFilterCounting *bf, const void *data, uint16_t datalen)
 {
     uint8_t iter = 0;
     uint32_t hash = 0;
@@ -124,7 +124,7 @@ int BloomFilterCountingAdd(BloomFilterCounting *bf, void *data, uint16_t datalen
     return 0;
 }
 
-int BloomFilterCountingRemove(BloomFilterCounting *bf, void *data, uint16_t datalen)
+int BloomFilterCountingRemove(BloomFilterCounting *bf, const void *data, uint16_t datalen)
 {
     uint8_t iter = 0;
     uint32_t hash = 0;
@@ -180,7 +180,7 @@ int BloomFilterCountingRemove(BloomFilterCounting *bf, void *data, uint16_t data
  * returns 0: for no match
  *         1: match
  */
-int BloomFilterCountingTest(BloomFilterCounting *bf, void *data, uint16_t datalen)
+int BloomFilterCountingTest(BloomFilterCounting *bf, const void *data, uint16_t datalen)
 {
     uint8_t iter = 0;
     uint32_t hash = 0;
@@ -218,7 +218,7 @@ int BloomFilterCountingTest(BloomFilterCounting *bf, void *data, uint16_t datale
  */
 
 #ifdef UNITTESTS
-static uint32_t BloomHash(void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size)
+static uint32_t BloomHash(const void *data, uint16_t datalen, uint8_t iter, uint32_t hash_size)
 {
      uint8_t *d = (uint8_t *)data;
      uint32_t i;
@@ -393,18 +393,28 @@ end:
 void BloomFilterCountingRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("BloomFilterCountingTestInit01", BloomFilterCountingTestInit01, 1);
-    UtRegisterTest("BloomFilterCountingTestInit02", BloomFilterCountingTestInit02, 1);
-    UtRegisterTest("BloomFilterCountingTestInit03", BloomFilterCountingTestInit03, 1);
-    UtRegisterTest("BloomFilterCountingTestInit04", BloomFilterCountingTestInit04, 1);
-    UtRegisterTest("BloomFilterCountingTestInit05", BloomFilterCountingTestInit05, 1);
-    UtRegisterTest("BloomFilterCountingTestInit06", BloomFilterCountingTestInit06, 1);
+    UtRegisterTest("BloomFilterCountingTestInit01",
+                   BloomFilterCountingTestInit01);
+    UtRegisterTest("BloomFilterCountingTestInit02",
+                   BloomFilterCountingTestInit02);
+    UtRegisterTest("BloomFilterCountingTestInit03",
+                   BloomFilterCountingTestInit03);
+    UtRegisterTest("BloomFilterCountingTestInit04",
+                   BloomFilterCountingTestInit04);
+    UtRegisterTest("BloomFilterCountingTestInit05",
+                   BloomFilterCountingTestInit05);
+    UtRegisterTest("BloomFilterCountingTestInit06",
+                   BloomFilterCountingTestInit06);
 
-    UtRegisterTest("BloomFilterCountingTestAdd01", BloomFilterCountingTestAdd01, 1);
-    UtRegisterTest("BloomFilterCountingTestAdd02", BloomFilterCountingTestAdd02, 1);
+    UtRegisterTest("BloomFilterCountingTestAdd01",
+                   BloomFilterCountingTestAdd01);
+    UtRegisterTest("BloomFilterCountingTestAdd02",
+                   BloomFilterCountingTestAdd02);
 
-    UtRegisterTest("BloomFilterCountingTestFull01", BloomFilterCountingTestFull01, 1);
-    UtRegisterTest("BloomFilterCountingTestFull02", BloomFilterCountingTestFull02, 1);
+    UtRegisterTest("BloomFilterCountingTestFull01",
+                   BloomFilterCountingTestFull01);
+    UtRegisterTest("BloomFilterCountingTestFull02",
+                   BloomFilterCountingTestFull02);
 #endif
 }
 

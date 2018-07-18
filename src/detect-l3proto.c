@@ -38,13 +38,15 @@
 #include "detect-engine-siggroup.h"
 #include "detect-engine-address.h"
 
+#include "detect-l3proto.h"
+
 #include "util-byte.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
 #include "util-debug.h"
 
-static int DetectL3ProtoSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectL3ProtoSetup(DetectEngineCtx *, Signature *, const char *);
 
 void DetectL3protoRegisterTests(void);
 
@@ -68,21 +70,9 @@ void DetectL3ProtoRegister(void)
  *
  * \return Non-zero on error
  */
-static int DetectL3ProtoSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
+static int DetectL3ProtoSetup(DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
-    char *str = optstr;
-    char dubbed = 0;
-
-    /* Strip leading and trailing "s. */
-    if (optstr[0] == '\"') {
-        str = SCStrdup(optstr + 1);
-        if (unlikely(str == NULL))
-            goto error;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        dubbed = 1;
-    }
+    const char *str = optstr;
 
     /* reset possible any value */
     if (s->proto.flags & DETECT_PROTO_ANY) {
@@ -111,20 +101,12 @@ static int DetectL3ProtoSetup(DetectEngineCtx *de_ctx, Signature *s, char *optst
         goto error;
     }
 
-    if (dubbed)
-        SCFree(str);
     return 0;
 error:
-    if (dubbed)
-        SCFree(str);
     return -1;
 }
 
 #ifdef UNITTESTS
-
-#include "detect-parse.h"
-#include "detect-engine.h"
-#include "detect-engine-mpm.h"
 
 /**
  * \test DetectL3protoTestSig01 is a test for checking the working of ttl keyword
@@ -386,8 +368,8 @@ end:
 void DetectL3protoRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectL3protoTestSig1",  DetectL3protoTestSig1, 1);
-    UtRegisterTest("DetectL3protoTestSig2",  DetectL3protoTestSig2, 1);
-    UtRegisterTest("DetectL3protoTestSig3",  DetectL3protoTestSig3, 1);
+    UtRegisterTest("DetectL3protoTestSig1", DetectL3protoTestSig1);
+    UtRegisterTest("DetectL3protoTestSig2", DetectL3protoTestSig2);
+    UtRegisterTest("DetectL3protoTestSig3", DetectL3protoTestSig3);
 #endif /* UNITTESTS */
 }

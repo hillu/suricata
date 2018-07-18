@@ -42,8 +42,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectMarkSetup (DetectEngineCtx *, Signature *, char *);
-int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx);
+static int DetectMarkSetup (DetectEngineCtx *, Signature *, const char *);
+static int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx);
 void DetectMarkDataFree(void *ptr);
 
 /**
@@ -58,27 +59,7 @@ void DetectMarkRegister (void)
     sigmatch_table[DETECT_MARK].Free  = DetectMarkDataFree;
     sigmatch_table[DETECT_MARK].RegisterTests = MarkRegisterTests;
 
-    const char *eb;
-    int opts = 0;
-    int eo;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-error:
-    return;
-
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 #ifdef NFQ
@@ -91,7 +72,7 @@ error:
  * \retval 0 on success
  * \retval < 0 on failure
  */
-static void * DetectMarkParse (char *rawstr)
+static void * DetectMarkParse (const char *rawstr)
 {
     int ret = 0, res = 0;
 #define MAX_SUBSTRINGS 30
@@ -201,7 +182,7 @@ static void * DetectMarkParse (char *rawstr)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectMarkSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectMarkSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
 #ifdef NFQ
     DetectMarkData *data = NULL;
@@ -237,14 +218,30 @@ void DetectMarkDataFree(void *ptr)
 }
 
 
-int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectMarkPacket(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
 #ifdef NFQ
     const DetectMarkData *nf_data = (const DetectMarkData *)ctx;
     if (nf_data->mask) {
-        p->nfq_v.mark = (nf_data->mark & nf_data->mask)
-                        | (p->nfq_v.mark & ~(nf_data->mask));
-        p->flags |= PKT_MARK_MODIFIED;
+        if (!(IS_TUNNEL_PKT(p))) {
+            /* coverity[missing_lock] */
+            p->nfq_v.mark = (nf_data->mark & nf_data->mask)
+                | (p->nfq_v.mark & ~(nf_data->mask));
+            p->flags |= PKT_MARK_MODIFIED;
+        } else {
+            /* real tunnels may have multiple flows inside them, so marking
+             * might 'mark' too much. Rebuilt packets from IP fragments
+             * are fine. */
+            if (p->flags & PKT_REBUILT_FRAGMENT) {
+                Packet *tp = p->root ? p->root : p;
+                SCMutexLock(&tp->tunnel_mutex);
+                tp->nfq_v.mark = (nf_data->mark & nf_data->mask)
+                    | (tp->nfq_v.mark & ~(nf_data->mask));
+                tp->flags |= PKT_MARK_MODIFIED;
+                SCMutexUnlock(&tp->tunnel_mutex);
+            }
+        }
     }
 #endif
     return 1;
@@ -288,11 +285,11 @@ static int MarkTestParse02 (void)
     data = DetectMarkParse("4");
 
     if (data == NULL) {
-        return 0;
+        return 1;
     }
 
     DetectMarkDataFree(data);
-    return 1;
+    return 0;
 }
 
 /**
@@ -328,11 +325,11 @@ static int MarkTestParse04 (void)
     data = DetectMarkParse("0x1g/0xff");
 
     if (data == NULL) {
-        return 0;
+        return 1;
     }
 
     DetectMarkDataFree(data);
-    return 1;
+    return 0;
 }
 
 
@@ -345,9 +342,9 @@ static int MarkTestParse04 (void)
 void MarkRegisterTests(void)
 {
 #if defined UNITTESTS && defined NFQ
-    UtRegisterTest("MarkTestParse01", MarkTestParse01, 1);
-    UtRegisterTest("MarkTestParse02", MarkTestParse02, 0);
-    UtRegisterTest("MarkTestParse03", MarkTestParse03, 1);
-    UtRegisterTest("MarkTestParse04", MarkTestParse04, 0);
+    UtRegisterTest("MarkTestParse01", MarkTestParse01);
+    UtRegisterTest("MarkTestParse02", MarkTestParse02);
+    UtRegisterTest("MarkTestParse03", MarkTestParse03);
+    UtRegisterTest("MarkTestParse04", MarkTestParse04);
 #endif /* UNITTESTS */
 }

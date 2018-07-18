@@ -41,7 +41,6 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-#include "detect.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
@@ -68,27 +67,20 @@
  * holding multiple alerts. */
 #define MAX_FASTLOG_BUFFER_SIZE (2 * MAX_FASTLOG_ALERT_SIZE)
 
-TmEcode AlertFastLogThreadInit(ThreadVars *, void *, void **);
+TmEcode AlertFastLogThreadInit(ThreadVars *, const void *, void **);
 TmEcode AlertFastLogThreadDeinit(ThreadVars *, void *);
-void AlertFastLogExitPrintStats(ThreadVars *, void *);
 void AlertFastLogRegisterTests(void);
 static void AlertFastLogDeInitCtx(OutputCtx *);
 
 int AlertFastLogCondition(ThreadVars *tv, const Packet *p);
 int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p);
 
-void TmModuleAlertFastLogRegister (void)
+void AlertFastLogRegister(void)
 {
-    tmm_modules[TMM_ALERTFASTLOG].name = MODULE_NAME;
-    tmm_modules[TMM_ALERTFASTLOG].ThreadInit = AlertFastLogThreadInit;
-    tmm_modules[TMM_ALERTFASTLOG].ThreadExitPrintStats = AlertFastLogExitPrintStats;
-    tmm_modules[TMM_ALERTFASTLOG].ThreadDeinit = AlertFastLogThreadDeinit;
-    tmm_modules[TMM_ALERTFASTLOG].RegisterTests = AlertFastLogRegisterTests;
-    tmm_modules[TMM_ALERTFASTLOG].cap_flags = 0;
-    tmm_modules[TMM_ALERTFASTLOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterPacketModule(MODULE_NAME, "fast",
-            AlertFastLogInitCtx, AlertFastLogger, AlertFastLogCondition);
+    OutputRegisterPacketModule(LOGGER_ALERT_FAST, MODULE_NAME, "fast",
+        AlertFastLogInitCtx, AlertFastLogger, AlertFastLogCondition,
+        AlertFastLogThreadInit, AlertFastLogThreadDeinit, NULL);
+    AlertFastLogRegisterTests();
 }
 
 typedef struct AlertFastLogThread_ {
@@ -104,12 +96,8 @@ int AlertFastLogCondition(ThreadVars *tv, const Packet *p)
 static inline void AlertFastLogOutputAlert(AlertFastLogThread *aft, char *buffer,
                                            int alert_size)
 {
-    SCMutex *file_lock = &aft->file_ctx->fp_mutex;
     /* Output the alert string and count alerts. Only need to lock here. */
-    SCMutexLock(file_lock);
-    aft->file_ctx->alerts++;
     aft->file_ctx->Write(buffer, alert_size, aft->file_ctx);
-    SCMutexUnlock(file_lock);
 }
 
 int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
@@ -146,7 +134,7 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
             continue;
         }
 
-        char *action = "";
+        const char *action = "";
         if ((pa->action & ACTION_DROP) && EngineModeIsIPS()) {
             action = "[Drop] ";
         } else if (pa->action & ACTION_DROP) {
@@ -194,7 +182,7 @@ int AlertFastLogger(ThreadVars *tv, void *data, const Packet *p)
     return TM_ECODE_OK;
 }
 
-TmEcode AlertFastLogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode AlertFastLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     AlertFastLogThread *aft = SCMalloc(sizeof(AlertFastLogThread));
     if (unlikely(aft == NULL))
@@ -225,16 +213,6 @@ TmEcode AlertFastLogThreadDeinit(ThreadVars *t, void *data)
 
     SCFree(aft);
     return TM_ECODE_OK;
-}
-
-void AlertFastLogExitPrintStats(ThreadVars *tv, void *data)
-{
-    AlertFastLogThread *aft = (AlertFastLogThread *)data;
-    if (aft == NULL) {
-        return;
-    }
-
-    SCLogInfo("Fast log output wrote %" PRIu64 " alerts", aft->file_ctx->alerts);
 }
 
 /**
@@ -275,7 +253,7 @@ static void AlertFastLogDeInitCtx(OutputCtx *output_ctx)
 
 #ifdef UNITTESTS
 
-static int AlertFastLogTest01()
+static int AlertFastLogTest01(void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *) "GET /one/ HTTP/1.1\r\n"
@@ -320,7 +298,7 @@ static int AlertFastLogTest01()
     return result;
 }
 
-static int AlertFastLogTest02()
+static int AlertFastLogTest02(void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *) "GET /one/ HTTP/1.1\r\n"
@@ -378,8 +356,8 @@ void AlertFastLogRegisterTests(void)
 
 #ifdef UNITTESTS
 
-    UtRegisterTest("AlertFastLogTest01", AlertFastLogTest01, 1);
-    UtRegisterTest("AlertFastLogTest02", AlertFastLogTest02, 1);
+    UtRegisterTest("AlertFastLogTest01", AlertFastLogTest01);
+    UtRegisterTest("AlertFastLogTest02", AlertFastLogTest02);
 
 #endif /* UNITTESTS */
 

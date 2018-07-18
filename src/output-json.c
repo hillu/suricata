@@ -20,7 +20,7 @@
  *
  * \author Tom DeCanio <td@npulsetech.com>
  *
- * Logs alerts in JSON format.
+ * Logs detection and monitoring events in JSON format.
  *
  */
 
@@ -38,7 +38,6 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-#include "detect.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
@@ -57,8 +56,11 @@
 #include "util-optimize.h"
 #include "util-buffer.h"
 #include "util-logopenfile.h"
+#include "util-log-redis.h"
 #include "util-device.h"
 
+#include "flow-var.h"
+#include "flow-bit.h"
 
 #ifndef HAVE_LIBJANSSON
 
@@ -66,45 +68,11 @@
  *
  */
 
-TmEcode OutputJson (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
-TmEcode OutputJsonThreadInit(ThreadVars *, void *, void **);
-TmEcode OutputJsonThreadDeinit(ThreadVars *, void *);
 int OutputJsonOpenFileCtx(LogFileCtx *, char *);
-void OutputJsonRegisterTests(void);
 
-void TmModuleOutputJsonRegister (void)
+void OutputJsonRegister (void)
 {
-    tmm_modules[TMM_OUTPUTJSON].name = "OutputJSON";
-    tmm_modules[TMM_OUTPUTJSON].ThreadInit = OutputJsonThreadInit;
-    tmm_modules[TMM_OUTPUTJSON].Func = OutputJson;
-    tmm_modules[TMM_OUTPUTJSON].ThreadDeinit = OutputJsonThreadDeinit;
-    tmm_modules[TMM_OUTPUTJSON].RegisterTests = OutputJsonRegisterTests;
-}
-
-OutputCtx *OutputJsonInitCtx(ConfNode *conf)
-{
-    SCLogDebug("Can't init JSON output - JSON support was disabled during build.");
-    return NULL;
-}
-
-TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
-{
-    SCLogDebug("Can't init JSON output thread - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-TmEcode OutputJson (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
-{
-    return TM_ECODE_OK;
-}
-
-TmEcode OutputJsonThreadDeinit(ThreadVars *t, void *data)
-{
-    return TM_ECODE_FAILED;
-}
-
-void OutputJsonRegisterTests (void)
-{
+    SCLogDebug("Can't register JSON output - JSON support was disabled during build.");
 }
 
 #else /* implied we do have JSON support */
@@ -117,28 +85,183 @@ void OutputJsonRegisterTests (void)
 
 #define OUTPUT_BUFFER_SIZE 65536
 
-TmEcode OutputJson (ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
-TmEcode OutputJsonThreadInit(ThreadVars *, void *, void **);
-TmEcode OutputJsonThreadDeinit(ThreadVars *, void *);
-void OutputJsonExitPrintStats(ThreadVars *, void *);
-void OutputJsonRegisterTests(void);
 static void OutputJsonDeInitCtx(OutputCtx *);
 
-void TmModuleOutputJsonRegister (void)
+void OutputJsonRegister (void)
 {
-    tmm_modules[TMM_OUTPUTJSON].name = MODULE_NAME;
-    tmm_modules[TMM_OUTPUTJSON].ThreadInit = OutputJsonThreadInit;
-    tmm_modules[TMM_OUTPUTJSON].Func = OutputJson;
-    tmm_modules[TMM_OUTPUTJSON].ThreadExitPrintStats = OutputJsonExitPrintStats;
-    tmm_modules[TMM_OUTPUTJSON].ThreadDeinit = OutputJsonThreadDeinit;
-    tmm_modules[TMM_OUTPUTJSON].RegisterTests = OutputJsonRegisterTests;
-    tmm_modules[TMM_OUTPUTJSON].cap_flags = 0;
-
     OutputRegisterModule(MODULE_NAME, "eve-log", OutputJsonInitCtx);
+}
+
+json_t *SCJsonBool(int val)
+{
+    return (val ? json_true() : json_false());
 }
 
 /* Default Sensor ID value */
 static int64_t sensor_id = -1; /* -1 = not defined */
+
+static void JsonAddPacketvars(const Packet *p, json_t *js_vars)
+{
+    if (p == NULL || p->pktvar == NULL) {
+        return;
+    }
+    json_t *js_pktvars = NULL;
+    PktVar *pv = p->pktvar;
+    while (pv != NULL) {
+        if (pv->key || pv->id > 0) {
+            if (js_pktvars == NULL) {
+                js_pktvars = json_array();
+                if (js_pktvars == NULL)
+                    break;
+            }
+            json_t *js_pair = json_object();
+            if (js_pair == NULL) {
+                break;
+            }
+
+            if (pv->key != NULL) {
+                uint32_t offset = 0;
+                uint8_t keybuf[pv->key_len + 1];
+                PrintStringsToBuffer(keybuf, &offset,
+                        sizeof(keybuf),
+                        pv->key, pv->key_len);
+                uint32_t len = pv->value_len;
+                uint8_t printable_buf[len + 1];
+                offset = 0;
+                PrintStringsToBuffer(printable_buf, &offset,
+                        sizeof(printable_buf),
+                        pv->value, pv->value_len);
+                json_object_set_new(js_pair, (char *)keybuf,
+                        json_string((char *)printable_buf));
+            } else {
+                const char *varname = VarNameStoreLookupById(pv->id, VAR_TYPE_PKT_VAR);
+                uint32_t len = pv->value_len;
+                uint8_t printable_buf[len + 1];
+                uint32_t offset = 0;
+                PrintStringsToBuffer(printable_buf, &offset,
+                        sizeof(printable_buf),
+                        pv->value, pv->value_len);
+
+                json_object_set_new(js_pair, varname,
+                        json_string((char *)printable_buf));
+            }
+            json_array_append_new(js_pktvars, js_pair);
+        }
+        pv = pv->next;
+    }
+    if (js_pktvars) {
+        json_object_set_new(js_vars, "pktvars", js_pktvars);
+    }
+}
+
+static void JsonAddFlowvars(const Flow *f, json_t *js_vars)
+{
+    if (f == NULL || f->flowvar == NULL) {
+        return;
+    }
+    json_t *js_flowvars = NULL;
+    json_t *js_flowints = NULL;
+    json_t *js_flowbits = NULL;
+    GenericVar *gv = f->flowvar;
+    while (gv != NULL) {
+        if (gv->type == DETECT_FLOWVAR || gv->type == DETECT_FLOWINT) {
+            FlowVar *fv = (FlowVar *)gv;
+            if (fv->datatype == FLOWVAR_TYPE_STR && fv->key == NULL) {
+                const char *varname = VarNameStoreLookupById(fv->idx, VAR_TYPE_FLOW_VAR);
+                if (varname) {
+                    if (js_flowvars == NULL) {
+                        js_flowvars = json_object();
+                        if (js_flowvars == NULL)
+                            break;
+                    }
+
+                    uint32_t len = fv->data.fv_str.value_len;
+                    uint8_t printable_buf[len + 1];
+                    uint32_t offset = 0;
+                    PrintStringsToBuffer(printable_buf, &offset,
+                            sizeof(printable_buf),
+                            fv->data.fv_str.value, fv->data.fv_str.value_len);
+
+                    json_object_set_new(js_flowvars, varname,
+                            json_string((char *)printable_buf));
+                }
+            } else if (fv->datatype == FLOWVAR_TYPE_STR && fv->key != NULL) {
+                if (js_flowvars == NULL) {
+                    js_flowvars = json_object();
+                    if (js_flowvars == NULL)
+                        break;
+                }
+
+                uint8_t keybuf[fv->keylen + 1];
+                uint32_t offset = 0;
+                PrintStringsToBuffer(keybuf, &offset,
+                        sizeof(keybuf),
+                        fv->key, fv->keylen);
+
+                uint32_t len = fv->data.fv_str.value_len;
+                uint8_t printable_buf[len + 1];
+                offset = 0;
+                PrintStringsToBuffer(printable_buf, &offset,
+                        sizeof(printable_buf),
+                        fv->data.fv_str.value, fv->data.fv_str.value_len);
+
+                json_object_set_new(js_flowvars, (const char *)keybuf,
+                        json_string((char *)printable_buf));
+
+            } else if (fv->datatype == FLOWVAR_TYPE_INT) {
+                const char *varname = VarNameStoreLookupById(fv->idx, VAR_TYPE_FLOW_INT);
+                if (varname) {
+                    if (js_flowints == NULL) {
+                        js_flowints = json_object();
+                        if (js_flowints == NULL)
+                            break;
+                    }
+
+                    json_object_set_new(js_flowints, varname, json_integer(fv->data.fv_int.value));
+                }
+
+            }
+        } else if (gv->type == DETECT_FLOWBITS) {
+            FlowBit *fb = (FlowBit *)gv;
+            const char *varname = VarNameStoreLookupById(fb->idx, VAR_TYPE_FLOW_BIT);
+            if (varname) {
+                if (js_flowbits == NULL) {
+                    js_flowbits = json_object();
+                    if (js_flowbits == NULL)
+                        break;
+                }
+                json_object_set_new(js_flowbits, varname, json_boolean(1));
+            }
+        }
+        gv = gv->next;
+    }
+    if (js_flowbits) {
+        json_object_set_new(js_vars, "flowbits", js_flowbits);
+    }
+    if (js_flowints) {
+        json_object_set_new(js_vars, "flowints", js_flowints);
+    }
+    if (js_flowvars) {
+        json_object_set_new(js_vars, "flowvars", js_flowvars);
+    }
+}
+
+void JsonAddVars(const Packet *p, const Flow *f, json_t *js)
+{
+    if ((p && p->pktvar) || (f && f->flowvar)) {
+        json_t *js_vars = json_object();
+        if (js_vars) {
+            if (f && f->flowvar) {
+                JsonAddFlowvars(f, js_vars);
+            }
+            if (p && p->pktvar) {
+                JsonAddPacketvars(p, js_vars);
+            }
+
+            json_object_set_new(js, "vars", js_vars);
+        }
+    }
+}
 
 /** \brief jsonify tcp flags field
  *  Only add 'true' fields in an attempt to keep things reasonably compact.
@@ -163,68 +286,119 @@ void JsonTcpFlags(uint8_t flags, json_t *js)
         json_object_set_new(js, "cwr", json_true());
 }
 
-void CreateJSONFlowId(json_t *js, const Flow *f)
+/**
+ * \brief Add five tuple from packet to JSON object
+ *
+ * \param p Packet
+ * \param direction_sensitive Indicate direction sensitivity
+ * \param js JSON object
+ */
+void JsonFiveTuple(const Packet *p, int direction_sensitive, json_t *js)
 {
-    if (f == NULL)
-        return;
-    json_object_set_new(js, "flow_id", json_integer(f->flow_hash));
-}
-
-json_t *CreateJSONHeader(const Packet *p, int direction_sensitive,
-                         const char *event_type)
-{
-    char timebuf[64];
     char srcip[46], dstip[46];
     Port sp, dp;
-
-    json_t *js = json_object();
-    if (unlikely(js == NULL))
-        return NULL;
-
-    CreateIsoTimeString(&p->ts, timebuf, sizeof(timebuf));
+    char proto[16];
 
     srcip[0] = '\0';
     dstip[0] = '\0';
+
     if (direction_sensitive) {
         if ((PKT_IS_TOSERVER(p))) {
             if (PKT_IS_IPV4(p)) {
-                PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
-                PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+                PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
+                          srcip, sizeof(srcip));
+                PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
+                          dstip, sizeof(dstip));
             } else if (PKT_IS_IPV6(p)) {
-                PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
-                PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+                PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
+                          srcip, sizeof(srcip));
+                PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
+                          dstip, sizeof(dstip));
             }
             sp = p->sp;
             dp = p->dp;
         } else {
             if (PKT_IS_IPV4(p)) {
-                PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), srcip, sizeof(srcip));
-                PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), dstip, sizeof(dstip));
+                PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
+                          srcip, sizeof(srcip));
+                PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
+                          dstip, sizeof(dstip));
             } else if (PKT_IS_IPV6(p)) {
-                PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), srcip, sizeof(srcip));
-                PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), dstip, sizeof(dstip));
+                PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
+                          srcip, sizeof(srcip));
+                PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
+                          dstip, sizeof(dstip));
             }
             sp = p->dp;
             dp = p->sp;
         }
     } else {
         if (PKT_IS_IPV4(p)) {
-            PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p), srcip, sizeof(srcip));
-            PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p), dstip, sizeof(dstip));
+            PrintInet(AF_INET, (const void *)GET_IPV4_SRC_ADDR_PTR(p),
+                      srcip, sizeof(srcip));
+            PrintInet(AF_INET, (const void *)GET_IPV4_DST_ADDR_PTR(p),
+                      dstip, sizeof(dstip));
         } else if (PKT_IS_IPV6(p)) {
-            PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p), srcip, sizeof(srcip));
-            PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p), dstip, sizeof(dstip));
+            PrintInet(AF_INET6, (const void *)GET_IPV6_SRC_ADDR(p),
+                      srcip, sizeof(srcip));
+            PrintInet(AF_INET6, (const void *)GET_IPV6_DST_ADDR(p),
+                      dstip, sizeof(dstip));
         }
         sp = p->sp;
         dp = p->dp;
     }
 
-    char proto[16];
     if (SCProtoNameValid(IP_GET_IPPROTO(p)) == TRUE) {
         strlcpy(proto, known_proto[IP_GET_IPPROTO(p)], sizeof(proto));
     } else {
         snprintf(proto, sizeof(proto), "%03" PRIu32, IP_GET_IPPROTO(p));
     }
+
+    json_object_set_new(js, "src_ip", json_string(srcip));
+
+    switch(p->proto) {
+        case IPPROTO_ICMP:
+            break;
+        case IPPROTO_UDP:
+        case IPPROTO_TCP:
+        case IPPROTO_SCTP:
+            json_object_set_new(js, "src_port", json_integer(sp));
+            break;
+    }
+
+    json_object_set_new(js, "dest_ip", json_string(dstip));
+
+    switch(p->proto) {
+        case IPPROTO_ICMP:
+            break;
+        case IPPROTO_UDP:
+        case IPPROTO_TCP:
+        case IPPROTO_SCTP:
+            json_object_set_new(js, "dest_port", json_integer(dp));
+            break;
+    }
+
+    json_object_set_new(js, "proto", json_string(proto));
+}
+
+void CreateJSONFlowId(json_t *js, const Flow *f)
+{
+    if (f == NULL)
+        return;
+    int64_t flow_id = FlowGetId(f);
+    json_object_set_new(js, "flow_id", json_integer(flow_id));
+}
+
+json_t *CreateJSONHeader(const Packet *p, int direction_sensitive,
+                         const char *event_type)
+{
+    char timebuf[64];
+
+    json_t *js = json_object();
+    if (unlikely(js == NULL))
+        return NULL;
+
+    CreateIsoTimeString(&p->ts, timebuf, sizeof(timebuf));
 
     /* time & tx */
     json_object_set_new(js, "timestamp", json_string(timebuf));
@@ -273,28 +447,10 @@ json_t *CreateJSONHeader(const Packet *p, int direction_sensitive,
         }
     }
 
-    /* tuple */
-    json_object_set_new(js, "src_ip", json_string(srcip));
-    switch(p->proto) {
-        case IPPROTO_ICMP:
-            break;
-        case IPPROTO_UDP:
-        case IPPROTO_TCP:
-        case IPPROTO_SCTP:
-            json_object_set_new(js, "src_port", json_integer(sp));
-            break;
-    }
-    json_object_set_new(js, "dest_ip", json_string(dstip));
-    switch(p->proto) {
-        case IPPROTO_ICMP:
-            break;
-        case IPPROTO_UDP:
-        case IPPROTO_TCP:
-        case IPPROTO_SCTP:
-            json_object_set_new(js, "dest_port", json_integer(dp));
-            break;
-    }
-    json_object_set_new(js, "proto", json_string(proto));
+    /* 5-tuple */
+    JsonFiveTuple(p, direction_sensitive, js);
+
+    /* icmp */
     switch (p->proto) {
         case IPPROTO_ICMP:
             if (p->icmpv4h) {
@@ -360,58 +516,12 @@ int OutputJSONBuffer(json_t *js, LogFileCtx *file_ctx, MemBuffer **buffer)
     };
 
     int r = json_dump_callback(js, OutputJSONMemBufferCallback, &wrapper,
-            JSON_PRESERVE_ORDER|JSON_COMPACT|JSON_ENSURE_ASCII|
-            JSON_ESCAPE_SLASH);
+            file_ctx->json_flags);
     if (r != 0)
         return TM_ECODE_OK;
 
     LogFileWrite(file_ctx, *buffer);
     return 0;
-}
-
-TmEcode OutputJson (ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, PacketQueue *postpq)
-{
-    return TM_ECODE_OK;
-}
-
-TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
-{
-    AlertJsonThread *aft = SCMalloc(sizeof(AlertJsonThread));
-    if (unlikely(aft == NULL))
-        return TM_ECODE_FAILED;
-    memset(aft, 0, sizeof(AlertJsonThread));
-
-    if(initdata == NULL)
-    {
-        SCLogDebug("Error getting context for AlertJson.  \"initdata\" argument NULL");
-        SCFree(aft);
-        return TM_ECODE_FAILED;
-    }
-
-    *data = (void *)aft;
-    return TM_ECODE_OK;
-}
-
-TmEcode OutputJsonThreadDeinit(ThreadVars *t, void *data)
-{
-    AlertJsonThread *aft = (AlertJsonThread *)data;
-    if (aft == NULL) {
-        return TM_ECODE_OK;
-    }
-
-    SCFree(aft);
-    return TM_ECODE_OK;
-}
-
-void OutputJsonExitPrintStats(ThreadVars *tv, void *data)
-{
-    AlertJsonThread *aft = (AlertJsonThread *)data;
-    if (aft == NULL) {
-        return;
-    }
-
-    SCLogInfo("JSON output wrote %" PRIu64 " alerts", aft->file_ctx->alerts);
-
 }
 
 /**
@@ -432,7 +542,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
             "Please set sensor-name globally.");
     }
     else {
-        (void)ConfGet("sensor-name", (char **)&sensor_name);
+        (void)ConfGet("sensor-name", &sensor_name);
     }
 
     if (unlikely(json_ctx == NULL)) {
@@ -488,6 +598,7 @@ OutputCtx *OutputJsonInitCtx(ConfNode *conf)
                 json_ctx->json_out = LOGFILE_TYPE_UNIX_STREAM;
             } else if (strcmp(output_s, "redis") == 0) {
 #ifdef HAVE_LIBHIREDIS
+                SCLogRedisInit();
                 json_ctx->json_out = LOGFILE_TYPE_REDIS;
 #else
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
@@ -613,26 +724,14 @@ static void OutputJsonDeInitCtx(OutputCtx *output_ctx)
 {
     OutputJsonCtx *json_ctx = (OutputJsonCtx *)output_ctx->data;
     LogFileCtx *logfile_ctx = json_ctx->file_ctx;
+    if (logfile_ctx->dropped) {
+        SCLogWarning(SC_WARN_EVENT_DROPPED,
+                "%"PRIu64" events were dropped due to slow or "
+                "disconnected socket", logfile_ctx->dropped);
+    }
     LogFileFreeCtx(logfile_ctx);
     SCFree(json_ctx);
     SCFree(output_ctx);
 }
 
-/*------------------------------Unittests-------------------------------------*/
-
-#ifdef UNITTESTS
-
-#endif /* UNITTESTS */
-
-/**
- * \brief This function registers unit tests for AlertFastLog API.
- */
-void OutputJsonRegisterTests(void)
-{
-
-#ifdef UNITTESTS
-
-#endif /* UNITTESTS */
-
-}
 #endif

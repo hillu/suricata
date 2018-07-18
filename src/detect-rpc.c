@@ -48,8 +48,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-int DetectRpcSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectRpcMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectRpcSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectRpcRegisterTests(void);
 void DetectRpcFree(void *);
 
@@ -60,34 +61,13 @@ void DetectRpcRegister (void)
 {
     sigmatch_table[DETECT_RPC].name = "rpc";
     sigmatch_table[DETECT_RPC].desc = "match RPC procedure numbers and RPC version";
-    sigmatch_table[DETECT_RPC].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#rpc";
+    sigmatch_table[DETECT_RPC].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#rpc";
     sigmatch_table[DETECT_RPC].Match = DetectRpcMatch;
     sigmatch_table[DETECT_RPC].Setup = DetectRpcSetup;
     sigmatch_table[DETECT_RPC].Free  = DetectRpcFree;
     sigmatch_table[DETECT_RPC].RegisterTests = DetectRpcRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    /* XXX */
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /*
@@ -107,7 +87,8 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     /* PrintRawDataFp(stdout, p->payload, p->payload_len); */
     const DetectRpcData *rd = (const DetectRpcData *)ctx;
@@ -161,7 +142,7 @@ int DetectRpcMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
  * \retval rd pointer to DetectRpcData on success
  * \retval NULL on failure
  */
-DetectRpcData *DetectRpcParse (char *rpcstr)
+static DetectRpcData *DetectRpcParse (const char *rpcstr)
 {
     DetectRpcData *rd = NULL;
     char *args[3] = {NULL,NULL,NULL};
@@ -211,7 +192,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
     rd->procedure = 0;
 
     int i;
-    for (i = 0; i < (ret -1); i++) {
+    for (i = 0; i < (ret - 1); i++) {
         if (args[i]) {
             switch (i) {
                 case 0:
@@ -220,7 +201,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                         goto error;
                     }
                     rd->flags |= DETECT_RPC_CHECK_PROGRAM;
-                break;
+                    break;
                 case 1:
                     if (args[i][0] != '*') {
                         if (ByteExtractStringUint32(&rd->program_version, 10, strlen(args[i]), args[i]) <= 0) {
@@ -229,7 +210,7 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                         }
                         rd->flags |= DETECT_RPC_CHECK_VERSION;
                     }
-                break;
+                    break;
                 case 2:
                     if (args[i][0] != '*') {
                         if (ByteExtractStringUint32(&rd->procedure, 10, strlen(args[i]), args[i]) <= 0) {
@@ -239,11 +220,11 @@ DetectRpcData *DetectRpcParse (char *rpcstr)
                         rd->flags |= DETECT_RPC_CHECK_PROCEDURE;
                     }
                 break;
-                }
-            } else {
-                SCLogError(SC_ERR_INVALID_VALUE, "invalid rpc option %s",args[i]);
-                goto error;
             }
+        } else {
+            SCLogError(SC_ERR_INVALID_VALUE, "invalid rpc option %s",rpcstr);
+            goto error;
+        }
     }
     for (i = 0; i < (ret -1); i++){
         if (args[i] != NULL)
@@ -273,7 +254,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, char *rpcstr)
+int DetectRpcSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rpcstr)
 {
     DetectRpcData *rd = NULL;
     SigMatch *sm = NULL;
@@ -324,7 +305,7 @@ void DetectRpcFree(void *ptr)
  * \test DetectRpcTestParse01 is a test to make sure that we return "something"
  *  when given valid rpc opt
  */
-int DetectRpcTestParse01 (void)
+static int DetectRpcTestParse01 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -340,7 +321,7 @@ int DetectRpcTestParse01 (void)
 /**
  * \test DetectRpcTestParse02 is a test for setting the established rpc opt
  */
-int DetectRpcTestParse02 (void)
+static int DetectRpcTestParse02 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -365,7 +346,7 @@ int DetectRpcTestParse02 (void)
  * \test DetectRpcTestParse03 is a test for checking the wildcards
  * and not specified fields
  */
-int DetectRpcTestParse03 (void)
+static int DetectRpcTestParse03 (void)
 {
     int result = 1;
     DetectRpcData *rd = NULL;
@@ -444,7 +425,7 @@ int DetectRpcTestParse03 (void)
 /**
  * \test DetectRpcTestParse04 is a test for check the discarding of empty options
  */
-int DetectRpcTestParse04 (void)
+static int DetectRpcTestParse04 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -462,7 +443,7 @@ int DetectRpcTestParse04 (void)
 /**
  * \test DetectRpcTestParse05 is a test for check invalid values
  */
-int DetectRpcTestParse05 (void)
+static int DetectRpcTestParse05 (void)
 {
     int result = 0;
     DetectRpcData *rd = NULL;
@@ -585,8 +566,6 @@ cleanup:
     DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
     DetectEngineCtxFree(de_ctx);
 
-    DetectSigGroupPrintMemory();
-    DetectAddressPrintMemory();
     UTHFreePackets(&p, 1);
 end:
     return result;
@@ -599,11 +578,11 @@ end:
 void DetectRpcRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectRpcTestParse01", DetectRpcTestParse01, 1);
-    UtRegisterTest("DetectRpcTestParse02", DetectRpcTestParse02, 1);
-    UtRegisterTest("DetectRpcTestParse03", DetectRpcTestParse03, 1);
-    UtRegisterTest("DetectRpcTestParse04", DetectRpcTestParse04, 1);
-    UtRegisterTest("DetectRpcTestParse05", DetectRpcTestParse05, 1);
-    UtRegisterTest("DetectRpcTestSig01", DetectRpcTestSig01, 1);
+    UtRegisterTest("DetectRpcTestParse01", DetectRpcTestParse01);
+    UtRegisterTest("DetectRpcTestParse02", DetectRpcTestParse02);
+    UtRegisterTest("DetectRpcTestParse03", DetectRpcTestParse03);
+    UtRegisterTest("DetectRpcTestParse04", DetectRpcTestParse04);
+    UtRegisterTest("DetectRpcTestParse05", DetectRpcTestParse05);
+    UtRegisterTest("DetectRpcTestSig01", DetectRpcTestSig01);
 #endif /* UNITTESTS */
 }

@@ -48,9 +48,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectTosSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectTosSetup(DetectEngineCtx *, Signature *, const char *);
 static int DetectTosMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                          Signature *, const SigMatchCtx *);
+                          const Signature *, const SigMatchCtx *);
 static void DetectTosRegisterTests(void);
 static void DetectTosFree(void *);
 
@@ -67,28 +67,10 @@ void DetectTosRegister(void)
     sigmatch_table[DETECT_TOS].Setup = DetectTosSetup;
     sigmatch_table[DETECT_TOS].Free = DetectTosFree;
     sigmatch_table[DETECT_TOS].RegisterTests = DetectTosRegisterTests;
+    sigmatch_table[DETECT_TOS].flags =
+        (SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION);
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at "
-                   "offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    return;
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /**
@@ -102,8 +84,8 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectTosMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Packet *p,
-                   Signature *s, const SigMatchCtx *ctx)
+static int DetectTosMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Packet *p,
+                   const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectTosData *tosd = (const DetectTosData *)ctx;
     int result = 0;
@@ -120,7 +102,7 @@ int DetectTosMatch(ThreadVars *tv, DetectEngineThreadCtx *det_ctx, Packet *p,
     return (tosd->negated ^ result);
 }
 
-DetectTosData *DetectTosParse(char *arg)
+static DetectTosData *DetectTosParse(const char *arg, bool negate)
 {
     DetectTosData *tosd = NULL;
 #define MAX_SUBSTRINGS 30
@@ -146,15 +128,6 @@ DetectTosData *DetectTosParse(char *arg)
     }
 
     int64_t tos = 0;
-    int negated = 0;
-
-    if (*str_ptr == '!') {
-        str_ptr++;
-        negated = 1;
-    }
-
-    while (isspace((unsigned char)*str_ptr))
-        str_ptr++;
 
     if (*str_ptr == 'x' || *str_ptr == 'X') {
         int r = ByteExtractStringSigned(&tos, 16, 0, str_ptr + 1);
@@ -178,13 +151,11 @@ DetectTosData *DetectTosParse(char *arg)
     if (unlikely(tosd == NULL))
         goto error;
     tosd->tos = (uint8_t)tos;
-    tosd->negated = negated;
+    tosd->negated = negate;
 
     return tosd;
 
 error:
-    if (tosd != NULL)
-        DetectTosFree(tosd);
     return NULL;
 }
 
@@ -199,20 +170,22 @@ error:
  * \retval  0 on Success.
  * \retval -1 on Failure.
  */
-int DetectTosSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+int DetectTosSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     DetectTosData *tosd;
     SigMatch *sm;
 
-    tosd = DetectTosParse(arg);
+    tosd = DetectTosParse(arg, s->init_data->negated);
     if (tosd == NULL)
-        goto error;
+        return -1;
 
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
     sm = SigMatchAlloc();
-    if (sm == NULL)
-        goto error;
+    if (sm == NULL) {
+        DetectTosFree(tosd);
+        return -1;
+    }
 
     sm->type = DETECT_TOS;
     sm->ctx = (SigMatchCtx *)tosd;
@@ -221,9 +194,6 @@ int DetectTosSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     s->flags |= SIG_FLAG_REQUIRE_PACKET;
 
     return 0;
-
-error:
-    return -1;
 }
 
 /**
@@ -240,10 +210,10 @@ void DetectTosFree(void *tosd)
 
 #ifdef UNITTESTS
 
-int DetectTosTest01(void)
+static int DetectTosTest01(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("12");
+    tosd = DetectTosParse("12", false);
     if (tosd != NULL && tosd->tos == 12 && !tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -252,10 +222,10 @@ int DetectTosTest01(void)
     return 0;
 }
 
-int DetectTosTest02(void)
+static int DetectTosTest02(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("123");
+    tosd = DetectTosParse("123", false);
     if (tosd != NULL && tosd->tos == 123 && !tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -264,22 +234,10 @@ int DetectTosTest02(void)
     return 0;
 }
 
-int DetectTosTest03(void)
+static int DetectTosTest04(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse(" 12 ");
-    if (tosd != NULL && tosd->tos == 12 && !tosd->negated) {
-        DetectTosFree(tosd);
-        return 1;
-    }
-
-    return 0;
-}
-
-int DetectTosTest04(void)
-{
-    DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("256");
+    tosd = DetectTosParse("256", false);
     if (tosd != NULL) {
         DetectTosFree(tosd);
         return 0;
@@ -288,10 +246,10 @@ int DetectTosTest04(void)
     return 1;
 }
 
-int DetectTosTest05(void)
+static int DetectTosTest05(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("boom");
+    tosd = DetectTosParse("boom", false);
     if (tosd != NULL) {
         DetectTosFree(tosd);
         return 0;
@@ -300,10 +258,10 @@ int DetectTosTest05(void)
     return 1;
 }
 
-int DetectTosTest06(void)
+static int DetectTosTest06(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("x12");
+    tosd = DetectTosParse("x12", false);
     if (tosd != NULL && tosd->tos == 0x12 && !tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -312,10 +270,10 @@ int DetectTosTest06(void)
     return 0;
 }
 
-int DetectTosTest07(void)
+static int DetectTosTest07(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("X12");
+    tosd = DetectTosParse("X12", false);
     if (tosd != NULL && tosd->tos == 0x12 && !tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -324,10 +282,10 @@ int DetectTosTest07(void)
     return 0;
 }
 
-int DetectTosTest08(void)
+static int DetectTosTest08(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("x121");
+    tosd = DetectTosParse("x121", false);
     if (tosd != NULL) {
         DetectTosFree(tosd);
         return 0;
@@ -336,10 +294,10 @@ int DetectTosTest08(void)
     return 1;
 }
 
-int DetectTosTest09(void)
+static int DetectTosTest09(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("!12");
+    tosd = DetectTosParse("12", true);
     if (tosd != NULL && tosd->tos == 12 && tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -348,10 +306,10 @@ int DetectTosTest09(void)
     return 0;
 }
 
-int DetectTosTest10(void)
+static int DetectTosTest10(void)
 {
     DetectTosData *tosd = NULL;
-    tosd = DetectTosParse("!x12");
+    tosd = DetectTosParse("x12", true);
     if (tosd != NULL && tosd->tos == 0x12 && tosd->negated) {
         DetectTosFree(tosd);
         return 1;
@@ -360,19 +318,7 @@ int DetectTosTest10(void)
     return 0;
 }
 
-int DetectTosTest11(void)
-{
-    DetectTosData *tosd = NULL;
-    tosd = DetectTosParse(" ! 12");
-    if (tosd != NULL && tosd->tos == 12 && tosd->negated) {
-        DetectTosFree(tosd);
-        return 1;
-    }
-
-    return 0;
-}
-
-int DetectTosTest12(void)
+static int DetectTosTest12(void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *)"Hi all!";
@@ -386,11 +332,11 @@ int DetectTosTest12(void)
 
     IPV4_SET_RAW_IPTOS(p->ip4h, 10);
 
-    char *sigs[4];
-    sigs[0]= "alert ip any any -> any any (msg:\"Testing id 1\"; tos:10; sid:1;)";
-    sigs[1]= "alert ip any any -> any any (msg:\"Testing id 2\"; tos:!10; sid:2;)";
-    sigs[2]= "alert ip any any -> any any (msg:\"Testing id 3\"; tos:20; sid:3;)";
-    sigs[3]= "alert ip any any -> any any (msg:\"Testing id 3\"; tos:!20; sid:4;)";
+    const char *sigs[4];
+    sigs[0]= "alert ip any any -> any any (msg:\"Testing id 1\"; tos: 10 ; sid:1;)";
+    sigs[1]= "alert ip any any -> any any (msg:\"Testing id 2\"; tos: ! 10; sid:2;)";
+    sigs[2]= "alert ip any any -> any any (msg:\"Testing id 3\"; tos:20 ; sid:3;)";
+    sigs[3]= "alert ip any any -> any any (msg:\"Testing id 3\"; tos:! 20; sid:4;)";
 
     uint32_t sid[4] = {1, 2, 3, 4};
 
@@ -412,19 +358,16 @@ end:
 void DetectTosRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectTosTest01", DetectTosTest01, 1);
-    UtRegisterTest("DetectTosTest02", DetectTosTest02, 1);
-    UtRegisterTest("DetectTosTest03", DetectTosTest03, 1);
-    UtRegisterTest("DetectTosTest04", DetectTosTest04, 1);
-    UtRegisterTest("DetectTosTest05", DetectTosTest05, 1);
-    UtRegisterTest("DetectTosTest06", DetectTosTest06, 1);
-    UtRegisterTest("DetectTosTest07", DetectTosTest07, 1);
-    UtRegisterTest("DetectTosTest08", DetectTosTest08, 1);
-    UtRegisterTest("DetectTosTest09", DetectTosTest09, 1);
-    UtRegisterTest("DetectTosTest10", DetectTosTest10, 1);
-    UtRegisterTest("DetectTosTest11", DetectTosTest11, 1);
-    UtRegisterTest("DetectTosTest12", DetectTosTest12, 1);
+    UtRegisterTest("DetectTosTest01", DetectTosTest01);
+    UtRegisterTest("DetectTosTest02", DetectTosTest02);
+    UtRegisterTest("DetectTosTest04", DetectTosTest04);
+    UtRegisterTest("DetectTosTest05", DetectTosTest05);
+    UtRegisterTest("DetectTosTest06", DetectTosTest06);
+    UtRegisterTest("DetectTosTest07", DetectTosTest07);
+    UtRegisterTest("DetectTosTest08", DetectTosTest08);
+    UtRegisterTest("DetectTosTest09", DetectTosTest09);
+    UtRegisterTest("DetectTosTest10", DetectTosTest10);
+    UtRegisterTest("DetectTosTest12", DetectTosTest12);
 #endif
-
     return;
 }

@@ -68,6 +68,10 @@ static json_t *OutputStats2Json(json_t *js, const char *key)
     const char *dot = index(key, '.');
     if (dot == NULL)
         return NULL;
+    if (strlen(dot) > 2) {
+        if (*(dot + 1) == '.' && *(dot + 2) != '\0')
+            dot = index(dot + 2, '.');
+    }
 
     size_t predot_len = (dot - key) + 1;
     char s[predot_len];
@@ -102,8 +106,9 @@ json_t *StatsToJSON(const StatsTable *st, uint8_t flags)
     }
 
     /* Uptime, in seconds. */
+    double up_time_d = difftime(tval.tv_sec, st->start_time);
     json_object_set_new(js_stats, "uptime",
-        json_integer((int)difftime(tval.tv_sec, st->start_time)));
+        json_integer((int)up_time_d));
 
     uint32_t u = 0;
     if (flags & JSON_STATS_TOTALS) {
@@ -207,7 +212,7 @@ static int JsonStatsLogger(ThreadVars *tv, void *thread_data, const StatsTable *
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonStatsLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonStatsLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonStatsLogThread *aft = SCMalloc(sizeof(JsonStatsLogThread));
     if (unlikely(aft == NULL))
@@ -216,7 +221,7 @@ static TmEcode JsonStatsLogThreadInit(ThreadVars *t, void *initdata, void **data
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for json stats.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogStats.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -261,11 +266,11 @@ static void OutputStatsLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "stats.json"
-OutputCtx *OutputStatsLogInit(ConfNode *conf)
+static OutputCtx *OutputStatsLogInit(ConfNode *conf)
 {
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "couldn't create new file_ctx");
+        SCLogError(SC_ERR_STATS_LOG_GENERIC, "couldn't create new file_ctx");
         return NULL;
     }
 
@@ -321,7 +326,7 @@ static void OutputStatsLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-OutputCtx *OutputStatsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputStatsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     AlertJsonThread *ajt = parent_ctx->data;
 
@@ -371,35 +376,22 @@ OutputCtx *OutputStatsLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     return output_ctx;
 }
 
-void TmModuleJsonStatsLogRegister (void) {
-    tmm_modules[TMM_JSONSTATSLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONSTATSLOG].ThreadInit = JsonStatsLogThreadInit;
-    tmm_modules[TMM_JSONSTATSLOG].ThreadDeinit = JsonStatsLogThreadDeinit;
-    tmm_modules[TMM_JSONSTATSLOG].RegisterTests = NULL;
-    tmm_modules[TMM_JSONSTATSLOG].cap_flags = 0;
-    tmm_modules[TMM_JSONSTATSLOG].flags = TM_FLAG_LOGAPI_TM;
-
+void JsonStatsLogRegister(void) {
     /* register as separate module */
-    OutputRegisterStatsModule(MODULE_NAME, "stats-json", OutputStatsLogInit,
-                              JsonStatsLogger);
+    OutputRegisterStatsModule(LOGGER_JSON_STATS, MODULE_NAME, "stats-json",
+        OutputStatsLogInit, JsonStatsLogger, JsonStatsLogThreadInit,
+        JsonStatsLogThreadDeinit, NULL);
 
     /* also register as child of eve-log */
-    OutputRegisterStatsSubModule("eve-log", MODULE_NAME, "eve-log.stats",
-                                  OutputStatsLogInitSub, JsonStatsLogger);
+    OutputRegisterStatsSubModule(LOGGER_JSON_STATS, "eve-log", MODULE_NAME,
+        "eve-log.stats", OutputStatsLogInitSub, JsonStatsLogger,
+        JsonStatsLogThreadInit, JsonStatsLogThreadDeinit, NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonStatsLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonStatsLogRegister (void)
-{
-    tmm_modules[TMM_JSONSTATSLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONSTATSLOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

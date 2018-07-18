@@ -29,6 +29,7 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine-prefilter-common.h"
 
 #include "detect-ttl.h"
 #include "util-debug.h"
@@ -42,10 +43,14 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectTtlMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectTtlSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectTtlMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTtlSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectTtlFree (void *);
 void DetectTtlRegisterTests (void);
+
+static int PrefilterSetupTtl(SigGroupHead *sgh);
+static _Bool PrefilterTtlIsPrefilterable(const Signature *s);
 
 /**
  * \brief Registration function for ttl: keyword
@@ -55,33 +60,33 @@ void DetectTtlRegister(void)
 {
     sigmatch_table[DETECT_TTL].name = "ttl";
     sigmatch_table[DETECT_TTL].desc = "check for a specific IP time-to-live value";
-    sigmatch_table[DETECT_TTL].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#ttl";
+    sigmatch_table[DETECT_TTL].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#ttl";
     sigmatch_table[DETECT_TTL].Match = DetectTtlMatch;
     sigmatch_table[DETECT_TTL].Setup = DetectTtlSetup;
     sigmatch_table[DETECT_TTL].Free = DetectTtlFree;
     sigmatch_table[DETECT_TTL].RegisterTests = DetectTtlRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
+    sigmatch_table[DETECT_TTL].SupportsPrefilter = PrefilterTtlIsPrefilterable;
+    sigmatch_table[DETECT_TTL].SetupPrefilter = PrefilterSetupTtl;
 
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
     return;
+}
 
-error:
-    if (parse_regex != NULL) SCFree(parse_regex);
-    if (parse_regex_study != NULL) SCFree(parse_regex_study);
-    return;
+static inline int TtlMatch(const uint8_t pttl, const uint8_t mode,
+                           const uint8_t dttl1, const uint8_t dttl2)
+{
+    if (mode == DETECT_TTL_EQ && pttl == dttl1)
+        return 1;
+    else if (mode == DETECT_TTL_LT && pttl < dttl1)
+        return 1;
+    else if (mode == DETECT_TTL_GT && pttl > dttl1)
+        return 1;
+    else if (mode == DETECT_TTL_RA && (pttl > dttl1 && pttl < dttl2))
+        return 1;
+
+    return 0;
+
 }
 
 /**
@@ -95,35 +100,25 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
-
-    int ret = 0;
-    uint8_t pttl;
-    const DetectTtlData *ttld = (const DetectTtlData *)ctx;
 
     if (PKT_IS_PSEUDOPKT(p))
         return 0;
 
+    uint8_t pttl;
     if (PKT_IS_IPV4(p)) {
         pttl = IPV4_GET_IPTTL(p);
     } else if (PKT_IS_IPV6(p)) {
         pttl = IPV6_GET_HLIM(p);
     } else {
         SCLogDebug("Packet is of not IPv4 or IPv6");
-        return ret;
+        return 0;
     }
 
-    if (ttld->mode == DETECT_TTL_EQ && pttl == ttld->ttl1)
-        ret = 1;
-    else if (ttld->mode == DETECT_TTL_LT && pttl < ttld->ttl1)
-        ret = 1;
-    else if (ttld->mode == DETECT_TTL_GT && pttl > ttld->ttl1)
-        ret = 1;
-    else if (ttld->mode == DETECT_TTL_RA && (pttl > ttld->ttl1 && pttl < ttld->ttl2))
-        ret = 1;
-
-    return ret;
+    const DetectTtlData *ttld = (const DetectTtlData *)ctx;
+    return TtlMatch(pttl, ttld->mode, ttld->ttl1, ttld->ttl2);
 }
 
 /**
@@ -135,9 +130,8 @@ int DetectTtlMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Si
  * \retval NULL on failure
  */
 
-DetectTtlData *DetectTtlParse (char *ttlstr)
+static DetectTtlData *DetectTtlParse (const char *ttlstr)
 {
-
     DetectTtlData *ttld = NULL;
     char *arg1 = NULL;
     char *arg2 = NULL;
@@ -183,7 +177,7 @@ DetectTtlData *DetectTtlParse (char *ttlstr)
 
     ttld = SCMalloc(sizeof (DetectTtlData));
     if (unlikely(ttld == NULL))
-    goto error;
+        goto error;
     ttld->ttl1 = 0;
     ttld->ttl2 = 0;
 
@@ -233,7 +227,9 @@ DetectTtlData *DetectTtlParse (char *ttlstr)
             default:
                 ttld->mode = DETECT_TTL_EQ;
 
-                if ((arg2 != NULL && strlen(arg2) > 0) || (arg3 != NULL && strlen(arg3) > 0) || (arg1 == NULL ||strlen(arg1) == 0))
+                if ((arg2 != NULL && strlen(arg2) > 0) ||
+                    (arg3 != NULL && strlen(arg3) > 0) ||
+                    (arg1 == NULL ||strlen(arg1) == 0))
                     goto error;
 
                 ttld->ttl1 = (uint8_t) atoi(arg1);
@@ -242,9 +238,8 @@ DetectTtlData *DetectTtlParse (char *ttlstr)
     } else {
         ttld->mode = DETECT_TTL_EQ;
 
-        if ((arg2 != NULL && strlen(arg2) > 0) ||
-                (arg3 != NULL && strlen(arg3) > 0) ||
-                (arg1 == NULL ||strlen(arg1) == 0))
+        if ((arg3 != NULL && strlen(arg3) > 0) ||
+            (arg1 == NULL ||strlen(arg1) == 0))
             goto error;
 
         ttld->ttl1 = (uint8_t) atoi(arg1);
@@ -256,10 +251,14 @@ DetectTtlData *DetectTtlParse (char *ttlstr)
     return ttld;
 
 error:
-    if (ttld) SCFree(ttld);
-    if (arg1) SCFree(arg1);
-    if (arg2) SCFree(arg2);
-    if (arg3) SCFree(arg3);
+    if (ttld)
+        SCFree(ttld);
+    if (arg1)
+        SCFree(arg1);
+    if (arg2)
+        SCFree(arg2);
+    if (arg3)
+        SCFree(arg3);
     return NULL;
 }
 
@@ -273,9 +272,8 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, char *ttlstr)
+static int DetectTtlSetup (DetectEngineCtx *de_ctx, Signature *s, const char *ttlstr)
 {
-
     DetectTtlData *ttld = NULL;
     SigMatch *sm = NULL;
 
@@ -312,9 +310,77 @@ void DetectTtlFree(void *ptr)
     SCFree(ttld);
 }
 
-#ifdef UNITTESTS
+/* prefilter code */
 
-#include "detect-parse.h"
+static void
+PrefilterPacketTtlMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
+{
+    if (PKT_IS_PSEUDOPKT(p)) {
+        SCReturn;
+    }
+
+    uint8_t pttl;
+    if (PKT_IS_IPV4(p)) {
+        pttl = IPV4_GET_IPTTL(p);
+    } else if (PKT_IS_IPV6(p)) {
+        pttl = IPV6_GET_HLIM(p);
+    } else {
+        SCLogDebug("Packet is of not IPv4 or IPv6");
+        return;
+    }
+
+    const PrefilterPacketHeaderCtx *ctx = pectx;
+    if (PrefilterPacketHeaderExtraMatch(ctx, p) == FALSE)
+        return;
+
+    if (TtlMatch(pttl, ctx->v1.u8[0], ctx->v1.u8[1], ctx->v1.u8[2]))
+    {
+        SCLogDebug("packet matches ttl/hl %u", pttl);
+        PrefilterAddSids(&det_ctx->pmq, ctx->sigs_array, ctx->sigs_cnt);
+    }
+}
+
+static void
+PrefilterPacketTtlSet(PrefilterPacketHeaderValue *v, void *smctx)
+{
+    const DetectTtlData *a = smctx;
+    v->u8[0] = a->mode;
+    v->u8[1] = a->ttl1;
+    v->u8[2] = a->ttl2;
+}
+
+static _Bool
+PrefilterPacketTtlCompare(PrefilterPacketHeaderValue v, void *smctx)
+{
+    const DetectTtlData *a = smctx;
+    if (v.u8[0] == a->mode &&
+        v.u8[1] == a->ttl1 &&
+        v.u8[2] == a->ttl2)
+        return TRUE;
+    return FALSE;
+}
+
+static int PrefilterSetupTtl(SigGroupHead *sgh)
+{
+    return PrefilterSetupPacketHeader(sgh, DETECT_TTL,
+            PrefilterPacketTtlSet,
+            PrefilterPacketTtlCompare,
+            PrefilterPacketTtlMatch);
+}
+
+static _Bool PrefilterTtlIsPrefilterable(const Signature *s)
+{
+    const SigMatch *sm;
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+        switch (sm->type) {
+            case DETECT_TTL:
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+#ifdef UNITTESTS
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 
@@ -324,7 +390,7 @@ void DetectTtlFree(void *ptr)
  *
  */
 
-static int DetectTtlInitTest(DetectEngineCtx **de_ctx, Signature **sig, DetectTtlData **ttld, char *str)
+static int DetectTtlInitTest(DetectEngineCtx **de_ctx, Signature **sig, DetectTtlData **ttld, const char *str)
 {
     char fullstr[1024];
     int result = 0;
@@ -625,14 +691,14 @@ end:
 void DetectTtlRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectTtlParseTest01", DetectTtlParseTest01, 1);
-    UtRegisterTest("DetectTtlParseTest02", DetectTtlParseTest02, 1);
-    UtRegisterTest("DetectTtlParseTest03", DetectTtlParseTest03, 1);
-    UtRegisterTest("DetectTtlParseTest04", DetectTtlParseTest04, 1);
-    UtRegisterTest("DetectTtlParseTest05", DetectTtlParseTest05, 1);
-    UtRegisterTest("DetectTtlParseTest06", DetectTtlParseTest06, 1);
-    UtRegisterTest("DetectTtlParseTest07", DetectTtlParseTest07, 1);
-    UtRegisterTest("DetectTtlSetpTest01", DetectTtlSetpTest01, 1);
-    UtRegisterTest("DetectTtlTestSig1",  DetectTtlTestSig1, 1);
+    UtRegisterTest("DetectTtlParseTest01", DetectTtlParseTest01);
+    UtRegisterTest("DetectTtlParseTest02", DetectTtlParseTest02);
+    UtRegisterTest("DetectTtlParseTest03", DetectTtlParseTest03);
+    UtRegisterTest("DetectTtlParseTest04", DetectTtlParseTest04);
+    UtRegisterTest("DetectTtlParseTest05", DetectTtlParseTest05);
+    UtRegisterTest("DetectTtlParseTest06", DetectTtlParseTest06);
+    UtRegisterTest("DetectTtlParseTest07", DetectTtlParseTest07);
+    UtRegisterTest("DetectTtlSetpTest01", DetectTtlSetpTest01);
+    UtRegisterTest("DetectTtlTestSig1", DetectTtlTestSig1);
 #endif /* UNITTESTS */
 }

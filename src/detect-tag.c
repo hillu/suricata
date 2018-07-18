@@ -57,8 +57,9 @@ SC_ATOMIC_EXTERN(unsigned int, num_tags);
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectTagMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectTagSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectTagMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTagSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectTagRegisterTests(void);
 void DetectTagDataFree(void *);
 
@@ -74,28 +75,7 @@ void DetectTagRegister(void)
     sigmatch_table[DETECT_TAG].RegisterTests = DetectTagRegisterTests;
     sigmatch_table[DETECT_TAG].flags |= SIGMATCH_IPONLY_COMPAT;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    /* XXX */
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /**
@@ -109,7 +89,8 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectTagMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectTagMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectTagData *td = (const DetectTagData *)ctx;
     DetectTagDataEntry tde;
@@ -170,7 +151,7 @@ int DetectTagMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Sig
  * \retval td pointer to DetectTagData on success
  * \retval NULL on failure
  */
-DetectTagData *DetectTagParse(char *tagstr)
+static DetectTagData *DetectTagParse(const char *tagstr)
 {
     DetectTagData td;
 #define MAX_SUBSTRINGS 30
@@ -300,7 +281,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectTagSetup(DetectEngineCtx *de_ctx, Signature *s, char *tagstr)
+int DetectTagSetup(DetectEngineCtx *de_ctx, Signature *s, const char *tagstr)
 {
     DetectTagData *td = NULL;
     SigMatch *sm = NULL;
@@ -477,11 +458,11 @@ static int DetectTagTestParse05(void)
 void DetectTagRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectTagTestParse01", DetectTagTestParse01, 1);
-    UtRegisterTest("DetectTagTestParse02", DetectTagTestParse02, 1);
-    UtRegisterTest("DetectTagTestParse03", DetectTagTestParse03, 1);
-    UtRegisterTest("DetectTagTestParse04", DetectTagTestParse04, 1);
-    UtRegisterTest("DetectTagTestParse05", DetectTagTestParse05, 1);
+    UtRegisterTest("DetectTagTestParse01", DetectTagTestParse01);
+    UtRegisterTest("DetectTagTestParse02", DetectTagTestParse02);
+    UtRegisterTest("DetectTagTestParse03", DetectTagTestParse03);
+    UtRegisterTest("DetectTagTestParse04", DetectTagTestParse04);
+    UtRegisterTest("DetectTagTestParse05", DetectTagTestParse05);
 
     DetectEngineTagRegisterTests();
 #endif /* UNITTESTS */

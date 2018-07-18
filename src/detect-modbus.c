@@ -45,8 +45,10 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine.h"
 
 #include "detect-modbus.h"
+#include "detect-engine-modbus.h"
 
 #include "util-debug.h"
 
@@ -67,6 +69,8 @@ static pcre_extra   *function_parse_regex_study;
 #define PARSE_REGEX_ACCESS "^\\s*\"?\\s*access\\s*(read|write)\\s*(discretes|coils|input|holding)?(,\\s*address\\s+([<>]?\\d+)(<>\\d+)?(,\\s*value\\s+([<>]?\\d+)(<>\\d+)?)?)?\\s*\"?\\s*$"
 static pcre         *access_parse_regex;
 static pcre_extra   *access_parse_regex_study;
+
+static int g_modbus_buffer_id = 0;
 
 #define MAX_SUBSTRINGS 30
 
@@ -104,7 +108,7 @@ static void DetectModbusFree(void *ptr) {
  *
  * \retval Pointer to DetectModbusData on success or NULL on failure
  */
-static DetectModbus *DetectModbusAccessParse(char *str)
+static DetectModbus *DetectModbusAccessParse(const char *str)
 {
     SCEnter();
     DetectModbus *modbus = NULL;
@@ -268,7 +272,7 @@ error:
  * \retval id_d pointer to DetectModbusData on success
  * \retval NULL on failure
  */
-static DetectModbus *DetectModbusFunctionParse(char *str)
+static DetectModbus *DetectModbusFunctionParse(const char *str)
 {
     SCEnter();
     DetectModbus *modbus = NULL;
@@ -356,16 +360,14 @@ error:
  *
  * \retval 0 on Success or -1 on Failure
  */
-static int DetectModbusSetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectModbusSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     SCEnter();
     DetectModbus    *modbus = NULL;
     SigMatch        *sm = NULL;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_MODBUS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
+    if (DetectSignatureSetAppProto(s, ALPROTO_MODBUS) != 0)
+        return -1;
 
     if ((modbus = DetectModbusFunctionParse(str)) == NULL) {
         if ((modbus = DetectModbusAccessParse(str)) == NULL) {
@@ -382,8 +384,7 @@ static int DetectModbusSetup(DetectEngineCtx *de_ctx, Signature *s, char *str)
     sm->type    = DETECT_AL_MODBUS;
     sm->ctx     = (void *) modbus;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_MODBUS_MATCH);
-    s->alproto = ALPROTO_MODBUS;
+    SigMatchAppendSMToList(s, sm, g_modbus_buffer_id);
 
     SCReturnInt(0);
 
@@ -403,52 +404,26 @@ void DetectModbusRegister(void)
     SCEnter();
     sigmatch_table[DETECT_AL_MODBUS].name          = "modbus";
     sigmatch_table[DETECT_AL_MODBUS].Match         = NULL;
-    sigmatch_table[DETECT_AL_MODBUS].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_AL_MODBUS].alproto       = ALPROTO_MODBUS;
     sigmatch_table[DETECT_AL_MODBUS].Setup         = DetectModbusSetup;
     sigmatch_table[DETECT_AL_MODBUS].Free          = DetectModbusFree;
     sigmatch_table[DETECT_AL_MODBUS].RegisterTests = DetectModbusRegisterTests;
 
-    const char *eb;
-    int eo, opts = 0;
+    DetectSetupParseRegexes(PARSE_REGEX_FUNCTION,
+            &function_parse_regex, &function_parse_regex_study);
+    DetectSetupParseRegexes(PARSE_REGEX_ACCESS,
+            &access_parse_regex, &access_parse_regex_study);
 
-    SCLogDebug("registering modbus rule option");
+    DetectAppLayerInspectEngineRegister("modbus",
+            ALPROTO_MODBUS, SIG_FLAG_TOSERVER, 0,
+            DetectEngineInspectModbus);
+    DetectAppLayerInspectEngineRegister("modbus",
+            ALPROTO_MODBUS, SIG_FLAG_TOCLIENT, 0,
+            DetectEngineInspectModbus);
 
-    /* Function PARSE_REGEX */
-    function_parse_regex = pcre_compile(PARSE_REGEX_FUNCTION, opts, &eb, &eo, NULL);
-    if (function_parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                    PARSE_REGEX_FUNCTION, eo, eb);
-        goto error;
-    }
-
-    function_parse_regex_study = pcre_study(function_parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    /* Access PARSE_REGEX */
-    access_parse_regex = pcre_compile(PARSE_REGEX_ACCESS, opts, &eb, &eo, NULL);
-    if (access_parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                   PARSE_REGEX_ACCESS, eo, eb);
-        goto error;
-    }
-
-    access_parse_regex_study = pcre_study(access_parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-error:
-    SCReturn;
+    g_modbus_buffer_id = DetectBufferTypeGetByName("modbus");
 }
 
 #ifdef UNITTESTS /* UNITTESTS */
-#include "detect-engine.h"
-
 #include "util-unittest.h"
 
 /** \test Signature containing a function. */
@@ -472,16 +447,16 @@ static int DetectModbusTest01(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if (modbus->function != 1) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, modbus->function);
+        printf("expected function %d, got %" PRIu8 ": ", 1, modbus->function);
         goto end;
     }
 
@@ -516,17 +491,17 @@ static int DetectModbusTest02(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if ((modbus->function != 8) || (*modbus->subfunction != 4)) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", 1, modbus->function);
-        printf("expected subfunction %" PRIu8 ", got %" PRIu16 ": ", 4, *modbus->subfunction);
+        printf("expected function %d, got %" PRIu8 ": ", 1, modbus->function);
+        printf("expected subfunction %d, got %" PRIu16 ": ", 4, *modbus->subfunction);
         goto end;
     }
 
@@ -561,16 +536,16 @@ static int DetectModbusTest03(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if (modbus->category != MODBUS_CAT_RESERVED) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", MODBUS_CAT_RESERVED, modbus->category);
+        printf("expected function %d, got %" PRIu8 ": ", MODBUS_CAT_RESERVED, modbus->category);
         goto end;
     }
 
@@ -607,16 +582,16 @@ static int DetectModbusTest04(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if (modbus->category != category) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", ~MODBUS_CAT_PUBLIC_ASSIGNED, modbus->category);
+        printf("expected function %u, got %" PRIu8 ": ", ~MODBUS_CAT_PUBLIC_ASSIGNED, modbus->category);
         goto end;
     }
 
@@ -651,16 +626,16 @@ static int DetectModbusTest05(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if (modbus->type != MODBUS_TYP_READ) {
-        printf("expected function %" PRIu8 ", got %" PRIu8 ": ", MODBUS_TYP_READ, modbus->type);
+        printf("expected function %d, got %" PRIu8 ": ", MODBUS_TYP_READ, modbus->type);
         goto end;
     }
 
@@ -697,13 +672,13 @@ static int DetectModbusTest06(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if (modbus->type != type) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
@@ -743,20 +718,20 @@ static int DetectModbusTest07(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if ((modbus->type != type) ||
         ((*modbus->address).mode != mode) ||
         ((*modbus->address).min != 1000)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected mode %" PRIu8 ", got %" PRIu16 ": ", mode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 1000, (*modbus->address).min);
+        printf("expected mode %u, got %u: ", mode, (*modbus->address).mode);
+        printf("expected address %d, got %" PRIu16 ": ", 1000, (*modbus->address).min);
         goto end;
     }
 
@@ -793,20 +768,20 @@ static int DetectModbusTest08(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if ((modbus->type != type) ||
         ((*modbus->address).mode != mode) ||
         ((*modbus->address).min != 500)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected mode %" PRIu8 ", got %" PRIu16 ": ", mode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->address).min);
+        printf("expected mode %d, got %u: ", mode, (*modbus->address).mode);
+        printf("expected address %u, got %" PRIu16 ": ", 500, (*modbus->address).min);
         goto end;
     }
 
@@ -844,13 +819,13 @@ static int DetectModbusTest09(void)
     if (de_ctx->sig_list == NULL)
         goto end;
 
-    if ((de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH] == NULL) ||
-        (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx == NULL)) {
+    if ((de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id] == NULL) ||
+        (de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx == NULL)) {
         printf("de_ctx->pmatch_tail == NULL && de_ctx->pmatch_tail->ctx == NULL: ");
         goto end;
     }
 
-    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_MODBUS_MATCH]->ctx;
+    modbus = (DetectModbus *) de_ctx->sig_list->sm_lists_tail[g_modbus_buffer_id]->ctx;
 
     if ((modbus->type != type) ||
         ((*modbus->address).mode != addressMode) ||
@@ -859,11 +834,11 @@ static int DetectModbusTest09(void)
         ((*modbus->data).min != 500)   ||
         ((*modbus->data).max != 1000)) {
         printf("expected function %" PRIu8 ", got %" PRIu8 ": ", type, modbus->type);
-        printf("expected address mode %" PRIu8 ", got %" PRIu16 ": ", addressMode, (*modbus->address).mode);
-        printf("expected address %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->address).min);
-        printf("expected value mode %" PRIu8 ", got %" PRIu16 ": ", valueMode, (*modbus->data).mode);
-        printf("expected min value %" PRIu8 ", got %" PRIu16 ": ", 500, (*modbus->data).min);
-        printf("expected max value %" PRIu8 ", got %" PRIu16 ": ", 1000, (*modbus->data).max);
+        printf("expected address mode %u, got %u: ", addressMode, (*modbus->address).mode);
+        printf("expected address %d, got %" PRIu16 ": ", 500, (*modbus->address).min);
+        printf("expected value mode %u, got %u: ", valueMode, (*modbus->data).mode);
+        printf("expected min value %d, got %" PRIu16 ": ", 500, (*modbus->data).min);
+        printf("expected max value %d, got %" PRIu16 ": ", 1000, (*modbus->data).max);
         goto end;
     }
 
@@ -884,14 +859,23 @@ static int DetectModbusTest09(void)
 void DetectModbusRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectModbusTest01 - Testing function", DetectModbusTest01, 1);
-    UtRegisterTest("DetectModbusTest02 - Testing function and subfunction", DetectModbusTest02, 1);
-    UtRegisterTest("DetectModbusTest03 - Testing category function", DetectModbusTest03, 1);
-    UtRegisterTest("DetectModbusTest04 - Testing category function in negative", DetectModbusTest04, 1);
-    UtRegisterTest("DetectModbusTest05 - Testing access type", DetectModbusTest05, 1);
-    UtRegisterTest("DetectModbusTest06 - Testing access function", DetectModbusTest06, 1);
-    UtRegisterTest("DetectModbusTest07 - Testing access at address", DetectModbusTest07, 1);
-    UtRegisterTest("DetectModbusTest08 - Testing a range of address", DetectModbusTest08, 1);
-    UtRegisterTest("DetectModbusTest09 - Testing write a range of value", DetectModbusTest09, 1);
+    UtRegisterTest("DetectModbusTest01 - Testing function",
+                   DetectModbusTest01);
+    UtRegisterTest("DetectModbusTest02 - Testing function and subfunction",
+                   DetectModbusTest02);
+    UtRegisterTest("DetectModbusTest03 - Testing category function",
+                   DetectModbusTest03);
+    UtRegisterTest("DetectModbusTest04 - Testing category function in negative",
+                   DetectModbusTest04);
+    UtRegisterTest("DetectModbusTest05 - Testing access type",
+                   DetectModbusTest05);
+    UtRegisterTest("DetectModbusTest06 - Testing access function",
+                   DetectModbusTest06);
+    UtRegisterTest("DetectModbusTest07 - Testing access at address",
+                   DetectModbusTest07);
+    UtRegisterTest("DetectModbusTest08 - Testing a range of address",
+                   DetectModbusTest08);
+    UtRegisterTest("DetectModbusTest09 - Testing write a range of value",
+                   DetectModbusTest09);
 #endif /* UNITTESTS */
 }

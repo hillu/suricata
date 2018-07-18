@@ -40,7 +40,8 @@
 
 static int host_bit_id = -1;                /**< Host storage id for bits */
 
-void HostBitFreeAll(void *store) {
+static void HostBitFreeAll(void *store)
+{
     GenericVar *gv = store;
     GenericVarFree(gv);
 }
@@ -78,7 +79,7 @@ int HostBitsTimedoutCheck(Host *h, struct timeval *ts)
 }
 
 /* get the bit with idx from the host */
-static XBit *HostBitGet(Host *h, uint16_t idx)
+static XBit *HostBitGet(Host *h, uint32_t idx)
 {
     GenericVar *gv = HostGetStorageById(h, host_bit_id);
     for ( ; gv != NULL; gv = gv->next) {
@@ -91,7 +92,7 @@ static XBit *HostBitGet(Host *h, uint16_t idx)
 }
 
 /* add a flowbit to the flow */
-static void HostBitAdd(Host *h, uint16_t idx, uint32_t expire)
+static void HostBitAdd(Host *h, uint32_t idx, uint32_t expire)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb == NULL) {
@@ -114,7 +115,7 @@ static void HostBitAdd(Host *h, uint16_t idx, uint32_t expire)
     }
 }
 
-static void HostBitRemove(Host *h, uint16_t idx)
+static void HostBitRemove(Host *h, uint32_t idx)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb == NULL)
@@ -123,11 +124,12 @@ static void HostBitRemove(Host *h, uint16_t idx)
     GenericVar *gv = HostGetStorageById(h, host_bit_id);
     if (gv) {
         GenericVarRemove(&gv, (GenericVar *)fb);
+        XBitFree(fb);
         HostSetStorageById(h, host_bit_id, gv);
     }
 }
 
-void HostBitSet(Host *h, uint16_t idx, uint32_t expire)
+void HostBitSet(Host *h, uint32_t idx, uint32_t expire)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb == NULL) {
@@ -135,7 +137,7 @@ void HostBitSet(Host *h, uint16_t idx, uint32_t expire)
     }
 }
 
-void HostBitUnset(Host *h, uint16_t idx)
+void HostBitUnset(Host *h, uint32_t idx)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb != NULL) {
@@ -143,7 +145,7 @@ void HostBitUnset(Host *h, uint16_t idx)
     }
 }
 
-void HostBitToggle(Host *h, uint16_t idx, uint32_t expire)
+void HostBitToggle(Host *h, uint32_t idx, uint32_t expire)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb != NULL) {
@@ -153,7 +155,7 @@ void HostBitToggle(Host *h, uint16_t idx, uint32_t expire)
     }
 }
 
-int HostBitIsset(Host *h, uint16_t idx, uint32_t ts)
+int HostBitIsset(Host *h, uint32_t idx, uint32_t ts)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb != NULL) {
@@ -166,7 +168,7 @@ int HostBitIsset(Host *h, uint16_t idx, uint32_t ts)
     return 0;
 }
 
-int HostBitIsnotset(Host *h, uint16_t idx, uint32_t ts)
+int HostBitIsnotset(Host *h, uint32_t idx, uint32_t ts)
 {
     XBit *fb = HostBitGet(h, idx);
     if (fb == NULL) {
@@ -177,6 +179,25 @@ int HostBitIsnotset(Host *h, uint16_t idx, uint32_t ts)
         HostBitRemove(h,idx);
         return 1;
     }
+    return 0;
+}
+
+int HostBitList(Host *h, XBit **iter)
+{
+    GenericVar *gv = (GenericVar *)*iter;
+    if (gv == NULL) {
+        gv = HostGetStorageById(h, host_bit_id);
+    } else {
+        gv = gv->next;
+    }
+
+    for ( ; gv != NULL; gv = gv->next) {
+        if (gv->type == DETECT_XBITS) {
+            *iter = (XBit *)gv;
+            return 1;
+        }
+    }
+    *iter = NULL;
     return 0;
 }
 
@@ -488,16 +509,16 @@ end:
 void HostBitRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("HostBitTest01", HostBitTest01, 1);
-    UtRegisterTest("HostBitTest02", HostBitTest02, 1);
-    UtRegisterTest("HostBitTest03", HostBitTest03, 1);
-    UtRegisterTest("HostBitTest04", HostBitTest04, 1);
-    UtRegisterTest("HostBitTest05", HostBitTest05, 1);
-    UtRegisterTest("HostBitTest06", HostBitTest06, 1);
-    UtRegisterTest("HostBitTest07", HostBitTest07, 1);
-    UtRegisterTest("HostBitTest08", HostBitTest08, 1);
-    UtRegisterTest("HostBitTest09", HostBitTest09, 1);
-    UtRegisterTest("HostBitTest10", HostBitTest10, 1);
-    UtRegisterTest("HostBitTest11", HostBitTest11, 1);
+    UtRegisterTest("HostBitTest01", HostBitTest01);
+    UtRegisterTest("HostBitTest02", HostBitTest02);
+    UtRegisterTest("HostBitTest03", HostBitTest03);
+    UtRegisterTest("HostBitTest04", HostBitTest04);
+    UtRegisterTest("HostBitTest05", HostBitTest05);
+    UtRegisterTest("HostBitTest06", HostBitTest06);
+    UtRegisterTest("HostBitTest07", HostBitTest07);
+    UtRegisterTest("HostBitTest08", HostBitTest08);
+    UtRegisterTest("HostBitTest09", HostBitTest09);
+    UtRegisterTest("HostBitTest10", HostBitTest10);
+    UtRegisterTest("HostBitTest11", HostBitTest11);
 #endif /* UNITTESTS */
 }

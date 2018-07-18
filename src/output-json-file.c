@@ -56,9 +56,11 @@
 
 #include "output.h"
 #include "output-json.h"
+#include "output-json-file.h"
 #include "output-json-http.h"
 #include "output-json-smtp.h"
 #include "output-json-email-common.h"
+#include "output-json-nfs.h"
 
 #include "app-layer-htp.h"
 #include "util-memcmp.h"
@@ -104,6 +106,16 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
             if (hjs)
                 json_object_set_new(js, "email", hjs);
             break;
+#ifdef HAVE_RUST
+        case ALPROTO_NFS:
+            hjs = JsonNFSAddMetadataRPC(p->flow, ff->txid);
+            if (hjs)
+                json_object_set_new(js, "rpc", hjs);
+            hjs = JsonNFSAddMetadata(p->flow, ff->txid);
+            if (hjs)
+                json_object_set_new(js, "nfs", hjs);
+            break;
+#endif
     }
 
     json_object_set_new(js, "app_proto",
@@ -119,8 +131,11 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
     json_object_set_new(fjs, "filename", json_string(s));
     if (s != NULL)
         SCFree(s);
+#ifdef HAVE_MAGIC
     if (ff->magic)
         json_object_set_new(fjs, "magic", json_string((char *)ff->magic));
+#endif
+    json_object_set_new(fjs, "gaps", json_boolean((ff->flags & FILE_HAS_GAPS)));
     switch (ff->state) {
         case FILE_STATE_CLOSED:
             json_object_set_new(fjs, "state", json_string("CLOSED"));
@@ -128,11 +143,29 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
             if (ff->flags & FILE_MD5) {
                 size_t x;
                 int i;
-                char s[256];
+                char str[256];
                 for (i = 0, x = 0; x < sizeof(ff->md5); x++) {
-                    i += snprintf(&s[i], 255-i, "%02x", ff->md5[x]);
+                    i += snprintf(&str[i], 255-i, "%02x", ff->md5[x]);
                 }
-                json_object_set_new(fjs, "md5", json_string(s));
+                json_object_set_new(fjs, "md5", json_string(str));
+            }
+            if (ff->flags & FILE_SHA1) {
+                size_t x;
+                int i;
+                char str[256];
+                for (i = 0, x = 0; x < sizeof(ff->sha1); x++) {
+                    i += snprintf(&str[i], 255-i, "%02x", ff->sha1[x]);
+                }
+                json_object_set_new(fjs, "sha1", json_string(str));
+            }
+            if (ff->flags & FILE_SHA256) {
+                size_t x;
+                int i;
+                char str[256];
+                for (i = 0, x = 0; x < sizeof(ff->sha256); x++) {
+                    i += snprintf(&str[i], 255-i, "%02x", ff->sha256[x]);
+                }
+                json_object_set_new(fjs, "sha256", json_string(str));
             }
 #endif
             break;
@@ -149,9 +182,9 @@ static void FileWriteJsonRecord(JsonFileLogThread *aft, const Packet *p, const F
     json_object_set_new(fjs, "stored",
                         (ff->flags & FILE_STORED) ? json_true() : json_false());
     if (ff->flags & FILE_STORED) {
-        json_object_set_new(fjs, "file_id", json_integer(ff->file_id));
+        json_object_set_new(fjs, "file_id", json_integer(ff->file_store_id));
     }
-    json_object_set_new(fjs, "size", json_integer(ff->size));
+    json_object_set_new(fjs, "size", json_integer(FileTrackedSize(ff)));
     json_object_set_new(fjs, "tx_id", json_integer(ff->txid));
 
     /* originally just 'file', but due to bug 1127 naming it fileinfo */
@@ -188,7 +221,7 @@ static int JsonFileLogger(ThreadVars *tv, void *thread_data, const Packet *p, co
 
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonFileLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonFileLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonFileLogThread *aft = SCMalloc(sizeof(JsonFileLogThread));
     if (unlikely(aft == NULL))
@@ -197,7 +230,7 @@ static TmEcode JsonFileLogThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for HTTPLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogFile.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -241,7 +274,7 @@ static void OutputFileLogDeinitSub(OutputCtx *output_ctx)
  *  \param conf Pointer to ConfNode containing this loggers configuration.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
  * */
-OutputCtx *OutputFileLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputFileLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     OutputJsonCtx *ojc = parent_ctx->data;
 
@@ -261,24 +294,16 @@ OutputCtx *OutputFileLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
         const char *force_filestore = ConfNodeLookupChildValue(conf, "force-filestore");
         if (force_filestore != NULL && ConfValIsTrue(force_filestore)) {
             FileForceFilestoreEnable();
-            SCLogInfo("forcing filestore of all files");
+            SCLogConfig("forcing filestore of all files");
         }
 
         const char *force_magic = ConfNodeLookupChildValue(conf, "force-magic");
         if (force_magic != NULL && ConfValIsTrue(force_magic)) {
             FileForceMagicEnable();
-            SCLogInfo("forcing magic lookup for logged files");
+            SCLogConfig("forcing magic lookup for logged files");
         }
 
-        const char *force_md5 = ConfNodeLookupChildValue(conf, "force-md5");
-        if (force_md5 != NULL && ConfValIsTrue(force_md5)) {
-#ifdef HAVE_NSS
-            FileForceMd5Enable();
-            SCLogInfo("forcing md5 calculation for logged files");
-#else
-            SCLogInfo("md5 calculation requires linking against libnss");
-#endif
-        }
+        FileForceHashParseCfg(conf);
     }
 
     output_ctx->data = output_file_ctx;
@@ -288,30 +313,18 @@ OutputCtx *OutputFileLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
     return output_ctx;
 }
 
-void TmModuleJsonFileLogRegister (void)
+void JsonFileLogRegister (void)
 {
-    tmm_modules[TMM_JSONFILELOG].name = "JsonFileLog";
-    tmm_modules[TMM_JSONFILELOG].ThreadInit = JsonFileLogThreadInit;
-    tmm_modules[TMM_JSONFILELOG].ThreadDeinit = JsonFileLogThreadDeinit;
-    tmm_modules[TMM_JSONFILELOG].flags = TM_FLAG_LOGAPI_TM;
-
     /* register as child of eve-log */
-    OutputRegisterFileSubModule("eve-log", "JsonFileLog", "eve-log.files",
-            OutputFileLogInitSub, JsonFileLogger);
+    OutputRegisterFileSubModule(LOGGER_JSON_FILE, "eve-log", "JsonFileLog",
+        "eve-log.files", OutputFileLogInitSub, JsonFileLogger,
+        JsonFileLogThreadInit, JsonFileLogThreadDeinit, NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonFileLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonFileLogRegister (void)
-{
-    tmm_modules[TMM_JSONFILELOG].name = "JsonFileLog";
-    tmm_modules[TMM_JSONFILELOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

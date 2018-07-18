@@ -27,41 +27,27 @@
 #include "detect.h"
 #include "detect-engine.h"
 #include "detect-parse.h"
+#include "detect-sid.h"
 #include "util-debug.h"
 #include "util-error.h"
 #include "util-unittest.h"
 
-static int DetectSidSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectSidSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectSidRegisterTests(void);
 
 void DetectSidRegister (void)
 {
     sigmatch_table[DETECT_SID].name = "sid";
     sigmatch_table[DETECT_SID].desc = "set rule id";
-    sigmatch_table[DETECT_SID].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Sid-signature-id";
+    sigmatch_table[DETECT_SID].url = DOC_URL DOC_VERSION "/rules/meta.html#sid-signature-id";
     sigmatch_table[DETECT_SID].Match = NULL;
     sigmatch_table[DETECT_SID].Setup = DetectSidSetup;
     sigmatch_table[DETECT_SID].Free = NULL;
     sigmatch_table[DETECT_SID].RegisterTests = DetectSidRegisterTests;
 }
 
-static int DetectSidSetup (DetectEngineCtx *de_ctx, Signature *s, char *sidstr)
+static int DetectSidSetup (DetectEngineCtx *de_ctx, Signature *s, const char *sidstr)
 {
-    char *str = sidstr;
-    char duped = 0;
-
-    /* Strip leading and trailing "s. */
-    if (sidstr[0] == '\"') {
-        str = SCStrdup(sidstr + 1);
-        if (unlikely(str == NULL)) {
-            return -1;
-        }
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\0';
-        }
-        duped = 1;
-    }
-
     unsigned long id = 0;
     char *endptr = NULL;
     id = strtoul(sidstr, &endptr, 10);
@@ -74,16 +60,19 @@ static int DetectSidSetup (DetectEngineCtx *de_ctx, Signature *s, char *sidstr)
         SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "sid value to high, max %u", UINT_MAX);
         goto error;
     }
+    if (id == 0) {
+        SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "sid value 0 is invalid");
+        goto error;
+    }
+    if (s->id > 0) {
+        SCLogError(SC_ERR_INVALID_RULE_ARGUMENT, "duplicated 'sid' keyword detected");
+        goto error;
+    }
 
     s->id = (uint32_t)id;
-
-    if (duped)
-        SCFree(str);
     return 0;
 
  error:
-    if (duped)
-        SCFree(str);
     return -1;
 }
 
@@ -158,8 +147,8 @@ end:
 static void DetectSidRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("SidTestParse01", SidTestParse01, 1);
-    UtRegisterTest("SidTestParse02", SidTestParse02, 1);
-    UtRegisterTest("SidTestParse03", SidTestParse03, 1);
+    UtRegisterTest("SidTestParse01", SidTestParse01);
+    UtRegisterTest("SidTestParse02", SidTestParse02);
+    UtRegisterTest("SidTestParse03", SidTestParse03);
 #endif /* UNITTESTS */
 }

@@ -35,7 +35,7 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 
-PoolThread *PoolThreadInit(int threads, uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *(*Alloc)(), int (*Init)(void *, void *), void *InitData,  void (*Cleanup)(void *), void (*Free)(void *))
+PoolThread *PoolThreadInit(int threads, uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *(*Alloc)(void), int (*Init)(void *, void *), void *InitData,  void (*Cleanup)(void *), void (*Free)(void *))
 {
     PoolThread *pt = NULL;
     int i;
@@ -85,7 +85,7 @@ error:
 /**
  *
  */
-int PoolThreadGrow(PoolThread *pt, uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *(*Alloc)(), int (*Init)(void *, void *), void *InitData,  void (*Cleanup)(void *), void (*Free)(void *)) {
+int PoolThreadGrow(PoolThread *pt, uint32_t size, uint32_t prealloc_size, uint32_t elt_size,  void *(*Alloc)(void), int (*Init)(void *, void *), void *InitData,  void (*Cleanup)(void *), void (*Free)(void *)) {
     void *ptmp;
     size_t newsize;
     PoolThreadElement *e = NULL;
@@ -439,17 +439,17 @@ end:
 void PoolThreadRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("PoolThreadTestInit01", PoolThreadTestInit01, 1);
-    UtRegisterTest("PoolThreadTestInit02", PoolThreadTestInit02, 1);
+    UtRegisterTest("PoolThreadTestInit01", PoolThreadTestInit01);
+    UtRegisterTest("PoolThreadTestInit02", PoolThreadTestInit02);
 
-    UtRegisterTest("PoolThreadTestGet01", PoolThreadTestGet01, 1);
-    UtRegisterTest("PoolThreadTestGet02", PoolThreadTestGet02, 1);
+    UtRegisterTest("PoolThreadTestGet01", PoolThreadTestGet01);
+    UtRegisterTest("PoolThreadTestGet02", PoolThreadTestGet02);
 
-    UtRegisterTest("PoolThreadTestReturn01", PoolThreadTestReturn01, 1);
+    UtRegisterTest("PoolThreadTestReturn01", PoolThreadTestReturn01);
 
-    UtRegisterTest("PoolThreadTestGrow01", PoolThreadTestGrow01, 1);
-    UtRegisterTest("PoolThreadTestGrow02", PoolThreadTestGrow02, 1);
-    UtRegisterTest("PoolThreadTestGrow03", PoolThreadTestGrow03, 1);
+    UtRegisterTest("PoolThreadTestGrow01", PoolThreadTestGrow01);
+    UtRegisterTest("PoolThreadTestGrow02", PoolThreadTestGrow02);
+    UtRegisterTest("PoolThreadTestGrow03", PoolThreadTestGrow03);
 #endif
 }
 

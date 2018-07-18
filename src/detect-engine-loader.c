@@ -26,6 +26,7 @@
 #include "conf.h"
 #include "debug.h"
 #include "detect.h"
+#include "runmodes.h"
 #include "threads.h"
 #include "threadvars.h"
 #include "tm-threads.h"
@@ -149,7 +150,7 @@ void TmThreadWakeupDetectLoaderThreads()
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
         while (tv != NULL) {
-            if (strcmp(tv->name,"DetectLoader") == 0) {
+            if (strncmp(tv->name,"DL#",3) == 0) {
                 BUG_ON(tv->ctrl_cond == NULL);
                 pthread_cond_broadcast(tv->ctrl_cond);
             }
@@ -173,7 +174,7 @@ void TmThreadContinueDetectLoaderThreads()
     for (i = 0; i < TVT_MAX; i++) {
         tv = tv_root[i];
         while (tv != NULL) {
-            if (strcmp(tv->name,"DetectLoader") == 0)
+            if (strncmp(tv->name,"DL#",3) == 0)
                 TmThreadContinue(tv);
 
             tv = tv->next;
@@ -191,7 +192,7 @@ typedef struct DetectLoaderThreadData_ {
     uint32_t instance;
 } DetectLoaderThreadData;
 
-static TmEcode DetectLoaderThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode DetectLoaderThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     DetectLoaderThreadData *ftd = SCCalloc(1, sizeof(DetectLoaderThreadData));
     if (ftd == NULL)
@@ -240,6 +241,7 @@ static TmEcode DetectLoader(ThreadVars *th_v, void *thread_data)
             int r = task->Func(task->ctx, ftd->instance);
             loader->result |= r;
             TAILQ_REMOVE(&loader->task_list, task, next);
+            SCFree(task->ctx);
             SCFree(task);
         }
 
@@ -261,16 +263,16 @@ static TmEcode DetectLoader(ThreadVars *th_v, void *thread_data)
 }
 
 /** \brief spawn the detect loader manager thread */
-void DetectLoaderThreadSpawn()
+void DetectLoaderThreadSpawn(void)
 {
     int i;
     for (i = 0; i < num_loaders; i++) {
         ThreadVars *tv_loader = NULL;
 
-        char name[32];
-        snprintf(name, sizeof(name), "DetectLoader%02d", i+1);
+        char name[TM_THREAD_NAME_MAX];
+        snprintf(name, sizeof(name), "%s#%02d", thread_name_detect_loader, i+1);
 
-        tv_loader = TmThreadCreateCmdThreadByName("DetectLoader",
+        tv_loader = TmThreadCreateCmdThreadByName(name,
                 "DetectLoader", 1);
         BUG_ON(tv_loader == NULL);
 

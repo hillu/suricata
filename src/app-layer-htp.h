@@ -37,6 +37,7 @@
 #include "util-file.h"
 #include "app-layer-htp-mem.h"
 #include "detect-engine-state.h"
+#include "util-streaming-buffer.h"
 
 #include <htp/htp.h>
 
@@ -125,6 +126,8 @@ enum {
     HTTP_DECODER_EVENT_METHOD_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_URI_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE,
+    HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS,
+    HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
@@ -132,12 +135,12 @@ enum {
     HTTP_DECODER_EVENT_MULTIPART_INVALID_HEADER,
 };
 
-#define HTP_PCRE_NONE           0x00    /**< No pcre executed yet */
-#define HTP_PCRE_DONE           0x01    /**< Flag to indicate that pcre has
-                                             done some inspection in the
-                                             chunks */
-#define HTP_PCRE_HAS_MATCH      0x02    /**< Flag to indicate that the chunks
-                                             matched on some rule */
+typedef struct HTPCfgDir_ {
+    uint32_t body_limit;
+    uint32_t inspect_min_size;
+    uint32_t inspect_window;
+    StreamingBufferConfig sbcfg;
+} HTPCfgDir;
 
 /** Need a linked list in order to keep track of these */
 typedef struct HTPCfgRec_ {
@@ -147,25 +150,18 @@ typedef struct HTPCfgRec_ {
     int                 uri_include_all; /**< use all info in uri (bool) */
 
     /** max size of the client body we inspect */
-    uint32_t            request_body_limit;
-    uint32_t            response_body_limit;
-
-    uint32_t            request_inspect_min_size;
-    uint32_t            request_inspect_window;
-
-    uint32_t            response_inspect_min_size;
-    uint32_t            response_inspect_window;
     int                 randomize;
     int                 randomize_range;
     int                 http_body_inline;
+
+    HTPCfgDir request;
+    HTPCfgDir response;
 } HTPCfgRec;
 
 /** Struct used to hold chunks of a body on a request */
 struct HtpBodyChunk_ {
-    uint8_t *data;              /**< Pointer to the data of the chunk */
     struct HtpBodyChunk_ *next; /**< Pointer to the next chunk */
-    uint64_t stream_offset;
-    uint32_t len;               /**< Length of the chunk */
+    StreamingBufferSegment sbseg;
     int logged;
 } __attribute__((__packed__));
 typedef struct HtpBodyChunk_ HtpBodyChunk;
@@ -174,6 +170,8 @@ typedef struct HtpBodyChunk_ HtpBodyChunk;
 typedef struct HtpBody_ {
     HtpBodyChunk *first; /**< Pointer to the first chunk */
     HtpBodyChunk *last;  /**< Pointer to the last chunk */
+
+    StreamingBuffer *sb;
 
     /* Holds the length of the htp request body seen so far */
     uint64_t content_len_so_far;
@@ -189,22 +187,22 @@ typedef struct HtpBody_ {
 #define HTP_FILENAME_SET        0x08   /**< filename is registered in the flow */
 #define HTP_DONTSTORE           0x10    /**< not storing this file */
 
-#define HTP_TX_HAS_FILE             0x01
-#define HTP_TX_HAS_FILENAME         0x02    /**< filename is known at this time */
-#define HTP_TX_HAS_TYPE             0x04
-#define HTP_TX_HAS_FILECONTENT      0x08    /**< file has content so we can do type detect */
-
-#define HTP_RULE_NEED_FILE          HTP_TX_HAS_FILE
-#define HTP_RULE_NEED_FILENAME      HTP_TX_HAS_FILENAME
-#define HTP_RULE_NEED_TYPE          HTP_TX_HAS_TYPE
-#define HTP_RULE_NEED_FILECONTENT   HTP_TX_HAS_FILECONTENT
-
 /** Now the Body Chunks will be stored per transaction, at
   * the tx user data */
 typedef struct HtpTxUserData_ {
+    /** flags to track which mpm has run */
+    uint64_t mpm_ids;
+
     /* Body of the request (if any) */
     uint8_t request_body_init;
     uint8_t response_body_init;
+
+    uint8_t request_has_trailers;
+    uint8_t response_has_trailers;
+
+    /* indicates which loggers that have logged */
+    uint32_t logged;
+
     HtpBody request_body;
     HtpBody response_body;
 
@@ -235,7 +233,6 @@ typedef struct HtpTxUserData_ {
 } HtpTxUserData;
 
 typedef struct HtpState_ {
-
     /* Connection parser structure for each connection */
     htp_connp_t *connp;
     /* Connection structure for each connection */
@@ -245,7 +242,7 @@ typedef struct HtpState_ {
     uint64_t store_tx_id;
     FileContainer *files_ts;
     FileContainer *files_tc;
-    struct HTPCfgRec_ *cfg;
+    const struct HTPCfgRec_ *cfg;
     uint16_t flags;
     uint16_t events;
     uint16_t htp_messages_offset; /**< offset into conn->messages list */
@@ -269,10 +266,6 @@ void HTPParserRegisterTests(void);
 void HTPAtExitPrintStats(void);
 void HTPFreeConfig(void);
 
-htp_tx_t *HTPTransactionMain(const HtpState *);
-
-int HTPCallbackRequestBodyData(htp_tx_data_t *);
-int HtpTransactionGetLoggableId(Flow *);
 void HtpBodyPrint(HtpBody *);
 void HtpBodyFree(HtpBody *);
 /* To free the state from unittests using app-layer-htp */

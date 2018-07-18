@@ -53,26 +53,19 @@
 
 #define OUTPUT_BUFFER_SIZE 65535
 
-TmEcode LogTcpDataLogThreadInit(ThreadVars *, void *, void **);
+TmEcode LogTcpDataLogThreadInit(ThreadVars *, const void *, void **);
 TmEcode LogTcpDataLogThreadDeinit(ThreadVars *, void *);
-void LogTcpDataLogExitPrintStats(ThreadVars *, void *);
 static void LogTcpDataLogDeInitCtx(OutputCtx *);
 
 int LogTcpDataLogger(ThreadVars *tv, void *thread_data, const Flow *f, const uint8_t *data, uint32_t data_len, uint64_t tx_id, uint8_t flags);
 
-void TmModuleLogTcpDataLogRegister (void) {
-    tmm_modules[TMM_LOGTCPDATALOG].name = MODULE_NAME;
-    tmm_modules[TMM_LOGTCPDATALOG].ThreadInit = LogTcpDataLogThreadInit;
-    tmm_modules[TMM_LOGTCPDATALOG].ThreadExitPrintStats = LogTcpDataLogExitPrintStats;
-    tmm_modules[TMM_LOGTCPDATALOG].ThreadDeinit = LogTcpDataLogThreadDeinit;
-    tmm_modules[TMM_LOGTCPDATALOG].RegisterTests = NULL;
-    tmm_modules[TMM_LOGTCPDATALOG].cap_flags = 0;
-    tmm_modules[TMM_LOGTCPDATALOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterStreamingModule(MODULE_NAME, "tcp-data", LogTcpDataLogInitCtx,
-            LogTcpDataLogger, STREAMING_TCP_DATA);
-    OutputRegisterStreamingModule(MODULE_NAME, "http-body-data", LogTcpDataLogInitCtx,
-            LogTcpDataLogger, STREAMING_HTTP_BODIES);
+void LogTcpDataLogRegister (void) {
+    OutputRegisterStreamingModule(LOGGER_TCP_DATA, MODULE_NAME, "tcp-data",
+        LogTcpDataLogInitCtx, LogTcpDataLogger, STREAMING_TCP_DATA,
+        LogTcpDataLogThreadInit, LogTcpDataLogThreadDeinit, NULL);
+    OutputRegisterStreamingModule(LOGGER_TCP_DATA, MODULE_NAME, "http-body-data",
+        LogTcpDataLogInitCtx, LogTcpDataLogger, STREAMING_HTTP_BODIES,
+        LogTcpDataLogThreadInit, LogTcpDataLogThreadDeinit, NULL);
 }
 
 typedef struct LogTcpDataFileCtx_ {
@@ -95,7 +88,7 @@ static int LogTcpDataLoggerDir(ThreadVars *tv, void *thread_data, const Flow *f,
     SCEnter();
     LogTcpDataLogThread *aft = thread_data;
     LogTcpDataFileCtx *td = aft->tcpdatalog_ctx;
-    char *mode = "a";
+    const char *mode = "a";
 
     if (flags & OUTPUT_STREAMING_FLAG_OPEN)
         mode = "w";
@@ -165,10 +158,8 @@ static int LogTcpDataLoggerFile(ThreadVars *tv, void *thread_data, const Flow *f
         PrintRawDataToBuffer(aft->buffer->buffer, &aft->buffer->offset,
                 aft->buffer->size, (uint8_t *)data,data_len);
 
-        SCMutexLock(&td->file_ctx->fp_mutex);
         td->file_ctx->Write((const char *)MEMBUFFER_BUFFER(aft->buffer),
                 MEMBUFFER_OFFSET(aft->buffer), td->file_ctx);
-        SCMutexUnlock(&td->file_ctx->fp_mutex);
     }
     SCReturnInt(TM_ECODE_OK);
 }
@@ -188,7 +179,7 @@ int LogTcpDataLogger(ThreadVars *tv, void *thread_data, const Flow *f,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode LogTcpDataLogThreadInit(ThreadVars *t, void *initdata, void **data)
+TmEcode LogTcpDataLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogTcpDataLogThread *aft = SCMalloc(sizeof(LogTcpDataLogThread));
     if (unlikely(aft == NULL))
@@ -230,13 +221,6 @@ TmEcode LogTcpDataLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void LogTcpDataLogExitPrintStats(ThreadVars *tv, void *data) {
-    LogTcpDataLogThread *aft = (LogTcpDataLogThread *)data;
-    if (aft == NULL) {
-        return;
-    }
-}
-
 /** \brief Create a new http log LogFileCtx.
  *  \param conf Pointer to ConfNode containing this loggers configuration.
  *  \return NULL if failure, LogFileCtx* to the file_ctx if succesful
@@ -249,7 +233,7 @@ OutputCtx *LogTcpDataLogInitCtx(ConfNode *conf)
 
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "couldn't create new file_ctx");
+        SCLogError(SC_ERR_TCPDATA_LOG_GENERIC, "couldn't create new file_ctx");
         return NULL;
     }
 

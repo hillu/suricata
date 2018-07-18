@@ -50,6 +50,10 @@
 
 #include "app-layer-dns-udp.h"
 
+#ifdef HAVE_RUST
+#include "app-layer-dns-udp-rust.h"
+#endif
+
 /** \internal
  *  \brief Parse DNS request packet
  */
@@ -80,6 +84,14 @@ static int DNSUDPRequestParse(Flow *f, void *dstate,
 
     if (DNSValidateRequestHeader(dns_state, dns_header) < 0)
         goto bad_data;
+
+    if (dns_state != NULL) {
+        if (timercmp(&dns_state->last_req, &dns_state->last_resp, >=)) {
+            if (dns_state->window <= dns_state->unreplied_cnt) {
+                dns_state->window++;
+            }
+        }
+    }
 
     uint16_t q;
     const uint8_t *data = input + sizeof(DNSHeader);
@@ -151,6 +163,10 @@ static int DNSUDPRequestParse(Flow *f, void *dstate,
         }
     }
 
+    if (dns_state != NULL && f != NULL) {
+        dns_state->last_req = f->lastts;
+    }
+
     SCReturnInt(1);
 bad_data:
 insufficient_data:
@@ -196,6 +212,8 @@ static int DNSUDPResponseParse(Flow *f, void *dstate,
     if (!found) {
         SCLogDebug("DNS_DECODER_EVENT_UNSOLLICITED_RESPONSE");
         DNSSetEvent(dns_state, DNS_DECODER_EVENT_UNSOLLICITED_RESPONSE);
+    } else if (dns_state->unreplied_cnt > 0) {
+        dns_state->unreplied_cnt--;
     }
 
     if (DNSValidateResponseHeader(dns_state, dns_header) < 0)
@@ -277,27 +295,32 @@ static int DNSUDPResponseParse(Flow *f, void *dstate,
         }
     }
 
-    /* parse rcode, e.g. "noerror" or "nxdomain" */
-    uint8_t rcode = ntohs(dns_header->flags) & 0x0F;
-    if (rcode <= DNS_RCODE_NOTZONE) {
-        SCLogDebug("rcode %u", rcode);
-        if (tx != NULL)
-            tx->rcode = rcode;
-    } else {
-        /* this is not invalid, rcodes can be user defined */
-        SCLogDebug("unexpected DNS rcode %u", rcode);
+    /* if we previously didn't have a tx, it could have been created by the
+     * above code, so lets check again */
+    if (tx == NULL) {
+        tx = DNSTransactionFindByTxId(dns_state, ntohs(dns_header->tx_id));
     }
-
-    if (ntohs(dns_header->flags) & 0x0080) {
-        SCLogDebug("recursion desired");
-        if (tx != NULL)
-            tx->recursion_desired = 1;
-    }
-
     if (tx != NULL) {
+        /* parse rcode, e.g. "noerror" or "nxdomain" */
+        uint8_t rcode = ntohs(dns_header->flags) & 0x0F;
+        if (rcode <= DNS_RCODE_NOTZONE) {
+            SCLogDebug("rcode %u", rcode);
+            tx->rcode = rcode;
+        } else {
+            /* this is not invalid, rcodes can be user defined */
+            SCLogDebug("unexpected DNS rcode %u", rcode);
+        }
+
+        if (ntohs(dns_header->flags) & 0x0080) {
+            SCLogDebug("recursion desired");
+            tx->recursion_desired = 1;
+        }
+
         tx->replied = 1;
     }
-
+    if (f != NULL) {
+        dns_state->last_resp = f->lastts;
+    }
     SCReturnInt(1);
 
 bad_data:
@@ -334,7 +357,7 @@ static void DNSUDPConfigure(void)
             request_flood = value;
         }
     }
-    SCLogInfo("DNS request flood protection level: %u", request_flood);
+    SCLogConfig("DNS request flood protection level: %u", request_flood);
     DNSConfigSetRequestFlood(request_flood);
 
     p = ConfGetNode("app-layer.protocols.dns.state-memcap");
@@ -346,7 +369,7 @@ static void DNSUDPConfigure(void)
             state_memcap = value;
         }
     }
-    SCLogInfo("DNS per flow memcap (state-memcap): %u", state_memcap);
+    SCLogConfig("DNS per flow memcap (state-memcap): %u", state_memcap);
     DNSConfigSetStateMemcap(state_memcap);
 
     p = ConfGetNode("app-layer.protocols.dns.global-memcap");
@@ -358,13 +381,17 @@ static void DNSUDPConfigure(void)
             global_memcap = value;
         }
     }
-    SCLogInfo("DNS global memcap: %"PRIu64, global_memcap);
+    SCLogConfig("DNS global memcap: %"PRIu64, global_memcap);
     DNSConfigSetGlobalMemcap(global_memcap);
 }
 
 void RegisterDNSUDPParsers(void)
 {
-    char *proto_name = "dns";
+    const char *proto_name = "dns";
+
+#ifdef HAVE_RUST
+    return RegisterRustDNSUDPParsers();
+#endif
 
     /** DNS */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("udp", proto_name)) {
@@ -376,20 +403,23 @@ void RegisterDNSUDPParsers(void)
                                           ALPROTO_DNS,
                                           0, sizeof(DNSHeader),
                                           STREAM_TOSERVER,
-                                          DNSUdpProbingParser);
+                                          DNSUdpProbingParser,
+                                          NULL);
         } else {
             int have_cfg = AppLayerProtoDetectPPParseConfPorts("udp", IPPROTO_UDP,
                                                 proto_name, ALPROTO_DNS,
                                                 0, sizeof(DNSHeader),
-                                                DNSUdpProbingParser);
+                                                DNSUdpProbingParser, NULL);
             /* if we have no config, we enable the default port 53 */
             if (!have_cfg) {
+#ifndef AFLFUZZ_APPLAYER
                 SCLogWarning(SC_ERR_DNS_CONFIG, "no DNS UDP config found, "
                                                 "enabling DNS detection on "
                                                 "port 53.");
+#endif
                 AppLayerProtoDetectPPRegister(IPPROTO_UDP, "53",
                                    ALPROTO_DNS, 0, sizeof(DNSHeader),
-                                   STREAM_TOSERVER, DNSUdpProbingParser);
+                                   STREAM_TOSERVER, DNSUdpProbingParser, NULL);
             }
         }
     } else {
@@ -418,9 +448,11 @@ void RegisterDNSUDPParsers(void)
                                     DNSGetTx);
         AppLayerParserRegisterGetTxCnt(IPPROTO_UDP, ALPROTO_DNS,
                                        DNSGetTxCnt);
+        AppLayerParserRegisterLoggerFuncs(IPPROTO_UDP, ALPROTO_DNS, DNSGetTxLogged,
+                                          DNSSetTxLogged);
         AppLayerParserRegisterGetStateProgressFunc(IPPROTO_UDP, ALPROTO_DNS,
                                                    DNSGetAlstateProgress);
-        AppLayerParserRegisterGetStateProgressCompletionStatus(IPPROTO_UDP, ALPROTO_DNS,
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DNS,
                                                                DNSGetAlstateProgressCompletionStatus);
 
         DNSAppLayerRegisterGetEventInfo(IPPROTO_UDP, ALPROTO_DNS);
@@ -441,7 +473,6 @@ void RegisterDNSUDPParsers(void)
 
 static int DNSUDPParserTest01 (void)
 {
-    int result = 0;
     /* query: abcdefghijk.com
      * TTL: 86400
      * serial 20130422 refresh 28800 retry 7200 exp 604800 min ttl 86400
@@ -461,25 +492,19 @@ static int DNSUDPParserTest01 (void)
     Flow *f = NULL;
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
-    if (f == NULL)
-        goto end;
+    FAIL_IF_NULL(f);
     f->proto = IPPROTO_UDP;
     f->alproto = ALPROTO_DNS;
     f->alstate = DNSStateAlloc();
 
-    int r = DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL);
-    if (r != 1)
-        goto end;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL));
 
-    result = 1;
-end:
     UTHFreeFlow(f);
-    return (result);
+    PASS;
 }
 
 static int DNSUDPParserTest02 (void)
 {
-    int result = 0;
     uint8_t buf[] = {
         0x6D,0x08,0x84,0x80,0x00,0x01,0x00,0x08,0x00,0x00,0x00,0x01,0x03,0x57,0x57,0x57,
         0x04,0x54,0x54,0x54,0x54,0x03,0x56,0x56,0x56,0x03,0x63,0x6F,0x6D,0x02,0x79,0x79,
@@ -496,25 +521,19 @@ static int DNSUDPParserTest02 (void)
     Flow *f = NULL;
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
-    if (f == NULL)
-        goto end;
+    FAIL_IF_NULL(f);
     f->proto = IPPROTO_UDP;
     f->alproto = ALPROTO_DNS;
     f->alstate = DNSStateAlloc();
 
-    int r = DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL);
-    if (r != 1)
-        goto end;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL));
 
-    result = 1;
-end:
     UTHFreeFlow(f);
-    return (result);
+    PASS;
 }
 
 static int DNSUDPParserTest03 (void)
 {
-    int result = 0;
     uint8_t buf[] = {
         0x6F,0xB4,0x84,0x80,0x00,0x01,0x00,0x02,0x00,0x02,0x00,0x03,0x03,0x57,0x57,0x77,
         0x0B,0x56,0x56,0x56,0x56,0x56,0x56,0x56,0x56,0x56,0x56,0x56,0x03,0x55,0x55,0x55,
@@ -531,26 +550,20 @@ static int DNSUDPParserTest03 (void)
     Flow *f = NULL;
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
-    if (f == NULL)
-        goto end;
+    FAIL_IF_NULL(f);
     f->proto = IPPROTO_UDP;
     f->alproto = ALPROTO_DNS;
     f->alstate = DNSStateAlloc();
 
-    int r = DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL);
-    if (r != 1)
-        goto end;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL));
 
-    result = 1;
-end:
     UTHFreeFlow(f);
-    return (result);
+    PASS;
 }
 
 /** \test TXT records in answer */
 static int DNSUDPParserTest04 (void)
 {
-    int result = 0;
     uint8_t buf[] = {
         0xc2,0x2f,0x81,0x80,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x0a,0x41,0x41,0x41,
         0x41,0x41,0x4f,0x31,0x6b,0x51,0x41,0x05,0x3d,0x61,0x75,0x74,0x68,0x03,0x73,0x72,
@@ -569,26 +582,20 @@ static int DNSUDPParserTest04 (void)
     Flow *f = NULL;
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
-    if (f == NULL)
-        goto end;
+    FAIL_IF_NULL(f);
     f->proto = IPPROTO_UDP;
     f->alproto = ALPROTO_DNS;
     f->alstate = DNSStateAlloc();
 
-    int r = DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL);
-    if (r != 1)
-        goto end;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL));
 
-    result = 1;
-end:
     UTHFreeFlow(f);
-    return (result);
+    PASS;
 }
 
 /** \test TXT records in answer, bad txtlen */
 static int DNSUDPParserTest05 (void)
 {
-    int result = 0;
     uint8_t buf[] = {
         0xc2,0x2f,0x81,0x80,0x00,0x01,0x00,0x01,0x00,0x01,0x00,0x01,0x0a,0x41,0x41,0x41,
         0x41,0x41,0x4f,0x31,0x6b,0x51,0x41,0x05,0x3d,0x61,0x75,0x74,0x68,0x03,0x73,0x72,
@@ -607,29 +614,256 @@ static int DNSUDPParserTest05 (void)
     Flow *f = NULL;
 
     f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
-    if (f == NULL)
-        goto end;
+    FAIL_IF_NULL(f);
     f->proto = IPPROTO_UDP;
     f->alproto = ALPROTO_DNS;
     f->alstate = DNSStateAlloc();
 
-    int r = DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL);
-    if (r != -1)
-        goto end;
+    FAIL_IF(DNSUDPResponseParse(f, f->alstate, NULL, buf, buflen, NULL) != -1);
 
-    result = 1;
-end:
     UTHFreeFlow(f);
-    return (result);
+    PASS;
 }
 
+/**
+ * \test Test subsequent requests before response.
+ *
+ * This test sends 2 DNS requests on the same state then sends the response
+ * to the first request checking that it is seen and associated with the
+ * transaction.
+ */
+static int DNSUDPParserTestDelayedResponse(void)
+{
+    /* DNS request:
+     * - Flags: 0x0100 Standard query
+     * - A www.google.com
+     */
+    uint8_t req[] = {
+        0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x77, 0x77, 0x77,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+    };
+    size_t reqlen = sizeof(req);
+
+    /* DNS response:
+     * - Flags: 0x8180 Standard query response, no error
+     * - www.google.com A 24.244.4.56
+     * - www.google.com A 24.244.4.54
+     * - www.google.com A 24.244.4.57
+     * - www.google.com A 24.244.4.55
+     * - www.google.com A 24.244.4.52
+     * - www.google.com A 24.244.4.53
+     * - www.google.com A 24.244.4.58
+     * - www.google.com A 24.244.4.59
+     */
+    uint8_t res[] = {
+        0x00, 0x01, 0x81, 0x80, 0x00, 0x01, 0x00, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x77, 0x77, 0x77,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x38,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x39,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x34,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x35,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x36,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x3b,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x37,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x3a
+    };
+    size_t reslen = sizeof(res);
+
+    DNSState *state = DNSStateAlloc();
+    FAIL_IF_NULL(state);
+    Flow *f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 53);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_UDP;
+    f->alproto = ALPROTO_DNS;
+    f->alstate = state;
+
+    /* Send to requests with an incrementing tx id. */
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    req[1] = 0x02;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+
+    /* Send response to the first request. */
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, res, reslen, NULL));
+    DNSTransaction *tx = TAILQ_FIRST(&state->tx_list);
+    FAIL_IF_NULL(tx);
+    FAIL_IF_NOT(tx->replied);
+
+    /* Also free's state. */
+    UTHFreeFlow(f);
+
+    PASS;
+}
+
+/**
+ * \test Test entering the flood/givenup state.
+ */
+static int DNSUDPParserTestFlood(void)
+{
+    /* DNS request:
+     * - Flags: 0x0100 Standard query
+     * - A www.google.com
+     */
+    uint8_t req[] = {
+        0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x77, 0x77, 0x77,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+    };
+    size_t reqlen = sizeof(req);
+
+    DNSState *state = DNSStateAlloc();
+    FAIL_IF_NULL(state);
+    Flow *f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 53);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_UDP;
+    f->alproto = ALPROTO_DNS;
+    f->alstate = state;
+
+    uint16_t txid;
+    for (txid = 1; txid <= DNS_CONFIG_DEFAULT_REQUEST_FLOOD + 1; txid++) {
+        req[0] = (txid >> 8) & 0xff;
+        req[1] = txid & 0xff;
+        FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+        FAIL_IF(state->givenup);
+    }
+
+    /* With one more request we should enter a flooded state. */
+    txid++;
+    req[0] = (txid >> 8) & 0xff;
+    req[1] = txid & 0xff;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF(!state->givenup);
+
+    /* Also free's state. */
+    UTHFreeFlow(f);
+
+    PASS;
+}
+
+static int DNSUDPParserTestLostResponse(void)
+{
+    /* DNS request:
+     * - Flags: 0x0100 Standard query
+     * - A www.google.com
+     */
+    uint8_t req[] = {
+        0x00, 0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x77, 0x77, 0x77,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+    };
+    size_t reqlen = sizeof(req);
+
+    uint8_t res[] = {
+        0x00, 0x01, 0x81, 0x80, 0x00, 0x01, 0x00, 0x08,
+        0x00, 0x00, 0x00, 0x00, 0x03, 0x77, 0x77, 0x77,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x38,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x39,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x34,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x35,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x36,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x3b,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x37,
+        0xc0, 0x0c, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
+        0x01, 0x08, 0x00, 0x04, 0x18, 0xf4, 0x04, 0x3a
+    };
+    size_t reslen = sizeof(res);
+
+    DNSTransaction *tx;
+    DNSState *state = DNSStateAlloc();
+    FAIL_IF_NULL(state);
+    Flow *f = UTHBuildFlow(AF_INET, "1.1.1.1", "2.2.2.2", 1024, 53);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_UDP;
+    f->alproto = ALPROTO_DNS;
+    f->alstate = state;
+
+    /* First request. */
+    req[1] = 0x01;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF_NOT(state->transaction_max == 1);
+    FAIL_IF_NOT(state->unreplied_cnt == 1);
+    FAIL_IF_NOT(state->window == 1);
+
+    /* Second request. */
+    req[1] = 0x02;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF_NOT(state->transaction_max == 2);
+    FAIL_IF_NOT(state->unreplied_cnt == 2);
+    FAIL_IF_NOT(state->window == 2);
+
+    /* Third request. */
+    req[1] = 0x03;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF_NOT(state->transaction_max == 3);
+    FAIL_IF_NOT(state->unreplied_cnt == 3);
+    FAIL_IF_NOT(state->window == 3);
+
+    /* Now respond to the second. */
+    res[1] = 0x02;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, res, reslen, NULL));
+    FAIL_IF_NOT(state->unreplied_cnt == 2);
+    FAIL_IF_NOT(state->window == 3);
+    tx = TAILQ_FIRST(&state->tx_list);
+    FAIL_IF_NULL(tx);
+    FAIL_IF(tx->replied);
+    FAIL_IF(tx->reply_lost);
+
+    /* Send a 4th request. */
+    req[1] = 0x04;
+    FAIL_IF_NOT(DNSUDPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF_NOT(state->unreplied_cnt == 3);
+    FAIL_IF(state->window != 3);
+    FAIL_IF_NOT(state->transaction_max == 4);
+
+    /* Response to the third request. */
+    res[1] = 0x03;
+    FAIL_IF_NOT(DNSUDPResponseParse(f, f->alstate, NULL, res, reslen, NULL));
+    FAIL_IF_NOT(state->unreplied_cnt == 2);
+    FAIL_IF_NOT(state->window == 3);
+    tx = TAILQ_FIRST(&state->tx_list);
+    FAIL_IF_NULL(tx);
+    FAIL_IF(tx->replied);
+    FAIL_IF(!tx->reply_lost);
+
+    /* Also free's state. */
+    UTHFreeFlow(f);
+
+    PASS;
+}
 
 void DNSUDPParserRegisterTests(void)
 {
-    UtRegisterTest("DNSUDPParserTest01", DNSUDPParserTest01, 1);
-    UtRegisterTest("DNSUDPParserTest02", DNSUDPParserTest02, 1);
-    UtRegisterTest("DNSUDPParserTest03", DNSUDPParserTest03, 1);
-    UtRegisterTest("DNSUDPParserTest04", DNSUDPParserTest04, 1);
-    UtRegisterTest("DNSUDPParserTest05", DNSUDPParserTest05, 1);
+    UtRegisterTest("DNSUDPParserTest01", DNSUDPParserTest01);
+    UtRegisterTest("DNSUDPParserTest02", DNSUDPParserTest02);
+    UtRegisterTest("DNSUDPParserTest03", DNSUDPParserTest03);
+    UtRegisterTest("DNSUDPParserTest04", DNSUDPParserTest04);
+    UtRegisterTest("DNSUDPParserTest05", DNSUDPParserTest05);
+    UtRegisterTest("DNSUDPParserTestFlood", DNSUDPParserTestFlood);
+    UtRegisterTest("DNSUDPParserTestDelayedResponse",
+        DNSUDPParserTestDelayedResponse);
+    UtRegisterTest("DNSUDPParserTestLostResponse",
+        DNSUDPParserTestLostResponse);
 }
 #endif

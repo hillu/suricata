@@ -28,34 +28,24 @@
 
 #include "detect.h"
 #include "detect-parse.h"
-
-#include "flow-var.h"
-
 #include "detect-content.h"
-#include "detect-uricontent.h"
-#include "detect-pcre.h"
-#include "detect-http-client-body.h"
-#include "detect-http-cookie.h"
-#include "detect-http-header.h"
-#include "detect-http-method.h"
-#include "detect-http-uri.h"
+#include "detect-nocase.h"
 
 #include "util-debug.h"
 
-static int DetectNocaseSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectNocaseSetup (DetectEngineCtx *, Signature *, const char *);
 
 void DetectNocaseRegister(void)
 {
     sigmatch_table[DETECT_NOCASE].name = "nocase";
     sigmatch_table[DETECT_NOCASE].desc = "modify content match to be case insensitive";
-    sigmatch_table[DETECT_NOCASE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#Nocase";
+    sigmatch_table[DETECT_NOCASE].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#nocase";
     sigmatch_table[DETECT_NOCASE].Match = NULL;
     sigmatch_table[DETECT_NOCASE].Setup = DetectNocaseSetup;
     sigmatch_table[DETECT_NOCASE].Free  = NULL;
     sigmatch_table[DETECT_NOCASE].RegisterTests = NULL;
 
     sigmatch_table[DETECT_NOCASE].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_NOCASE].flags |= SIGMATCH_PAYLOAD;
 }
 
 /**
@@ -67,7 +57,7 @@ void DetectNocaseRegister(void)
  *  \retval 0 ok
  *  \retval -1 failure
  */
-static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nullstr)
+static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, const char *nullstr)
 {
     SCEnter();
 
@@ -79,36 +69,13 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
         goto end;
     }
 
-    /* retrive the sm to apply the depth against */
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        pm = SigMatchGetLastSMFromLists(s, 2, DETECT_CONTENT, s->sm_lists_tail[s->list]);
-    } else {
-        pm =  SigMatchGetLastSMFromLists(s, 28,
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-                                         DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
-    }
+    /* retrive the sm to apply the nocase against */
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_NOCASE_MISSING_PATTERN, "nocase needs "
-                   "preceding content, uricontent option, http_client_body, "
-                   "http_server_body, http_header option, http_raw_header option, "
-                   "http_method option, http_cookie, http_raw_uri, "
-                   "http_stat_msg, http_stat_code, http_user_agent or "
-                   "file_data/dce_stub_data sticky buffer options");
+                   "preceding content option");
         goto end;
     }
-
 
     /* verify other conditions. */
     DetectContentData *cd = (DetectContentData *)pm->ctx;;
@@ -117,9 +84,21 @@ static int DetectNocaseSetup (DetectEngineCtx *de_ctx, Signature *s, char *nulls
         SCLogError(SC_ERR_INVALID_SIGNATURE, "can't use multiple nocase modifiers with the same content");
         goto end;
     }
+
+    /* for consistency in later use (e.g. by MPM construction and hashing),
+     * coerce the content string to lower-case. */
+    for (uint8_t *c = cd->content; c < cd->content + cd->content_len; c++) {
+        *c = u8_tolower(*c);
+    }
+
     cd->flags |= DETECT_CONTENT_NOCASE;
     /* Recreate the context with nocase chars */
-    BoyerMooreCtxToNocase(cd->bm_ctx, cd->content, cd->content_len);
+    SpmDestroyCtx(cd->spm_ctx);
+    cd->spm_ctx = SpmInitCtx(cd->content, cd->content_len, 1,
+                             de_ctx->spm_global_thread_ctx);
+    if (cd->spm_ctx == NULL) {
+        goto end;
+    }
 
     ret = 0;
  end:

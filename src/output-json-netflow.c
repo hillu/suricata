@@ -45,6 +45,7 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 #include "output-json.h"
+#include "output-json-netflow.h"
 
 #include "stream-tcp-private.h"
 
@@ -62,7 +63,7 @@ typedef struct JsonNetFlowLogThread_ {
 } JsonNetFlowLogThread;
 
 
-static json_t *CreateJSONHeaderFromFlow(Flow *f, char *event_type, int dir)
+static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type, int dir)
 {
     char timebuf[64];
     char srcip[46], dstip[46];
@@ -324,12 +325,11 @@ static void OutputNetFlowLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "netflow.json"
-OutputCtx *OutputNetFlowLogInit(ConfNode *conf)
+static OutputCtx *OutputNetFlowLogInit(ConfNode *conf)
 {
-    SCLogInfo("hi");
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "couldn't create new file_ctx");
+        SCLogError(SC_ERR_NETFLOW_LOG_GENERIC, "couldn't create new file_ctx");
         return NULL;
     }
 
@@ -365,7 +365,7 @@ static void OutputNetFlowLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-OutputCtx *OutputNetFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputNetFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     OutputJsonCtx *ojc = parent_ctx->data;
 
@@ -388,7 +388,7 @@ OutputCtx *OutputNetFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonNetFlowLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonNetFlowLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonNetFlowLogThread *aft = SCMalloc(sizeof(JsonNetFlowLogThread));
     if (unlikely(aft == NULL))
@@ -397,7 +397,7 @@ static TmEcode JsonNetFlowLogThreadInit(ThreadVars *t, void *initdata, void **da
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for HTTPLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogNetflow.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -430,36 +430,23 @@ static TmEcode JsonNetFlowLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void TmModuleJsonNetFlowLogRegister (void)
+void JsonNetFlowLogRegister(void)
 {
-    tmm_modules[TMM_JSONNETFLOWLOG].name = "JsonNetFlowLog";
-    tmm_modules[TMM_JSONNETFLOWLOG].ThreadInit = JsonNetFlowLogThreadInit;
-    tmm_modules[TMM_JSONNETFLOWLOG].ThreadDeinit = JsonNetFlowLogThreadDeinit;
-    tmm_modules[TMM_JSONNETFLOWLOG].RegisterTests = NULL;
-    tmm_modules[TMM_JSONNETFLOWLOG].cap_flags = 0;
-    tmm_modules[TMM_JSONNETFLOWLOG].flags = TM_FLAG_LOGAPI_TM;
-
     /* register as separate module */
-    OutputRegisterFlowModule("JsonNetFlowLog", "netflow-json-log",
-            OutputNetFlowLogInit, JsonNetFlowLogger);
+    OutputRegisterFlowModule(LOGGER_JSON_NETFLOW, "JsonNetFlowLog",
+        "netflow-json-log", OutputNetFlowLogInit, JsonNetFlowLogger,
+        JsonNetFlowLogThreadInit, JsonNetFlowLogThreadDeinit, NULL);
 
     /* also register as child of eve-log */
-    OutputRegisterFlowSubModule("eve-log", "JsonNetFlowLog", "eve-log.netflow",
-            OutputNetFlowLogInitSub, JsonNetFlowLogger);
+    OutputRegisterFlowSubModule(LOGGER_JSON_NETFLOW, "eve-log", "JsonNetFlowLog",
+        "eve-log.netflow", OutputNetFlowLogInitSub, JsonNetFlowLogger,
+        JsonNetFlowLogThreadInit, JsonNetFlowLogThreadDeinit, NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonNetFlowLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonNetFlowLogRegister (void)
-{
-    tmm_modules[TMM_JSONNETFLOWLOG].name = "JsonNetFlowLog";
-    tmm_modules[TMM_JSONNETFLOWLOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

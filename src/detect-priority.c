@@ -27,18 +27,19 @@
 #include "suricata-common.h"
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-priority.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "util-error.h"
 #include "util-debug.h"
 #include "util-unittest.h"
 
-#define DETECT_PRIORITY_REGEX "^\\s*(\\d+|\"\\d+\")\\s*$"
+#define PARSE_REGEX "^\\s*(\\d+|\"\\d+\")\\s*$"
 
 static pcre *regex = NULL;
 static pcre_extra *regex_study = NULL;
 
-static int DetectPrioritySetup (DetectEngineCtx *, Signature *, char *);
+static int DetectPrioritySetup (DetectEngineCtx *, Signature *, const char *);
 void SCPriorityRegisterTests(void);
 
 /**
@@ -46,36 +47,18 @@ void SCPriorityRegisterTests(void);
  */
 void DetectPriorityRegister (void)
 {
-    const char *eb = NULL;
-    int eo;
-    int opts = 0;
-
     sigmatch_table[DETECT_PRIORITY].name = "priority";
     sigmatch_table[DETECT_PRIORITY].desc = "rules with a higher priority will be examined first";
-    sigmatch_table[DETECT_PRIORITY].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Priority";
+    sigmatch_table[DETECT_PRIORITY].url = DOC_URL DOC_VERSION "/rules/meta.html#priority";
     sigmatch_table[DETECT_PRIORITY].Match = NULL;
     sigmatch_table[DETECT_PRIORITY].Setup = DetectPrioritySetup;
     sigmatch_table[DETECT_PRIORITY].Free = NULL;
     sigmatch_table[DETECT_PRIORITY].RegisterTests = SCPriorityRegisterTests;
 
-    regex = pcre_compile(DETECT_PRIORITY_REGEX, opts, &eb, &eo, NULL);
-    if (regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                   DETECT_PRIORITY_REGEX, eo, eb);
-        goto end;
-    }
-
-    regex_study = pcre_study(regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto end;
-    }
-
- end:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &regex, &regex_study);
 }
 
-static int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     char copy_str[128] = "";
 
@@ -114,7 +97,7 @@ static int DetectPrioritySetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
 
 #ifdef UNITTESTS
 
-int DetectPriorityTest01()
+static int DetectPriorityTest01(void)
 {
     int result = 0;
 
@@ -134,7 +117,7 @@ end:
     return result;
 }
 
-int DetectPriorityTest02()
+static int DetectPriorityTest02(void)
 {
     int result = 0;
     Signature *last = NULL;
@@ -213,8 +196,8 @@ void SCPriorityRegisterTests(void)
 
 #ifdef UNITTESTS
 
-    UtRegisterTest("DetectPriorityTest01", DetectPriorityTest01, 1);
-    UtRegisterTest("DetectPriorityTest02", DetectPriorityTest02, 1);
+    UtRegisterTest("DetectPriorityTest01", DetectPriorityTest01);
+    UtRegisterTest("DetectPriorityTest02", DetectPriorityTest02);
 
 #endif /* UNITTESTS */
 

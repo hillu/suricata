@@ -32,48 +32,31 @@ static const char decode_pattern[] = "\\s*(bytes\\s+(\\d+),?)?"
 static pcre *decode_pcre = NULL;
 static pcre_extra *decode_pcre_study = NULL;
 
-static int DetectBase64DecodeSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectBase64DecodeSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectBase64DecodeFree(void *);
 static void DetectBase64DecodeRegisterTests(void);
 
 void DetectBase64DecodeRegister(void)
 {
-    const char *pcre_errptr;
-    int pcre_erroffset;
-
     sigmatch_table[DETECT_BASE64_DECODE].name = "base64_decode";
     sigmatch_table[DETECT_BASE64_DECODE].desc =
         "Decodes base64 encoded data.";
     sigmatch_table[DETECT_BASE64_DECODE].url =
-        "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Payload_keywords#base64_decode";
+        DOC_URL DOC_VERSION "/rules/payload-keywords.html#base64-decode";
     sigmatch_table[DETECT_BASE64_DECODE].Setup = DetectBase64DecodeSetup;
     sigmatch_table[DETECT_BASE64_DECODE].Free = DetectBase64DecodeFree;
     sigmatch_table[DETECT_BASE64_DECODE].RegisterTests =
         DetectBase64DecodeRegisterTests;
 
-    sigmatch_table[DETECT_BASE64_DECODE].flags |= SIGMATCH_PAYLOAD;
     sigmatch_table[DETECT_BASE64_DECODE].flags |= SIGMATCH_OPTIONAL_OPT;
 
-    decode_pcre = pcre_compile(decode_pattern, 0, &pcre_errptr, &pcre_erroffset,
-        NULL);
-    if (decode_pcre == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Failed to compile pattern \"%s\" at"
-            " offset %d: %s", decode_pattern, pcre_erroffset, pcre_errptr);
-        exit(EXIT_FAILURE);
-    }
-
-    decode_pcre_study = pcre_study(decode_pcre, 0, &pcre_errptr);
-    if (pcre_errptr != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "Failed to study pattern \"%s\": %s",
-            decode_pattern, pcre_errptr);
-        exit(EXIT_FAILURE);
-    }
+    DetectSetupParseRegexes(decode_pattern, &decode_pcre, &decode_pcre_study);
 }
 
-int DetectBase64DecodeDoMatch(DetectEngineThreadCtx *det_ctx, Signature *s,
-    const SigMatch *sm, uint8_t *payload, uint32_t payload_len)
+int DetectBase64DecodeDoMatch(DetectEngineThreadCtx *det_ctx, const Signature *s,
+    const SigMatchData *smd, uint8_t *payload, uint32_t payload_len)
 {
-    DetectBase64Decode *data = (DetectBase64Decode *)sm->ctx;
+    DetectBase64Decode *data = (DetectBase64Decode *)smd->ctx;
     int decode_len;
 
 #if 0
@@ -185,7 +168,7 @@ error:
 }
 
 static int DetectBase64DecodeSetup(DetectEngineCtx *de_ctx, Signature *s,
-    char *str)
+    const char *str)
 {
     uint32_t bytes = 0;
     uint32_t offset = 0;
@@ -208,8 +191,8 @@ static int DetectBase64DecodeSetup(DetectEngineCtx *de_ctx, Signature *s,
     data->offset = offset;
     data->relative = relative;
 
-    if (s->list != DETECT_SM_LIST_NOTSET) {
-        sm_list = s->list;
+    if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        sm_list = s->init_data->list;
 #if 0
         if (data->relative) {
             pm = SigMatchGetLastSMFromLists(s, 4,
@@ -219,92 +202,10 @@ static int DetectBase64DecodeSetup(DetectEngineCtx *de_ctx, Signature *s,
 #endif
     }
     else {
-        /* Copied from detect-isdataat.c. */
-        pm = SigMatchGetLastSMFromLists(s, 168,
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_PCRE, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_BYTETEST, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_BYTEJUMP, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_BYTE_EXTRACT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_UMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_FILEDATA],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HMDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HCDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRUDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSMDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HSCDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HUADMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HHHDMATCH],
-            DETECT_ISDATAAT, s->sm_lists_tail[DETECT_SM_LIST_HRHHDMATCH]);
+        pm = DetectGetLastSMFromLists(s,
+                DETECT_CONTENT, DETECT_PCRE,
+                DETECT_BYTETEST, DETECT_BYTEJUMP, DETECT_BYTE_EXTRACT,
+                DETECT_ISDATAAT, -1);
         if (pm == NULL) {
             sm_list = DETECT_SM_LIST_PMATCH;
         }
@@ -347,15 +248,14 @@ static void DetectBase64DecodeFree(void *ptr)
 
 
 #ifdef UNITTESTS
-
-#include "detect.h"
 #include "detect-engine.h"
-#include "detect-parse.h"
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 #include "app-layer-parser.h"
 #include "flow-util.h"
 #include "stream-tcp.h"
+
+static int g_http_header_buffer_id = 0;
 
 static int DetectBase64TestDecodeParse(void)
 {
@@ -512,7 +412,7 @@ static int DetectBase64DecodeHttpHeaderTestSetup(void)
     }
 
     /* Test that the http header list is not NULL. */
-    if (s->sm_lists_tail[DETECT_SM_LIST_HHDMATCH] == NULL) {
+    if (s->sm_lists_tail[g_http_header_buffer_id] == NULL) {
         goto end;
     }
 
@@ -763,19 +663,19 @@ end:
 static void DetectBase64DecodeRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectBase64TestDecodeParse", DetectBase64TestDecodeParse,
-        1);
-    UtRegisterTest("DetectBase64DecodeTestSetup", DetectBase64DecodeTestSetup,
-        1);
+    g_http_header_buffer_id = DetectBufferTypeGetByName("http_header");
+
+    UtRegisterTest("DetectBase64TestDecodeParse", DetectBase64TestDecodeParse);
+    UtRegisterTest("DetectBase64DecodeTestSetup", DetectBase64DecodeTestSetup);
     UtRegisterTest("DetectBase64DecodeHttpHeaderTestSetup",
-        DetectBase64DecodeHttpHeaderTestSetup, 1);
-    UtRegisterTest("DetectBase64DecodeTestDecode", DetectBase64DecodeTestDecode,
-        1);
+                   DetectBase64DecodeHttpHeaderTestSetup);
+    UtRegisterTest("DetectBase64DecodeTestDecode",
+                   DetectBase64DecodeTestDecode);
     UtRegisterTest("DetectBase64DecodeTestDecodeWithOffset",
-        DetectBase64DecodeTestDecodeWithOffset, 1);
+                   DetectBase64DecodeTestDecodeWithOffset);
     UtRegisterTest("DetectBase64DecodeTestDecodeLargeOffset",
-        DetectBase64DecodeTestDecodeLargeOffset, 1);
+                   DetectBase64DecodeTestDecodeLargeOffset);
     UtRegisterTest("DetectBase64DecodeTestDecodeRelative",
-        DetectBase64DecodeTestDecodeRelative, 1);
+                   DetectBase64DecodeTestDecodeRelative);
 #endif /* UNITTESTS */
 }

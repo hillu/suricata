@@ -35,7 +35,7 @@
 /**
  * \brief Test Mutex macros
  */
-int ThreadMacrosTest01Mutex(void)
+static int ThreadMacrosTest01Mutex(void)
 {
     SCMutex mut;
     int r = 0;
@@ -63,7 +63,7 @@ int ThreadMacrosTest01Mutex(void)
  * if a spinlock is actually locked.
  *
  */
-int ThreadMacrosTest02Spinlocks(void)
+static int ThreadMacrosTest02Spinlocks(void)
 {
     SCSpinlock mut;
     int r = 0;
@@ -83,16 +83,15 @@ int ThreadMacrosTest02Spinlocks(void)
 /**
  * \brief Test RWLock macros
  */
-int ThreadMacrosTest03RWLocks(void)
+static int ThreadMacrosTest03RWLocks(void)
 {
     SCRWLock rwl_write;
     int r = 0;
     r |= SCRWLockInit(&rwl_write, NULL);
     r |= SCRWLockWRLock(&rwl_write);
-/* work around OS X 10.10 Yosemite returning EDEADLK. All other
- * OS' (and versions of OS X that I tested) seem to return EBUSY
- * instead. */
-#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__==101000
+/* OS X/macOS 10.10 (Yosemite) and newer return EDEADLK. Older versions
+ * and other tested OS's return EBUSY. */
+#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__>=101000
     r |= (SCRWLockTryWRLock(&rwl_write) == EDEADLK)? 0 : 1;
 #else
     r |= (SCRWLockTryWRLock(&rwl_write) == EBUSY)? 0 : 1;
@@ -106,7 +105,7 @@ int ThreadMacrosTest03RWLocks(void)
 /**
  * \brief Test RWLock macros
  */
-int ThreadMacrosTest04RWLocks(void)
+static int ThreadMacrosTest04RWLocks(void)
 {
     SCRWLock rwl_read;
     int r = 0;
@@ -119,10 +118,11 @@ int ThreadMacrosTest04RWLocks(void)
     return (r == 0)? 1 : 0;
 }
 
+#if 0 // broken on OSX
 /**
  * \brief Test RWLock macros
  */
-int ThreadMacrosTest05RWLocks(void)
+static int ThreadMacrosTest05RWLocks(void)
 {
     SCRWLock rwl_read;
     int r = 0;
@@ -134,6 +134,7 @@ int ThreadMacrosTest05RWLocks(void)
 
     return (r == 0)? 1 : 0;
 }
+#endif
 
 #endif /* UNIT TESTS */
 
@@ -143,9 +144,10 @@ int ThreadMacrosTest05RWLocks(void)
 void ThreadMacrosRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNIT TESTS */
-    UtRegisterTest("ThreadMacrosTest01Mutex", ThreadMacrosTest01Mutex, 1);
-    UtRegisterTest("ThreadMacrosTest02Spinlocks", ThreadMacrosTest02Spinlocks, 1);
-    UtRegisterTest("ThreadMacrosTest03RWLocks", ThreadMacrosTest03RWLocks, 1);
-    UtRegisterTest("ThreadMacrosTest04RWLocks", ThreadMacrosTest04RWLocks, 1);
+    UtRegisterTest("ThreadMacrosTest01Mutex", ThreadMacrosTest01Mutex);
+    UtRegisterTest("ThreadMacrosTest02Spinlocks", ThreadMacrosTest02Spinlocks);
+    UtRegisterTest("ThreadMacrosTest03RWLocks", ThreadMacrosTest03RWLocks);
+    UtRegisterTest("ThreadMacrosTest04RWLocks", ThreadMacrosTest04RWLocks);
+//    UtRegisterTest("ThreadMacrosTest05RWLocks", ThreadMacrosTest05RWLocks);
 #endif /* UNIT TESTS */
 }

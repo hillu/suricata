@@ -24,11 +24,18 @@
 #ifndef __DETECT_ENGINE_PAYLOAD_H__
 #define __DETECT_ENGINE_PAYLOAD_H__
 
+int PrefilterPktPayloadRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx);
+int PrefilterPktStreamRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx);
+
 int DetectEngineInspectPacketPayload(DetectEngineCtx *,
-        DetectEngineThreadCtx *, Signature *, Flow *, Packet *);
+        DetectEngineThreadCtx *, const Signature *, Flow *, Packet *);
 int DetectEngineInspectStreamPayload(DetectEngineCtx *,
-        DetectEngineThreadCtx *, Signature *, Flow *,
-        uint8_t *, uint32_t);
+        DetectEngineThreadCtx *, const Signature *, Flow *,
+        Packet *);
+int DetectEngineInspectStream(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id);
 
 void PayloadRegisterTests(void);
 

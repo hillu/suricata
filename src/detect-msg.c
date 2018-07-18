@@ -32,53 +32,32 @@
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
+#include "detect-msg.h"
 
-static int DetectMsgSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectMsgSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectMsgRegisterTests(void);
 
 void DetectMsgRegister (void)
 {
     sigmatch_table[DETECT_MSG].name = "msg";
     sigmatch_table[DETECT_MSG].desc = "information about the rule and the possible alert";
-    sigmatch_table[DETECT_MSG].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#msg-message";
+    sigmatch_table[DETECT_MSG].url = DOC_URL DOC_VERSION "/rules/meta.html#msg-message";
     sigmatch_table[DETECT_MSG].Match = NULL;
     sigmatch_table[DETECT_MSG].Setup = DetectMsgSetup;
     sigmatch_table[DETECT_MSG].Free = NULL;
     sigmatch_table[DETECT_MSG].RegisterTests = DetectMsgRegisterTests;
+    sigmatch_table[DETECT_MSG].flags = SIGMATCH_QUOTES_MANDATORY;
 }
 
-static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
+static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, const char *msgstr)
 {
-    char *str = NULL;
-    uint16_t len;
-    uint16_t pos = 0;
-    uint16_t slen = 0;
-
-    slen = strlen(msgstr);
+    size_t slen = strlen(msgstr);
     if (slen == 0)
-        goto error;
+        return -1;
 
-    /* skip the first spaces */
-    while (pos < slen && isspace((unsigned char)msgstr[pos]))
-        pos++;
-
-    /* Strip leading and trailing "s. */
-    if (msgstr[pos] == '\"') {
-        str = SCStrdup(msgstr+1);
-        if (unlikely(str == NULL))
-            goto error;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str)-1] = '\0';
-        }
-    } else {
-        SCLogError(SC_ERR_INVALID_VALUE, "format error \'%s\'", msgstr);
-        goto error;
-    }
-
-    len = strlen(str);
-    if (len == 0)
-        goto error;
-
+    char input[slen + 1];
+    strlcpy(input, msgstr, slen + 1);
+    char *str = input;
     char converted = 0;
 
     {
@@ -86,7 +65,7 @@ static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
         uint8_t escape = 0;
 
         /* it doesn't matter if we need to escape or not we remove the extra "\" to mimic snort */
-        for (i = 0, x = 0; i < len; i++) {
+        for (i = 0, x = 0; i < slen; i++) {
             //printf("str[%02u]: %c\n", i, str[i]);
             if(!escape && str[i] == '\\') {
                 escape = 1;
@@ -119,22 +98,21 @@ static int DetectMsgSetup (DetectEngineCtx *de_ctx, Signature *s, char *msgstr)
 #endif
 
         if (converted) {
-            len = x;
-            str[len] = '\0';
+            slen = x;
+            str[slen] = '\0';
         }
     }
 
-    s->msg = SCMalloc(len + 1);
+    if (s->msg != NULL) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "duplicated 'msg' keyword detected");
+        goto error;
+    }
+    s->msg = SCStrdup(str);
     if (s->msg == NULL)
         goto error;
-
-    strlcpy(s->msg, str, len + 1);
-
-    SCFree(str);
     return 0;
 
 error:
-    SCFree(str);
     return -1;
 }
 
@@ -145,7 +123,7 @@ static int DetectMsgParseTest01(void)
 {
     int result = 0;
     Signature *sig = NULL;
-    char *teststringparsed = "flow stateless to_server";
+    const char *teststringparsed = "flow stateless to_server";
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
         goto end;
@@ -175,7 +153,7 @@ static int DetectMsgParseTest02(void)
 {
     int result = 0;
     Signature *sig = NULL;
-    char *teststringparsed = "msg escape tests wxy'\"\\;:";
+    const char *teststringparsed = "msg escape tests wxy'\"\\;:";
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
     if (de_ctx == NULL)
         goto end;
@@ -198,6 +176,36 @@ end:
     return result;
 }
 
+static int DetectMsgParseTest03(void)
+{
+    int result = 0;
+    Signature *sig = NULL;
+    const char *teststringparsed = "flow stateless to_server";
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    if (de_ctx == NULL)
+        goto end;
+
+    FILE *fd = SCClassConfGenerateValidDummyClassConfigFD01();
+    SCClassConfLoadClassficationConfigFile(de_ctx, fd);
+
+    sig = SigInit(de_ctx, "alert tcp any any -> any any (msg: \"flow stateless to_server\"; flow:stateless,to_server; content:\"flowstatelesscheck\"; classtype:bad-unknown; sid: 40000002; rev: 1;)");
+    if(sig == NULL)
+        goto end;
+
+    if (strcmp(sig->msg, teststringparsed) != 0) {
+        printf("got \"%s\", expected: \"%s\": ", sig->msg, teststringparsed);
+        goto end;
+    }
+
+    result = 1;
+end:
+    if (sig != NULL)
+        SigFree(sig);
+    if (de_ctx != NULL)
+        DetectEngineCtxFree(de_ctx);
+    return result;
+}
+
 #endif /* UNITTESTS */
 
 /**
@@ -206,8 +214,9 @@ end:
 void DetectMsgRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectMsgParseTest01", DetectMsgParseTest01, 1);
-    UtRegisterTest("DetectMsgParseTest02", DetectMsgParseTest02, 1);
+    UtRegisterTest("DetectMsgParseTest01", DetectMsgParseTest01);
+    UtRegisterTest("DetectMsgParseTest02", DetectMsgParseTest02);
+    UtRegisterTest("DetectMsgParseTest03", DetectMsgParseTest03);
 #endif /* UNITTESTS */
 }
 

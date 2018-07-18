@@ -43,6 +43,7 @@
 
 #include "output.h"
 #include "log-tlslog.h"
+#include "log-tlsstore.h"
 #include "app-layer-ssl.h"
 #include "app-layer.h"
 #include "app-layer-parser.h"
@@ -131,6 +132,7 @@ static void LogTlsLogPem(LogTlsStoreLogThread *aft, const Packet *p, SSLState *s
             if (ptmp == NULL) {
                 SCFree(aft->enc_buf);
                 aft->enc_buf = NULL;
+                aft->enc_buf_len = 0;
                 SCLogWarning(SC_ERR_MEM_ALLOC, "Can't allocate data for base64 encoding");
                 goto end_fp;
             }
@@ -244,7 +246,8 @@ end_fp:
  *  \brief Condition function for TLS logger
  *  \retval bool true or false -- log now?
  */
-static int LogTlsStoreCondition(ThreadVars *tv, const Packet *p)
+static int LogTlsStoreCondition(ThreadVars *tv, const Packet *p, void *state,
+                                void *tx, uint64_t tx_id)
 {
     if (p->flow == NULL) {
         return FALSE;
@@ -254,61 +257,43 @@ static int LogTlsStoreCondition(ThreadVars *tv, const Packet *p)
         return FALSE;
     }
 
-    FLOWLOCK_RDLOCK(p->flow);
-    uint16_t proto = FlowGetAppProtocol(p->flow);
-    if (proto != ALPROTO_TLS)
-        goto dontlog;
-
-    SSLState *ssl_state = (SSLState *)FlowGetAppState(p->flow);
+    SSLState *ssl_state = (SSLState *)state;
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, so no request logging");
         goto dontlog;
     }
 
-    /* we only log the state once if we don't have to write
-     * the cert due to tls.store keyword. */
-    if (!(ssl_state->server_connp.cert_log_flag & SSL_TLS_LOG_PEM) &&
-        (ssl_state->flags & SSL_AL_FLAG_STATE_STORED))
+    if ((ssl_state->server_connp.cert_log_flag & SSL_TLS_LOG_PEM) == 0)
         goto dontlog;
 
     if (ssl_state->server_connp.cert0_issuerdn == NULL ||
             ssl_state->server_connp.cert0_subject == NULL)
         goto dontlog;
 
-    FLOWLOCK_UNLOCK(p->flow);
     return TRUE;
 dontlog:
-    FLOWLOCK_UNLOCK(p->flow);
     return FALSE;
 }
 
-static int LogTlsStoreLogger(ThreadVars *tv, void *thread_data, const Packet *p)
+static int LogTlsStoreLogger(ThreadVars *tv, void *thread_data, const Packet *p,
+                             Flow *f, void *state, void *tx, uint64_t tx_id)
 {
     LogTlsStoreLogThread *aft = (LogTlsStoreLogThread *)thread_data;
     int ipproto = (PKT_IS_IPV4(p)) ? AF_INET : AF_INET6;
-    /* check if we have TLS state or not */
-    FLOWLOCK_WRLOCK(p->flow);
-    uint16_t proto = FlowGetAppProtocol(p->flow);
-    if (proto != ALPROTO_TLS)
-        goto end;
 
-    SSLState *ssl_state = (SSLState *)FlowGetAppState(p->flow);
+    SSLState *ssl_state = (SSLState *)state;
     if (unlikely(ssl_state == NULL)) {
-        goto end;
+        return 0;
     }
 
     if (ssl_state->server_connp.cert_log_flag & SSL_TLS_LOG_PEM) {
         LogTlsLogPem(aft, p, ssl_state, ipproto);
     }
 
-    /* we only store the state once */
-    ssl_state->flags |= SSL_AL_FLAG_STATE_STORED;
-end:
-    FLOWLOCK_UNLOCK(p->flow);
     return 0;
 }
 
-static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogTlsStoreLogThread *aft = SCMalloc(sizeof(LogTlsStoreLogThread));
     if (unlikely(aft == NULL))
@@ -316,14 +301,16 @@ static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, void *initdata, void **da
     memset(aft, 0, sizeof(LogTlsStoreLogThread));
 
     if (initdata == NULL) {
-        SCLogDebug("Error getting context for LogTlsStore. \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for LogTLSStore. \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
 
     struct stat stat_buf;
+    /* coverity[toctou] */
     if (stat(tls_logfile_base_dir, &stat_buf) != 0) {
         int ret;
+        /* coverity[toctou] */
         ret = mkdir(tls_logfile_base_dir, S_IRWXU|S_IXGRP|S_IRGRP);
         if (ret != 0) {
             int err = errno;
@@ -350,6 +337,9 @@ static TmEcode LogTlsStoreLogThreadDeinit(ThreadVars *t, void *data)
     if (aft == NULL) {
         return TM_ECODE_OK;
     }
+
+    if (aft->enc_buf != NULL)
+        SCFree(aft->enc_buf);
 
     /* clear memory */
     memset(aft, 0, sizeof(LogTlsStoreLogThread));
@@ -395,7 +385,7 @@ static OutputCtx *LogTlsStoreLogInitCtx(ConfNode *conf)
     output_ctx->DeInit = LogTlsStoreLogDeInitCtx;
 
     /* FIXME we need to implement backward compability here */
-    char *s_default_log_dir = NULL;
+    const char *s_default_log_dir = NULL;
     s_default_log_dir = ConfigGetLogDirectory();
 
     const char *s_base_dir = NULL;
@@ -415,23 +405,18 @@ static OutputCtx *LogTlsStoreLogInitCtx(ConfNode *conf)
 
     SCLogInfo("storing certs in %s", tls_logfile_base_dir);
 
+    /* enable the logger for the app layer */
+    AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_TLS);
+
     SCReturnPtr(output_ctx, "OutputCtx");
 }
 
-void TmModuleLogTlsStoreRegister (void)
+void LogTlsStoreRegister (void)
 {
-    tmm_modules[TMM_TLSSTORE].name = MODULE_NAME;
-    tmm_modules[TMM_TLSSTORE].ThreadInit = LogTlsStoreLogThreadInit;
-    tmm_modules[TMM_TLSSTORE].Func = NULL;
-    tmm_modules[TMM_TLSSTORE].ThreadExitPrintStats = LogTlsStoreLogExitPrintStats;
-    tmm_modules[TMM_TLSSTORE].ThreadDeinit = LogTlsStoreLogThreadDeinit;
-    tmm_modules[TMM_TLSSTORE].RegisterTests = NULL;
-    tmm_modules[TMM_TLSSTORE].cap_flags = 0;
-    tmm_modules[TMM_TLSSTORE].flags = TM_FLAG_LOGAPI_TM;
-    tmm_modules[TMM_TLSSTORE].priority = 10;
-
-    OutputRegisterPacketModule(MODULE_NAME, "tls-store", LogTlsStoreLogInitCtx,
-            LogTlsStoreLogger, LogTlsStoreCondition);
+    OutputRegisterTxModuleWithCondition(LOGGER_TLS_STORE, MODULE_NAME,
+        "tls-store", LogTlsStoreLogInitCtx, ALPROTO_TLS, LogTlsStoreLogger,
+        LogTlsStoreCondition, LogTlsStoreLogThreadInit,
+        LogTlsStoreLogThreadDeinit, LogTlsStoreLogExitPrintStats);
 
     SC_ATOMIC_INIT(cert_id);
 

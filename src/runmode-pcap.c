@@ -62,7 +62,7 @@ void RunModeIdsPcapRegister(void)
     return;
 }
 
-void PcapDerefConfig(void *conf)
+static void PcapDerefConfig(void *conf)
 {
     PcapIfaceConfig *pfp = (PcapIfaceConfig *)conf;
     /* Pcap config is used only once but cost of this low. */
@@ -71,16 +71,15 @@ void PcapDerefConfig(void *conf)
     }
 }
 
-
-void *ParsePcapConfig(const char *iface)
+static void *ParsePcapConfig(const char *iface)
 {
-    char *threadsstr = NULL;
+    const char *threadsstr = NULL;
     ConfNode *if_root;
     ConfNode *if_default = NULL;
     ConfNode *pcap_node;
     PcapIfaceConfig *aconf = SCMalloc(sizeof(*aconf));
-    char *tmpbpf;
-    char *tmpctype;
+    const char *tmpbpf;
+    const char *tmpctype;
     intmax_t value;
     int promisc = 0;
     intmax_t snaplen = 0;
@@ -121,9 +120,9 @@ void *ParsePcapConfig(const char *iface)
         return aconf;
     }
 
-    if_root = ConfNodeLookupKeyValue(pcap_node, "interface", iface);
+    if_root = ConfFindDeviceConfig(pcap_node, iface);
 
-    if_default = ConfNodeLookupKeyValue(pcap_node, "interface", "default");
+    if_default = ConfFindDeviceConfig(pcap_node, "default");
 
     if (if_root == NULL && if_default == NULL) {
         SCLogInfo("Unable to find pcap config for "
@@ -142,7 +141,7 @@ void *ParsePcapConfig(const char *iface)
         aconf->threads = 1;
     } else {
         if (threadsstr != NULL) {
-            aconf->threads = (uint8_t)atoi(threadsstr);
+            aconf->threads = atoi(threadsstr);
         }
     }
     if (aconf->threads == 0) {
@@ -151,7 +150,7 @@ void *ParsePcapConfig(const char *iface)
     (void) SC_ATOMIC_ADD(aconf->ref, aconf->threads);
 
     if (aconf->buffer_size == 0) {
-        char *s_limit = NULL;
+        const char *s_limit = NULL;
         int ret;
         ret = ConfGetChildValueWithDefault(if_root, if_default, "buffer-size", &s_limit);
         if (ret == 1 && s_limit) {
@@ -191,9 +190,9 @@ void *ParsePcapConfig(const char *iface)
     if (ConfGetChildValueWithDefault(if_root, if_default, "checksum-checks", &tmpctype) == 1) {
         if (strcmp(tmpctype, "auto") == 0) {
             aconf->checksum_mode = CHECKSUM_VALIDATION_AUTO;
-        } else if (strcmp(tmpctype, "yes") == 0) {
+        } else if (ConfValIsTrue(tmpctype)) {
             aconf->checksum_mode = CHECKSUM_VALIDATION_ENABLE;
-        } else if (strcmp(tmpctype, "no") == 0) {
+        } else if (ConfValIsFalse(tmpctype)) {
             aconf->checksum_mode = CHECKSUM_VALIDATION_DISABLE;
         } else {
             SCLogError(SC_ERR_INVALID_ARGUMENT, "Invalid value for checksum-checks for %s", aconf->iface);
@@ -218,7 +217,7 @@ void *ParsePcapConfig(const char *iface)
     return aconf;
 }
 
-int PcapConfigGeThreadsCount(void *conf)
+static int PcapConfigGeThreadsCount(void *conf)
 {
     PcapIfaceConfig *pfp = (PcapIfaceConfig *)conf;
     return pfp->threads;
@@ -230,7 +229,7 @@ int PcapConfigGeThreadsCount(void *conf)
 int RunModeIdsPcapSingle(void)
 {
     int ret;
-    char *live_dev = NULL;
+    const char *live_dev = NULL;
 
     SCEnter();
 
@@ -242,7 +241,7 @@ int RunModeIdsPcapSingle(void)
     ret = RunModeSetLiveCaptureSingle(ParsePcapConfig,
                                     PcapConfigGeThreadsCount,
                                     "ReceivePcap",
-                                    "DecodePcap", "PcapLive",
+                                    "DecodePcap", thread_name_single,
                                     live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Runmode start failed");
@@ -272,7 +271,7 @@ int RunModeIdsPcapSingle(void)
 int RunModeIdsPcapAutoFp(void)
 {
     int ret;
-    char *live_dev = NULL;
+    const char *live_dev = NULL;
 
     SCEnter();
     RunModeInitialize();
@@ -283,7 +282,7 @@ int RunModeIdsPcapAutoFp(void)
     ret = RunModeSetLiveCaptureAutoFp(ParsePcapConfig,
                               PcapConfigGeThreadsCount,
                               "ReceivePcap",
-                              "DecodePcap", "RxPcap",
+                              "DecodePcap", thread_name_autofp,
                               live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Runmode start failed");
@@ -304,7 +303,7 @@ int RunModeIdsPcapAutoFp(void)
 int RunModeIdsPcapWorkers(void)
 {
     int ret;
-    char *live_dev = NULL;
+    const char *live_dev = NULL;
     SCEnter();
 
     RunModeInitialize();
@@ -315,7 +314,7 @@ int RunModeIdsPcapWorkers(void)
     ret = RunModeSetLiveCaptureWorkers(ParsePcapConfig,
                                     PcapConfigGeThreadsCount,
                                     "ReceivePcap",
-                                    "DecodePcap", "RxPcap",
+                                    "DecodePcap", thread_name_workers,
                                     live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");

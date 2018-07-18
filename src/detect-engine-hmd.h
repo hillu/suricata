@@ -26,14 +26,12 @@
 #include "app-layer-htp.h"
 
 int DetectEngineInspectHttpMethod(ThreadVars *tv,
-                                  DetectEngineCtx *de_ctx,
-                                  DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, Flow *f, uint8_t flags,
-                                  void *alstate,
-                                  void *tx, uint64_t tx_id);
-int DetectEngineRunHttpMethodMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
-                                 HtpState *htp_state, uint8_t flags,
-                                 void *tx, uint64_t idx);
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *tx, uint64_t tx_id);
+
+int PrefilterTxMethodRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx);
+
 void DetectEngineHttpMethodRegisterTests(void);
 
 #endif /* __DETECT_ENGINE_HMD_H__ */

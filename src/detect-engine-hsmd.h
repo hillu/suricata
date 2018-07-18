@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -25,15 +25,13 @@
 
 #include "app-layer-htp.h"
 
-int DetectEngineRunHttpStatMsgMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
-                                  HtpState *htp_state, uint8_t flags,
-                                  void *tx, uint64_t idx);
+int PrefilterTxHttpStatMsgRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx);
+
 int DetectEngineInspectHttpStatMsg(ThreadVars *tv,
-                                   DetectEngineCtx *de_ctx,
-                                   DetectEngineThreadCtx *det_ctx,
-                                   Signature *s, Flow *f, uint8_t flags,
-                                   void *alstate,
-                                   void *tx, uint64_t tx_id);
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *tx, uint64_t tx_id);
+
 void DetectEngineHttpStatMsgRegisterTests(void);
 
 #endif /* __DETECT_ENGINE_HSMD_H__ */

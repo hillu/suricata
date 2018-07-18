@@ -24,6 +24,7 @@
 #ifndef __LOG_FILESTORE_H__
 #define __LOG_FILESTORE_H__
 
-void TmModuleLogFilestoreRegister (void);
+void LogFilestoreRegister(void);
+void LogFilestoreInitConfig(void);
 
 #endif /* __LOG_FILELOG_H__ */

@@ -40,29 +40,49 @@ enum {
 };
 
 /* prototypes */
-int SigParse(DetectEngineCtx *,Signature *, char *, uint8_t);
+int SigParse(DetectEngineCtx *, Signature *, const char *, uint8_t);
 Signature *SigAlloc(void);
 void SigFree(Signature *s);
-Signature *SigInit(DetectEngineCtx *,char *sigstr);
-Signature *SigInitReal(DetectEngineCtx *, char *);
-SigMatch *SigMatchGetLastSMFromLists(Signature *, int, ...);
-void SigMatchTransferSigMatchAcrossLists(SigMatch *sm,
-                                         SigMatch **, SigMatch **s,
-                                         SigMatch **, SigMatch **);
+Signature *SigInit(DetectEngineCtx *, const char *sigstr);
+Signature *SigInitReal(DetectEngineCtx *, const char *);
+SigMatchData* SigMatchList2DataArray(SigMatch *head);
 void SigParsePrepare(void);
 void SigParseRegisterTests(void);
-Signature *DetectEngineAppendSig(DetectEngineCtx *, char *);
+Signature *DetectEngineAppendSig(DetectEngineCtx *, const char *);
 
 void SigMatchAppendSMToList(Signature *, SigMatch *, int);
 void SigMatchRemoveSMFromList(Signature *, SigMatch *, int);
-int SigMatchListSMBelongsTo(Signature *, SigMatch *);
+int SigMatchListSMBelongsTo(const Signature *, const SigMatch *);
 
 int DetectParseDupSigHashInit(DetectEngineCtx *);
 void DetectParseDupSigHashFree(DetectEngineCtx *);
 
-int DetectEngineContentModifierBufferSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg,
-                                           uint8_t sm_type, uint8_t sm_list,
-                                           AppProto alproto,  void (*CustomCallback)(Signature *s));
+int DetectEngineContentModifierBufferSetup(DetectEngineCtx *de_ctx,
+        Signature *s, const char *arg, int sm_type, int sm_list,
+        AppProto alproto);
+
+const char *DetectListToHumanString(int list);
+const char *DetectListToString(int list);
+
+SigMatch *DetectGetLastSM(const Signature *);
+SigMatch *DetectGetLastSMFromMpmLists(const Signature *s);
+SigMatch *DetectGetLastSMFromLists(const Signature *s, ...);
+SigMatch *DetectGetLastSMByListPtr(const Signature *s, SigMatch *sm_list, ...);
+SigMatch *DetectGetLastSMByListId(const Signature *s, int list_id, ...);
+
+int DetectSignatureSetAppProto(Signature *s, AppProto alproto);
+
+/* parse regex setup and free util funcs */
+
+void DetectSetupParseRegexes(const char *parse_str,
+                             pcre **parse_regex,
+                             pcre_extra **parse_regex_study);
+void DetectParseRegexAddToFreeList(pcre *regex, pcre_extra *study);
+void DetectParseFreeRegexes(void);
+
+#ifdef AFLFUZZ_RULES
+int RuleParseDataFromFile(char *filename);
+#endif
 
 #endif /* __DETECT_PARSE_H__ */
 

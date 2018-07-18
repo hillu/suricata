@@ -44,8 +44,9 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectStreamSizeMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectStreamSizeSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectStreamSizeFree(void *);
 void DetectStreamSizeRegisterTests(void);
 
@@ -57,33 +58,13 @@ void DetectStreamSizeRegister(void)
 {
     sigmatch_table[DETECT_STREAM_SIZE].name = "stream_size";
     sigmatch_table[DETECT_STREAM_SIZE].desc = "match on amount of bytes of a stream";
-    sigmatch_table[DETECT_STREAM_SIZE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#stream_size";
+    sigmatch_table[DETECT_STREAM_SIZE].url = DOC_URL DOC_VERSION "/rules/flow-keywords.html#stream-size";
     sigmatch_table[DETECT_STREAM_SIZE].Match = DetectStreamSizeMatch;
     sigmatch_table[DETECT_STREAM_SIZE].Setup = DetectStreamSizeSetup;
     sigmatch_table[DETECT_STREAM_SIZE].Free = DetectStreamSizeFree;
     sigmatch_table[DETECT_STREAM_SIZE].RegisterTests = DetectStreamSizeRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    if (parse_regex != NULL) SCFree(parse_regex);
-    if (parse_regex_study != NULL) SCFree(parse_regex_study);
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /**
@@ -97,7 +78,9 @@ error:
  *  \retval 1 on success and 0 on failure.
  */
 
-static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t mode) {
+static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t mode)
+{
+    SCLogDebug("diff %u stream_size %u mode %u", diff, stream_size, mode);
 
     int ret = 0;
     switch (mode) {
@@ -127,7 +110,7 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
             break;
     }
 
-    return ret;
+    SCReturnInt(ret);
 }
 
 /**
@@ -141,24 +124,21 @@ static int DetectStreamSizeCompare (uint32_t diff, uint32_t stream_size, uint8_t
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
 
-    int ret = 0;
     const DetectStreamSizeData *sd = (const DetectStreamSizeData *)ctx;
 
     if (!(PKT_IS_TCP(p)))
-        return ret;
+        return 0;
+    if (p->flow == NULL || p->flow->protoctx == NULL)
+        return 0;
 
+    const TcpSession *ssn = (TcpSession *)p->flow->protoctx;
+    int ret = 0;
     uint32_t csdiff = 0;
     uint32_t ssdiff = 0;
-
-    if (p->flow == NULL)
-        return ret;
-
-    TcpSession *ssn = (TcpSession *)p->flow->protoctx;
-    if (ssn == NULL)
-        return ret;
 
     if (sd->flags & STREAM_SIZE_SERVER) {
         /* get the server stream size */
@@ -173,17 +153,21 @@ int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
     } else if (sd->flags & STREAM_SIZE_BOTH) {
         ssdiff = ssn->server.next_seq - ssn->server.isn;
         csdiff = ssn->client.next_seq - ssn->client.isn;
-        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) && DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
+
+        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) &&
+            DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
             ret = 1;
 
     } else if (sd->flags & STREAM_SIZE_EITHER) {
         ssdiff = ssn->server.next_seq - ssn->server.isn;
         csdiff = ssn->client.next_seq - ssn->client.isn;
-        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) || DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
+
+        if (DetectStreamSizeCompare(ssdiff, sd->ssize, sd->mode) ||
+            DetectStreamSizeCompare(csdiff, sd->ssize, sd->mode))
             ret = 1;
     }
 
-    return ret;
+    SCReturnInt(ret);
 }
 
 /**
@@ -194,8 +178,7 @@ int DetectStreamSizeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet
  * \retval sd pointer to DetectStreamSizeData on success
  * \retval NULL on failure
  */
-
-DetectStreamSizeData *DetectStreamSizeParse (char *streamstr)
+static DetectStreamSizeData *DetectStreamSizeParse (const char *streamstr)
 {
 
     DetectStreamSizeData *sd = NULL;
@@ -305,7 +288,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, char *streamstr)
+static int DetectStreamSizeSetup (DetectEngineCtx *de_ctx, Signature *s, const char *streamstr)
 {
 
     DetectStreamSizeData *sd = NULL;
@@ -374,7 +357,7 @@ static int DetectStreamSizeParseTest02 (void)
     DetectStreamSizeData *sd = NULL;
     sd = DetectStreamSizeParse("invalidoption,<,6");
     if (sd != NULL) {
-        printf("expected: NULL got 0x%02X %" PRId16 ": ",sd->flags, sd->ssize);
+        printf("expected: NULL got 0x%02X %" PRIu32 ": ",sd->flags, sd->ssize);
         result = 0;
         DetectStreamSizeFree(sd);
     }
@@ -523,10 +506,10 @@ static int DetectStreamSizeParseTest04 (void)
 void DetectStreamSizeRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectStreamSizeParseTest01", DetectStreamSizeParseTest01, 1);
-    UtRegisterTest("DetectStreamSizeParseTest02", DetectStreamSizeParseTest02, 1);
-    UtRegisterTest("DetectStreamSizeParseTest03", DetectStreamSizeParseTest03, 1);
-    UtRegisterTest("DetectStreamSizeParseTest04", DetectStreamSizeParseTest04, 1);
+    UtRegisterTest("DetectStreamSizeParseTest01", DetectStreamSizeParseTest01);
+    UtRegisterTest("DetectStreamSizeParseTest02", DetectStreamSizeParseTest02);
+    UtRegisterTest("DetectStreamSizeParseTest03", DetectStreamSizeParseTest03);
+    UtRegisterTest("DetectStreamSizeParseTest04", DetectStreamSizeParseTest04);
 #endif /* UNITTESTS */
 }
 

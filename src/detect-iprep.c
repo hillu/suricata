@@ -52,8 +52,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectIPRepMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectIPRepSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectIPRepMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectIPRepSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectIPRepFree (void *);
 void IPRepRegisterTests(void);
 
@@ -67,28 +68,7 @@ void DetectIPRepRegister (void)
     /* this is compatible to ip-only signatures */
     sigmatch_table[DETECT_IPREP].flags |= SIGMATCH_IPONLY_COMPAT;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    return;
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 static uint8_t GetHostRepSrc(Packet *p, uint8_t cat, uint32_t version)
@@ -187,7 +167,8 @@ static inline int RepMatch(uint8_t op, uint8_t val1, uint8_t val2)
  *         1: match
  *        -1: error
  */
-int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectIPRepData *rd = (const DetectIPRepData *)ctx;
     if (rd == NULL)
@@ -252,7 +233,7 @@ int DetectIPRepMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
     return 0;
 }
 
-int DetectIPRepSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+int DetectIPRepSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     DetectIPRepData *cd = NULL;
     SigMatch *sm = NULL;
@@ -397,7 +378,7 @@ void DetectIPRepFree (void *ptr)
 }
 
 #ifdef UNITTESTS
-FILE *DetectIPRepGenerateCategoriesDummy()
+static FILE *DetectIPRepGenerateCategoriesDummy(void)
 {
     FILE *fd = NULL;
     const char *buffer = "1,BadHosts,Know bad hosts";
@@ -409,7 +390,7 @@ FILE *DetectIPRepGenerateCategoriesDummy()
     return fd;
 }
 
-FILE *DetectIPRepGenerateCategoriesDummy2()
+static FILE *DetectIPRepGenerateCategoriesDummy2(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -423,7 +404,7 @@ FILE *DetectIPRepGenerateCategoriesDummy2()
     return fd;
 }
 
-FILE *DetectIPRepGenerateNetworksDummy()
+static FILE *DetectIPRepGenerateNetworksDummy(void)
 {
     FILE *fd = NULL;
     const char *buffer = "10.0.0.0/24,1,20";
@@ -435,7 +416,7 @@ FILE *DetectIPRepGenerateNetworksDummy()
     return fd;
 }
 
-FILE *DetectIPRepGenerateNetworksDummy2()
+static FILE *DetectIPRepGenerateNetworksDummy2(void)
 {
     FILE *fd = NULL;
     const char *buffer =
@@ -757,7 +738,7 @@ end:
     DetectEngineCtxFree(de_ctx);
 
     HostShutdown();
-    return result;
+    return result == 0;
 }
 
 static int DetectIPRepTest06(void)
@@ -819,7 +800,7 @@ end:
     DetectEngineCtxFree(de_ctx);
 
     HostShutdown();
-    return result;
+    return result == 0;
 }
 
 static int DetectIPRepTest07(void)
@@ -881,7 +862,7 @@ end:
     DetectEngineCtxFree(de_ctx);
 
     HostShutdown();
-    return result;
+    return result == 0;
 }
 
 static int DetectIPRepTest08(void)
@@ -944,7 +925,7 @@ end:
     DetectEngineCtxFree(de_ctx);
 
     HostShutdown();
-    return result;
+    return result == 0;
 }
 
 static int DetectIPRepTest09(void)
@@ -1017,14 +998,14 @@ end:
 void IPRepRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectIPRepTest01", DetectIPRepTest01, 1);
-    UtRegisterTest("DetectIPRepTest02", DetectIPRepTest02, 1);
-    UtRegisterTest("DetectIPRepTest03", DetectIPRepTest03, 1);
-    UtRegisterTest("DetectIPRepTest04", DetectIPRepTest04, 1);
-    UtRegisterTest("DetectIPRepTest05", DetectIPRepTest05, 0);
-    UtRegisterTest("DetectIPRepTest06", DetectIPRepTest06, 0);
-    UtRegisterTest("DetectIPRepTest07", DetectIPRepTest07, 0);
-    UtRegisterTest("DetectIPRepTest08", DetectIPRepTest08, 0);
-    UtRegisterTest("DetectIPRepTest09", DetectIPRepTest09, 1);
+    UtRegisterTest("DetectIPRepTest01", DetectIPRepTest01);
+    UtRegisterTest("DetectIPRepTest02", DetectIPRepTest02);
+    UtRegisterTest("DetectIPRepTest03", DetectIPRepTest03);
+    UtRegisterTest("DetectIPRepTest04", DetectIPRepTest04);
+    UtRegisterTest("DetectIPRepTest05", DetectIPRepTest05);
+    UtRegisterTest("DetectIPRepTest06", DetectIPRepTest06);
+    UtRegisterTest("DetectIPRepTest07", DetectIPRepTest07);
+    UtRegisterTest("DetectIPRepTest08", DetectIPRepTest08);
+    UtRegisterTest("DetectIPRepTest09", DetectIPRepTest09);
 #endif /* UNITTESTS */
 }

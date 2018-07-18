@@ -75,10 +75,24 @@ const char *AppProtoToString(AppProto alproto)
         case ALPROTO_MODBUS:
             proto_name = "modbus";
             break;
+        case ALPROTO_ENIP:
+            proto_name = "enip";
+            break;
+        case ALPROTO_DNP3:
+            proto_name = "dnp3";
+            break;
+        case ALPROTO_NFS:
+            proto_name = "nfs";
+            break;
+        case ALPROTO_NTP:
+            proto_name = "ntp";
+            break;
         case ALPROTO_TEMPLATE:
             proto_name = "template";
             break;
         case ALPROTO_FAILED:
+            proto_name = "failed";
+            break;
 #ifdef UNITTESTS
         case ALPROTO_TEST:
 #endif

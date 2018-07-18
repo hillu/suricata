@@ -62,9 +62,6 @@
 /** Max valid wscale value. */
 #define TCP_WSCALE_MAX                       14
 
-#define TCP_OPTS                             tcpvars.tcp_opts
-#define TCP_OPTS_CNT                         tcpvars.tcp_opt_cnt
-
 #define TCP_GET_RAW_OFFSET(tcph)             (((tcph)->th_offx2 & 0xf0) >> 4)
 #define TCP_GET_RAW_X2(tcph)                 (unsigned char)((tcph)->th_offx2 & 0x0f)
 #define TCP_GET_RAW_SRC_PORT(tcph)           ntohs((tcph)->th_sport)
@@ -78,25 +75,31 @@
 
 #define TCP_GET_RAW_WINDOW(tcph)             ntohs((tcph)->th_win)
 #define TCP_GET_RAW_URG_POINTER(tcph)        ntohs((tcph)->th_urp)
+#define TCP_GET_RAW_SUM(tcph)                ntohs((tcph)->th_sum)
 
-/** macro for getting the first timestamp from the packet. Timestamp is in host
- *  order and either returned from the cache or from the packet directly. */
-#define TCP_GET_TSVAL(p) \
-    (uint32_t)ntohl((*(uint32_t *)(p)->tcpvars.ts->data))
+/** macro for getting the first timestamp from the packet in host order */
+#define TCP_GET_TSVAL(p)                    ((p)->tcpvars.ts_val)
 
-/** macro for getting the second timestamp from the packet. Timestamp is in
- *  host order and either returned from the cache or from the packet directly. */
-#define TCP_GET_TSECR(p) \
-    (uint32_t)ntohl((*(uint32_t *)((p)->tcpvars.ts->data+4)))
+/** macro for getting the second timestamp from the packet in host order. */
+#define TCP_GET_TSECR(p)                    ((p)->tcpvars.ts_ecr)
+
+#define TCP_HAS_WSCALE(p)                   ((p)->tcpvars.ws.type == TCP_OPT_WS)
+#define TCP_HAS_SACK(p)                     ((p)->tcpvars.sack.type == TCP_OPT_SACK)
+#define TCP_HAS_SACKOK(p)                   ((p)->tcpvars.sackok.type == TCP_OPT_SACKOK)
+#define TCP_HAS_TS(p)                       ((p)->tcpvars.ts_set == TRUE)
+#define TCP_HAS_MSS(p)                      ((p)->tcpvars.mss.type == TCP_OPT_MSS)
 
 /** macro for getting the wscale from the packet. */
-#define TCP_GET_WSCALE(p)                    ((p)->tcpvars.ws ? (((*(uint8_t *)(p)->tcpvars.ws->data) <= TCP_WSCALE_MAX) ? (*(uint8_t *)((p)->tcpvars.ws->data)) : 0) : 0)
+#define TCP_GET_WSCALE(p)                    (TCP_HAS_WSCALE((p)) ? \
+                                                (((*(uint8_t *)(p)->tcpvars.ws.data) <= TCP_WSCALE_MAX) ? \
+                                                  (*(uint8_t *)((p)->tcpvars.ws.data)) : 0) : 0)
 
-#define TCP_GET_SACKOK(p)                    ((p)->tcpvars.sackok ? 1 : 0)
-#define TCP_GET_SACK_PTR(p)                  (p)->tcpvars.sack ? (p)->tcpvars.sack->data : NULL
-#define TCP_GET_SACK_CNT(p)                  ((p)->tcpvars.sack ? (((p)->tcpvars.sack->len - 2) / 8) : 0)
+#define TCP_GET_SACKOK(p)                    (TCP_HAS_SACKOK((p)) ? 1 : 0)
+#define TCP_GET_SACK_PTR(p)                  TCP_HAS_SACK((p)) ? (p)->tcpvars.sack.data : NULL
+#define TCP_GET_SACK_CNT(p)                  (TCP_HAS_SACK((p)) ? (((p)->tcpvars.sack.len - 2) / 8) : 0)
 
 #define TCP_GET_OFFSET(p)                    TCP_GET_RAW_OFFSET((p)->tcph)
+#define TCP_GET_X2(p)                        TCP_GET_RAW_X2((p)->tcph)
 #define TCP_GET_HLEN(p)                      (TCP_GET_OFFSET((p)) << 2)
 #define TCP_GET_SRC_PORT(p)                  TCP_GET_RAW_SRC_PORT((p)->tcph)
 #define TCP_GET_DST_PORT(p)                  TCP_GET_RAW_DST_PORT((p)->tcph)
@@ -104,6 +107,8 @@
 #define TCP_GET_ACK(p)                       TCP_GET_RAW_ACK((p)->tcph)
 #define TCP_GET_WINDOW(p)                    TCP_GET_RAW_WINDOW((p)->tcph)
 #define TCP_GET_URG_POINTER(p)               TCP_GET_RAW_URG_POINTER((p)->tcph)
+#define TCP_GET_SUM(p)                       TCP_GET_RAW_SUM((p)->tcph)
+#define TCP_GET_FLAGS(p)                     (p)->tcph->th_flags
 
 #define TCP_ISSET_FLAG_FIN(p)                ((p)->tcph->th_flags & TH_FIN)
 #define TCP_ISSET_FLAG_SYN(p)                ((p)->tcph->th_flags & TH_SYN)
@@ -140,51 +145,47 @@ typedef struct TCPHdr_
 
 typedef struct TCPVars_
 {
-    uint8_t tcp_opt_cnt;
-    TCPOpt tcp_opts[TCP_OPTMAX];
-
-    /* ptrs to commonly used and needed opts */
-    TCPOpt *ts;
-    TCPOpt *sack;
-    TCPOpt *sackok;
-    TCPOpt *ws;
-    TCPOpt *mss;
+    /* commonly used and needed opts */
+    _Bool ts_set;
+    uint32_t ts_val;    /* host-order */
+    uint32_t ts_ecr;    /* host-order */
+    TCPOpt sack;
+    TCPOpt sackok;
+    TCPOpt ws;
+    TCPOpt mss;
 } TCPVars;
 
-#define CLEAR_TCP_PACKET(p) { \
-    (p)->tcph = NULL; \
+#define CLEAR_TCP_PACKET(p) {   \
     (p)->level4_comp_csum = -1; \
-    (p)->tcpvars.tcp_opt_cnt = 0; \
-    (p)->tcpvars.ts = NULL; \
-    (p)->tcpvars.sack = NULL; \
-    (p)->tcpvars.sackok = NULL; \
-    (p)->tcpvars.ws = NULL; \
-    (p)->tcpvars.mss = NULL; \
+    PACKET_CLEAR_L4VARS((p));   \
+    (p)->tcph = NULL;           \
 }
 
 void DecodeTCPRegisterTests(void);
 
 /** -------- Inline functions ------- */
-static inline uint16_t TCPCalculateChecksum(uint16_t *, uint16_t *, uint16_t);
-static inline uint16_t TCPV6CalculateChecksum(uint16_t *, uint16_t *, uint16_t);
+static inline uint16_t TCPChecksum(uint16_t *, uint16_t *, uint16_t, uint16_t);
+static inline uint16_t TCPV6Checksum(uint16_t *, uint16_t *, uint16_t, uint16_t);
 
 /**
- * \brief Calculates the checksum for the TCP packet
+ * \brief Calculate or validate the checksum for the TCP packet
  *
  * \param shdr Pointer to source address field from the IP packet.  Used as a
  *             part of the pseudoheader for computing the checksum
  * \param pkt  Pointer to the start of the TCP packet
  * \param tlen Total length of the TCP packet(header + payload)
+ * \param init The current checksum if validating, 0 if generating.
  *
- * \retval csum Checksum for the TCP packet
+ * \retval csum For validation 0 will be returned for success, for calculation
+ *    this will be the checksum.
  */
-static inline uint16_t TCPCalculateChecksum(uint16_t *shdr, uint16_t *pkt,
-                                            uint16_t tlen)
+static inline uint16_t TCPChecksum(uint16_t *shdr, uint16_t *pkt,
+                                   uint16_t tlen, uint16_t init)
 {
     uint16_t pad = 0;
-    uint32_t csum = shdr[0];
+    uint32_t csum = init;
 
-    csum += shdr[1] + shdr[2] + shdr[3] + htons(6) + htons(tlen);
+    csum += shdr[0] + shdr[1] + shdr[2] + shdr[3] + htons(6) + htons(tlen);
 
     csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
         pkt[7] + pkt[9];
@@ -194,7 +195,9 @@ static inline uint16_t TCPCalculateChecksum(uint16_t *shdr, uint16_t *pkt,
 
     while (tlen >= 32) {
         csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
-            pkt[7] + pkt[8] + pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13] +
+            pkt[7] +
+            pkt[8] +
+            pkt[9] + pkt[10] + pkt[11] + pkt[12] + pkt[13] +
             pkt[14] + pkt[15];
         tlen -= 32;
         pkt += 16;
@@ -230,24 +233,26 @@ static inline uint16_t TCPCalculateChecksum(uint16_t *shdr, uint16_t *pkt,
 }
 
 /**
- * \brief Calculates the checksum for the TCP packet
+ * \brief Calculate or validate the checksum for the TCP packet
  *
  * \param shdr Pointer to source address field from the IPV6 packet.  Used as a
  *             part of the psuedoheader for computing the checksum
  * \param pkt  Pointer to the start of the TCP packet
  * \param tlen Total length of the TCP packet(header + payload)
+ * \param init The current checksum if validating, 0 if generating.
  *
- * \retval csum Checksum for the TCP packet
+ * \retval csum For validation 0 will be returned for success, for calculation
+ *    this will be the checksum.
  */
-static inline uint16_t TCPV6CalculateChecksum(uint16_t *shdr, uint16_t *pkt,
-                                       uint16_t tlen)
+static inline uint16_t TCPV6Checksum(uint16_t *shdr, uint16_t *pkt,
+                                     uint16_t tlen, uint16_t init)
 {
     uint16_t pad = 0;
-    uint32_t csum = shdr[0];
+    uint32_t csum = init;
 
-    csum += shdr[1] + shdr[2] + shdr[3] + shdr[4] + shdr[5] + shdr[6] +
-        shdr[7] + shdr[8] + shdr[9] + shdr[10] + shdr[11] + shdr[12] +
-        shdr[13] + shdr[14] + shdr[15] + htons(6) + htons(tlen);
+    csum += shdr[0] + shdr[1] + shdr[2] + shdr[3] + shdr[4] + shdr[5] +
+        shdr[6] +  shdr[7] + shdr[8] + shdr[9] + shdr[10] + shdr[11] +
+        shdr[12] + shdr[13] + shdr[14] + shdr[15] + htons(6) + htons(tlen);
 
     csum += pkt[0] + pkt[1] + pkt[2] + pkt[3] + pkt[4] + pkt[5] + pkt[6] +
         pkt[7] + pkt[9];

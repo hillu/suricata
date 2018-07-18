@@ -53,6 +53,29 @@
 #define ND_NEIGHBOR_ADVERT          136
 #define ND_REDIRECT                 137
 
+#define ICMP6_RR                    138
+#define ICMP6_NI_QUERY              139
+#define ICMP6_NI_REPLY              140
+#define ND_INVERSE_SOLICIT          141
+#define ND_INVERSE_ADVERT           142
+#define MLD_V2_LIST_REPORT          143
+#define HOME_AGENT_AD_REQUEST       144
+#define HOME_AGENT_AD_REPLY         145
+#define MOBILE_PREFIX_SOLICIT       146
+#define MOBILE_PREFIX_ADVERT        147
+#define CERT_PATH_SOLICIT           148
+#define CERT_PATH_ADVERT            149
+#define ICMP6_MOBILE_EXPERIMENTAL   150
+#define MC_ROUTER_ADVERT            151
+#define MC_ROUTER_SOLICIT           152
+#define MC_ROUTER_TERMINATE         153
+#define FMIPV6_MSG                  154
+#define RPL_CONTROL_MSG             155
+#define LOCATOR_UDATE_MSG           156
+#define DUPL_ADDR_REQUEST           157
+#define DUPL_ADDR_CONFIRM           158
+#define MPL_CONTROL_MSG             159
+
 /** Destination Unreachable Message (type=1) Code: */
 
 #define ICMP6_DST_UNREACH_NOROUTE       0 /* no route to destination */
@@ -80,6 +103,7 @@
 /** macro for icmpv6 "code" access */
 #define ICMPV6_GET_CODE(p)      (p)->icmpv6h->code
 /** macro for icmpv6 "csum" access */
+#define ICMPV6_GET_RAW_CSUM(p)      ntohs((p)->icmpv6h->csum)
 #define ICMPV6_GET_CSUM(p)      (p)->icmpv6h->csum
 
 /** If message is informational */
@@ -158,23 +182,9 @@ typedef struct ICMPV6Vars_ {
 
 
 #define CLEAR_ICMPV6_PACKET(p) do { \
-    (p)->level4_comp_csum = -1; \
-    (p)->icmpv6vars.id = 0; \
-    (p)->icmpv6vars.seq = 0; \
-    (p)->icmpv6vars.mtu = 0; \
-    (p)->icmpv6vars.error_ptr = 0; \
-    (p)->icmpv6vars.emb_ipv6h = NULL; \
-    (p)->icmpv6vars.emb_tcph = NULL; \
-    (p)->icmpv6vars.emb_udph = NULL; \
-    (p)->icmpv6vars.emb_icmpv6h = NULL; \
-    (p)->icmpv6vars.emb_ip6_src[0] = 0; \
-    (p)->icmpv6vars.emb_ip6_src[1] = 0; \
-    (p)->icmpv6vars.emb_ip6_src[2] = 0; \
-    (p)->icmpv6vars.emb_ip6_src[3] = 0; \
-    (p)->icmpv6vars.emb_ip6_proto_next = 0; \
-    (p)->icmpv6vars.emb_sport = 0; \
-    (p)->icmpv6vars.emb_dport = 0; \
-    (p)->icmpv6h = NULL; \
+    (p)->level4_comp_csum = -1;     \
+    PACKET_CLEAR_L4VARS((p));       \
+    (p)->icmpv6h = NULL;            \
 } while(0)
 
 void DecodeICMPV6RegisterTests(void);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -59,10 +59,13 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectTlsVersionMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *, uint8_t, void *, Signature *, SigMatch *);
-static int DetectTlsVersionSetup (DetectEngineCtx *, Signature *, char *);
-void DetectTlsVersionRegisterTests(void);
-void DetectTlsVersionFree(void *);
+static int DetectTlsVersionMatch (ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectTlsVersionSetup (DetectEngineCtx *, Signature *, const char *);
+static void DetectTlsVersionRegisterTests(void);
+static void DetectTlsVersionFree(void *);
+static int g_tls_generic_list_id = 0;
 
 /**
  * \brief Registration function for keyword: tls.version
@@ -71,36 +74,15 @@ void DetectTlsVersionRegister (void)
 {
     sigmatch_table[DETECT_AL_TLS_VERSION].name = "tls.version";
     sigmatch_table[DETECT_AL_TLS_VERSION].desc = "match on TLS/SSL version";
-    sigmatch_table[DETECT_AL_TLS_VERSION].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/TLS-keywords#tlsversion";
-    sigmatch_table[DETECT_AL_TLS_VERSION].Match = NULL;
-    sigmatch_table[DETECT_AL_TLS_VERSION].AppLayerMatch = DetectTlsVersionMatch;
-    sigmatch_table[DETECT_AL_TLS_VERSION].alproto = ALPROTO_TLS;
+    sigmatch_table[DETECT_AL_TLS_VERSION].url = DOC_URL DOC_VERSION "/rules/tls-keywords.html#tlsversion";
+    sigmatch_table[DETECT_AL_TLS_VERSION].AppLayerTxMatch = DetectTlsVersionMatch;
     sigmatch_table[DETECT_AL_TLS_VERSION].Setup = DetectTlsVersionSetup;
     sigmatch_table[DETECT_AL_TLS_VERSION].Free  = DetectTlsVersionFree;
     sigmatch_table[DETECT_AL_TLS_VERSION].RegisterTests = DetectTlsVersionRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 
-	SCLogDebug("registering tls.version rule option");
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                    PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    return;
+    g_tls_generic_list_id = DetectBufferTypeRegister("tls_generic");
 }
 
 /**
@@ -114,11 +96,13 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectTlsVersionMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *f, uint8_t flags, void *state, Signature *s, SigMatch *m)
+static int DetectTlsVersionMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
 
-    DetectTlsVersionData *tls_data = (DetectTlsVersionData *)m->ctx;
+    const DetectTlsVersionData *tls_data = (const DetectTlsVersionData *)m;
     SSLState *ssl_state = (SSLState *)state;
     if (ssl_state == NULL) {
         SCLogDebug("no tls state, no match");
@@ -149,7 +133,7 @@ int DetectTlsVersionMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Flow *
  * \retval id_d pointer to DetectTlsVersionData on success
  * \retval NULL on failure
  */
-DetectTlsVersionData *DetectTlsVersionParse (char *str)
+static DetectTlsVersionData *DetectTlsVersionParse (const char *str)
 {
     uint16_t temp;
     DetectTlsVersionData *tls = NULL;
@@ -232,13 +216,17 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectTlsVersionData *tls = NULL;
     SigMatch *sm = NULL;
 
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
+
     tls = DetectTlsVersionParse(str);
-    if (tls == NULL) goto error;
+    if (tls == NULL)
+        goto error;
 
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
@@ -249,19 +237,15 @@ static int DetectTlsVersionSetup (DetectEngineCtx *de_ctx, Signature *s, char *s
     sm->type = DETECT_AL_TLS_VERSION;
     sm->ctx = (void *)tls;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
+    SigMatchAppendSMToList(s, sm, g_tls_generic_list_id);
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
-    s->alproto = ALPROTO_TLS;
     return 0;
 
 error:
-    if (tls != NULL) DetectTlsVersionFree(tls);
-    if (sm != NULL) SCFree(sm);
+    if (tls != NULL)
+        DetectTlsVersionFree(tls);
+    if (sm != NULL)
+        SCFree(sm);
     return -1;
 
 }
@@ -271,7 +255,7 @@ error:
  *
  * \param id_d pointer to DetectTlsVersionData
  */
-void DetectTlsVersionFree(void *ptr)
+static void DetectTlsVersionFree(void *ptr)
 {
     DetectTlsVersionData *id_d = (DetectTlsVersionData *)ptr;
     SCFree(id_d);
@@ -283,16 +267,14 @@ void DetectTlsVersionFree(void *ptr)
  * \test DetectTlsVersionTestParse01 is a test to make sure that we parse the "id"
  *       option correctly when given valid id option
  */
-int DetectTlsVersionTestParse01 (void)
+static int DetectTlsVersionTestParse01 (void)
 {
     DetectTlsVersionData *tls = NULL;
     tls = DetectTlsVersionParse("1.0");
-    if (tls != NULL && tls->ver == TLS_VERSION_10) {
-        DetectTlsVersionFree(tls);
-        return 1;
-    }
-
-    return 0;
+    FAIL_IF_NULL(tls);
+    FAIL_IF_NOT(tls->ver == TLS_VERSION_10);
+    DetectTlsVersionFree(tls);
+    PASS;
 }
 
 /**
@@ -300,16 +282,13 @@ int DetectTlsVersionTestParse01 (void)
  *       option correctly when given an invalid id option
  *       it should return id_d = NULL
  */
-int DetectTlsVersionTestParse02 (void)
+static int DetectTlsVersionTestParse02 (void)
 {
     DetectTlsVersionData *tls = NULL;
     tls = DetectTlsVersionParse("2.5");
-    if (tls == NULL) {
-        DetectTlsVersionFree(tls);
-        return 1;
-    }
-
-    return 0;
+    FAIL_IF_NOT_NULL(tls);
+    DetectTlsVersionFree(tls);
+    PASS;
 }
 
 #include "stream-tcp-reassemble.h"
@@ -317,7 +296,6 @@ int DetectTlsVersionTestParse02 (void)
 /** \test Send a get request in three chunks + more data. */
 static int DetectTlsVersionTestDetect01(void)
 {
-    int result = 0;
     Flow f;
     uint8_t tlsbuf1[] = { 0x16 };
     uint32_t tlslen1 = sizeof(tlsbuf1);
@@ -352,67 +330,40 @@ static int DetectTlsVersionTestDetect01(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert tls any any -> any any (msg:\"TLS\"; tls.version:1.0; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS,
+                                STREAM_TOSERVER, tlsbuf1, tlslen1);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf2, tlslen2);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf3, tlslen3);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf4, tlslen4);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     SSLState *ssl_state = f.alstate;
-    if (ssl_state == NULL) {
-        printf("no tls state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(ssl_state);
 
-    if (ssl_state->client_connp.content_type != 0x16) {
-        printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               0x16, ssl_state->client_connp.content_type);
-        goto end;
-    }
+    FAIL_IF(ssl_state->client_connp.content_type != 0x16);
 
-    if (ssl_state->client_connp.version != TLS_VERSION_10) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-               TLS_VERSION_10, ssl_state->client_connp.version);
-        goto end;
-    }
+    FAIL_IF(ssl_state->client_connp.version != TLS_VERSION_10);
 
     SCLogDebug("ssl_state is at %p, ssl_state->server_version 0x%02X "
                "ssl_state->client_version 0x%02X",
@@ -422,14 +373,9 @@ static int DetectTlsVersionTestDetect01(void)
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!(PacketAlertCheck(p, 1))) {
-        goto end;
-    }
+    FAIL_IF_NOT(PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
+    AppLayerParserThreadCtxFree(alp_tctx);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
@@ -440,12 +386,12 @@ end:
     FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
-    return result;
+
+    PASS;
 }
 
 static int DetectTlsVersionTestDetect02(void)
 {
-    int result = 0;
     Flow f;
     uint8_t tlsbuf1[] = { 0x16 };
     uint32_t tlslen1 = sizeof(tlsbuf1);
@@ -480,80 +426,47 @@ static int DetectTlsVersionTestDetect02(void)
     StreamTcpInitConfig(TRUE);
 
     DetectEngineCtx *de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
 
     s = de_ctx->sig_list = SigInit(de_ctx,"alert tls any any -> any any (msg:\"TLS\"; tls.version:1.0; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS,
+                                STREAM_TOSERVER, tlsbuf1, tlslen1);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf2, tlslen2);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf3, tlslen3);
+    FAIL_IF(r != 0);
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            tlsbuf4, tlslen4);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     SSLState *ssl_state = f.alstate;
-    if (ssl_state == NULL) {
-        printf("no tls state: ");
-        goto end;
-    }
+    FAIL_IF_NULL(ssl_state);
 
-    if (ssl_state->client_connp.content_type != 0x16) {
-        printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               0x16, ssl_state->client_connp.content_type);
-        goto end;
-    }
+    FAIL_IF(ssl_state->client_connp.content_type != 0x16);
 
-    if (ssl_state->client_connp.version != TLS_VERSION_10) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-               TLS_VERSION_10, ssl_state->client_connp.version);
-        goto end;
-    }
+    FAIL_IF(ssl_state->client_connp.version != TLS_VERSION_10);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!(PacketAlertCheck(p, 1))) {
-        printf("signature 1 didn't match while it should have: ");
-        goto end;
-    }
+    FAIL_IF_NOT(PacketAlertCheck(p, 1));
 
-    result = 1;
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
+    AppLayerParserThreadCtxFree(alp_tctx);
     SigGroupCleanup(de_ctx);
     SigCleanSignatures(de_ctx);
 
@@ -564,160 +477,23 @@ end:
     FLOW_DESTROY(&f);
 
     UTHFreePackets(&p, 1);
-    return result;
+
+    PASS;
 }
-
-static int DetectTlsVersionTestDetect03(void)
-{
-    DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-    Flow f;
-    uint8_t tlsbuf1[] = { 0x16 };
-    uint32_t tlslen1 = sizeof(tlsbuf1);
-    uint8_t tlsbuf2[] = { 0x03 };
-    uint32_t tlslen2 = sizeof(tlsbuf2);
-    uint8_t tlsbuf3[] = { 0x01 };
-    uint32_t tlslen3 = sizeof(tlsbuf3);
-    uint8_t tlsbuf4[] = { 0x01, 0x00, 0x00, 0xad, 0x03, 0x02 };
-    uint32_t tlslen4 = sizeof(tlsbuf4);
-    TcpSession ssn;
-    Packet *p = NULL;
-    Signature *s = NULL;
-    ThreadVars th_v;
-    DetectEngineThreadCtx *det_ctx = NULL;
-    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
-
-    memset(&th_v, 0, sizeof(th_v));
-    memset(&f, 0, sizeof(f));
-    memset(&ssn, 0, sizeof(ssn));
-
-    p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
-    p->tcph->th_seq = htonl(1000);
-
-    FLOW_INITIALIZE(&f);
-    f.protoctx = (void *)&ssn;
-    p->flow = &f;
-    p->flowflags |= FLOW_PKT_TOSERVER;
-    p->flowflags |= FLOW_PKT_ESTABLISHED;
-    p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
-    f.alproto = ALPROTO_TLS;
-    f.proto = p->proto;
-
-    StreamTcpInitConfig(TRUE);
-
-    StreamMsg *stream_msg = StreamMsgGetFromPool();
-    if (stream_msg == NULL) {
-        printf("no stream_msg: ");
-        goto end;
-    }
-
-    memcpy(stream_msg->data, tlsbuf4, tlslen4);
-    stream_msg->data_len = tlslen4;
-
-    ssn.toserver_smsg_head = stream_msg;
-    ssn.toserver_smsg_tail = stream_msg;
-
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
-
-    de_ctx->flags |= DE_QUIET;
-
-    s = de_ctx->sig_list = SigInit(de_ctx,"alert tcp any any -> any any (msg:\"TLS\"; tls.version:1.0; content:\"|01 00 00 AD|\"; sid:1;)");
-    if (s == NULL) {
-        goto end;
-    }
-
-    SigGroupBuild(de_ctx);
-    DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf1, tlslen1);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf2, tlslen2);
-    if (r != 0) {
-        printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf3, tlslen3);
-    if (r != 0) {
-        printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, tlsbuf4, tlslen4);
-    if (r != 0) {
-        printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
-
-    SSLState *ssl_state = f.alstate;
-    if (ssl_state == NULL) {
-        printf("no tls state: ");
-        goto end;
-    }
-
-    if (ssl_state->client_connp.content_type != 0x16) {
-        printf("expected content_type %" PRIu8 ", got %" PRIu8 ": ",
-               0x16, ssl_state->client_connp.content_type);
-        goto end;
-    }
-
-    if (ssl_state->client_connp.version != TLS_VERSION_10) {
-        printf("expected version %04" PRIu16 ", got %04" PRIu16 ": ",
-               TLS_VERSION_10, ssl_state->client_connp.version);
-        goto end;
-    }
-
-    /* do detect */
-    SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-
-    if (!(PacketAlertCheck(p, 1))) {
-        printf("signature 1 didn't match while it should have: ");
-        goto end;
-    }
-
-    result = 1;
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-        DetectEngineCtxFree(de_ctx);
-    }
-
-    StreamTcpFreeConfig(TRUE);
-    FLOW_DESTROY(&f);
-    UTHFreePackets(&p, 1);
-    return result;
-}
-
 #endif /* UNITTESTS */
 
 /**
  * \brief this function registers unit tests for DetectTlsVersion
  */
-void DetectTlsVersionRegisterTests(void)
+static void DetectTlsVersionRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectTlsVersionTestParse01", DetectTlsVersionTestParse01, 1);
-    UtRegisterTest("DetectTlsVersionTestParse02", DetectTlsVersionTestParse02, 1);
-    UtRegisterTest("DetectTlsVersionTestDetect01", DetectTlsVersionTestDetect01, 1);
-    UtRegisterTest("DetectTlsVersionTestDetect02", DetectTlsVersionTestDetect02, 1);
-    UtRegisterTest("DetectTlsVersionTestDetect03", DetectTlsVersionTestDetect03, 1);
+    UtRegisterTest("DetectTlsVersionTestParse01", DetectTlsVersionTestParse01);
+    UtRegisterTest("DetectTlsVersionTestParse02", DetectTlsVersionTestParse02);
+    UtRegisterTest("DetectTlsVersionTestDetect01",
+                   DetectTlsVersionTestDetect01);
+    UtRegisterTest("DetectTlsVersionTestDetect02",
+                   DetectTlsVersionTestDetect02);
 #endif /* UNITTESTS */
 }
 

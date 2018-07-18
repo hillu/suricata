@@ -51,10 +51,11 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectDetectionFilterMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectDetectionFilterSetup(DetectEngineCtx *, Signature *, char *);
-void DetectDetectionFilterRegisterTests(void);
-void DetectDetectionFilterFree(void *);
+static int DetectDetectionFilterMatch(ThreadVars *, DetectEngineThreadCtx *,
+        Packet *, const Signature *, const SigMatchCtx *);
+static int DetectDetectionFilterSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectDetectionFilterRegisterTests(void);
+static void DetectDetectionFilterFree(void *);
 
 /**
  * \brief Registration function for detection_filter: keyword
@@ -63,7 +64,7 @@ void DetectDetectionFilterRegister (void)
 {
     sigmatch_table[DETECT_DETECTION_FILTER].name = "detection_filter";
     sigmatch_table[DETECT_DETECTION_FILTER].desc = "alert on every match after a threshold has been reached";
-    sigmatch_table[DETECT_DETECTION_FILTER].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule-Thresholding#detection_filter";
+    sigmatch_table[DETECT_DETECTION_FILTER].url = DOC_URL DOC_VERSION "/rules/thresholding.html#detection-filter";
     sigmatch_table[DETECT_DETECTION_FILTER].Match = DetectDetectionFilterMatch;
     sigmatch_table[DETECT_DETECTION_FILTER].Setup = DetectDetectionFilterSetup;
     sigmatch_table[DETECT_DETECTION_FILTER].Free = DetectDetectionFilterFree;
@@ -71,30 +72,11 @@ void DetectDetectionFilterRegister (void)
     /* this is compatible to ip-only signatures */
     sigmatch_table[DETECT_DETECTION_FILTER].flags |= SIGMATCH_IPONLY_COMPAT;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
-int DetectDetectionFilterMatch (ThreadVars *thv, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectDetectionFilterMatch (ThreadVars *thv, DetectEngineThreadCtx *det_ctx,
+        Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     return 1;
 }
@@ -108,7 +90,7 @@ int DetectDetectionFilterMatch (ThreadVars *thv, DetectEngineThreadCtx *det_ctx,
  * \retval df pointer to DetectThresholdData on success
  * \retval NULL on failure
  */
-DetectThresholdData *DetectDetectionFilterParse (char *rawstr)
+static DetectThresholdData *DetectDetectionFilterParse (const char *rawstr)
 {
     DetectThresholdData *df = NULL;
 #define MAX_SUBSTRINGS 30
@@ -225,7 +207,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     SCEnter();
     DetectThresholdData *df = NULL;
@@ -233,15 +215,13 @@ int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     SigMatch *tmpm = NULL;
 
     /* checks if there's a previous instance of threshold */
-    tmpm = SigMatchGetLastSMFromLists(s, 2,
-                                      DETECT_THRESHOLD, s->sm_lists_tail[DETECT_SM_LIST_MATCH]);
+    tmpm = DetectGetLastSMFromLists(s, DETECT_THRESHOLD, -1);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and \"threshold\" are not allowed in the same rule");
         SCReturnInt(-1);
     }
     /* checks there's no previous instance of detection_filter */
-    tmpm = SigMatchGetLastSMFromLists(s, 2,
-                                      DETECT_DETECTION_FILTER, s->sm_lists_tail[DETECT_SM_LIST_MATCH]);
+    tmpm = DetectGetLastSMFromLists(s, DETECT_DETECTION_FILTER, -1);
     if (tmpm != NULL) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "At most one \"detection_filter\" is allowed per rule");
         SCReturnInt(-1);
@@ -263,8 +243,10 @@ int DetectDetectionFilterSetup (DetectEngineCtx *de_ctx, Signature *s, char *raw
     return 0;
 
 error:
-    if (df) SCFree(df);
-    if (sm) SCFree(sm);
+    if (df)
+        SCFree(df);
+    if (sm)
+        SCFree(sm);
     return -1;
 }
 
@@ -274,18 +256,17 @@ error:
  *
  * \param df_ptr pointer to DetectDetectionFilterData
  */
-void DetectDetectionFilterFree(void *df_ptr)
+static void DetectDetectionFilterFree(void *df_ptr)
 {
     DetectThresholdData *df = (DetectThresholdData *)df_ptr;
-    if (df) SCFree(df);
+    if (df)
+        SCFree(df);
 }
 
 /*
  * ONLY TESTS BELOW THIS COMMENT
  */
 #ifdef UNITTESTS
-
-#include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-threshold.h"
@@ -298,7 +279,7 @@ void DetectDetectionFilterFree(void *df_ptr)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse01 (void)
+static int DetectDetectionFilterTestParse01 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("track by_dst,count 10,seconds 60");
@@ -316,16 +297,16 @@ int DetectDetectionFilterTestParse01 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse02 (void)
+static int DetectDetectionFilterTestParse02 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("track both,count 10,seconds 60");
     if (df && (df->track == TRACK_DST || df->track == TRACK_SRC) && (df->count == 10) && (df->seconds == 60)) {
         DetectDetectionFilterFree(df);
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 /**
@@ -334,7 +315,7 @@ int DetectDetectionFilterTestParse02 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse03 (void)
+static int DetectDetectionFilterTestParse03 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("track by_dst, seconds 60, count 10");
@@ -353,16 +334,16 @@ int DetectDetectionFilterTestParse03 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse04 (void)
+static int DetectDetectionFilterTestParse04 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("count 10, track by_dst, seconds 60, count 10");
     if (df && (df->track == TRACK_DST) && (df->count == 10) && (df->seconds == 60)) {
         DetectDetectionFilterFree(df);
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 /**
@@ -371,7 +352,7 @@ int DetectDetectionFilterTestParse04 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse05 (void)
+static int DetectDetectionFilterTestParse05 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("count 10, track by_dst, seconds 60");
@@ -389,16 +370,16 @@ int DetectDetectionFilterTestParse05 (void)
  *  \retval 1 on succces
  *  \retval 0 on failure
  */
-int DetectDetectionFilterTestParse06 (void)
+static int DetectDetectionFilterTestParse06 (void)
 {
     DetectThresholdData *df = NULL;
     df = DetectDetectionFilterParse("count 10, track by_dst, seconds 0");
     if (df && (df->track == TRACK_DST) && (df->count == 10) && (df->seconds == 0)) {
         DetectDetectionFilterFree(df);
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 /**
@@ -648,18 +629,27 @@ end:
 }
 #endif /* UNITTESTS */
 
-void DetectDetectionFilterRegisterTests(void)
+static void DetectDetectionFilterRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectDetectionFilterTestParse01", DetectDetectionFilterTestParse01, 1);
-    UtRegisterTest("DetectDetectionFilterTestParse02", DetectDetectionFilterTestParse02, 0);
-    UtRegisterTest("DetectDetectionFilterTestParse03", DetectDetectionFilterTestParse03, 1);
-    UtRegisterTest("DetectDetectionFilterTestParse04", DetectDetectionFilterTestParse04, 0);
-    UtRegisterTest("DetectDetectionFilterTestParse05", DetectDetectionFilterTestParse05, 1);
-    UtRegisterTest("DetectDetectionFilterTestParse06", DetectDetectionFilterTestParse06, 0);
-    UtRegisterTest("DetectDetectionFilterTestSig1", DetectDetectionFilterTestSig1, 1);
-    UtRegisterTest("DetectDetectionFilterTestSig2", DetectDetectionFilterTestSig2, 1);
-    UtRegisterTest("DetectDetectionFilterTestSig3", DetectDetectionFilterTestSig3, 1);
+    UtRegisterTest("DetectDetectionFilterTestParse01",
+                   DetectDetectionFilterTestParse01);
+    UtRegisterTest("DetectDetectionFilterTestParse02",
+                   DetectDetectionFilterTestParse02);
+    UtRegisterTest("DetectDetectionFilterTestParse03",
+                   DetectDetectionFilterTestParse03);
+    UtRegisterTest("DetectDetectionFilterTestParse04",
+                   DetectDetectionFilterTestParse04);
+    UtRegisterTest("DetectDetectionFilterTestParse05",
+                   DetectDetectionFilterTestParse05);
+    UtRegisterTest("DetectDetectionFilterTestParse06",
+                   DetectDetectionFilterTestParse06);
+    UtRegisterTest("DetectDetectionFilterTestSig1",
+                   DetectDetectionFilterTestSig1);
+    UtRegisterTest("DetectDetectionFilterTestSig2",
+                   DetectDetectionFilterTestSig2);
+    UtRegisterTest("DetectDetectionFilterTestSig3",
+                   DetectDetectionFilterTestSig3);
 #endif /* UNITTESTS */
 }
 

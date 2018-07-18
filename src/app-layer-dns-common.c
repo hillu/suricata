@@ -236,6 +236,21 @@ int DNSGetAlstateProgress(void *tx, uint8_t direction)
     }
 }
 
+void DNSSetTxLogged(void *alstate, void *tx, uint32_t logger)
+{
+    DNSTransaction *dns_tx = (DNSTransaction *)tx;
+    dns_tx->logged |= logger;
+}
+
+int DNSGetTxLogged(void *alstate, void *tx, uint32_t logger)
+{
+    DNSTransaction *dns_tx = (DNSTransaction *)tx;
+    if (dns_tx->logged & logger)
+        return 1;
+
+    return 0;
+}
+
 /** \brief get value for 'complete' status in DNS
  *
  *  For DNS we use a simple bool. 1 means done.
@@ -377,6 +392,9 @@ DNSTransaction *DNSTransactionFindByTxId(const DNSState *dns_state, const uint16
         TAILQ_FOREACH(tx, &dns_state->tx_list, next) {
             if (tx->tx_id == tx_id) {
                 return tx;
+            } else if ((dns_state->transaction_max - tx->tx_num) >
+                (dns_state->window - 1U)) {
+                tx->reply_lost = 1;
             }
         }
     }
@@ -539,19 +557,11 @@ void DNSStoreQueryInState(DNSState *dns_state, const uint8_t *fqdn, const uint16
         return;
     }
 
-    /* see if the last tx is unreplied */
-    if (dns_state->curr != tx && dns_state->curr != NULL &&
-        dns_state->curr->replied == 0)
-    {
-        dns_state->curr->reply_lost = 1;
-        dns_state->unreplied_cnt++;
-
-        /* check flood limit */
-        if (dns_config.request_flood != 0 &&
-                dns_state->unreplied_cnt > dns_config.request_flood) {
-            DNSSetEvent(dns_state, DNS_DECODER_EVENT_FLOODED);
-            dns_state->givenup = 1;
-        }
+    /* check flood limit */
+    if (dns_config.request_flood != 0 &&
+        dns_state->unreplied_cnt > dns_config.request_flood) {
+        DNSSetEvent(dns_state, DNS_DECODER_EVENT_FLOODED);
+        dns_state->givenup = 1;
     }
 
     if (tx == NULL) {
@@ -564,6 +574,7 @@ void DNSStoreQueryInState(DNSState *dns_state, const uint8_t *fqdn, const uint16
         dns_state->curr = tx;
         tx->tx_num = dns_state->transaction_max;
         SCLogDebug("new tx %u with internal id %u", tx->tx_id, tx->tx_num);
+        dns_state->unreplied_cnt++;
     }
 
     if (DNSCheckMemcap((sizeof(DNSQueryEntry) + fqdn_len), dns_state) < 0)
@@ -594,6 +605,7 @@ void DNSStoreAnswerInState(DNSState *dns_state, const int rtype, const uint8_t *
             return;
         TAILQ_INSERT_TAIL(&dns_state->tx_list, tx, next);
         dns_state->curr = tx;
+        dns_state->transaction_max++;
         tx->tx_num = dns_state->transaction_max;
     }
 
@@ -630,9 +642,6 @@ void DNSStoreAnswerInState(DNSState *dns_state, const int rtype, const uint8_t *
 
     /* mark tx is as replied so we can log it */
     tx->replied = 1;
-
-    /* reset unreplied counter */
-    dns_state->unreplied_cnt = 0;
 }
 
 /** \internal
@@ -656,7 +665,7 @@ void DNSStoreAnswerInState(DNSState *dns_state, const int rtype, const uint8_t *
 static uint16_t DNSResponseGetNameByOffset(const uint8_t * const input, const uint32_t input_len,
         const uint16_t offset, uint8_t *fqdn, const size_t fqdn_size)
 {
-    if (input + input_len < input + offset + 1) {
+    if (offset >= input_len) {
         SCLogDebug("input buffer too small for domain of len %u", offset);
         goto insufficient_data;
     }
@@ -672,13 +681,18 @@ static uint16_t DNSResponseGetNameByOffset(const uint8_t * const input, const ui
         SCReturnUInt(6U);
     }
 
+    if ((uint64_t)((qdata + 1) - input) >= (uint64_t)input_len) {
+        SCLogDebug("input buffer too small");
+        goto insufficient_data;
+    }
+
     while (length != 0) {
         int cnt = 0;
         while (length & 0xc0) {
-            uint16_t offset = ((length & 0x3f) << 8) + *(qdata+1);
-            qdata = (const uint8_t *)input + offset;
+            uint16_t off = ((length & 0x3f) << 8) + *(qdata+1);
+            qdata = (const uint8_t *)input + off;
 
-            if (input + input_len < qdata + 1) {
+            if ((uint64_t)((qdata + 1) - input) >= (uint64_t)input_len) {
                 SCLogDebug("input buffer too small");
                 goto insufficient_data;
             }
@@ -710,8 +724,12 @@ static uint16_t DNSResponseGetNameByOffset(const uint8_t * const input, const ui
         }
         qdata += length;
 
-        if (input + input_len < qdata + 1) {
-            SCLogDebug("input buffer too small for len field");
+        /* if we're at the end of the input data, we're done */
+        if ((uint64_t)((qdata + 1) - input) == (uint64_t)input_len) {
+            break;
+        }
+        else if ((uint64_t)((qdata + 1) - input) > (uint64_t)input_len) {
+            SCLogDebug("input buffer too small");
             goto insufficient_data;
         }
 
@@ -816,6 +834,7 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
     }
 
     const DNSAnswerHeader *head = (DNSAnswerHeader *)data;
+    const uint16_t datalen = ntohs(head->len);
 
     data += sizeof(DNSAnswerHeader);
 
@@ -831,7 +850,7 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
     switch (ntohs(head->type)) {
         case DNS_RECORD_TYPE_A:
         {
-            if (ntohs(head->len) == 4) {
+            if (datalen == 0 || datalen == 4) {
                 //PrintRawDataFp(stdout, data, ntohs(head->len));
                 //char a[16];
                 //PrintInet(AF_INET, (const void *)data, a, sizeof(a));
@@ -839,31 +858,31 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
 
                 DNSStoreAnswerInState(dns_state, list, fqdn, fqdn_len,
                         ntohs(head->type), ntohs(head->class), ntohl(head->ttl),
-                        data, 4, ntohs(dns_header->tx_id));
+                        data, datalen, ntohs(dns_header->tx_id));
             } else {
                 SCLogDebug("invalid length for A response data: %u", ntohs(head->len));
                 goto bad_data;
             }
 
-            data += ntohs(head->len);
+            data += datalen;
             break;
         }
         case DNS_RECORD_TYPE_AAAA:
         {
-            if (ntohs(head->len) == 16) {
+            if (datalen == 0 || datalen == 16) {
                 //char a[46];
                 //PrintInet(AF_INET6, (const void *)data, a, sizeof(a));
                 //SCLogInfo("AAAA %s TTL %u", a, ntohl(head->ttl));
 
                 DNSStoreAnswerInState(dns_state, list, fqdn, fqdn_len,
                         ntohs(head->type), ntohs(head->class), ntohl(head->ttl),
-                        data, 16, ntohs(dns_header->tx_id));
+                        data, datalen, ntohs(dns_header->tx_id));
             } else {
                 SCLogDebug("invalid length for AAAA response data: %u", ntohs(head->len));
                 goto bad_data;
             }
 
-            data += ntohs(head->len);
+            data += datalen;
             break;
         }
         case DNS_RECORD_TYPE_MX:
@@ -958,31 +977,52 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
         }
         case DNS_RECORD_TYPE_TXT:
         {
-            uint16_t datalen = ntohs(head->len);
+            uint16_t txtdatalen = datalen;
+
+            if (txtdatalen == 0) {
+                DNSSetEvent(dns_state, DNS_DECODER_EVENT_MALFORMED_DATA);
+                goto bad_data;
+            }
+
             uint8_t txtlen = *data;
             const uint8_t *tdata = data + 1;
 
             do {
                 //PrintRawDataFp(stdout, (uint8_t*)tdata, txtlen);
 
-                if (txtlen >= datalen)
+                if (txtlen >= txtdatalen)
                     goto bad_data;
 
                 DNSStoreAnswerInState(dns_state, list, fqdn, fqdn_len,
                         ntohs(head->type), ntohs(head->class), ntohl(head->ttl),
                         (uint8_t*)tdata, (uint16_t)txtlen, ntohs(dns_header->tx_id));
 
-                datalen -= txtlen;
+                txtdatalen -= txtlen;
                 tdata += txtlen;
                 txtlen = *tdata;
 
                 tdata++;
-                datalen--;
+                txtdatalen--;
 
-                SCLogDebug("datalen %u, txtlen %u", datalen, txtlen);
-            } while (datalen > 1);
+                SCLogDebug("datalen %u, txtlen %u", txtdatalen, txtlen);
+            } while (txtdatalen > 1);
 
-            data += ntohs(head->len);
+            data += datalen;
+            break;
+        }
+        case DNS_RECORD_TYPE_SSHFP:
+        {
+            /* data here should be:
+             * [1 byte algo][1 byte type][var bytes fingerprint]
+             * As we currently can't store each of those in the state,
+             * we just store the raw data an let the output/detect
+             * code figure out what to do with it. */
+
+            DNSStoreAnswerInState(dns_state, list, fqdn, fqdn_len,
+                    ntohs(head->type), ntohs(head->class), ntohl(head->ttl),
+                    data, ntohs(head->len), ntohs(dns_header->tx_id));
+
+            data += datalen;
             break;
         }
         default:    /* unsupported record */
@@ -992,7 +1032,7 @@ const uint8_t *DNSReponseParse(DNSState *dns_state, const DNSHeader * const dns_
                     NULL, 0, ntohs(dns_header->tx_id));
 
             //PrintRawDataFp(stdout, data, ntohs(head->len));
-            data += ntohs(head->len);
+            data += datalen;
             break;
         }
     }
@@ -1014,23 +1054,29 @@ void DNSCreateTypeString(uint16_t type, char *str, size_t str_size)
         case DNS_RECORD_TYPE_AAAA:
             snprintf(str, str_size, "AAAA");
             break;
-        case DNS_RECORD_TYPE_TXT:
-            snprintf(str, str_size, "TXT");
-            break;
         case DNS_RECORD_TYPE_CNAME:
             snprintf(str, str_size, "CNAME");
             break;
-        case DNS_RECORD_TYPE_SOA:
-            snprintf(str, str_size, "SOA");
+        case DNS_RECORD_TYPE_TXT:
+            snprintf(str, str_size, "TXT");
             break;
         case DNS_RECORD_TYPE_MX:
             snprintf(str, str_size, "MX");
             break;
+        case DNS_RECORD_TYPE_SOA:
+            snprintf(str, str_size, "SOA");
+            break;
         case DNS_RECORD_TYPE_PTR:
             snprintf(str, str_size, "PTR");
             break;
-        case DNS_RECORD_TYPE_ANY:
-            snprintf(str, str_size, "ANY");
+        case DNS_RECORD_TYPE_SIG:
+            snprintf(str, str_size, "SIG");
+            break;
+        case DNS_RECORD_TYPE_KEY:
+            snprintf(str, str_size, "KEY");
+            break;
+        case DNS_RECORD_TYPE_WKS:
+            snprintf(str, str_size, "WKS");
             break;
         case DNS_RECORD_TYPE_TKEY:
             snprintf(str, str_size, "TKEY");
@@ -1038,14 +1084,8 @@ void DNSCreateTypeString(uint16_t type, char *str, size_t str_size)
         case DNS_RECORD_TYPE_TSIG:
             snprintf(str, str_size, "TSIG");
             break;
-        case DNS_RECORD_TYPE_SRV:
-            snprintf(str, str_size, "SRV");
-            break;
-        case DNS_RECORD_TYPE_NAPTR:
-            snprintf(str, str_size, "NAPTR");
-            break;
-        case DNS_RECORD_TYPE_DS:
-            snprintf(str, str_size, "DS");
+        case DNS_RECORD_TYPE_ANY:
+            snprintf(str, str_size, "ANY");
             break;
         case DNS_RECORD_TYPE_RRSIG:
             snprintf(str, str_size, "RRSIG");
@@ -1053,8 +1093,131 @@ void DNSCreateTypeString(uint16_t type, char *str, size_t str_size)
         case DNS_RECORD_TYPE_NSEC:
             snprintf(str, str_size, "NSEC");
             break;
+        case DNS_RECORD_TYPE_DNSKEY:
+            snprintf(str, str_size, "DNSKEY");
+            break;
+        case DNS_RECORD_TYPE_HINFO:
+            snprintf(str, str_size, "HINFO");
+            break;
+        case DNS_RECORD_TYPE_MINFO:
+            snprintf(str, str_size, "MINFO");
+            break;
+        case DNS_RECORD_TYPE_RP:
+            snprintf(str, str_size, "RP");
+            break;
+        case DNS_RECORD_TYPE_AFSDB:
+            snprintf(str, str_size, "AFSDB");
+            break;
+        case DNS_RECORD_TYPE_X25:
+            snprintf(str, str_size, "X25");
+            break;
+        case DNS_RECORD_TYPE_ISDN:
+            snprintf(str, str_size, "ISDN");
+            break;
+        case DNS_RECORD_TYPE_RT:
+            snprintf(str, str_size, "RT");
+            break;
+        case DNS_RECORD_TYPE_NSAP:
+            snprintf(str, str_size, "NSAP");
+            break;
+        case DNS_RECORD_TYPE_NSAPPTR:
+            snprintf(str, str_size, "NSAPPTR");
+            break;
+        case DNS_RECORD_TYPE_PX:
+            snprintf(str, str_size, "PX");
+            break;
+        case DNS_RECORD_TYPE_GPOS:
+            snprintf(str, str_size, "GPOS");
+            break;
+        case DNS_RECORD_TYPE_LOC:
+            snprintf(str, str_size, "LOC");
+            break;
+        case DNS_RECORD_TYPE_SRV:
+            snprintf(str, str_size, "SRV");
+            break;
+        case DNS_RECORD_TYPE_ATMA:
+            snprintf(str, str_size, "ATMA");
+            break;
+        case DNS_RECORD_TYPE_NAPTR:
+            snprintf(str, str_size, "NAPTR");
+            break;
+        case DNS_RECORD_TYPE_KX:
+            snprintf(str, str_size, "KX");
+            break;
+        case DNS_RECORD_TYPE_CERT:
+            snprintf(str, str_size, "CERT");
+            break;
+        case DNS_RECORD_TYPE_A6:
+            snprintf(str, str_size, "A6");
+            break;
+        case DNS_RECORD_TYPE_DNAME:
+            snprintf(str, str_size, "DNAME");
+            break;
+        case DNS_RECORD_TYPE_OPT:
+            snprintf(str, str_size, "OPT");
+            break;
+        case DNS_RECORD_TYPE_APL:
+            snprintf(str, str_size, "APL");
+            break;
+        case DNS_RECORD_TYPE_DS:
+            snprintf(str, str_size, "DS");
+            break;
+        case DNS_RECORD_TYPE_SSHFP:
+            snprintf(str, str_size, "SSHFP");
+            break;
+        case DNS_RECORD_TYPE_IPSECKEY:
+            snprintf(str, str_size, "IPSECKEY");
+            break;
+        case DNS_RECORD_TYPE_DHCID:
+            snprintf(str, str_size, "DHCID");
+            break;
         case DNS_RECORD_TYPE_NSEC3:
             snprintf(str, str_size, "NSEC3");
+            break;
+        case DNS_RECORD_TYPE_NSEC3PARAM:
+            snprintf(str, str_size, "NSEC3PARAM");
+            break;
+        case DNS_RECORD_TYPE_TLSA:
+            snprintf(str, str_size, "TLSA");
+            break;
+        case DNS_RECORD_TYPE_HIP:
+            snprintf(str, str_size, "HIP");
+            break;
+        case DNS_RECORD_TYPE_CDS:
+            snprintf(str, str_size, "CDS");
+            break;
+        case DNS_RECORD_TYPE_CDNSKEY:
+            snprintf(str, str_size, "CDNSKEY");
+            break;
+        case DNS_RECORD_TYPE_MAILA:
+            snprintf(str, str_size, "MAILA");
+            break;
+        case DNS_RECORD_TYPE_URI:
+            snprintf(str, str_size, "URI");
+            break;
+        case DNS_RECORD_TYPE_MB:
+            snprintf(str, str_size, "MB");
+            break;
+        case DNS_RECORD_TYPE_MG:
+            snprintf(str, str_size, "MG");
+            break;
+        case DNS_RECORD_TYPE_MR:
+            snprintf(str, str_size, "MR");
+            break;
+        case DNS_RECORD_TYPE_NULL:
+            snprintf(str, str_size, "NULL");
+            break;
+        case DNS_RECORD_TYPE_SPF:
+            snprintf(str, str_size, "SPF");
+            break;
+        case DNS_RECORD_TYPE_NXT:
+            snprintf(str, str_size, "NXT");
+            break;
+        case DNS_RECORD_TYPE_MD:
+            snprintf(str, str_size, "MD");
+            break;
+        case DNS_RECORD_TYPE_MF:
+            snprintf(str, str_size, "MF");
             break;
         default:
             snprintf(str, str_size, "%04x/%u", type, type);

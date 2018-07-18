@@ -55,11 +55,14 @@
 #include "app-layer-parser.h"
 #include "app-layer-htp.h"
 #include "detect-http-client-body.h"
+#include "detect-engine-hcbd.h"
 #include "stream-tcp.h"
 
-int DetectHttpClientBodySetup(DetectEngineCtx *, Signature *, char *);
-void DetectHttpClientBodyRegisterTests(void);
-void DetectHttpClientBodyFree(void *);
+static int DetectHttpClientBodySetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectHttpClientBodyRegisterTests(void);
+static void DetectHttpClientBodyFree(void *);
+static void DetectHttpClientBodySetupCallback(Signature *s);
+static int g_http_client_body_buffer_id = 0;
 
 /**
  * \brief Registers the keyword handlers for the "http_client_body" keyword.
@@ -68,22 +71,35 @@ void DetectHttpClientBodyRegister(void)
 {
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].name = "http_client_body";
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].desc = "content modifier to match only on HTTP request-body";
-    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_client_body";
+    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_client-body";
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Setup = DetectHttpClientBodySetup;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].Free  = DetectHttpClientBodyFree;
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].RegisterTests = DetectHttpClientBodyRegisterTests;
-    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].alproto = ALPROTO_HTTP;
 
     sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].flags |= SIGMATCH_NOOPT ;
-    sigmatch_table[DETECT_AL_HTTP_CLIENT_BODY].flags |= SIGMATCH_PAYLOAD ;
+
+    DetectAppLayerMpmRegister("http_client_body", SIG_FLAG_TOSERVER, 2,
+            PrefilterTxHttpRequestBodyRegister);
+
+    DetectAppLayerInspectEngineRegister("http_client_body",
+            ALPROTO_HTTP, SIG_FLAG_TOSERVER, HTP_REQUEST_BODY,
+            DetectEngineInspectHttpClientBody);
+
+    DetectBufferTypeSetDescriptionByName("http_client_body",
+            "http request body");
+
+    DetectBufferTypeRegisterSetupCallback("http_client_body",
+            DetectHttpClientBodySetupCallback);
+
+    g_http_client_body_buffer_id = DetectBufferTypeGetByName("http_client_body");
 }
 
 static void DetectHttpClientBodySetupCallback(Signature *s)
 {
+    SCLogDebug("callback invoked by %u", s->id);
     AppLayerHtpEnableRequestBodyCallback();
-    return;
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
 }
 
 /**
@@ -99,13 +115,12 @@ static void DetectHttpClientBodySetupCallback(Signature *s)
  * \retval  0 On success
  * \retval -1 On failure
  */
-int DetectHttpClientBodySetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+int DetectHttpClientBodySetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_CLIENT_BODY,
-                                                  DETECT_SM_LIST_HCBDMATCH,
-                                                  ALPROTO_HTTP,
-                                                  DetectHttpClientBodySetupCallback);
+                                                  g_http_client_body_buffer_id,
+                                                  ALPROTO_HTTP);
 }
 
 /**
@@ -123,7 +138,7 @@ void DetectHttpClientBodyFree(void *ptr)
     if (hcbd->content != NULL)
         SCFree(hcbd->content);
 
-    BoyerMooreCtxDeInit(hcbd->bm_ctx);
+    SpmDestroyCtx(hcbd->spm_ctx);
     SCFree(hcbd);
 
     SCReturn;
@@ -133,6 +148,7 @@ void DetectHttpClientBodyFree(void *ptr)
 
 #ifdef UNITTESTS
 
+#include "detect-isdataat.h"
 #include "stream-tcp-reassemble.h"
 
 /**
@@ -345,15 +361,16 @@ static int DetectHttpClientBodyTest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -456,15 +473,16 @@ static int DetectHttpClientBodyTest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -480,14 +498,15 @@ static int DetectHttpClientBodyTest07(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -583,15 +602,16 @@ static int DetectHttpClientBodyTest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -608,15 +628,16 @@ static int DetectHttpClientBodyTest08(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -713,15 +734,16 @@ static int DetectHttpClientBodyTest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -738,15 +760,16 @@ static int DetectHttpClientBodyTest09(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -843,15 +866,16 @@ static int DetectHttpClientBodyTest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -868,15 +892,16 @@ static int DetectHttpClientBodyTest10(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: \n", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -964,15 +989,16 @@ static int DetectHttpClientBodyTest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1066,15 +1092,16 @@ static int DetectHttpClientBodyTest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1168,15 +1195,16 @@ static int DetectHttpClientBodyTest13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1276,14 +1304,15 @@ static int DetectHttpClientBodyTest14(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1293,32 +1322,34 @@ static int DetectHttpClientBodyTest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
     if (PacketAlertCheck(p, 1)) {
         printf("sig 1 alerted (2): ");
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1328,15 +1359,16 @@ static int DetectHttpClientBodyTest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1346,14 +1378,15 @@ static int DetectHttpClientBodyTest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
     if (r != 0) {
         printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1363,14 +1396,15 @@ static int DetectHttpClientBodyTest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
     if (r != 0) {
         printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1382,14 +1416,15 @@ static int DetectHttpClientBodyTest14(void)
 
     SCLogDebug("sending data chunk 7");
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf7, httplen7);
     if (r != 0) {
         printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1406,7 +1441,7 @@ static int DetectHttpClientBodyTest14(void)
         goto end;
     }
 
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
+    if (AppLayerParserGetTxCnt(&f, htp_state) != 2) {
         printf("The http app layer doesn't have 2 transactions, but it should: ");
         goto end;
     }
@@ -1495,14 +1530,15 @@ static int DetectHttpClientBodyTest15(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1512,14 +1548,15 @@ static int DetectHttpClientBodyTest15(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1529,14 +1566,15 @@ static int DetectHttpClientBodyTest15(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1546,15 +1584,16 @@ static int DetectHttpClientBodyTest15(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1564,14 +1603,15 @@ static int DetectHttpClientBodyTest15(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
     if (r != 0) {
         printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1581,14 +1621,15 @@ static int DetectHttpClientBodyTest15(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
     if (r != 0) {
         printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1600,14 +1641,15 @@ static int DetectHttpClientBodyTest15(void)
 
     SCLogDebug("sending data chunk 7");
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf7, httplen7);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf7, httplen7);
     if (r != 0) {
         printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1625,7 +1667,7 @@ static int DetectHttpClientBodyTest15(void)
     }
 
     /* hardcoded check of the transactions and it's client body chunks */
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
+    if (AppLayerParserGetTxCnt(&f, htp_state) != 2) {
         printf("The http app layer doesn't have 2 transactions, but it should: ");
         goto end;
     }
@@ -1641,7 +1683,9 @@ static int DetectHttpClientBodyTest15(void)
         goto end;
     }
 
-    if (memcmp(cur->data, "Body one!!", strlen("Body one!!")) != 0) {
+    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg,
+                (uint8_t *)"Body one!!", 10) != 1)
+    {
         SCLogDebug("Body data in t1 is not correctly set: ");
         goto end;
     }
@@ -1654,7 +1698,9 @@ static int DetectHttpClientBodyTest15(void)
         goto end;
     }
 
-    if (memcmp(cur->data, "Body two!!", strlen("Body two!!")) != 0) {
+    if (StreamingBufferSegmentCompareRawData(htud->request_body.sb, &cur->sbseg,
+                (uint8_t *)"Body two!!", 10) != 1)
+    {
         SCLogDebug("Body data in t1 is not correctly set: ");
         goto end;
     }
@@ -1691,7 +1737,7 @@ end:
 
 
 
-int DetectHttpClientBodyTest22(void)
+static int DetectHttpClientBodyTest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1713,15 +1759,15 @@ int DetectHttpClientBodyTest22(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *cd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (cd1->flags != 0 || memcmp(cd1->content, "one", cd1->content_len) != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1746,7 +1792,7 @@ int DetectHttpClientBodyTest22(void)
     return result;
 }
 
-int DetectHttpClientBodyTest23(void)
+static int DetectHttpClientBodyTest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1768,15 +1814,15 @@ int DetectHttpClientBodyTest23(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1800,7 +1846,7 @@ int DetectHttpClientBodyTest23(void)
     return result;
 }
 
-int DetectHttpClientBodyTest24(void)
+static int DetectHttpClientBodyTest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1822,15 +1868,15 @@ int DetectHttpClientBodyTest24(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1854,7 +1900,7 @@ int DetectHttpClientBodyTest24(void)
     return result;
 }
 
-int DetectHttpClientBodyTest25(void)
+static int DetectHttpClientBodyTest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1877,15 +1923,15 @@ int DetectHttpClientBodyTest25(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != DETECT_PCRE_RELATIVE_NEXT ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1910,7 +1956,7 @@ int DetectHttpClientBodyTest25(void)
     return result;
 }
 
-int DetectHttpClientBodyTest26(void)
+static int DetectHttpClientBodyTest26(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1933,15 +1979,15 @@ int DetectHttpClientBodyTest26(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1967,7 +2013,7 @@ int DetectHttpClientBodyTest26(void)
     return result;
 }
 
-int DetectHttpClientBodyTest27(void)
+static int DetectHttpClientBodyTest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1993,7 +2039,7 @@ int DetectHttpClientBodyTest27(void)
     return result;
 }
 
-int DetectHttpClientBodyTest28(void)
+static int DetectHttpClientBodyTest28(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2016,15 +2062,15 @@ int DetectHttpClientBodyTest28(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -2049,7 +2095,7 @@ int DetectHttpClientBodyTest28(void)
     return result;
 }
 
-int DetectHttpClientBodyTest29(void)
+static int DetectHttpClientBodyTest29(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2071,13 +2117,13 @@ int DetectHttpClientBodyTest29(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(hcbd1->content, "one", hcbd1->content_len) != 0 ||
         hcbd2->flags != DETECT_CONTENT_DISTANCE ||
@@ -2093,7 +2139,7 @@ int DetectHttpClientBodyTest29(void)
     return result;
 }
 
-int DetectHttpClientBodyTest30(void)
+static int DetectHttpClientBodyTest30(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2115,13 +2161,13 @@ int DetectHttpClientBodyTest30(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(hcbd1->content, "one", hcbd1->content_len) != 0 ||
         hcbd2->flags != DETECT_CONTENT_WITHIN ||
@@ -2137,7 +2183,7 @@ int DetectHttpClientBodyTest30(void)
     return result;
 }
 
-int DetectHttpClientBodyTest31(void)
+static int DetectHttpClientBodyTest31(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2161,7 +2207,7 @@ int DetectHttpClientBodyTest31(void)
     return result;
 }
 
-int DetectHttpClientBodyTest32(void)
+static int DetectHttpClientBodyTest32(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2185,7 +2231,7 @@ int DetectHttpClientBodyTest32(void)
     return result;
 }
 
-int DetectHttpClientBodyTest33(void)
+static int DetectHttpClientBodyTest33(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2209,7 +2255,7 @@ int DetectHttpClientBodyTest33(void)
     return result;
 }
 
-int DetectHttpClientBodyTest34(void)
+static int DetectHttpClientBodyTest34(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2231,21 +2277,21 @@ int DetectHttpClientBodyTest34(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         hcbd2->flags != DETECT_CONTENT_WITHIN ||
         memcmp(hcbd2->content, "two", hcbd2->content_len) != 0) {
@@ -2260,7 +2306,7 @@ int DetectHttpClientBodyTest34(void)
     return result;
 }
 
-int DetectHttpClientBodyTest35(void)
+static int DetectHttpClientBodyTest35(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2282,21 +2328,21 @@ int DetectHttpClientBodyTest35(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->type != DETECT_PCRE ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->type != DETECT_CONTENT) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->type != DETECT_PCRE ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->type != DETECT_CONTENT) {
 
         goto end;
     }
 
-    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectContentData *hcbd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd2->flags != (DETECT_PCRE_RELATIVE) ||
         hcbd1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(hcbd1->content, "two", hcbd1->content_len) != 0) {
@@ -2311,7 +2357,7 @@ int DetectHttpClientBodyTest35(void)
     return result;
 }
 
-int DetectHttpClientBodyTest36(void)
+static int DetectHttpClientBodyTest36(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2333,21 +2379,21 @@ int DetectHttpClientBodyTest36(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HCBDMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_client_body_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->prev->ctx;
-    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HCBDMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->prev->ctx;
+    DetectContentData *hcbd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_client_body_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         hcbd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(hcbd2->content, "two", hcbd2->content_len) != 0) {
@@ -2362,42 +2408,71 @@ int DetectHttpClientBodyTest36(void)
     return result;
 }
 
+static int DetectHttpClientBodyIsdataatParseTest(void)
+{
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+
+    Signature *s = DetectEngineAppendSig(de_ctx,
+            "alert tcp any any -> any any ("
+            "content:\"one\"; http_client_body; "
+            "isdataat:!4,relative; sid:1;)");
+    FAIL_IF_NULL(s);
+
+    SigMatch *sm = s->init_data->smlists_tail[g_http_client_body_buffer_id];
+    FAIL_IF_NULL(sm);
+    FAIL_IF_NOT(sm->type == DETECT_ISDATAAT);
+
+    DetectIsdataatData *data = (DetectIsdataatData *)sm->ctx;
+    FAIL_IF_NOT(data->flags & ISDATAAT_RELATIVE);
+    FAIL_IF_NOT(data->flags & ISDATAAT_NEGATED);
+    FAIL_IF(data->flags & ISDATAAT_RAWBYTES);
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
+}
+
 #endif /* UNITTESTS */
 
 void DetectHttpClientBodyRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectHttpClientBodyTest01", DetectHttpClientBodyTest01, 1);
-    UtRegisterTest("DetectHttpClientBodyTest02", DetectHttpClientBodyTest02, 1);
-    UtRegisterTest("DetectHttpClientBodyTest03", DetectHttpClientBodyTest03, 1);
-    UtRegisterTest("DetectHttpClientBodyTest04", DetectHttpClientBodyTest04, 1);
-    UtRegisterTest("DetectHttpClientBodyTest05", DetectHttpClientBodyTest05, 1);
-    UtRegisterTest("DetectHttpClientBodyTest06", DetectHttpClientBodyTest06, 1);
-    UtRegisterTest("DetectHttpClientBodyTest07", DetectHttpClientBodyTest07, 1);
-    UtRegisterTest("DetectHttpClientBodyTest08", DetectHttpClientBodyTest08, 1);
-    UtRegisterTest("DetectHttpClientBodyTest09", DetectHttpClientBodyTest09, 1);
-    UtRegisterTest("DetectHttpClientBodyTest10", DetectHttpClientBodyTest10, 1);
-    UtRegisterTest("DetectHttpClientBodyTest11", DetectHttpClientBodyTest11, 1);
-    UtRegisterTest("DetectHttpClientBodyTest12", DetectHttpClientBodyTest12, 1);
-    UtRegisterTest("DetectHttpClientBodyTest13", DetectHttpClientBodyTest13, 1);
-    UtRegisterTest("DetectHttpClientBodyTest14", DetectHttpClientBodyTest14, 1);
-    UtRegisterTest("DetectHttpClientBodyTest15", DetectHttpClientBodyTest15, 1);
+    UtRegisterTest("DetectHttpClientBodyTest01", DetectHttpClientBodyTest01);
+    UtRegisterTest("DetectHttpClientBodyTest02", DetectHttpClientBodyTest02);
+    UtRegisterTest("DetectHttpClientBodyTest03", DetectHttpClientBodyTest03);
+    UtRegisterTest("DetectHttpClientBodyTest04", DetectHttpClientBodyTest04);
+    UtRegisterTest("DetectHttpClientBodyTest05", DetectHttpClientBodyTest05);
+    UtRegisterTest("DetectHttpClientBodyTest06", DetectHttpClientBodyTest06);
+    UtRegisterTest("DetectHttpClientBodyTest07", DetectHttpClientBodyTest07);
+    UtRegisterTest("DetectHttpClientBodyTest08", DetectHttpClientBodyTest08);
+    UtRegisterTest("DetectHttpClientBodyTest09", DetectHttpClientBodyTest09);
+    UtRegisterTest("DetectHttpClientBodyTest10", DetectHttpClientBodyTest10);
+    UtRegisterTest("DetectHttpClientBodyTest11", DetectHttpClientBodyTest11);
+    UtRegisterTest("DetectHttpClientBodyTest12", DetectHttpClientBodyTest12);
+    UtRegisterTest("DetectHttpClientBodyTest13", DetectHttpClientBodyTest13);
+    UtRegisterTest("DetectHttpClientBodyTest14", DetectHttpClientBodyTest14);
+    UtRegisterTest("DetectHttpClientBodyTest15", DetectHttpClientBodyTest15);
 
-    UtRegisterTest("DetectHttpClientBodyTest22", DetectHttpClientBodyTest22, 1);
-    UtRegisterTest("DetectHttpClientBodyTest23", DetectHttpClientBodyTest23, 1);
-    UtRegisterTest("DetectHttpClientBodyTest24", DetectHttpClientBodyTest24, 1);
-    UtRegisterTest("DetectHttpClientBodyTest25", DetectHttpClientBodyTest25, 1);
-    UtRegisterTest("DetectHttpClientBodyTest26", DetectHttpClientBodyTest26, 1);
-    UtRegisterTest("DetectHttpClientBodyTest27", DetectHttpClientBodyTest27, 1);
-    UtRegisterTest("DetectHttpClientBodyTest28", DetectHttpClientBodyTest28, 1);
-    UtRegisterTest("DetectHttpClientBodyTest29", DetectHttpClientBodyTest29, 1);
-    UtRegisterTest("DetectHttpClientBodyTest30", DetectHttpClientBodyTest30, 1);
-    UtRegisterTest("DetectHttpClientBodyTest31", DetectHttpClientBodyTest31, 1);
-    UtRegisterTest("DetectHttpClientBodyTest32", DetectHttpClientBodyTest32, 1);
-    UtRegisterTest("DetectHttpClientBodyTest33", DetectHttpClientBodyTest33, 1);
-    UtRegisterTest("DetectHttpClientBodyTest34", DetectHttpClientBodyTest34, 1);
-    UtRegisterTest("DetectHttpClientBodyTest35", DetectHttpClientBodyTest35, 1);
-    UtRegisterTest("DetectHttpClientBodyTest36", DetectHttpClientBodyTest36, 1);
+    UtRegisterTest("DetectHttpClientBodyTest22", DetectHttpClientBodyTest22);
+    UtRegisterTest("DetectHttpClientBodyTest23", DetectHttpClientBodyTest23);
+    UtRegisterTest("DetectHttpClientBodyTest24", DetectHttpClientBodyTest24);
+    UtRegisterTest("DetectHttpClientBodyTest25", DetectHttpClientBodyTest25);
+    UtRegisterTest("DetectHttpClientBodyTest26", DetectHttpClientBodyTest26);
+    UtRegisterTest("DetectHttpClientBodyTest27", DetectHttpClientBodyTest27);
+    UtRegisterTest("DetectHttpClientBodyTest28", DetectHttpClientBodyTest28);
+    UtRegisterTest("DetectHttpClientBodyTest29", DetectHttpClientBodyTest29);
+    UtRegisterTest("DetectHttpClientBodyTest30", DetectHttpClientBodyTest30);
+    UtRegisterTest("DetectHttpClientBodyTest31", DetectHttpClientBodyTest31);
+    UtRegisterTest("DetectHttpClientBodyTest32", DetectHttpClientBodyTest32);
+    UtRegisterTest("DetectHttpClientBodyTest33", DetectHttpClientBodyTest33);
+    UtRegisterTest("DetectHttpClientBodyTest34", DetectHttpClientBodyTest34);
+    UtRegisterTest("DetectHttpClientBodyTest35", DetectHttpClientBodyTest35);
+    UtRegisterTest("DetectHttpClientBodyTest36", DetectHttpClientBodyTest36);
+
+    UtRegisterTest("DetectHttpClientBodyIsdataatParseTest",
+            DetectHttpClientBodyIsdataatParseTest);
+
 #endif /* UNITTESTS */
 
     return;

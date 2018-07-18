@@ -47,6 +47,10 @@
 
 #include "app-layer-dns-tcp.h"
 
+#ifdef HAVE_RUST
+#include "app-layer-dns-tcp-rust.h"
+#endif
+
 struct DNSTcpHeader_ {
     uint16_t len;
     uint16_t tx_id;
@@ -57,6 +61,9 @@ struct DNSTcpHeader_ {
     uint16_t additional_rr;
 } __attribute__((__packed__));
 typedef struct DNSTcpHeader_ DNSTcpHeader;
+
+static uint16_t DNSTcpProbingParser(uint8_t *input, uint32_t ilen,
+        uint32_t *offset);
 
 /** \internal
  *  \param input_len at least enough for the DNSTcpHeader
@@ -196,6 +203,14 @@ static int DNSRequestParseData(Flow *f, DNSState *dns_state, const uint8_t *inpu
 
     //PrintRawDataFp(stdout, (uint8_t*)data, input_len - (data - input));
 
+    if (dns_state != NULL) {
+        if (timercmp(&dns_state->last_req, &dns_state->last_resp, >=)) {
+            if (dns_state->window <= dns_state->unreplied_cnt) {
+                dns_state->window++;
+            }
+        }
+    }
+
     for (q = 0; q < ntohs(dns_header->questions); q++) {
         uint8_t fqdn[DNS_MAX_SIZE];
         uint16_t fqdn_offset = 0;
@@ -280,6 +295,13 @@ static int DNSTCPRequestParse(Flow *f, void *dstate,
     DNSState *dns_state = (DNSState *)dstate;
     SCLogDebug("starting %u", input_len);
 
+    if (input == NULL && input_len > 0) {
+        SCLogDebug("Input is NULL, but len is %"PRIu32": must be a gap.",
+                input_len);
+        dns_state->gap_ts = 1;
+        SCReturnInt(1);
+    }
+
     if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
         SCReturnInt(1);
     }
@@ -291,6 +313,18 @@ static int DNSTCPRequestParse(Flow *f, void *dstate,
     /* probably a rst/fin sending an eof */
     if (input == NULL || input_len == 0) {
         goto insufficient_data;
+    }
+
+    /* Clear gap state. */
+    if (dns_state->gap_ts) {
+        if (DNSTcpProbingParser(input, input_len, NULL) == ALPROTO_DNS) {
+            SCLogDebug("New data probed as DNS, clearing gap state.");
+            BufferReset(dns_state);
+            dns_state->gap_ts = 0;
+        } else {
+            SCLogDebug("Unable to sync DNS parser, leaving gap state.");
+            SCReturnInt(1);
+        }
     }
 
 next_record:
@@ -321,8 +355,8 @@ next_record:
                 goto bad_data;
 
             /* treat the rest of the data as a (potential) new record */
-            input += ntohs(dns_tcp_header->len);
-            input_len -= ntohs(dns_tcp_header->len);
+            input += (2 + ntohs(dns_tcp_header->len));
+            input_len -= (2 + ntohs(dns_tcp_header->len));
             goto next_record;
         } else {
             /* not enough data, store record length and buffer */
@@ -355,6 +389,10 @@ next_record:
             goto bad_data;
     }
 
+    if (f != NULL) {
+        dns_state->last_req = f->lastts;
+    }
+
     SCReturnInt(1);
 insufficient_data:
     SCReturnInt(-1);
@@ -377,6 +415,8 @@ static int DNSReponseParseData(Flow *f, DNSState *dns_state, const uint8_t *inpu
     if (!found) {
         SCLogDebug("DNS_DECODER_EVENT_UNSOLLICITED_RESPONSE");
         DNSSetEvent(dns_state, DNS_DECODER_EVENT_UNSOLLICITED_RESPONSE);
+    } else if (dns_state->unreplied_cnt > 0) {
+        dns_state->unreplied_cnt--;
     }
 
     uint16_t q;
@@ -494,6 +534,13 @@ static int DNSTCPResponseParse(Flow *f, void *dstate,
 {
     DNSState *dns_state = (DNSState *)dstate;
 
+    if (input == NULL && input_len > 0) {
+        SCLogDebug("Input is NULL, but len is %"PRIu32": must be a gap.",
+                input_len);
+        dns_state->gap_tc = 1;
+        SCReturnInt(1);
+    }
+
     if (input == NULL && AppLayerParserStateIssetFlag(pstate, APP_LAYER_PARSER_EOF)) {
         SCReturnInt(1);
     }
@@ -505,6 +552,18 @@ static int DNSTCPResponseParse(Flow *f, void *dstate,
     /* probably a rst/fin sending an eof */
     if (input == NULL || input_len == 0) {
         goto insufficient_data;
+    }
+
+    /* Clear gap state. */
+    if (dns_state->gap_tc) {
+        if (DNSTcpProbingParser(input, input_len, NULL) == ALPROTO_DNS) {
+            SCLogDebug("New data probed as DNS, clearing gap state.");
+            BufferReset(dns_state);
+            dns_state->gap_tc = 0;
+        } else {
+            SCLogDebug("Unable to sync DNS parser, leaving gap state.");
+            SCReturnInt(1);
+        }
     }
 
 next_record:
@@ -534,8 +593,8 @@ next_record:
                 goto bad_data;
 
             /* treat the rest of the data as a (potential) new record */
-            input += ntohs(dns_tcp_header->len);
-            input_len -= ntohs(dns_tcp_header->len);
+            input += (2 + ntohs(dns_tcp_header->len));
+            input_len -= (2 + ntohs(dns_tcp_header->len));
             goto next_record;
         } else {
             /* not enough data, store record length and buffer */
@@ -567,6 +626,11 @@ next_record:
         if (r < 0)
             goto bad_data;
     }
+
+    if (f != NULL) {
+        dns_state->last_resp = f->lastts;
+    }
+
     SCReturnInt(1);
 insufficient_data:
     SCReturnInt(-1);
@@ -608,10 +672,35 @@ static uint16_t DNSTcpProbingParser(uint8_t *input, uint32_t ilen, uint32_t *off
     return ALPROTO_DNS;
 }
 
+/**
+ * \brief Probing parser for TCP DNS responses.
+ *
+ * This is a minimal parser that just checks that the input contains enough
+ * data for a TCP DNS response.
+ */
+static uint16_t DNSTcpProbeResponse(uint8_t *input, uint32_t len,
+    uint32_t *offset)
+{
+    if (len == 0 || len < sizeof(DNSTcpHeader)) {
+        return ALPROTO_UNKNOWN;
+    }
+
+    DNSTcpHeader *dns_header = (DNSTcpHeader *)input;
+
+    if (ntohs(dns_header->len) < sizeof(DNSHeader)) {
+        return ALPROTO_FAILED;
+    }
+
+    return ALPROTO_DNS;
+}
+
 void RegisterDNSTCPParsers(void)
 {
-    char *proto_name = "dns";
-
+    const char *proto_name = "dns";
+#ifdef HAVE_RUST
+    RegisterRustDNSTCPParsers();
+    return;
+#endif
     /** DNS */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
         AppLayerProtoDetectRegisterProtocol(ALPROTO_DNS, proto_name);
@@ -622,12 +711,13 @@ void RegisterDNSTCPParsers(void)
                                           ALPROTO_DNS,
                                           0, sizeof(DNSTcpHeader),
                                           STREAM_TOSERVER,
-                                          DNSTcpProbingParser);
+                                          DNSTcpProbingParser, NULL);
         } else {
             int have_cfg = AppLayerProtoDetectPPParseConfPorts("tcp", IPPROTO_TCP,
                                                 proto_name, ALPROTO_DNS,
                                                 0, sizeof(DNSTcpHeader),
-                                                DNSTcpProbingParser);
+                                                DNSTcpProbingParser,
+                                                DNSTcpProbeResponse);
             /* if we have no config, we enable the default port 53 */
             if (!have_cfg) {
                 SCLogWarning(SC_ERR_DNS_CONFIG, "no DNS TCP config found, "
@@ -635,7 +725,8 @@ void RegisterDNSTCPParsers(void)
                                                 "port 53.");
                 AppLayerProtoDetectPPRegister(IPPROTO_TCP, "53",
                                    ALPROTO_DNS, 0, sizeof(DNSTcpHeader),
-                                   STREAM_TOSERVER, DNSTcpProbingParser);
+                                   STREAM_TOSERVER, DNSTcpProbingParser,
+                                   DNSTcpProbeResponse);
             }
         }
     } else {
@@ -662,23 +753,148 @@ void RegisterDNSTCPParsers(void)
 
         AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_DNS, DNSGetTx);
         AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_DNS, DNSGetTxCnt);
+        AppLayerParserRegisterLoggerFuncs(IPPROTO_TCP, ALPROTO_DNS, DNSGetTxLogged,
+                                          DNSSetTxLogged);
         AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_DNS,
                                                    DNSGetAlstateProgress);
-        AppLayerParserRegisterGetStateProgressCompletionStatus(IPPROTO_TCP, ALPROTO_DNS,
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DNS,
                                                                DNSGetAlstateProgressCompletionStatus);
         DNSAppLayerRegisterGetEventInfo(IPPROTO_TCP, ALPROTO_DNS);
+
+        /* This parser accepts gaps. */
+        AppLayerParserRegisterOptionFlags(IPPROTO_TCP, ALPROTO_DNS,
+                APP_LAYER_PARSER_OPT_ACCEPT_GAPS);
+
     } else {
         SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
                   "still on.", proto_name);
     }
+
+#ifdef UNITTESTS
+    AppLayerParserRegisterProtocolUnittests(IPPROTO_TCP, ALPROTO_DNS,
+        DNSTCPParserRegisterTests);
+#endif
 
     return;
 }
 
 /* UNITTESTS */
 #ifdef UNITTESTS
+
+#include "util-unittest-helper.h"
+
+static int DNSTCPParserTestMultiRecord(void)
+{
+    /* This is a buffer containing 20 DNS requests each prefixed by
+     * the request length for transport over TCP.  It was generated with Scapy,
+     * where each request is:
+     *    DNS(id=i, rd=1, qd=DNSQR(qname="%d.google.com" % i, qtype="A"))
+     * where i is 0 to 19.
+     */
+    uint8_t req[] = {
+        0x00, 0x1e, 0x00, 0x00, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x30,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x01, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x31,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x02, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x32,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x03, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x33,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x04, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x34,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x05, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x35,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x06, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x36,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x07, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x37,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x08, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x38,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1e, 0x00, 0x09, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01, 0x39,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1f, 0x00, 0x0a, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x31,
+        0x30, 0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65,
+        0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x00, 0x1f, 0x00, 0x0b, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x31, 0x31, 0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c,
+        0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01,
+        0x00, 0x01, 0x00, 0x1f, 0x00, 0x0c, 0x01, 0x00,
+        0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x02, 0x31, 0x32, 0x06, 0x67, 0x6f, 0x6f, 0x67,
+        0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x1f, 0x00, 0x0d, 0x01,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x02, 0x31, 0x33, 0x06, 0x67, 0x6f, 0x6f,
+        0x67, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00,
+        0x00, 0x01, 0x00, 0x01, 0x00, 0x1f, 0x00, 0x0e,
+        0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x02, 0x31, 0x34, 0x06, 0x67, 0x6f,
+        0x6f, 0x67, 0x6c, 0x65, 0x03, 0x63, 0x6f, 0x6d,
+        0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x1f, 0x00,
+        0x0f, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x02, 0x31, 0x35, 0x06, 0x67,
+        0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03, 0x63, 0x6f,
+        0x6d, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x1f,
+        0x00, 0x10, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x02, 0x31, 0x36, 0x06,
+        0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03, 0x63,
+        0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+        0x1f, 0x00, 0x11, 0x01, 0x00, 0x00, 0x01, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x31, 0x37,
+        0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65, 0x03,
+        0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x1f, 0x00, 0x12, 0x01, 0x00, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x31,
+        0x38, 0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c, 0x65,
+        0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01, 0x00,
+        0x01, 0x00, 0x1f, 0x00, 0x13, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
+        0x31, 0x39, 0x06, 0x67, 0x6f, 0x6f, 0x67, 0x6c,
+        0x65, 0x03, 0x63, 0x6f, 0x6d, 0x00, 0x00, 0x01,
+        0x00, 0x01
+    };
+    size_t reqlen = sizeof(req);
+
+    DNSState *state = DNSStateAlloc();
+    FAIL_IF_NULL(state);
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 53);
+    FAIL_IF_NULL(f);
+    f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_DNS;
+    f->alstate = state;
+
+    FAIL_IF_NOT(DNSTCPRequestParse(f, f->alstate, NULL, req, reqlen, NULL));
+    FAIL_IF(state->transaction_max != 20);
+
+    UTHFreeFlow(f);
+    PASS;
+}
+
 void DNSTCPParserRegisterTests(void)
 {
-//    UtRegisterTest("DNSTCPParserTest01", DNSTCPParserTest01, 1);
+    UtRegisterTest("DNSTCPParserTestMultiRecord", DNSTCPParserTestMultiRecord);
 }
-#endif
+
+#endif /* UNITTESTS */

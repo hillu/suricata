@@ -48,7 +48,7 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectReferenceSetup(DetectEngineCtx *, Signature *s, char *str);
+static int DetectReferenceSetup(DetectEngineCtx *, Signature *s, const char *str);
 
 /**
  * \brief Registration function for the reference: keyword
@@ -57,33 +57,13 @@ void DetectReferenceRegister(void)
 {
     sigmatch_table[DETECT_REFERENCE].name = "reference";
     sigmatch_table[DETECT_REFERENCE].desc = "direct to places where information about the rule can be found";
-    sigmatch_table[DETECT_REFERENCE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Reference";
+    sigmatch_table[DETECT_REFERENCE].url = DOC_URL DOC_VERSION "/rules/meta.html#reference";
     sigmatch_table[DETECT_REFERENCE].Match = NULL;
     sigmatch_table[DETECT_REFERENCE].Setup = DetectReferenceSetup;
     sigmatch_table[DETECT_REFERENCE].Free  = NULL;
     sigmatch_table[DETECT_REFERENCE].RegisterTests = ReferenceRegisterTests;
 
-    const char *eb;
-    int opts = 0;
-    int eo;
-
-    opts |= PCRE_CASELESS;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at "
-                   "offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 /**
@@ -110,7 +90,7 @@ void DetectReferenceFree(DetectReference *ref)
  * \retval ref  Pointer to signature reference on success.
  * \retval NULL On failure.
  */
-static DetectReference *DetectReferenceParse(char *rawstr, DetectEngineCtx *de_ctx)
+static DetectReference *DetectReferenceParse(const char *rawstr, DetectEngineCtx *de_ctx)
 {
     SCEnter();
 
@@ -190,7 +170,7 @@ error:
  * \retval -1 On Failure.
  */
 static int DetectReferenceSetup(DetectEngineCtx *de_ctx, Signature *s,
-                                char *rawstr)
+                                const char *rawstr)
 {
     SCEnter();
 
@@ -367,9 +347,9 @@ cleanup:
 void ReferenceRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectReferenceParseTest01", DetectReferenceParseTest01, 1);
-    UtRegisterTest("DetectReferenceParseTest02", DetectReferenceParseTest02, 1);
-    UtRegisterTest("DetectReferenceParseTest03", DetectReferenceParseTest03, 1);
+    UtRegisterTest("DetectReferenceParseTest01", DetectReferenceParseTest01);
+    UtRegisterTest("DetectReferenceParseTest02", DetectReferenceParseTest02);
+    UtRegisterTest("DetectReferenceParseTest03", DetectReferenceParseTest03);
 #endif /* UNITTESTS */
 
     return;

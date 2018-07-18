@@ -25,38 +25,25 @@
 
 #include "suricata-common.h"
 #include "detect.h"
+#include "detect-rev.h"
 #include "util-debug.h"
 #include "util-error.h"
 
-static int DetectRevSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectRevSetup (DetectEngineCtx *, Signature *, const char *);
 
 void DetectRevRegister (void)
 {
     sigmatch_table[DETECT_REV].name = "rev";
     sigmatch_table[DETECT_REV].desc = "set version of the rule";
-    sigmatch_table[DETECT_REV].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Rev-Revision";
+    sigmatch_table[DETECT_REV].url = DOC_URL DOC_VERSION "/rules/meta.html#rev-revision";
     sigmatch_table[DETECT_REV].Match = NULL;
     sigmatch_table[DETECT_REV].Setup = DetectRevSetup;
     sigmatch_table[DETECT_REV].Free  = NULL;
     sigmatch_table[DETECT_REV].RegisterTests = NULL;
 }
 
-static int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
-    char *str = rawstr;
-    char dubbed = 0;
-
-    /* Strip leading and trailing "s. */
-    if (rawstr[0] == '\"') {
-        str = SCStrdup(rawstr+1);
-        if (unlikely(str == NULL))
-            return -1;
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(rawstr)-1] = '\0';
-        }
-        dubbed = 1;
-    }
-
     unsigned long rev = 0;
     char *endptr = NULL;
     rev = strtoul(rawstr, &endptr, 10);
@@ -69,16 +56,20 @@ static int DetectRevSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "rev value to high, max %u", UINT_MAX);
         goto error;
     }
+    if (rev == 0) {
+        SCLogError(SC_ERR_INVALID_NUMERIC_VALUE, "rev value 0 is invalid");
+        goto error;
+    }
+    if (s->rev > 0) {
+        SCLogError(SC_ERR_INVALID_RULE_ARGUMENT, "duplicated 'rev' keyword detected");
+        goto error;
+    }
 
     s->rev = (uint32_t)rev;
 
-    if (dubbed)
-        SCFree(str);
     return 0;
 
  error:
-    if (dubbed)
-        SCFree(str);
     return -1;
 }
 

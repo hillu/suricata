@@ -7,4 +7,7 @@ dns-events.rules \
 tls-events.rules \
 modbus-events.rules \
 app-layer-events.rules \
-files.rules
+files.rules \
+dnp3-events.rules \
+ntp-events.rules \
+nfs-events.rules

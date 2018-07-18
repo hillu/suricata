@@ -31,15 +31,15 @@
 
 #include "util-privs.h"
 #include "util-debug.h"
+#include "util-device.h"
 #include "util-signal.h"
-
 #include "util-buffer.h"
 
+#if (defined BUILD_UNIX_SOCKET) && (defined HAVE_SYS_UN_H) && (defined HAVE_SYS_STAT_H) && (defined HAVE_SYS_TYPES_H)
 #include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#ifdef BUILD_UNIX_SOCKET
 #include <jansson.h>
 
 #include "output-json.h"
@@ -91,14 +91,14 @@ typedef struct UnixCommand_ {
  *
  * \retval 0 in case of error, 1 in case of success
  */
-int UnixNew(UnixCommand * this)
+static int UnixNew(UnixCommand * this)
 {
     struct sockaddr_un addr;
     int len;
     int ret;
     int on = 1;
-    char *sockettarget = NULL;
-    char *socketname;
+    char sockettarget[PATH_MAX];
+    const char *socketname;
 
     this->start_timestamp = time(NULL);
     this->socket = -1;
@@ -108,42 +108,39 @@ int UnixNew(UnixCommand * this)
     TAILQ_INIT(&this->tasks);
     TAILQ_INIT(&this->clients);
 
+    int check_dir = 0;
     if (ConfGet("unix-command.filename", &socketname) == 1) {
         if (PathIsAbsolute(socketname)) {
-            sockettarget = SCStrdup(socketname);
-            if (unlikely(sockettarget == NULL)) {
-                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-                return 0;
-            }
+            strlcpy(sockettarget, socketname, sizeof(sockettarget));
         } else {
-            int socketlen = strlen(SOCKET_PATH) + strlen(socketname) + 2;
-            sockettarget = SCMalloc(socketlen);
-            if (unlikely(sockettarget == NULL)) {
-                SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-                return 0;
-            }
-            snprintf(sockettarget, socketlen, "%s/%s", SOCKET_PATH, socketname);
+            snprintf(sockettarget, sizeof(sockettarget), "%s/%s",
+                    SOCKET_PATH, socketname);
+            check_dir = 1;
+        }
+    } else {
+        strlcpy(sockettarget, SOCKET_TARGET, sizeof(sockettarget));
+        check_dir = 1;
+    }
+    SCLogInfo("Using unix socket file '%s'", sockettarget);
 
-            /* Create socket dir */
+    if (check_dir) {
+        struct stat stat_buf;
+        /* coverity[toctou] */
+        if (stat(SOCKET_PATH, &stat_buf) != 0) {
+            /* coverity[toctou] */
             ret = mkdir(SOCKET_PATH, S_IRWXU|S_IXGRP|S_IRGRP);
-            if ( ret != 0 ) {
+            if (ret != 0) {
                 int err = errno;
                 if (err != EEXIST) {
-                    SCFree(sockettarget);
-                    SCLogError(SC_ERR_OPENING_FILE,
-                            "Cannot create socket directory %s: %s", SOCKET_PATH, strerror(err));
+                    SCLogError(SC_ERR_INITIALIZATION,
+                            "Cannot create socket directory %s: %s",
+                            SOCKET_PATH, strerror(err));
                     return 0;
                 }
+            } else {
+                SCLogInfo("Created socket directory %s",
+                        SOCKET_PATH);
             }
-
-        }
-        SCLogInfo("Using unix socket file '%s'", sockettarget);
-    }
-    if (sockettarget == NULL) {
-        sockettarget = SCStrdup(SOCKET_TARGET);
-        if (unlikely(sockettarget == NULL)) {
-            SCLogError(SC_ERR_MEM_ALLOC, "Unable to allocate socket name");
-            return 0;
         }
     }
 
@@ -154,7 +151,7 @@ int UnixNew(UnixCommand * this)
     addr.sun_family = AF_UNIX;
     strlcpy(addr.sun_path, sockettarget, sizeof(addr.sun_path));
     addr.sun_path[sizeof(addr.sun_path) - 1] = 0;
-    len = strlen(addr.sun_path) + sizeof(addr.sun_family);
+    len = strlen(addr.sun_path) + sizeof(addr.sun_family) + 1;
 
     /* create socket */
     this->socket = socket(AF_UNIX, SOCK_STREAM, 0);
@@ -162,14 +159,14 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_OPENING_FILE,
                      "Unix Socket: unable to create UNIX socket %s: %s",
                      addr.sun_path, strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
     this->select_max = this->socket + 1;
 
+#if !(defined OS_FREEBSD || defined __OpenBSD__)
     /* Set file mode: will not fully work on most system, the group
-     * permission is not changed on some Linux and *BSD won't do the
-     * chmod. */
+     * permission is not changed on some Linux. *BSD won't do the
+     * chmod: it returns EINVAL when calling fchmod on sockets. */
     ret = fchmod(this->socket, S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP);
     if (ret == -1) {
         int err = errno;
@@ -178,6 +175,7 @@ int UnixNew(UnixCommand * this)
                      strerror(err),
                      err);
     }
+#endif
     /* set reuse option */
     ret = setsockopt(this->socket, SOL_SOCKET, SO_REUSEADDR,
                      (char *) &on, sizeof(on));
@@ -192,7 +190,6 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_INITIALIZATION,
                      "Unix socket: UNIX socket bind(%s) error: %s",
                      sockettarget, strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
 
@@ -201,14 +198,12 @@ int UnixNew(UnixCommand * this)
         SCLogWarning(SC_ERR_INITIALIZATION,
                      "Command server: UNIX socket listen() error: %s",
                      strerror(errno));
-        SCFree(sockettarget);
         return 0;
     }
-    SCFree(sockettarget);
     return 1;
 }
 
-void UnixCommandSetMaxFD(UnixCommand *this)
+static void UnixCommandSetMaxFD(UnixCommand *this)
 {
     UnixClient *item;
 
@@ -252,7 +247,7 @@ static void UnixClientFree(UnixClient *c)
 /**
  * \brief Close the unix socket
  */
-void UnixCommandClose(UnixCommand  *this, int fd)
+static void UnixCommandClose(UnixCommand  *this, int fd)
 {
     UnixClient *item;
     int found = 0;
@@ -279,7 +274,7 @@ void UnixCommandClose(UnixCommand  *this, int fd)
 #define UNIX_PROTO_VERSION_LENGTH 200
 #define UNIX_PROTO_VERSION "0.1"
 
-int UnixCommandSendJSONToClient(UnixClient *client, json_t *js)
+static int UnixCommandSendJSONToClient(UnixClient *client, json_t *js)
 {
     MemBufferReset(client->mbuf);
 
@@ -319,7 +314,7 @@ int UnixCommandSendJSONToClient(UnixClient *client, json_t *js)
  *
  * \retval 0 in case of error, 1 in case of success
  */
-int UnixCommandAccept(UnixCommand *this)
+static int UnixCommandAccept(UnixCommand *this)
 {
     char buffer[UNIX_PROTO_VERSION_LENGTH + 1];
     json_t *client_msg;
@@ -421,7 +416,7 @@ int UnixCommandAccept(UnixCommand *this)
     return 1;
 }
 
-int UnixCommandBackgroundTasks(UnixCommand* this)
+static int UnixCommandBackgroundTasks(UnixCommand* this)
 {
     int ret = 1;
     Task *ltask;
@@ -444,7 +439,7 @@ int UnixCommandBackgroundTasks(UnixCommand* this)
  *
  * \retval 0 in case of error, 1 in case of success
  */
-int UnixCommandExecute(UnixCommand * this, char *command, UnixClient *client)
+static int UnixCommandExecute(UnixCommand * this, char *command, UnixClient *client)
 {
     int ret = 1;
     json_error_t error;
@@ -521,7 +516,7 @@ error:
     return 0;
 }
 
-void UnixCommandRun(UnixCommand * this, UnixClient *client)
+static void UnixCommandRun(UnixCommand * this, UnixClient *client)
 {
     char buffer[4096];
     int ret;
@@ -550,7 +545,7 @@ void UnixCommandRun(UnixCommand * this, UnixClient *client)
  *
  * \retval 0 in case of error, 1 in case of success
  */
-int UnixMain(UnixCommand * this)
+static int UnixMain(UnixCommand * this)
 {
     struct timeval tv;
     int ret;
@@ -579,7 +574,7 @@ int UnixMain(UnixCommand * this)
         return 0;
     }
 
-    if (suricata_ctl_flags & (SURICATA_STOP | SURICATA_KILL)) {
+    if (suricata_ctl_flags & SURICATA_STOP) {
         TAILQ_FOREACH_SAFE(uclient, &this->clients, next, tclient) {
             UnixCommandClose(this, uclient->fd);
         }
@@ -604,50 +599,7 @@ int UnixMain(UnixCommand * this)
     return 1;
 }
 
-/**
- * \brief Used to kill unix manager thread(s).
- *
- * \todo Kinda hackish since it uses the tv name to identify unix manager
- *       thread.  We need an all weather identification scheme.
- */
-void UnixKillUnixManagerThread(void)
-{
-    ThreadVars *tv = NULL;
-    int cnt = 0;
-
-    SCCtrlCondSignal(&unix_manager_ctrl_cond);
-
-    SCMutexLock(&tv_root_lock);
-
-    /* flow manager thread(s) is/are a part of mgmt threads */
-    tv = tv_root[TVT_CMD];
-
-    while (tv != NULL) {
-        if (strcasecmp(tv->name, "UnixManagerThread") == 0) {
-            TmThreadsSetFlag(tv, THV_KILL);
-            TmThreadsSetFlag(tv, THV_DEINIT);
-
-            /* be sure it has shut down */
-            while (!TmThreadsCheckFlag(tv, THV_CLOSED)) {
-                usleep(100);
-            }
-            cnt++;
-        }
-        tv = tv->next;
-    }
-
-    /* not possible, unless someone decides to rename UnixManagerThread */
-    if (cnt == 0) {
-        SCMutexUnlock(&tv_root_lock);
-        abort();
-    }
-
-    SCMutexUnlock(&tv_root_lock);
-    return;
-}
-
-
-TmEcode UnixManagerShutdownCommand(json_t *cmd,
+static TmEcode UnixManagerShutdownCommand(json_t *cmd,
                                    json_t *server_msg, void *data)
 {
     SCEnter();
@@ -656,13 +608,13 @@ TmEcode UnixManagerShutdownCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerVersionCommand(json_t *cmd,
+static TmEcode UnixManagerVersionCommand(json_t *cmd,
                                    json_t *server_msg, void *data)
 {
     SCEnter();
     json_object_set_new(server_msg, "message", json_string(
 #ifdef REVISION
-                        PROG_VER  xstr(REVISION)
+                        PROG_VER " (rev "  xstr(REVISION) ")"
 #elif defined RELEASE
                         PROG_VER " RELEASE"
 #else
@@ -672,7 +624,7 @@ TmEcode UnixManagerVersionCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerUptimeCommand(json_t *cmd,
+static TmEcode UnixManagerUptimeCommand(json_t *cmd,
                                  json_t *server_msg, void *data)
 {
     SCEnter();
@@ -684,7 +636,7 @@ TmEcode UnixManagerUptimeCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerRunningModeCommand(json_t *cmd,
+static TmEcode UnixManagerRunningModeCommand(json_t *cmd,
                                       json_t *server_msg, void *data)
 {
     SCEnter();
@@ -692,7 +644,7 @@ TmEcode UnixManagerRunningModeCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerCaptureModeCommand(json_t *cmd,
+static TmEcode UnixManagerCaptureModeCommand(json_t *cmd,
                                       json_t *server_msg, void *data)
 {
     SCEnter();
@@ -700,7 +652,7 @@ TmEcode UnixManagerCaptureModeCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerReloadRules(json_t *cmd, json_t *server_msg, void *data)
+static TmEcode UnixManagerReloadRules(json_t *cmd, json_t *server_msg, void *data)
 {
     SCEnter();
     DetectEngineReloadStart();
@@ -712,12 +664,12 @@ TmEcode UnixManagerReloadRules(json_t *cmd, json_t *server_msg, void *data)
     SCReturnInt(TM_ECODE_OK);
 }
 
-TmEcode UnixManagerConfGetCommand(json_t *cmd,
+static TmEcode UnixManagerConfGetCommand(json_t *cmd,
                                   json_t *server_msg, void *data)
 {
     SCEnter();
 
-    char *confval = NULL;
+    const char *confval = NULL;
     char *variable = NULL;
 
     json_t *jarg = json_object_get(cmd, "variable");
@@ -742,7 +694,7 @@ TmEcode UnixManagerConfGetCommand(json_t *cmd,
     SCReturnInt(TM_ECODE_FAILED);
 }
 
-TmEcode UnixManagerListCommand(json_t *cmd,
+static TmEcode UnixManagerListCommand(json_t *cmd,
                                json_t *answer, void *data)
 {
     SCEnter();
@@ -894,28 +846,21 @@ TmEcode UnixManagerRegisterBackgroundTask(TmEcode (*Func)(void *),
     SCReturnInt(TM_ECODE_OK);
 }
 
-typedef struct UnixManagerThreadData_ {
-    int padding;
-} UnixManagerThreadData;
-
-static TmEcode UnixManagerThreadInit(ThreadVars *t, void *initdata, void **data)
+int UnixManagerInit(void)
 {
-    UnixManagerThreadData *utd = SCCalloc(1, sizeof(*utd));
-    if (utd == NULL)
-        return TM_ECODE_FAILED;
-
     if (UnixNew(&command) == 0) {
         int failure_fatal = 0;
-        SCLogError(SC_ERR_INITIALIZATION,
-                   "Unable to create unix command socket");
         if (ConfGetBool("engine.init-failure-fatal", &failure_fatal) != 1) {
             SCLogDebug("ConfGetBool could not load the value.");
         }
-        SCFree(utd);
         if (failure_fatal) {
+            SCLogError(SC_ERR_INITIALIZATION,
+                    "Unable to create unix command socket");
             exit(EXIT_FAILURE);
         } else {
-            return TM_ECODE_FAILED;
+            SCLogWarning(SC_ERR_INITIALIZATION,
+                    "Unable to create unix command socket");
+            return -1;
         }
     }
 
@@ -935,6 +880,22 @@ static TmEcode UnixManagerThreadInit(ThreadVars *t, void *initdata, void **data)
     UnixManagerRegisterCommand("register-tenant", UnixSocketRegisterTenant, &command, UNIX_CMD_TAKE_ARGS);
     UnixManagerRegisterCommand("reload-tenant", UnixSocketReloadTenant, &command, UNIX_CMD_TAKE_ARGS);
     UnixManagerRegisterCommand("unregister-tenant", UnixSocketUnregisterTenant, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("add-hostbit", UnixSocketHostbitAdd, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("remove-hostbit", UnixSocketHostbitRemove, &command, UNIX_CMD_TAKE_ARGS);
+    UnixManagerRegisterCommand("list-hostbit", UnixSocketHostbitList, &command, UNIX_CMD_TAKE_ARGS);
+
+    return 0;
+}
+
+typedef struct UnixManagerThreadData_ {
+    int padding;
+} UnixManagerThreadData;
+
+static TmEcode UnixManagerThreadInit(ThreadVars *t, const void *initdata, void **data)
+{
+    UnixManagerThreadData *utd = SCCalloc(1, sizeof(*utd));
+    if (utd == NULL)
+        return TM_ECODE_FAILED;
 
     *data = utd;
     return TM_ECODE_OK;
@@ -994,7 +955,7 @@ void UnixManagerThreadSpawn(int mode)
     SCCtrlCondInit(&unix_manager_ctrl_cond, NULL);
     SCCtrlMutexInit(&unix_manager_ctrl_mutex, NULL);
 
-    tv_unixmgr = TmThreadCreateCmdThreadByName("UnixManagerThread",
+    tv_unixmgr = TmThreadCreateCmdThreadByName(thread_name_unix_socket,
                                           "UnixManager", 0);
 
     if (tv_unixmgr == NULL) {
@@ -1014,6 +975,21 @@ void UnixManagerThreadSpawn(int mode)
     return;
 }
 
+// TODO can't think of a good name
+void UnixManagerThreadSpawnNonRunmode(void)
+{
+    /* Spawn the unix socket manager thread */
+    int unix_socket = ConfUnixSocketIsEnable();
+    if (unix_socket == 1) {
+        if (UnixManagerInit() == 0) {
+            UnixManagerRegisterCommand("iface-stat", LiveDeviceIfaceStat, NULL,
+                    UNIX_CMD_TAKE_ARGS);
+            UnixManagerRegisterCommand("iface-list", LiveDeviceIfaceList, NULL, 0);
+            UnixManagerThreadSpawn(0);
+        }
+    }
+}
+
 /**
  * \brief Used to kill unix manager thread(s).
  *
@@ -1024,6 +1000,7 @@ void UnixSocketKillSocketThread(void)
 {
     ThreadVars *tv = NULL;
 
+again:
     SCMutexLock(&tv_root_lock);
 
     /* unix manager thread(s) is/are a part of command threads */
@@ -1044,8 +1021,10 @@ void UnixSocketKillSocketThread(void)
             TmThreadsSetFlag(tv, THV_KILL);
             TmThreadsSetFlag(tv, THV_DEINIT);
             /* Be sure it has shut down */
-            while (!TmThreadsCheckFlag(tv, THV_CLOSED)) {
+            if (!TmThreadsCheckFlag(tv, THV_CLOSED)) {
+                SCMutexUnlock(&tv_root_lock);
                 usleep(100);
+                goto again;
             }
         }
         tv = tv->next;
@@ -1068,11 +1047,16 @@ void UnixSocketKillSocketThread(void)
     return;
 }
 
+void UnixManagerThreadSpawnNonRunmode(void)
+{
+    return;
+}
+
 #endif /* BUILD_UNIX_SOCKET */
 
 void TmModuleUnixManagerRegister (void)
 {
-#ifdef BUILD_UNIX_SOCKET
+#if defined(BUILD_UNIX_SOCKET) && defined(HAVE_SYS_UN_H) && defined(HAVE_SYS_STAT_H) && defined(HAVE_SYS_TYPES_H)
     tmm_modules[TMM_UNIXMANAGER].name = "UnixManager";
     tmm_modules[TMM_UNIXMANAGER].ThreadInit = UnixManagerThreadInit;
     tmm_modules[TMM_UNIXMANAGER].ThreadDeinit = UnixManagerThreadDeinit;

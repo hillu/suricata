@@ -37,48 +37,28 @@
 #include "util-debug.h"
 #include "util-unittest.h"
 
-#define DETECT_CLASSTYPE_REGEX "^\\s*([a-zA-Z][a-zA-Z0-9-_]*)\\s*$"
+#define PARSE_REGEX "^\\s*([a-zA-Z][a-zA-Z0-9-_]*)\\s*$"
 
 static pcre *regex = NULL;
 static pcre_extra *regex_study = NULL;
 
-static int DetectClasstypeSetup(DetectEngineCtx *, Signature *, char *);
-void DetectClasstypeRegisterTests(void);
+static int DetectClasstypeSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectClasstypeRegisterTests(void);
 
 /**
  * \brief Registers the handler functions for the "Classtype" keyword.
  */
 void DetectClasstypeRegister(void)
 {
-    const char *eb = NULL;
-    int eo;
-    int opts = 0;
-
-    SCLogDebug("Registering the Classtype keyword handler");
-
     sigmatch_table[DETECT_CLASSTYPE].name = "classtype";
     sigmatch_table[DETECT_CLASSTYPE].desc = "information about the classification of rules and alerts";
-    sigmatch_table[DETECT_CLASSTYPE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Classtype";
+    sigmatch_table[DETECT_CLASSTYPE].url = DOC_URL DOC_VERSION "/rules/meta.html#classtype";
     sigmatch_table[DETECT_CLASSTYPE].Match = NULL;
     sigmatch_table[DETECT_CLASSTYPE].Setup = DetectClasstypeSetup;
     sigmatch_table[DETECT_CLASSTYPE].Free  = NULL;
     sigmatch_table[DETECT_CLASSTYPE].RegisterTests = DetectClasstypeRegisterTests;
 
-    regex = pcre_compile(DETECT_CLASSTYPE_REGEX, opts, &eb, &eo, NULL);
-    if (regex == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                   DETECT_CLASSTYPE_REGEX, eo, eb);
-        goto end;
-    }
-
-    regex_study = pcre_study(regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto end;
-    }
-
- end:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &regex, &regex_study);
 }
 
 /**
@@ -88,19 +68,12 @@ void DetectClasstypeRegister(void)
  *
  * \retval bool success or failure.
  */
-static int DetectClasstypeParseRawString(char *rawstr, char *out, size_t outsize)
+static int DetectClasstypeParseRawString(const char *rawstr, char *out, size_t outsize)
 {
 #define MAX_SUBSTRINGS 30
     int ret = 0;
     int ov[MAX_SUBSTRINGS];
     size_t len = strlen(rawstr);
-
-    /* get rid of the double quotes if present */
-    if (rawstr[0] == '\"' && rawstr[strlen(rawstr) - 1] == '\"') {
-        rawstr++;
-        rawstr[strlen(rawstr) - 1] = '\0';
-        len -= 2;
-    }
 
     ret = pcre_exec(regex, regex_study, rawstr, len, 0, 0, ov, 30);
     if (ret < 0) {
@@ -130,7 +103,7 @@ static int DetectClasstypeParseRawString(char *rawstr, char *out, size_t outsize
  * \retval  0 On success
  * \retval -1 On failure
  */
-static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     char parsed_ct_name[1024] = "";
     SCClassConfClasstype *ct = NULL;
@@ -145,6 +118,12 @@ static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
     if (ct == NULL) {
         SCLogError(SC_ERR_UNKNOWN_VALUE, "Unknown Classtype: \"%s\".  Invalidating the Signature",
                    parsed_ct_name);
+        goto error;
+    }
+
+    if ((s->class > 0) || (s->class_msg != NULL))
+    {
+        SCLogError(SC_ERR_INVALID_RULE_ARGUMENT, "duplicated 'classtype' keyword detected");
         goto error;
     }
 
@@ -173,7 +152,7 @@ static int DetectClasstypeSetup(DetectEngineCtx *de_ctx, Signature *s, char *raw
  * \test Check that supplying an invalid classtype in the rule, results in the
  *       rule being invalidated.
  */
-int DetectClasstypeTest01()
+static int DetectClasstypeTest01(void)
 {
     int result = 0;
 
@@ -202,7 +181,7 @@ end:
  *       properly, with rules containing invalid classtypes being rejected
  *       and the ones containing valid classtypes parsed and returned.
  */
-int DetectClasstypeTest02()
+static int DetectClasstypeTest02(void)
 {
     int result = 0;
     Signature *last = NULL;
@@ -268,7 +247,7 @@ end:
  * \test Check that the signatures are assigned priority based on classtype they
  *       are given.
  */
-int DetectClasstypeTest03()
+static int DetectClasstypeTest03(void)
 {
     int result = 0;
     Signature *last = NULL;
@@ -328,14 +307,14 @@ end:
 /**
  * \brief This function registers unit tests for Classification Config API.
  */
-void DetectClasstypeRegisterTests(void)
+static void DetectClasstypeRegisterTests(void)
 {
 
 #ifdef UNITTESTS
 
-    UtRegisterTest("DetectClasstypeTest01", DetectClasstypeTest01, 1);
-    UtRegisterTest("DetectClasstypeTest02", DetectClasstypeTest02, 1);
-    UtRegisterTest("DetectClasstypeTest03", DetectClasstypeTest03, 1);
+    UtRegisterTest("DetectClasstypeTest01", DetectClasstypeTest01);
+    UtRegisterTest("DetectClasstypeTest02", DetectClasstypeTest02);
+    UtRegisterTest("DetectClasstypeTest03", DetectClasstypeTest03);
 
 #endif /* UNITTESTS */
 

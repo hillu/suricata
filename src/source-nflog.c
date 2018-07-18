@@ -43,7 +43,7 @@
  *
  */
 
-TmEcode NoNFLOGSupportExit(ThreadVars *, void *, void **);
+TmEcode NoNFLOGSupportExit(ThreadVars *, const void *, void **);
 
 void TmModuleReceiveNFLOGRegister (void)
 {
@@ -57,7 +57,7 @@ void TmModuleDecodeNFLOGRegister (void)
     tmm_modules[TMM_DECODENFLOG].ThreadInit = NoNFLOGSupportExit;
 }
 
-TmEcode NoNFLOGSupportExit(ThreadVars *tv, void *initdata, void **data)
+TmEcode NoNFLOGSupportExit(ThreadVars *tv, const void *initdata, void **data)
 {
     SCLogError(SC_ERR_NFLOG_NOSUPPORT,"Error creating thread %s: you do not have support for nflog "
            "enabled please recompile with --enable-nflog", tv->name);
@@ -68,12 +68,12 @@ TmEcode NoNFLOGSupportExit(ThreadVars *tv, void *initdata, void **data)
 
 #include "source-nflog.h"
 
-TmEcode ReceiveNFLOGThreadInit(ThreadVars *, void *, void **);
+TmEcode ReceiveNFLOGThreadInit(ThreadVars *, const void *, void **);
 TmEcode ReceiveNFLOGThreadDeinit(ThreadVars *, void *);
 TmEcode ReceiveNFLOGLoop(ThreadVars *, void *, void *);
 void ReceiveNFLOGThreadExitStats(ThreadVars *, void *);
 
-TmEcode DecodeNFLOGThreadInit(ThreadVars *, void *, void **);
+TmEcode DecodeNFLOGThreadInit(ThreadVars *, const void *, void **);
 TmEcode DecodeNFLOGThreadDeinit(ThreadVars *tv, void *data);
 TmEcode DecodeNFLOG(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
 
@@ -209,9 +209,9 @@ static int NFLOGCallback(struct nflog_g_handle *gh, struct nfgenmsg *msg,
  * \retvalTM_ECODE_OK on success
  * \retval TM_ECODE_FAILED on error
  */
-TmEcode ReceiveNFLOGThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode ReceiveNFLOGThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
-    NflogGroupConfig *nflconfig = initdata;
+    NflogGroupConfig *nflconfig = (NflogGroupConfig *)initdata;
 
     if (initdata == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "initdata == NULL");
@@ -526,7 +526,7 @@ TmEcode DecodeNFLOG(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Pack
  * \retval TM_ECODE_OK is returned on success
  * \retval TM_ECODE_FAILED is returned on error
  */
-TmEcode DecodeNFLOGThreadInit(ThreadVars *tv, void *initdata, void **data)
+TmEcode DecodeNFLOGThreadInit(ThreadVars *tv, const void *initdata, void **data)
 {
     DecodeThreadVars *dtv = NULL;
     dtv = DecodeThreadVarsAlloc(tv);

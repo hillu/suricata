@@ -36,7 +36,6 @@
 #include "util-debug.h"
 
 #include "decode-ipv4.h"
-#include "detect.h"
 #include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
@@ -45,6 +44,7 @@
 #include "output.h"
 #include "output-json.h"
 #include "output-json-alert.h"
+#include "output-json-drop.h"
 
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
@@ -71,6 +71,9 @@ typedef struct JsonDropLogThread_ {
     JsonDropOutputCtx *drop_ctx;
     MemBuffer *buffer;
 } JsonDropLogThread;
+
+/* default to true as this has been the default behavior for a long time */
+static int g_droplog_flows_start = 1;
 
 /**
  * \brief   Log the dropped packets in netfilter format when engine is running
@@ -175,7 +178,7 @@ static int DropLogJSON (JsonDropLogThread *aft, const Packet *p)
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonDropLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonDropLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonDropLogThread *aft = SCMalloc(sizeof(JsonDropLogThread));
     if (unlikely(aft == NULL))
@@ -184,7 +187,7 @@ static TmEcode JsonDropLogThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for AlertFastLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogDrop.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -283,6 +286,17 @@ static OutputCtx *JsonDropLogInitCtx(ConfNode *conf)
                 drop_ctx->flags = LOG_DROP_ALERTS;
             }
         }
+        extended = ConfNodeLookupChildValue(conf, "flows");
+        if (extended != NULL) {
+            if (strcasecmp(extended, "start") == 0) {
+                g_droplog_flows_start = 1;
+            } else if (strcasecmp(extended, "all") == 0) {
+                g_droplog_flows_start = 0;
+            } else {
+                SCLogWarning(SC_ERR_CONF_YAML_ERROR, "valid options for "
+                        "'flow' are 'start' and 'all'");
+            }
+        }
     }
 
     output_ctx->data = drop_ctx;
@@ -317,6 +331,17 @@ static OutputCtx *JsonDropLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
                 drop_ctx->flags = LOG_DROP_ALERTS;
             }
         }
+        extended = ConfNodeLookupChildValue(conf, "flows");
+        if (extended != NULL) {
+            if (strcasecmp(extended, "start") == 0) {
+                g_droplog_flows_start = 1;
+            } else if (strcasecmp(extended, "all") == 0) {
+                g_droplog_flows_start = 0;
+            } else {
+                SCLogWarning(SC_ERR_CONF_YAML_ERROR, "valid options for "
+                        "'flow' are 'start' and 'all'");
+            }
+        }
     }
 
     drop_ctx->file_ctx = ajt->file_ctx;
@@ -342,15 +367,16 @@ static int JsonDropLogger(ThreadVars *tv, void *thread_data, const Packet *p)
     if (r < 0)
         return -1;
 
+    if (!g_droplog_flows_start)
+        return 0;
+
     if (p->flow) {
-        FLOWLOCK_RDLOCK(p->flow);
         if (p->flow->flags & FLOW_ACTION_DROP) {
             if (PKT_IS_TOSERVER(p) && !(p->flow->flags & FLOW_TOSERVER_DROP_LOGGED))
                 p->flow->flags |= FLOW_TOSERVER_DROP_LOGGED;
             else if (PKT_IS_TOCLIENT(p) && !(p->flow->flags & FLOW_TOCLIENT_DROP_LOGGED))
                 p->flow->flags |= FLOW_TOCLIENT_DROP_LOGGED;
         }
-        FLOWLOCK_UNLOCK(p->flow);
     }
     return 0;
 }
@@ -375,18 +401,16 @@ static int JsonDropLogCondition(ThreadVars *tv, const Packet *p)
         return FALSE;
     }
 
-    if (p->flow != NULL) {
+    if (g_droplog_flows_start && p->flow != NULL) {
         int ret = FALSE;
 
         /* for a flow that will be dropped fully, log just once per direction */
-        FLOWLOCK_RDLOCK(p->flow);
         if (p->flow->flags & FLOW_ACTION_DROP) {
             if (PKT_IS_TOSERVER(p) && !(p->flow->flags & FLOW_TOSERVER_DROP_LOGGED))
                 ret = TRUE;
             else if (PKT_IS_TOCLIENT(p) && !(p->flow->flags & FLOW_TOCLIENT_DROP_LOGGED))
                 ret = TRUE;
         }
-        FLOWLOCK_UNLOCK(p->flow);
 
         /* if drop is caused by signature, log anyway */
         if (p->alerts.drop.action != 0)
@@ -400,32 +424,21 @@ static int JsonDropLogCondition(ThreadVars *tv, const Packet *p)
     return FALSE;
 }
 
-void TmModuleJsonDropLogRegister (void)
+void JsonDropLogRegister (void)
 {
-    tmm_modules[TMM_JSONDROPLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONDROPLOG].ThreadInit = JsonDropLogThreadInit;
-    tmm_modules[TMM_JSONDROPLOG].ThreadDeinit = JsonDropLogThreadDeinit;
-    tmm_modules[TMM_JSONDROPLOG].cap_flags = 0;
-    tmm_modules[TMM_JSONDROPLOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterPacketModule(MODULE_NAME, "drop-json-log",
-            JsonDropLogInitCtx, JsonDropLogger, JsonDropLogCondition);
-    OutputRegisterPacketSubModule("eve-log", MODULE_NAME, "eve-log.drop",
-            JsonDropLogInitCtxSub, JsonDropLogger, JsonDropLogCondition);
+    OutputRegisterPacketModule(LOGGER_JSON_DROP, MODULE_NAME, "drop-json-log",
+        JsonDropLogInitCtx, JsonDropLogger, JsonDropLogCondition,
+        JsonDropLogThreadInit, JsonDropLogThreadDeinit, NULL);
+    OutputRegisterPacketSubModule(LOGGER_JSON_DROP, "eve-log", MODULE_NAME,
+        "eve-log.drop", JsonDropLogInitCtxSub, JsonDropLogger,
+        JsonDropLogCondition, JsonDropLogThreadInit, JsonDropLogThreadDeinit,
+        NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonDropLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonDropLogRegister (void)
-{
-    tmm_modules[TMM_JSONDROPLOG].name = MODULE_NAME;
-    tmm_modules[TMM_JSONDROPLOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

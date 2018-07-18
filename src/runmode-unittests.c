@@ -23,6 +23,7 @@
 #include "suricata-common.h"
 #include "config.h"
 #include "util-unittest.h"
+#include "runmode-unittests.h"
 
 #ifdef UNITTESTS
 
@@ -38,7 +39,6 @@
 #include "detect-engine-uri.h"
 #include "detect-engine-hcbd.h"
 #include "detect-engine-hsbd.h"
-#include "detect-engine-hhd.h"
 #include "detect-engine-hrhd.h"
 #include "detect-engine-hmd.h"
 #include "detect-engine-hcd.h"
@@ -66,6 +66,8 @@
 #include "ippair-bit.h"
 #include "unix-manager.h"
 
+#include "stream-tcp.h"
+
 #include "app-layer-detect-proto.h"
 #include "app-layer-parser.h"
 #include "app-layer.h"
@@ -92,7 +94,6 @@
 #include "util-magic.h"
 #include "util-memcmp.h"
 #include "util-misc.h"
-#include "util-ringbuffer.h"
 #include "util-signal.h"
 
 #include "reputation.h"
@@ -109,7 +110,6 @@
 
 #include "util-mpm-ac.h"
 #include "util-mpm-hs.h"
-#include "detect-engine-mpm.h"
 
 #include "util-decode-asn1.h"
 
@@ -119,78 +119,19 @@
 #include "defrag.h"
 #include "detect-engine-siggroup.h"
 
+#include "util-streaming-buffer.h"
+#include "util-lua.h"
+
 #endif /* UNITTESTS */
 
-void RegisterAllModules();
 void TmqhSetup (void);
 
-/**
- * Run or list unittests
- *
- * \param list_unittests If set to 1, list unittests. Run them if set to 0.
- * \param regex_arg A regular expression to select unittests to run
- *
- * This function is terminal and will call exit after being called.
- */
-
-void RunUnittests(int list_unittests, char *regex_arg)
-{
 #ifdef UNITTESTS
-    /* Initializations for global vars, queues, etc (memsets, mutex init..) */
-    GlobalInits();
-    TimeInit();
-    SupportFastPatternForSigMatchTypes();
-
-    default_packet_size = DEFAULT_PACKET_SIZE;
-#ifdef __SC_CUDA_SUPPORT__
-    /* Init the CUDA environment */
-    SCCudaInitCudaEnvironment();
-    CudaBufferInit();
-#endif
-    /* load the pattern matchers */
-    MpmTableSetup();
-#ifdef __SC_CUDA_SUPPORT__
-    MpmCudaEnvironmentSetup();
-#endif
-
-    AppLayerSetup();
-
-    /* hardcoded initialization code */
-    SigTableSetup(); /* load the rule keywords */
-    TmqhSetup();
-
-    StorageInit();
-    CIDRInit();
-    SigParsePrepare();
-
-#ifdef DBG_MEM_ALLOC
-    SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
-#endif
-    SCReputationInitCtx();
-    SCProtoNameInit();
-
-    TagInitCtx();
-    SCReferenceConfInit();
-    SCClassConfInit();
-
-    RegisterAllModules();
-
-    DetectEngineRegisterAppInspectionEngines();
-
-    HostBitInitCtx();
-
-    StorageFinalize();
-   /* test and initialize the unittesting subsystem */
-    if(regex_arg == NULL){
-        regex_arg = ".*";
-        UtRunSelftest(regex_arg); /* inits and cleans up again */
-    }
-
-    AppLayerHtpEnableRequestBodyCallback();
-    AppLayerHtpNeedFileInspection();
-
-    UtInitialize();
+static void RegisterUnittests(void)
+{
     UTHRegisterTests();
+    StreamTcpRegisterTests();
+    SigRegisterTests();
     SCReputationRegisterTests();
     TmModuleRegisterTests();
     SigTableRegisterTests();
@@ -205,6 +146,7 @@ void RunUnittests(int list_unittests, char *regex_arg)
     HostBitRegisterTests();
     IPPairBitRegisterTests();
     StatsRegisterTests();
+    DecodeEthernetRegisterTests();
     DecodePPPRegisterTests();
     DecodeVLANRegisterTests();
     DecodeRawRegisterTests();
@@ -248,11 +190,9 @@ void RunUnittests(int list_unittests, char *regex_arg)
     SCProfilingRegisterTests();
 #endif
     DeStateRegisterTests();
-    DetectRingBufferRegisterTests();
     MemcmpRegisterTests();
     DetectEngineHttpClientBodyRegisterTests();
     DetectEngineHttpServerBodyRegisterTests();
-    DetectEngineHttpHeaderRegisterTests();
     DetectEngineHttpRawHeaderRegisterTests();
     DetectEngineHttpMethodRegisterTests();
     DetectEngineHttpCookieRegisterTests();
@@ -278,6 +218,76 @@ void RunUnittests(int list_unittests, char *regex_arg)
 #endif
     AppLayerUnittestsRegister();
     MimeDecRegisterTests();
+    StreamingBufferRegisterTests();
+}
+#endif
+
+/**
+ * Run or list unittests
+ *
+ * \param list_unittests If set to 1, list unittests. Run them if set to 0.
+ * \param regex_arg A regular expression to select unittests to run
+ *
+ * This function is terminal and will call exit after being called.
+ */
+
+void RunUnittests(int list_unittests, const char *regex_arg)
+{
+#ifdef UNITTESTS
+    /* Initializations for global vars, queues, etc (memsets, mutex init..) */
+    GlobalsInitPreConfig();
+
+#ifdef HAVE_LUAJIT
+    if (LuajitSetupStatesPool() != 0) {
+        exit(EXIT_FAILURE);
+    }
+#endif
+
+    default_packet_size = DEFAULT_PACKET_SIZE;
+    /* load the pattern matchers */
+    MpmTableSetup();
+#ifdef __SC_CUDA_SUPPORT__
+    MpmCudaEnvironmentSetup();
+#endif
+    SpmTableSetup();
+
+    AppLayerSetup();
+
+    /* hardcoded initialization code */
+    SigTableSetup(); /* load the rule keywords */
+    TmqhSetup();
+
+    StorageInit();
+    CIDRInit();
+    SigParsePrepare();
+
+#ifdef DBG_MEM_ALLOC
+    SCLogInfo("Memory used at startup: %"PRIdMAX, (intmax_t)global_mem);
+#endif
+    SCProtoNameInit();
+
+    TagInitCtx();
+    SCReferenceConfInit();
+    SCClassConfInit();
+
+    UtInitialize();
+
+    RegisterAllModules();
+
+    HostBitInitCtx();
+
+    StorageFinalize();
+   /* test and initialize the unittesting subsystem */
+    if (regex_arg == NULL){
+        regex_arg = ".*";
+        UtRunSelftest(regex_arg); /* inits and cleans up again */
+    }
+
+    AppLayerHtpEnableRequestBodyCallback();
+    AppLayerHtpNeedFileInspection();
+
+    RegisterUnittests();
+
     if (list_unittests) {
         UtListTests(regex_arg);
     } else {
@@ -302,6 +312,9 @@ void RunUnittests(int list_unittests, char *regex_arg)
         }
     }
 
+#ifdef HAVE_LUAJIT
+    LuajitFreeStatesPool();
+#endif
 #ifdef DBG_MEM_ALLOC
     SCLogInfo("Total memory used (without SCFree()): %"PRIdMAX, (intmax_t)global_mem);
 #endif

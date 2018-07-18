@@ -132,7 +132,6 @@ int TagFlowAdd(Packet *p, DetectTagDataEntry *tde)
     if (p->flow == NULL)
         return 1;
 
-    FLOWLOCK_WRLOCK(p->flow);
     iter = FlowGetStorageById(p->flow, flow_tag_id);
     if (iter != NULL) {
         /* First iterate installed entries searching a duplicated sid/gid */
@@ -169,7 +168,6 @@ int TagFlowAdd(Packet *p, DetectTagDataEntry *tde)
         SCLogDebug("Max tags for sessions reached (%"PRIu16")", tag_cnt);
     }
 
-    FLOWLOCK_UNLOCK(p->flow);
     return updated;
 }
 
@@ -377,7 +375,7 @@ static void TagHandlePacketFlow(Flow *f, Packet *p)
     }
 }
 
-void TagHandlePacketHost(Host *host, Packet *p)
+static void TagHandlePacketHost(Host *host, Packet *p)
 {
     DetectTagDataEntry *tde = NULL;
     DetectTagDataEntry *prev = NULL;
@@ -516,9 +514,7 @@ void TagHandlePacket(DetectEngineCtx *de_ctx,
 
     /* First update and get session tags */
     if (p->flow != NULL) {
-        FLOWLOCK_WRLOCK(p->flow);
         TagHandlePacketFlow(p->flow, p);
-        FLOWLOCK_UNLOCK(p->flow);
     }
 
     Host *src = HostLookupHostFromHash(&p->src);
@@ -595,7 +591,7 @@ int TagTimeoutCheck(Host *host, struct timeval *tv)
 /**
  * \test host tagging: packets
  */
-int DetectTagTestPacket01 (void)
+static int DetectTagTestPacket01 (void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *)"Hi all!";
@@ -626,7 +622,7 @@ int DetectTagTestPacket01 (void)
                               "192.168.1.5", "192.168.1.11",
                               41424, 80);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:host,3,packets,src; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"Hi all\"; tag:host,4,packets,dst; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -692,7 +688,7 @@ int DetectTagTestPacket01 (void)
 /**
  * \test host tagging: seconds
  */
-int DetectTagTestPacket02 (void)
+static int DetectTagTestPacket02 (void)
 {
     int result = 0;
     uint8_t *buf = (uint8_t *)"Hi all!";
@@ -740,7 +736,7 @@ int DetectTagTestPacket02 (void)
                               "192.168.1.5", "192.168.1.11",
                               41424, 80);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:host,3,seconds,src; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"Hi all\"; tag:host,8,seconds,dst; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -861,7 +857,7 @@ static int DetectTagTestPacket03 (void)
                               "192.168.1.5", "192.168.1.11",
                               41424, 80);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:host, 150, bytes, src; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"Hi all\"; tag:host, 150, bytes, dst; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -995,7 +991,7 @@ static int DetectTagTestPacket04 (void)
                               "192.168.1.5", "192.168.1.1",
                               80, 41424);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:session,4,packets; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"blahblah\"; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -1136,7 +1132,7 @@ static int DetectTagTestPacket05 (void)
                               "192.168.1.5", "192.168.1.1",
                               80, 41424);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:session,8,seconds; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"blahblah\"; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -1282,7 +1278,7 @@ static int DetectTagTestPacket06 (void)
                               "192.168.1.5", "192.168.1.1",
                               80, 41424);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:session,150,bytes; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"blahblah\"; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -1424,7 +1420,7 @@ static int DetectTagTestPacket07 (void)
                               "192.168.1.5", "192.168.1.1",
                               80, 41424);
 
-    char *sigs[5];
+    const char *sigs[5];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing tag 1\"; content:\"Hi all\"; tag:session,150,bytes; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"blahblah\"; sid:2;)";
     sigs[2]= "alert tcp any any -> any any (msg:\"Testing tag 2\"; content:\"no match\"; sid:3;)";
@@ -1507,13 +1503,13 @@ end:
 void DetectEngineTagRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectTagTestPacket01", DetectTagTestPacket01, 1);
-    UtRegisterTest("DetectTagTestPacket02", DetectTagTestPacket02, 1);
-    UtRegisterTest("DetectTagTestPacket03", DetectTagTestPacket03, 1);
-    UtRegisterTest("DetectTagTestPacket04", DetectTagTestPacket04, 1);
-    UtRegisterTest("DetectTagTestPacket05", DetectTagTestPacket05, 1);
-    UtRegisterTest("DetectTagTestPacket06", DetectTagTestPacket06, 1);
-    UtRegisterTest("DetectTagTestPacket07", DetectTagTestPacket07, 1);
+    UtRegisterTest("DetectTagTestPacket01", DetectTagTestPacket01);
+    UtRegisterTest("DetectTagTestPacket02", DetectTagTestPacket02);
+    UtRegisterTest("DetectTagTestPacket03", DetectTagTestPacket03);
+    UtRegisterTest("DetectTagTestPacket04", DetectTagTestPacket04);
+    UtRegisterTest("DetectTagTestPacket05", DetectTagTestPacket05);
+    UtRegisterTest("DetectTagTestPacket06", DetectTagTestPacket06);
+    UtRegisterTest("DetectTagTestPacket07", DetectTagTestPacket07);
 #endif /* UNITTESTS */
 }
 

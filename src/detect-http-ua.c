@@ -57,10 +57,13 @@
 #include "app-layer-htp.h"
 #include "stream-tcp.h"
 #include "detect-http-ua.h"
+#include "detect-engine-hua.h"
 
-int DetectHttpUASetup(DetectEngineCtx *, Signature *, char *);
-void DetectHttpUARegisterTests(void);
-void DetectHttpUAFree(void *);
+static int DetectHttpUASetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectHttpUARegisterTests(void);
+static void DetectHttpUAFree(void *);
+static void DetectHttpUASetupCallback(Signature *);
+static int g_http_ua_buffer_id = 0;
 
 /**
  * \brief Registers the keyword handlers for the "http_user_agent" keyword.
@@ -69,18 +72,28 @@ void DetectHttpUARegister(void)
 {
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].name = "http_user_agent";
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].desc = "content modifier to match only on the HTTP User-Agent header";
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_user_agent";
+    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_user-agent";
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].AppLayerMatch = NULL;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Setup = DetectHttpUASetup;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].Free  = DetectHttpUAFree;
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].RegisterTests = DetectHttpUARegisterTests;
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].alproto = ALPROTO_HTTP;
 
     sigmatch_table[DETECT_AL_HTTP_USER_AGENT].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_HTTP_USER_AGENT].flags |= SIGMATCH_PAYLOAD ;
 
-    return;
+    DetectAppLayerMpmRegister("http_user_agent", SIG_FLAG_TOSERVER, 2,
+            PrefilterTxUARegister);
+
+    DetectAppLayerInspectEngineRegister("http_user_agent",
+            ALPROTO_HTTP, SIG_FLAG_TOSERVER, HTP_REQUEST_HEADERS,
+            DetectEngineInspectHttpUA);
+
+    DetectBufferTypeSetDescriptionByName("http_user_agent",
+            "http user agent");
+
+    DetectBufferTypeRegisterSetupCallback("http_user_agent",
+            DetectHttpUASetupCallback);
+
+    g_http_ua_buffer_id = DetectBufferTypeGetByName("http_user_agent");
 }
 
 /**
@@ -96,13 +109,18 @@ void DetectHttpUARegister(void)
  * \retval  0 On success
  * \retval -1 On failure
  */
-int DetectHttpUASetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+int DetectHttpUASetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_USER_AGENT,
-                                                  DETECT_SM_LIST_HUADMATCH,
-                                                  ALPROTO_HTTP,
-                                                  NULL);
+                                                  g_http_ua_buffer_id,
+                                                  ALPROTO_HTTP);
+}
+
+static void DetectHttpUASetupCallback(Signature *s)
+{
+    SCLogDebug("callback invoked by %u", s->id);
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
 }
 
 /**
@@ -119,7 +137,7 @@ void DetectHttpUAFree(void *ptr)
     if (huad->content != NULL)
         SCFree(huad->content);
 
-    BoyerMooreCtxDeInit(huad->bm_ctx);
+    SpmDestroyCtx(huad->spm_ctx);
     SCFree(huad);
 
     return;
@@ -331,15 +349,16 @@ static int DetectHttpUATest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -438,15 +457,16 @@ static int DetectHttpUATest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -462,14 +482,15 @@ static int DetectHttpUATest07(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -561,15 +582,16 @@ static int DetectHttpUATest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -586,15 +608,16 @@ static int DetectHttpUATest08(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -691,15 +714,16 @@ static int DetectHttpUATest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -716,15 +740,16 @@ static int DetectHttpUATest09(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -821,15 +846,16 @@ static int DetectHttpUATest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http1_buf, http1_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http1_buf, http1_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -846,15 +872,16 @@ static int DetectHttpUATest10(void)
         goto end;
     }
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http2_buf, http2_len);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, http2_buf, http2_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: \n", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p2);
@@ -940,15 +967,16 @@ static int DetectHttpUATest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1039,15 +1067,16 @@ static int DetectHttpUATest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1139,15 +1168,16 @@ static int DetectHttpUATest13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1247,14 +1277,15 @@ static int DetectHttpUATest14(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1264,14 +1295,15 @@ static int DetectHttpUATest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf2, httplen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf2, httplen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1281,14 +1313,15 @@ static int DetectHttpUATest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf3, httplen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf3, httplen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1298,14 +1331,15 @@ static int DetectHttpUATest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf4, httplen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf4, httplen4);
     if (r != 0) {
         printf("toserver chunk 5 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1315,14 +1349,15 @@ static int DetectHttpUATest14(void)
     }
     p->alerts.cnt = 0;
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf5, httplen5);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf5, httplen5);
     if (r != 0) {
         printf("toserver chunk 6 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1334,14 +1369,15 @@ static int DetectHttpUATest14(void)
 
     SCLogDebug("sending data chunk 7");
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf6, httplen6);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOSERVER, httpbuf6, httplen6);
     if (r != 0) {
         printf("toserver chunk 7 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
@@ -1358,7 +1394,7 @@ static int DetectHttpUATest14(void)
         goto end;
     }
 
-    if (AppLayerParserGetTxCnt(IPPROTO_TCP, ALPROTO_HTTP, htp_state) != 2) {
+    if (AppLayerParserGetTxCnt(&f, htp_state) != 2) {
         printf("The http app layer doesn't have 2 transactions, but it should: ");
         goto end;
     }
@@ -1395,7 +1431,7 @@ end:
 
 
 
-int DetectHttpUATest22(void)
+static int DetectHttpUATest22(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1417,15 +1453,15 @@ int DetectHttpUATest22(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectContentData *cd1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (cd1->flags != 0 || memcmp(cd1->content, "one", cd1->content_len) != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1450,7 +1486,7 @@ int DetectHttpUATest22(void)
     return result;
 }
 
-int DetectHttpUATest23(void)
+static int DetectHttpUATest23(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1472,15 +1508,15 @@ int DetectHttpUATest23(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1504,7 +1540,7 @@ int DetectHttpUATest23(void)
     return result;
 }
 
-int DetectHttpUATest24(void)
+static int DetectHttpUATest24(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1526,15 +1562,15 @@ int DetectHttpUATest24(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != 0 ||
         cd2->flags != 0 || memcmp(cd2->content, "four", cd2->content_len) != 0 ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
@@ -1558,7 +1594,7 @@ int DetectHttpUATest24(void)
     return result;
 }
 
-int DetectHttpUATest25(void)
+static int DetectHttpUATest25(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1581,15 +1617,15 @@ int DetectHttpUATest25(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != DETECT_PCRE_RELATIVE_NEXT ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1614,7 +1650,7 @@ int DetectHttpUATest25(void)
     return result;
 }
 
-int DetectHttpUATest26(void)
+static int DetectHttpUATest26(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1637,15 +1673,15 @@ int DetectHttpUATest26(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1671,7 +1707,7 @@ int DetectHttpUATest26(void)
     return result;
 }
 
-int DetectHttpUATest27(void)
+static int DetectHttpUATest27(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1697,7 +1733,7 @@ int DetectHttpUATest27(void)
     return result;
 }
 
-int DetectHttpUATest28(void)
+static int DetectHttpUATest28(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1720,15 +1756,15 @@ int DetectHttpUATest28(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
     DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->prev->ctx;
     DetectContentData *cd2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_PMATCH]->ctx;
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         cd2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(cd2->content, "four", cd2->content_len) != 0 ||
@@ -1753,7 +1789,7 @@ int DetectHttpUATest28(void)
     return result;
 }
 
-int DetectHttpUATest29(void)
+static int DetectHttpUATest29(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1775,13 +1811,13 @@ int DetectHttpUATest29(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "one", huad1->content_len) != 0 ||
         huad2->flags != DETECT_CONTENT_DISTANCE ||
@@ -1797,7 +1833,7 @@ int DetectHttpUATest29(void)
     return result;
 }
 
-int DetectHttpUATest30(void)
+static int DetectHttpUATest30(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1819,13 +1855,13 @@ int DetectHttpUATest30(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "one", huad1->content_len) != 0 ||
         huad2->flags != DETECT_CONTENT_WITHIN ||
@@ -1841,7 +1877,7 @@ int DetectHttpUATest30(void)
     return result;
 }
 
-int DetectHttpUATest31(void)
+static int DetectHttpUATest31(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1865,7 +1901,7 @@ int DetectHttpUATest31(void)
     return result;
 }
 
-int DetectHttpUATest32(void)
+static int DetectHttpUATest32(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1889,7 +1925,7 @@ int DetectHttpUATest32(void)
     return result;
 }
 
-int DetectHttpUATest33(void)
+static int DetectHttpUATest33(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1913,7 +1949,7 @@ int DetectHttpUATest33(void)
     return result;
 }
 
-int DetectHttpUATest34(void)
+static int DetectHttpUATest34(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1935,21 +1971,21 @@ int DetectHttpUATest34(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         huad2->flags != DETECT_CONTENT_WITHIN ||
         memcmp(huad2->content, "two", huad2->content_len) != 0) {
@@ -1964,7 +2000,7 @@ int DetectHttpUATest34(void)
     return result;
 }
 
-int DetectHttpUATest35(void)
+static int DetectHttpUATest35(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -1986,21 +2022,21 @@ int DetectHttpUATest35(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_PCRE ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_CONTENT) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_PCRE ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_CONTENT) {
 
         goto end;
     }
 
-    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectContentData *huad1 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectPcreData *pd2 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd2->flags != (DETECT_PCRE_RELATIVE) ||
         huad1->flags != DETECT_CONTENT_RELATIVE_NEXT ||
         memcmp(huad1->content, "two", huad1->content_len) != 0) {
@@ -2015,7 +2051,7 @@ int DetectHttpUATest35(void)
     return result;
 }
 
-int DetectHttpUATest36(void)
+static int DetectHttpUATest36(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -2037,21 +2073,21 @@ int DetectHttpUATest36(void)
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL) {
-        printf("de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HUADMATCH] == NULL\n");
+    if (de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL) {
+        printf("de_ctx->sig_list->sm_lists[g_http_ua_buffer_id] == NULL\n");
         goto end;
     }
 
-    if (de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH] == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->type != DETECT_CONTENT ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev == NULL ||
-        de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->type != DETECT_PCRE) {
+    if (de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id] == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->type != DETECT_CONTENT ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev == NULL ||
+        de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->type != DETECT_PCRE) {
 
         goto end;
     }
 
-    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->prev->ctx;
-    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[DETECT_SM_LIST_HUADMATCH]->ctx;
+    DetectPcreData *pd1 = (DetectPcreData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->prev->ctx;
+    DetectContentData *huad2 = (DetectContentData *)de_ctx->sig_list->sm_lists_tail[g_http_ua_buffer_id]->ctx;
     if (pd1->flags != (DETECT_PCRE_RELATIVE_NEXT) ||
         huad2->flags != DETECT_CONTENT_DISTANCE ||
         memcmp(huad2->content, "two", huad2->content_len) != 0) {
@@ -2071,36 +2107,36 @@ int DetectHttpUATest36(void)
 void DetectHttpUARegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectHttpUATest01", DetectHttpUATest01, 1);
-    UtRegisterTest("DetectHttpUATest02", DetectHttpUATest02, 1);
-    UtRegisterTest("DetectHttpUATest03", DetectHttpUATest03, 1);
-    UtRegisterTest("DetectHttpUATest04", DetectHttpUATest04, 1);
-    UtRegisterTest("DetectHttpUATest05", DetectHttpUATest05, 1);
-    UtRegisterTest("DetectHttpUATest06", DetectHttpUATest06, 1);
-    UtRegisterTest("DetectHttpUATest07", DetectHttpUATest07, 1);
-    UtRegisterTest("DetectHttpUATest08", DetectHttpUATest08, 1);
-    UtRegisterTest("DetectHttpUATest09", DetectHttpUATest09, 1);
-    UtRegisterTest("DetectHttpUATest10", DetectHttpUATest10, 1);
-    UtRegisterTest("DetectHttpUATest11", DetectHttpUATest11, 1);
-    UtRegisterTest("DetectHttpUATest12", DetectHttpUATest12, 1);
-    UtRegisterTest("DetectHttpUATest13", DetectHttpUATest13, 1);
-    UtRegisterTest("DetectHttpUATest14", DetectHttpUATest14, 1);
+    UtRegisterTest("DetectHttpUATest01", DetectHttpUATest01);
+    UtRegisterTest("DetectHttpUATest02", DetectHttpUATest02);
+    UtRegisterTest("DetectHttpUATest03", DetectHttpUATest03);
+    UtRegisterTest("DetectHttpUATest04", DetectHttpUATest04);
+    UtRegisterTest("DetectHttpUATest05", DetectHttpUATest05);
+    UtRegisterTest("DetectHttpUATest06", DetectHttpUATest06);
+    UtRegisterTest("DetectHttpUATest07", DetectHttpUATest07);
+    UtRegisterTest("DetectHttpUATest08", DetectHttpUATest08);
+    UtRegisterTest("DetectHttpUATest09", DetectHttpUATest09);
+    UtRegisterTest("DetectHttpUATest10", DetectHttpUATest10);
+    UtRegisterTest("DetectHttpUATest11", DetectHttpUATest11);
+    UtRegisterTest("DetectHttpUATest12", DetectHttpUATest12);
+    UtRegisterTest("DetectHttpUATest13", DetectHttpUATest13);
+    UtRegisterTest("DetectHttpUATest14", DetectHttpUATest14);
 
-    UtRegisterTest("DetectHttpUATest22", DetectHttpUATest22, 1);
-    UtRegisterTest("DetectHttpUATest23", DetectHttpUATest23, 1);
-    UtRegisterTest("DetectHttpUATest24", DetectHttpUATest24, 1);
-    UtRegisterTest("DetectHttpUATest25", DetectHttpUATest25, 1);
-    UtRegisterTest("DetectHttpUATest26", DetectHttpUATest26, 1);
-    UtRegisterTest("DetectHttpUATest27", DetectHttpUATest27, 1);
-    UtRegisterTest("DetectHttpUATest28", DetectHttpUATest28, 1);
-    UtRegisterTest("DetectHttpUATest29", DetectHttpUATest29, 1);
-    UtRegisterTest("DetectHttpUATest30", DetectHttpUATest30, 1);
-    UtRegisterTest("DetectHttpUATest31", DetectHttpUATest31, 1);
-    UtRegisterTest("DetectHttpUATest32", DetectHttpUATest32, 1);
-    UtRegisterTest("DetectHttpUATest33", DetectHttpUATest33, 1);
-    UtRegisterTest("DetectHttpUATest34", DetectHttpUATest34, 1);
-    UtRegisterTest("DetectHttpUATest35", DetectHttpUATest35, 1);
-    UtRegisterTest("DetectHttpUATest36", DetectHttpUATest36, 1);
+    UtRegisterTest("DetectHttpUATest22", DetectHttpUATest22);
+    UtRegisterTest("DetectHttpUATest23", DetectHttpUATest23);
+    UtRegisterTest("DetectHttpUATest24", DetectHttpUATest24);
+    UtRegisterTest("DetectHttpUATest25", DetectHttpUATest25);
+    UtRegisterTest("DetectHttpUATest26", DetectHttpUATest26);
+    UtRegisterTest("DetectHttpUATest27", DetectHttpUATest27);
+    UtRegisterTest("DetectHttpUATest28", DetectHttpUATest28);
+    UtRegisterTest("DetectHttpUATest29", DetectHttpUATest29);
+    UtRegisterTest("DetectHttpUATest30", DetectHttpUATest30);
+    UtRegisterTest("DetectHttpUATest31", DetectHttpUATest31);
+    UtRegisterTest("DetectHttpUATest32", DetectHttpUATest32);
+    UtRegisterTest("DetectHttpUATest33", DetectHttpUATest33);
+    UtRegisterTest("DetectHttpUATest34", DetectHttpUATest34);
+    UtRegisterTest("DetectHttpUATest35", DetectHttpUATest35);
+    UtRegisterTest("DetectHttpUATest36", DetectHttpUATest36);
 #endif /* UNITTESTS */
 
     return;

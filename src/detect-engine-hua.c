@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2012 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -25,6 +25,7 @@
 /** \file
  *
  * \author Anoop Saldanha <anoopsaldanha@gmail.com>
+ * \author Victor Julien <victor@inliniac.net>
  *
  * \brief Handle HTTP user agent match
  *
@@ -40,6 +41,7 @@
 #include "detect-parse.h"
 #include "detect-engine-state.h"
 #include "detect-engine-content-inspection.h"
+#include "detect-engine-prefilter.h"
 
 #include "flow-util.h"
 #include "util-debug.h"
@@ -57,28 +59,51 @@
 #include "app-layer-protos.h"
 
 #include "detect-engine-hua.h"
+#include "util-validate.h"
 
-int DetectEngineRunHttpUAMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
-                             HtpState *htp_state, uint8_t flags,
-                             void *txv, uint64_t idx)
+/** \brief HTTP UA Mpm prefilter callback
+ *
+ *  \param det_ctx detection engine thread ctx
+ *  \param p packet to inspect
+ *  \param f flow to inspect
+ *  \param txv tx to inspect
+ *  \param pectx inspection context
+ */
+static void PrefilterTxUA(DetectEngineThreadCtx *det_ctx, const void *pectx,
+        Packet *p, Flow *f, void *txv,
+        const uint64_t idx, const uint8_t flags)
 {
-    uint32_t cnt = 0;
+    SCEnter();
+
+    const MpmCtx *mpm_ctx = (MpmCtx *)pectx;
     htp_tx_t *tx = (htp_tx_t *)txv;
+
     if (tx->request_headers == NULL)
-        goto end;
+        return;
 
     htp_header_t *h = (htp_header_t *)htp_table_get_c(tx->request_headers,
                                                       "User-Agent");
-    if (h == NULL) {
-        SCLogDebug("HTTP user agent header not present in this request");
-        goto end;
+    if (h == NULL || h->value == NULL) {
+        SCLogDebug("HTTP UA header not present in this request");
+        return;
     }
-    cnt = HttpUAPatternSearch(det_ctx,
-                              (uint8_t *)bstr_ptr(h->value),
-                              bstr_len(h->value), flags);
 
- end:
-    return cnt;
+    const uint32_t buffer_len = bstr_len(h->value);
+    const uint8_t *buffer = bstr_ptr(h->value);
+
+    if (buffer_len >= mpm_ctx->minlen) {
+        (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
+                &det_ctx->mtcu, &det_ctx->pmq, buffer, buffer_len);
+    }
+}
+
+int PrefilterTxUARegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
+{
+    SCEnter();
+
+    return PrefilterAppendTxEngine(sgh, PrefilterTxUA,
+        ALPROTO_HTTP, HTP_REQUEST_HEADERS,
+        mpm_ctx, NULL, "http_user_agent");
 }
 
 /**
@@ -95,11 +120,9 @@ int DetectEngineRunHttpUAMpm(DetectEngineThreadCtx *det_ctx, Flow *f,
  * \retval 1 Match.
  */
 int DetectEngineInspectHttpUA(ThreadVars *tv,
-                              DetectEngineCtx *de_ctx,
-                              DetectEngineThreadCtx *det_ctx,
-                              Signature *s, Flow *f, uint8_t flags,
-                              void *alstate,
-                              void *txv, uint64_t tx_id)
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *txv, uint64_t tx_id)
 {
     htp_tx_t *tx = (htp_tx_t *)txv;
     htp_header_t *h = (htp_header_t *)htp_table_get_c(tx->request_headers,
@@ -112,12 +135,12 @@ int DetectEngineInspectHttpUA(ThreadVars *tv,
     det_ctx->buffer_offset = 0;
     det_ctx->discontinue_matching = 0;
     det_ctx->inspection_recursion_counter = 0;
-    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_lists[DETECT_SM_LIST_HUADMATCH],
+    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
                                           f,
                                           (uint8_t *)bstr_ptr(h->value),
                                           bstr_len(h->value),
                                           0,
-                                          DETECT_ENGINE_CONTENT_INSPECTION_MODE_HUAD, NULL);
+                                          DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
     if (r == 1)
         return DETECT_ENGINE_INSPECT_SIG_MATCH;
 
@@ -187,15 +210,16 @@ static int DetectEngineHttpUATest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -285,15 +309,16 @@ static int DetectEngineHttpUATest02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -383,15 +408,16 @@ static int DetectEngineHttpUATest03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -481,15 +507,16 @@ static int DetectEngineHttpUATest04(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -579,15 +606,16 @@ static int DetectEngineHttpUATest05(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -677,15 +705,16 @@ static int DetectEngineHttpUATest06(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -775,15 +804,16 @@ static int DetectEngineHttpUATest07(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -873,15 +903,16 @@ static int DetectEngineHttpUATest08(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -971,15 +1002,16 @@ static int DetectEngineHttpUATest09(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1070,15 +1102,16 @@ static int DetectEngineHttpUATest10(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1169,15 +1202,16 @@ static int DetectEngineHttpUATest11(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1268,15 +1302,16 @@ static int DetectEngineHttpUATest12(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1367,15 +1402,16 @@ static int DetectEngineHttpUATest13(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1466,15 +1502,16 @@ static int DetectEngineHttpUATest14(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1565,15 +1602,16 @@ static int DetectEngineHttpUATest15(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1664,15 +1702,16 @@ static int DetectEngineHttpUATest16(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1763,15 +1802,16 @@ static int DetectEngineHttpUATest17(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, http_buf, http_len);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, http_buf, http_len);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -1812,40 +1852,23 @@ void DetectEngineHttpUARegisterTests(void)
 {
 
 #ifdef UNITTESTS
-    UtRegisterTest("DetectEngineHttpUATest01",
-                   DetectEngineHttpUATest01, 1);
-    UtRegisterTest("DetectEngineHttpUATest02",
-                   DetectEngineHttpUATest02, 1);
-    UtRegisterTest("DetectEngineHttpUATest03",
-                   DetectEngineHttpUATest03, 1);
-    UtRegisterTest("DetectEngineHttpUATest04",
-                   DetectEngineHttpUATest04, 1);
-    UtRegisterTest("DetectEngineHttpUATest05",
-                   DetectEngineHttpUATest05, 1);
-    UtRegisterTest("DetectEngineHttpUATest06",
-                   DetectEngineHttpUATest06, 1);
-    UtRegisterTest("DetectEngineHttpUATest07",
-                   DetectEngineHttpUATest07, 1);
-    UtRegisterTest("DetectEngineHttpUATest08",
-                   DetectEngineHttpUATest08, 1);
-    UtRegisterTest("DetectEngineHttpUATest09",
-                   DetectEngineHttpUATest09, 1);
-    UtRegisterTest("DetectEngineHttpUATest10",
-                   DetectEngineHttpUATest10, 1);
-    UtRegisterTest("DetectEngineHttpUATest11",
-                   DetectEngineHttpUATest11, 1);
-    UtRegisterTest("DetectEngineHttpUATest12",
-                   DetectEngineHttpUATest12, 1);
-    UtRegisterTest("DetectEngineHttpUATest13",
-                   DetectEngineHttpUATest13, 1);
-    UtRegisterTest("DetectEngineHttpUATest14",
-                   DetectEngineHttpUATest14, 1);
-    UtRegisterTest("DetectEngineHttpUATest15",
-                   DetectEngineHttpUATest15, 1);
-    UtRegisterTest("DetectEngineHttpUATest16",
-                   DetectEngineHttpUATest16, 1);
-    UtRegisterTest("DetectEngineHttpUATest17",
-                   DetectEngineHttpUATest17, 1);
+    UtRegisterTest("DetectEngineHttpUATest01", DetectEngineHttpUATest01);
+    UtRegisterTest("DetectEngineHttpUATest02", DetectEngineHttpUATest02);
+    UtRegisterTest("DetectEngineHttpUATest03", DetectEngineHttpUATest03);
+    UtRegisterTest("DetectEngineHttpUATest04", DetectEngineHttpUATest04);
+    UtRegisterTest("DetectEngineHttpUATest05", DetectEngineHttpUATest05);
+    UtRegisterTest("DetectEngineHttpUATest06", DetectEngineHttpUATest06);
+    UtRegisterTest("DetectEngineHttpUATest07", DetectEngineHttpUATest07);
+    UtRegisterTest("DetectEngineHttpUATest08", DetectEngineHttpUATest08);
+    UtRegisterTest("DetectEngineHttpUATest09", DetectEngineHttpUATest09);
+    UtRegisterTest("DetectEngineHttpUATest10", DetectEngineHttpUATest10);
+    UtRegisterTest("DetectEngineHttpUATest11", DetectEngineHttpUATest11);
+    UtRegisterTest("DetectEngineHttpUATest12", DetectEngineHttpUATest12);
+    UtRegisterTest("DetectEngineHttpUATest13", DetectEngineHttpUATest13);
+    UtRegisterTest("DetectEngineHttpUATest14", DetectEngineHttpUATest14);
+    UtRegisterTest("DetectEngineHttpUATest15", DetectEngineHttpUATest15);
+    UtRegisterTest("DetectEngineHttpUATest16", DetectEngineHttpUATest16);
+    UtRegisterTest("DetectEngineHttpUATest17", DetectEngineHttpUATest17);
 #endif /* UNITTESTS */
 
     return;

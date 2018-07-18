@@ -33,9 +33,9 @@
 SCCtrlCondT unix_manager_ctrl_cond;
 SCCtrlMutex unix_manager_ctrl_mutex;
 
+int UnixManagerInit(void);
 void UnixManagerThreadSpawn(int mode);
 void UnixSocketKillSocketThread(void);
-
 
 #ifdef BUILD_UNIX_SOCKET
 TmEcode UnixManagerRegisterCommand(const char * keyword,
@@ -47,5 +47,6 @@ TmEcode UnixManagerRegisterBackgroundTask(
 #endif
 
 void TmModuleUnixManagerRegister(void);
+void UnixManagerThreadSpawnNonRunmode(void);
 
 #endif /* UNIX_MANAGER_H */

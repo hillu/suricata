@@ -168,7 +168,7 @@ void PrintRawDataFp(FILE *fp, const uint8_t *buf, uint32_t buflen)
 }
 
 void PrintRawDataToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32_t dst_buf_size,
-                          uint8_t *src_buf, uint32_t src_buf_len)
+                          const uint8_t *src_buf, uint32_t src_buf_len)
 {
     int ch = 0;
     uint32_t u = 0;
@@ -217,7 +217,7 @@ void PrintRawDataToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
 }
 
 void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32_t dst_buf_size,
-                          uint8_t *src_buf, uint32_t src_buf_len)
+                          const uint8_t *src_buf, const uint32_t src_buf_len)
 {
     uint32_t ch = 0;
     for (ch = 0; ch < src_buf_len; ch++) {
@@ -227,6 +227,7 @@ void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
                         src_buf[ch] == '\n' ||
                         src_buf[ch] == '\r') ? (uint8_t)src_buf[ch] : '.');
     }
+    dst_buf[dst_buf_size - 1] = 0;
 
     return;
 }
@@ -237,9 +238,10 @@ void PrintStringsToBuffer(uint8_t *dst_buf, uint32_t *dst_buf_offset_ptr, uint32
 
 static const char *PrintInetIPv6(const void *src, char *dst, socklen_t size)
 {
-    struct in6_addr * insrc = (struct in6_addr *) src;
     int i;
     char s_part[6];
+    uint16_t x[8];
+    memcpy(&x, src, 16);
 
     /* current IPv6 format is fixed size */
     if (size < 8 * 5) {
@@ -248,7 +250,7 @@ static const char *PrintInetIPv6(const void *src, char *dst, socklen_t size)
     }
     memset(dst, 0, size);
     for(i = 0; i < 8; i++) {
-        snprintf(s_part, 6, "%04x:", htons(insrc->s6_addr16[i]));
+        snprintf(s_part, sizeof(s_part), "%04x:", htons(x[i]));
         strlcat(dst, s_part, size);
     }
     /* suppress last ':' */

@@ -85,17 +85,11 @@ int DecodeUDP(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p, uint8_t *pkt, ui
     if (unlikely(DecodeTeredo(tv, dtv, p, p->payload, p->payload_len, pq) == TM_ECODE_OK)) {
         /* Here we have a Teredo packet and don't need to handle app
          * layer */
-        FlowHandlePacket(tv, dtv, p);
+        FlowSetupPacket(p);
         return TM_ECODE_OK;
     }
 
-    /* Flow is an integral part of us */
-    FlowHandlePacket(tv, dtv, p);
-
-    /* handle the app layer part of the UDP packet payload */
-    if (unlikely(p->flow != NULL)) {
-        AppLayerHandleUdp(tv, dtv->app_tctx, p, p->flow);
-    }
+    FlowSetupPacket(p);
 
     return TM_ECODE_OK;
 }
@@ -123,9 +117,9 @@ static int UDPV4CalculateValidChecksumtest01(void)
 
     csum = *( ((uint16_t *)raw_udp) + 3);
 
-    return (csum == UDPV4CalculateChecksum((uint16_t *) raw_ipshdr,
-                                           (uint16_t *)raw_udp,
-                                           sizeof(raw_udp)));
+    FAIL_IF(UDPV4Checksum((uint16_t *) raw_ipshdr,
+            (uint16_t *)raw_udp, sizeof(raw_udp), csum) != 0);
+    PASS;
 }
 
 static int UDPV4CalculateInvalidChecksumtest02(void)
@@ -150,9 +144,9 @@ static int UDPV4CalculateInvalidChecksumtest02(void)
 
     csum = *( ((uint16_t *)raw_udp) + 3);
 
-    return (csum == UDPV4CalculateChecksum((uint16_t *) raw_ipshdr,
-                                           (uint16_t *)raw_udp,
-                                           sizeof(raw_udp)));
+    FAIL_IF(UDPV4Checksum((uint16_t *) raw_ipshdr,
+            (uint16_t *)raw_udp, sizeof(raw_udp), csum) == 0);
+    PASS;
 }
 
 static int UDPV6CalculateValidChecksumtest03(void)
@@ -173,8 +167,9 @@ static int UDPV6CalculateValidChecksumtest03(void)
 
     csum = *( ((uint16_t *)(raw_ipv6 + 60)));
 
-    return (csum == UDPV6CalculateChecksum((uint16_t *)(raw_ipv6 + 14 + 8),
-                                           (uint16_t *)(raw_ipv6 + 54), 20));
+    FAIL_IF(UDPV6Checksum((uint16_t *)(raw_ipv6 + 14 + 8),
+            (uint16_t *)(raw_ipv6 + 54), 20, csum) != 0);
+    PASS;
 }
 
 static int UDPV6CalculateInvalidChecksumtest04(void)
@@ -195,8 +190,9 @@ static int UDPV6CalculateInvalidChecksumtest04(void)
 
     csum = *( ((uint16_t *)(raw_ipv6 + 60)));
 
-    return (csum == UDPV6CalculateChecksum((uint16_t *)(raw_ipv6 + 14 + 8),
-                                           (uint16_t *)(raw_ipv6 + 54), 20));
+    FAIL_IF(UDPV6Checksum((uint16_t *)(raw_ipv6 + 14 + 8),
+            (uint16_t *)(raw_ipv6 + 54), 20, csum) == 0);
+    PASS;
 }
 #endif /* UNITTESTS */
 
@@ -204,13 +200,13 @@ void DecodeUDPV4RegisterTests(void)
 {
 #ifdef UNITTESTS
     UtRegisterTest("UDPV4CalculateValidChecksumtest01",
-                   UDPV4CalculateValidChecksumtest01, 1);
+                   UDPV4CalculateValidChecksumtest01);
     UtRegisterTest("UDPV4CalculateInvalidChecksumtest02",
-                   UDPV4CalculateInvalidChecksumtest02, 0);
+                   UDPV4CalculateInvalidChecksumtest02);
     UtRegisterTest("UDPV6CalculateValidChecksumtest03",
-                   UDPV6CalculateValidChecksumtest03, 1);
+                   UDPV6CalculateValidChecksumtest03);
     UtRegisterTest("UDPV6CalculateInvalidChecksumtest04",
-                   UDPV6CalculateInvalidChecksumtest04, 0);
+                   UDPV6CalculateInvalidChecksumtest04);
 #endif /* UNITTESTS */
 }
 /**

@@ -32,6 +32,7 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine.h"
 #include "detect-engine-state.h"
 
 #include "detect-urilen.h"
@@ -49,9 +50,12 @@ static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
 /*prototypes*/
-static int DetectUrilenSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectUrilenSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectUrilenFree (void *);
 void DetectUrilenRegisterTests (void);
+
+static int g_http_uri_buffer_id = 0;
+static int g_http_raw_uri_buffer_id = 0;
 
 /**
  * \brief Registration function for urilen: keyword
@@ -61,39 +65,16 @@ void DetectUrilenRegister(void)
 {
     sigmatch_table[DETECT_AL_URILEN].name = "urilen";
     sigmatch_table[DETECT_AL_URILEN].desc = "match on the length of the HTTP uri";
-    sigmatch_table[DETECT_AL_URILEN].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#Urilen";
+    sigmatch_table[DETECT_AL_URILEN].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#urilen";
     sigmatch_table[DETECT_AL_URILEN].Match = NULL;
-    sigmatch_table[DETECT_AL_URILEN].alproto = ALPROTO_HTTP;
-    sigmatch_table[DETECT_AL_URILEN].AppLayerMatch = NULL /**< We handle this at detect-engine-uri.c now */;
     sigmatch_table[DETECT_AL_URILEN].Setup = DetectUrilenSetup;
     sigmatch_table[DETECT_AL_URILEN].Free = DetectUrilenFree;
     sigmatch_table[DETECT_AL_URILEN].RegisterTests = DetectUrilenRegisterTests;
-    sigmatch_table[DETECT_AL_URILEN].flags |= SIGMATCH_PAYLOAD;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL) {
-        SCLogDebug("pcre compile of \"%s\" failed at offset %" PRId32 ": %s",
-                    PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL) {
-        SCLogDebug("pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    if (parse_regex != NULL)
-        pcre_free(parse_regex);
-    if (parse_regex_study != NULL)
-        pcre_free_study(parse_regex_study);
-    return;
+    g_http_uri_buffer_id = DetectBufferTypeRegister("http_uri");
+    g_http_raw_uri_buffer_id = DetectBufferTypeRegister("http_raw_uri");
 }
 
 /**
@@ -105,7 +86,7 @@ error:
  * \retval NULL on failure
  */
 
-DetectUrilenData *DetectUrilenParse (char *urilenstr)
+static DetectUrilenData *DetectUrilenParse (const char *urilenstr)
 {
 
     DetectUrilenData *urilend = NULL;
@@ -260,17 +241,14 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, char *urilenstr)
+static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, const char *urilenstr)
 {
     SCEnter();
     DetectUrilenData *urilend = NULL;
     SigMatch *sm = NULL;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_HTTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains a non http "
-                   "alproto set");
-        goto error;
-    }
+    if (DetectSignatureSetAppProto(s, ALPROTO_HTTP) != 0)
+        return -1;
 
     urilend = DetectUrilenParse(urilenstr);
     if (urilend == NULL)
@@ -282,13 +260,9 @@ static int DetectUrilenSetup (DetectEngineCtx *de_ctx, Signature *s, char *urile
     sm->ctx = (void *)urilend;
 
     if (urilend->raw_buffer)
-        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_HRUDMATCH);
+        SigMatchAppendSMToList(s, sm, g_http_raw_uri_buffer_id);
     else
-        SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_UMATCH);
-
-    /* Flagged the signature as to inspect the app layer data */
-    s->flags |= SIG_FLAG_APPLAYER;
-    s->alproto = ALPROTO_HTTP;
+        SigMatchAppendSMToList(s, sm, g_http_uri_buffer_id);
 
     SCReturnInt(0);
 
@@ -316,7 +290,6 @@ void DetectUrilenFree(void *ptr)
 #include "stream.h"
 #include "stream-tcp-private.h"
 #include "stream-tcp-reassemble.h"
-#include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "app-layer-parser.h"
@@ -501,7 +474,7 @@ static int DetectUrilenParseTest10(void)
  */
 
 static int DetectUrilenInitTest(DetectEngineCtx **de_ctx, Signature **sig,
-                                DetectUrilenData **urilend, char *str)
+                                DetectUrilenData **urilend, const char *str)
 {
     char fullstr[1024];
     int result = 0;
@@ -635,14 +608,15 @@ static int DetectUrilenSigTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     HtpState *htp_state = f.alstate;
     if (htp_state == NULL) {
@@ -684,17 +658,17 @@ end:
 void DetectUrilenRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectUrilenParseTest01", DetectUrilenParseTest01, 1);
-    UtRegisterTest("DetectUrilenParseTest02", DetectUrilenParseTest02, 1);
-    UtRegisterTest("DetectUrilenParseTest03", DetectUrilenParseTest03, 1);
-    UtRegisterTest("DetectUrilenParseTest04", DetectUrilenParseTest04, 1);
-    UtRegisterTest("DetectUrilenParseTest05", DetectUrilenParseTest05, 1);
-    UtRegisterTest("DetectUrilenParseTest06", DetectUrilenParseTest06, 1);
-    UtRegisterTest("DetectUrilenParseTest07", DetectUrilenParseTest07, 1);
-    UtRegisterTest("DetectUrilenParseTest08", DetectUrilenParseTest08, 1);
-    UtRegisterTest("DetectUrilenParseTest09", DetectUrilenParseTest09, 1);
-    UtRegisterTest("DetectUrilenParseTest10", DetectUrilenParseTest10, 1);
-    UtRegisterTest("DetectUrilenSetpTest01", DetectUrilenSetpTest01, 1);
-    UtRegisterTest("DetectUrilenSigTest01", DetectUrilenSigTest01, 1);
+    UtRegisterTest("DetectUrilenParseTest01", DetectUrilenParseTest01);
+    UtRegisterTest("DetectUrilenParseTest02", DetectUrilenParseTest02);
+    UtRegisterTest("DetectUrilenParseTest03", DetectUrilenParseTest03);
+    UtRegisterTest("DetectUrilenParseTest04", DetectUrilenParseTest04);
+    UtRegisterTest("DetectUrilenParseTest05", DetectUrilenParseTest05);
+    UtRegisterTest("DetectUrilenParseTest06", DetectUrilenParseTest06);
+    UtRegisterTest("DetectUrilenParseTest07", DetectUrilenParseTest07);
+    UtRegisterTest("DetectUrilenParseTest08", DetectUrilenParseTest08);
+    UtRegisterTest("DetectUrilenParseTest09", DetectUrilenParseTest09);
+    UtRegisterTest("DetectUrilenParseTest10", DetectUrilenParseTest10);
+    UtRegisterTest("DetectUrilenSetpTest01", DetectUrilenSetpTest01);
+    UtRegisterTest("DetectUrilenSigTest01", DetectUrilenSigTest01);
 #endif /* UNITTESTS */
 }

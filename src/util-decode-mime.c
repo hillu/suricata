@@ -62,7 +62,7 @@
 #define CTNT_DISP_STR     "content-disposition"
 #define CTNT_TRAN_STR     "content-transfer-encoding"
 #define MSG_ID_STR        "message-id"
-#define BND_START_STR     "boundary=\""
+#define BND_START_STR     "boundary="
 #define TOK_END_STR       "\""
 #define MSG_STR           "message/"
 #define MULTIPART_STR     "multipart/"
@@ -113,7 +113,7 @@ static const char *UrlExeExts[] = { ".exe",
  *
  * \return none
  */
-static void PrintChars(int log_level, char *label, const uint8_t *src, uint32_t len)
+static void PrintChars(int log_level, const char *label, const uint8_t *src, uint32_t len)
 {
 #ifdef DEBUG
     if (log_level <= sc_log_global_log_level) {
@@ -1150,7 +1150,8 @@ static int ProcessDecodedDataChunk(const uint8_t *chunk, uint32_t len,
                             if (tok + tokLen - (uint8_t *) chunk == (int)len) {
                                 PrintChars(SC_LOG_DEBUG, "LAST CHUNK LINE - CUTOFF",
                                         tok, tokLen);
-                                SCLogDebug("\nCHUNK CUTOFF CHARS: %d delim %ld\n", tokLen, len - (tok + tokLen - (uint8_t *) chunk));
+                                SCLogDebug("\nCHUNK CUTOFF CHARS: %u delim %u\n",
+                                        tokLen, len - (uint32_t)(tok + tokLen - (uint8_t *) chunk));
                             } else {
                                 /* Search line for URL */
                                 ret = FindUrlStrings(tok, tokLen, state);
@@ -1210,7 +1211,9 @@ static uint8_t ProcessBase64Remainder(const uint8_t *buf, uint32_t len,
     /* Fill in block with first few bytes of current line */
     remainder = B64_BLOCK - state->bvr_len;
     remainder = remainder < len ? remainder : len;
-    memcpy(state->bvremain + state->bvr_len, buf, remainder);
+    if (remainder && buf) {
+        memcpy(state->bvremain + state->bvr_len, buf, remainder);
+    }
     state->bvr_len += remainder;
 
     /* If data chunk buffer will be full, then clear it now */
@@ -1825,8 +1828,8 @@ static int FindMimeHeader(const uint8_t *buf, uint32_t blen,
  *
  * \return A pointer to the token if found, otherwise NULL if not found
  */
-static uint8_t * FindMimeHeaderToken(MimeDecField *field, char *search_start,
-        char *search_end, uint32_t *tlen)
+static uint8_t * FindMimeHeaderToken(MimeDecField *field, const char *search_start,
+        const char *search_end, uint32_t *tlen)
 {
     uint8_t *fptr, *tptr = NULL, *tok = NULL;
 
@@ -1891,7 +1894,7 @@ static int ProcessMimeHeaders(const uint8_t *buf, uint32_t len,
         /* Check for file attachment in content disposition */
         field = MimeDecFindField(entity, CTNT_DISP_STR);
         if (field != NULL) {
-            bptr = FindMimeHeaderToken(field, "filename=\"", TOK_END_STR, &blen);
+            bptr = FindMimeHeaderToken(field, "filename=", TOK_END_STR, &blen);
             if (bptr != NULL) {
                 SCLogDebug("File attachment found in disposition");
                 entity->ctnt_flags |= CTNT_IS_ATTACHMENT;
@@ -1933,7 +1936,7 @@ static int ProcessMimeHeaders(const uint8_t *buf, uint32_t len,
 
             /* Look for file name (if not already found) */
             if (!(entity->ctnt_flags & CTNT_IS_ATTACHMENT)) {
-                bptr = FindMimeHeaderToken(field, "name=\"", TOK_END_STR, &blen);
+                bptr = FindMimeHeaderToken(field, "name=", TOK_END_STR, &blen);
                 if (bptr != NULL) {
                     SCLogDebug("File attachment found");
                     entity->ctnt_flags |= CTNT_IS_ATTACHMENT;
@@ -2614,6 +2617,65 @@ MimeDecEntity * MimeDecParseFullMsg(const uint8_t *buf, uint32_t blen, void *dat
     return msg;
 }
 
+#ifdef AFLFUZZ_MIME
+static int MimeParserDataFromFileCB(const uint8_t *chunk, uint32_t len,
+        MimeDecParseState *state)
+{
+    return MIME_DEC_OK;
+}
+
+int MimeParserDataFromFile(char *filename)
+{
+    int result = 1;
+    uint8_t buffer[256];
+
+#ifdef AFLFUZZ_PERSISTANT_MODE
+    while (__AFL_LOOP(1000)) {
+        /* reset state */
+        memset(buffer, 0, sizeof(buffer));
+#endif /* AFLFUZZ_PERSISTANT_MODE */
+
+        FILE *fp = fopen(filename, "r");
+        BUG_ON(fp == NULL);
+
+        uint32_t line_count = 0;
+
+        MimeDecParseState *state = MimeDecInitParser(&line_count,
+                MimeParserDataFromFileCB);
+
+        while (1) {
+            int done = 0;
+            size_t size = fread(&buffer, 1, sizeof(buffer), fp);
+            if (size < sizeof(buffer))
+                done = 1;
+
+            (void) MimeDecParseLine(buffer, size, 1, state);
+
+            if (done)
+                break;
+        }
+
+        /* Completed */
+        (void)MimeDecParseComplete(state);
+
+        if (state->msg) {
+            MimeDecFreeEntity(state->msg);
+        }
+
+        /* De Init parser */
+        MimeDecDeInitParser(state);
+
+        fclose(fp);
+
+#ifdef AFLFUZZ_PERSISTANT_MODE
+    }
+#endif /* AFLFUZZ_PERSISTANT_MODE */
+
+    result = 0;
+    return result;
+}
+#endif /* AFLFUZZ_MIME */
+
 #ifdef UNITTESTS
 
 /* Helper body chunk callback function */
@@ -2669,7 +2731,7 @@ static int MimeDecParseLineTest01(void)
     MimeDecParseState *state = MimeDecInitParser(&line_count,
             TestDataChunkCallback);
 
-    char *str = "From: Sender1";
+    const char *str = "From: Sender1";
     ret |= MimeDecParseLine((uint8_t *)str, strlen(str), 1, state);
 
     str = "To: Recipient1";
@@ -2691,18 +2753,18 @@ static int MimeDecParseLineTest01(void)
     ret |= MimeDecParseLine((uint8_t *)str, strlen(str), 1, state);
 
     if (ret != MIME_DEC_OK) {
-        return ret;
+        return 0;
     }
     /* Completed */
     ret = MimeDecParseComplete(state);
     if (ret != MIME_DEC_OK) {
-        return ret;
+        return 0;
     }
 
     MimeDecEntity *msg = state->msg;
     if (msg->next != NULL || msg->child != NULL) {
         SCLogInfo("Error: Invalid sibling or child message");
-        return -1;
+        return 0;
     }
 
     MimeDecFreeEntity(msg);
@@ -2715,10 +2777,10 @@ static int MimeDecParseLineTest01(void)
     if (expected_count != line_count) {
         SCLogInfo("Error: Line count is invalid: expected - %d actual - %d",
                 expected_count, line_count);
-        return -1;
+        return 0;
     }
 
-    return ret;
+    return 1;
 }
 
 /* Test simple case of EXE URL extraction */
@@ -2737,7 +2799,7 @@ static int MimeDecParseLineTest02(void)
     MimeDecParseState *state = MimeDecInitParser(&line_count,
             TestDataChunkCallback);
 
-    char *str = "From: Sender1";
+    const char *str = "From: Sender1";
     ret |= MimeDecParseLine((uint8_t *)str, strlen(str), 1, state);
 
     str = "To: Recipient1";
@@ -2757,19 +2819,19 @@ static int MimeDecParseLineTest02(void)
     ret |= MimeDecParseLine((uint8_t *)str, strlen(str), 1, state);
 
     if (ret != MIME_DEC_OK) {
-        return ret;
+        return 0;
     }
     /* Completed */
     ret = MimeDecParseComplete(state);
     if (ret != MIME_DEC_OK) {
-        return ret;
+        return 0;
     }
 
     MimeDecEntity *msg = state->msg;
     if (msg->url_list == NULL || (msg->url_list != NULL &&
             !(msg->url_list->url_flags & URL_IS_EXE))) {
         SCLogInfo("Warning: Expected EXE URL not found");
-        return -1;
+        return 0;
     }
 
     MimeDecFreeEntity(msg);
@@ -2782,17 +2844,15 @@ static int MimeDecParseLineTest02(void)
     if (expected_count != line_count) {
         SCLogInfo("Warning: Line count is invalid: expected - %d actual - %d",
                 expected_count, line_count);
-        return -1;
+        return 0;
     }
 
-    return ret;
+    return 1;
 }
 
 /* Test full message with linebreaks */
 static int MimeDecParseFullMsgTest01(void)
 {
-    int ret = MIME_DEC_OK;
-
     uint32_t expected_count = 3;
     uint32_t line_count = 0;
 
@@ -2808,7 +2868,7 @@ static int MimeDecParseFullMsgTest01(void)
             TestDataChunkCallback);
     if (entity == NULL) {
         SCLogInfo("Warning: Message failed to parse");
-        return -1;
+        return 0;
     }
 
     MimeDecFreeEntity(entity);
@@ -2816,17 +2876,15 @@ static int MimeDecParseFullMsgTest01(void)
     if (expected_count != line_count) {
         SCLogInfo("Warning: Line count is invalid: expected - %d actual - %d",
                 expected_count, line_count);
-        return -1;
+        return 0;
     }
 
-    return ret;
+    return 1;
 }
 
 /* Test full message with linebreaks */
 static int MimeDecParseFullMsgTest02(void)
 {
-    int ret = MIME_DEC_OK;
-
     uint32_t expected_count = 3;
     uint32_t line_count = 0;
 
@@ -2844,23 +2902,23 @@ static int MimeDecParseFullMsgTest02(void)
 
     if (entity == NULL) {
         SCLogInfo("Warning: Message failed to parse");
-        return -1;
+        return 0;
     }
 
     MimeDecField *field = MimeDecFindField(entity, "subject");
     if (field == NULL) {
         SCLogInfo("Warning: Message failed to parse");
-        return -1;
+        return 0;
     }
 
     if (field->value_len != sizeof("subject2") - 1) {
         SCLogInfo("Warning: failed to get subject");
-        return -1;
+        return 0;
     }
 
     if (memcmp(field->value, "subject2", field->value_len) != 0) {
         SCLogInfo("Warning: failed to get subject");
-        return -1;
+        return 0;
     }
 
 
@@ -2869,19 +2927,19 @@ static int MimeDecParseFullMsgTest02(void)
     if (expected_count != line_count) {
         SCLogInfo("Warning: Line count is invalid: expected - %d actual - %d",
                 expected_count, line_count);
-        return -1;
+        return 0;
     }
 
-    return ret;
+    return 1;
 }
 
 static int MimeBase64DecodeTest01(void)
 {
-    int ret = -1;
+    int ret = 0;
 
-    char *msg = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890@"
+    const char *msg = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890@"
             "#$%^&*()-=_+,./;'[]<>?:";
-    char *base64msg = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QU"
+    const char *base64msg = "YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXpBQkNERUZHSElKS0xNTk9QU"
             "VJTVFVWV1hZWjEyMzQ1Njc4OTBAIyQlXiYqKCktPV8rLC4vOydbXTw+Pzo=";
 
     uint8_t *dst = SCMalloc(strlen(msg) + 1);
@@ -2891,7 +2949,7 @@ static int MimeBase64DecodeTest01(void)
     ret = DecodeBase64(dst, (const uint8_t *)base64msg, strlen(base64msg), 1);
 
     if (memcmp(dst, msg, strlen(msg)) == 0) {
-        ret = 0;
+        ret = 1;
     }
 
     SCFree(dst);
@@ -2901,9 +2959,9 @@ static int MimeBase64DecodeTest01(void)
 
 static int MimeIsExeURLTest01(void)
 {
-    int ret = -1;
-    char *url1 = "http://www.google.com/";
-    char *url2 = "http://www.google.com/test.exe";
+    int ret = 0;
+    const char *url1 = "http://www.google.com/";
+    const char *url2 = "http://www.google.com/test.exe";
 
     if(IsExeUrl((const uint8_t *)url1, strlen(url1)) != 0){
         SCLogDebug("Debug: URL1 error");
@@ -2913,7 +2971,7 @@ static int MimeIsExeURLTest01(void)
         SCLogDebug("Debug: URL2 error");
         goto end;
     }
-    ret = 0;
+    ret = 1;
 
     end:
 
@@ -2923,67 +2981,67 @@ static int MimeIsExeURLTest01(void)
 static int MimeIsIpv4HostTest01(void)
 {
     if(IsIpv4Host((const uint8_t *)"192.168.1.1", 11) != 1) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv4Host((const uint8_t *)"999.oogle.com", 14) != 0) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv4Host((const uint8_t *)"0:0:0:0:0:0:0:0", 15) != 0) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv4Host((const uint8_t *)"192.168.255.255", 15) != 1) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv4Host((const uint8_t *)"192.168.255.255/testurl.html", 28) != 1) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv4Host((const uint8_t *)"www.google.com", 14) != 0) {
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 static int MimeIsIpv6HostTest01(void)
 {
     if(IsIpv6Host((const uint8_t *)"0:0:0:0:0:0:0:0", 19) != 1) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv6Host((const uint8_t *)"0000:0000:0000:0000:0000:0000:0000:0000", 39) != 1) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv6Host((const uint8_t *)"0:0:0:0:0:0:0:0", 19) != 1) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv6Host((const uint8_t *)"192:168:1:1:0:0:0:0", 19) != 1) {
-        return 1;
+        return 0;
     }
 
     if(IsIpv6Host((const uint8_t *)"999.oogle.com", 14) != 0) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv6Host((const uint8_t *)"192.168.255.255", 15) != 0) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv6Host((const uint8_t *)"192.168.255.255/testurl.html", 28) != 0) {
-        return 1;
+        return 0;
     }
 
     if (IsIpv6Host((const uint8_t *)"www.google.com", 14) != 0) {
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 #endif /* UNITTESTS */
@@ -2991,13 +3049,13 @@ static int MimeIsIpv6HostTest01(void)
 void MimeDecRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("MimeDecParseLineTest01", MimeDecParseLineTest01, 0);
-    UtRegisterTest("MimeDecParseLineTest02", MimeDecParseLineTest02, 0);
-    UtRegisterTest("MimeDecParseFullMsgTest01", MimeDecParseFullMsgTest01, 0);
-    UtRegisterTest("MimeDecParseFullMsgTest02", MimeDecParseFullMsgTest02, 0);
-    UtRegisterTest("MimeBase64DecodeTest01", MimeBase64DecodeTest01, 0);
-    UtRegisterTest("MimeIsExeURLTest01", MimeIsExeURLTest01, 0);
-    UtRegisterTest("MimeIsIpv4HostTest01", MimeIsIpv4HostTest01, 0);
-    UtRegisterTest("MimeIsIpv6HostTest01", MimeIsIpv6HostTest01, 0);
+    UtRegisterTest("MimeDecParseLineTest01", MimeDecParseLineTest01);
+    UtRegisterTest("MimeDecParseLineTest02", MimeDecParseLineTest02);
+    UtRegisterTest("MimeDecParseFullMsgTest01", MimeDecParseFullMsgTest01);
+    UtRegisterTest("MimeDecParseFullMsgTest02", MimeDecParseFullMsgTest02);
+    UtRegisterTest("MimeBase64DecodeTest01", MimeBase64DecodeTest01);
+    UtRegisterTest("MimeIsExeURLTest01", MimeIsExeURLTest01);
+    UtRegisterTest("MimeIsIpv4HostTest01", MimeIsIpv4HostTest01);
+    UtRegisterTest("MimeIsIpv6HostTest01", MimeIsIpv6HostTest01);
 #endif /* UNITTESTS */
 }

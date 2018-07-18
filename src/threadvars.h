@@ -24,7 +24,6 @@
 #ifndef __THREADVARS_H__
 #define __THREADVARS_H__
 
-#include "util-mpm.h"
 #include "util-affinity.h"
 #include "tm-queues.h"
 #include "counters.h"
@@ -52,29 +51,16 @@ struct TmSlot_;
  *  the engine. This is to force timely handling of maintenance taks like
  *  rule reloads even if no packets are read by the capture method. */
 #define THV_CAPTURE_INJECT_PKT (1<<11)
-
-/** Thread flags set and read by threads, to control the threads, when they
- *  encounter certain conditions like failure */
-#define THV_RESTART_THREAD 0x01 /** restart the thread */
-#define THV_ENGINE_EXIT 0x02 /** shut the engine down gracefully */
-
-/** Maximum no of times a thread can be restarted */
-#define THV_MAX_RESTARTS 50
+#define THV_DEAD        (1 << 12) /**< thread has been joined with pthread_join() */
 
 /** \brief Per thread variable structure */
 typedef struct ThreadVars_ {
     pthread_t t;
-    char *name;
+    char name[16];
+    char *printable_name;
     char *thread_group_name;
 
     SC_ATOMIC_DECLARE(unsigned int, flags);
-
-    /** aof(action on failure) determines what should be done with the thread
-        when it encounters certain conditions like failures */
-    uint8_t aof;
-
-    /** no of times the thread has been restarted on failure */
-    uint8_t restarted;
 
     /** TmModule::flags for each module part of this thread */
     uint8_t tmm_flags;
@@ -86,7 +72,7 @@ typedef struct ThreadVars_ {
     Tmq *inq;
     Tmq *outq;
     void *outctx;
-    char *outqh_name;
+    const char *outqh_name;
 
     /** queue handlers */
     struct Packet_ * (*tmqh_in)(struct ThreadVars_ *);
@@ -132,4 +118,3 @@ typedef struct ThreadVars_ {
 #define THREAD_SET_AFFTYPE      0x04 /** Priority and affinity */
 
 #endif /* __THREADVARS_H__ */
-

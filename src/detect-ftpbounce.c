@@ -47,15 +47,19 @@
 #include "stream-tcp.h"
 #include "util-byte.h"
 
-int DetectFtpbounceMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                          Signature *, SigMatch *);
-int DetectFtpbounceALMatch(ThreadVars *, DetectEngineThreadCtx *, Flow *,
-                           uint8_t, void *, Signature *, SigMatch *);
-static int DetectFtpbounceSetup(DetectEngineCtx *, Signature *, char *);
-int DetectFtpbounceMatchArgs(uint8_t *payload, uint16_t payload_len,
-                             uint32_t ip_orig, uint16_t offset);
-void DetectFtpbounceRegisterTests(void);
-void DetectFtpbounceFree(void *);
+static int DetectFtpbounceALMatch(ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+
+static int DetectFtpbounceSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectFtpbounceRegisterTests(void);
+static int g_ftp_request_list_id = 0;
+
+static int InspectFtpRequest(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id);
 
 /**
  * \brief Registration function for ftpbounce: keyword
@@ -65,13 +69,25 @@ void DetectFtpbounceRegister(void)
 {
     sigmatch_table[DETECT_FTPBOUNCE].name = "ftpbounce";
     sigmatch_table[DETECT_FTPBOUNCE].Setup = DetectFtpbounceSetup;
-    sigmatch_table[DETECT_FTPBOUNCE].Match = NULL;
-    sigmatch_table[DETECT_FTPBOUNCE].AppLayerMatch = DetectFtpbounceALMatch;
-    sigmatch_table[DETECT_FTPBOUNCE].alproto = ALPROTO_FTP;
-    sigmatch_table[DETECT_FTPBOUNCE].Free  = NULL;
+    sigmatch_table[DETECT_FTPBOUNCE].AppLayerTxMatch = DetectFtpbounceALMatch;
     sigmatch_table[DETECT_FTPBOUNCE].RegisterTests = DetectFtpbounceRegisterTests;
     sigmatch_table[DETECT_FTPBOUNCE].flags = SIGMATCH_NOOPT;
-    return;
+
+    g_ftp_request_list_id = DetectBufferTypeRegister("ftp_request");
+
+    DetectAppLayerInspectEngineRegister("ftp_request",
+            ALPROTO_FTP, SIG_FLAG_TOSERVER, 0,
+            InspectFtpRequest);
+}
+
+static int InspectFtpRequest(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id)
+{
+    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, smd,
+                                          f, flags, alstate, txv, tx_id);
 }
 
 /**
@@ -84,7 +100,7 @@ void DetectFtpbounceRegister(void)
  *
  * \retval 1 if ftpbounce detected, 0 if not
  */
-int DetectFtpbounceMatchArgs(uint8_t *payload, uint16_t payload_len,
+static int DetectFtpbounceMatchArgs(uint8_t *payload, uint16_t payload_len,
                              uint32_t ip_orig, uint16_t offset)
 {
     SCEnter();
@@ -169,19 +185,20 @@ int DetectFtpbounceMatchArgs(uint8_t *payload, uint16_t payload_len,
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectFtpbounceALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                           Flow *f, uint8_t flags, void *state, Signature *s,
-                           SigMatch *m)
+static int DetectFtpbounceALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags,
+        void *state, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
-    FtpState *ftp_state =(FtpState *)state;
+
+    FtpState *ftp_state = (FtpState *)state;
     if (ftp_state == NULL) {
         SCLogDebug("no ftp state, no match");
         SCReturnInt(0);
     }
 
     int ret = 0;
-
     if (ftp_state->command == FTP_COMMAND_PORT) {
         ret = DetectFtpbounceMatchArgs(ftp_state->port_line,
                   ftp_state->port_line_len, f->src.address.address_un_data32[0],
@@ -203,15 +220,18 @@ int DetectFtpbounceALMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, char *ftpbouncestr)
+int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, const char *ftpbouncestr)
 {
     SCEnter();
 
     SigMatch *sm = NULL;
 
+    if (DetectSignatureSetAppProto(s, ALPROTO_FTP) != 0)
+        return -1;
+
     sm = SigMatchAlloc();
     if (sm == NULL) {
-        goto error;;
+        return -1;
     }
 
     sm->type = DETECT_FTPBOUNCE;
@@ -227,22 +247,8 @@ int DetectFtpbounceSetup(DetectEngineCtx *de_ctx, Signature *s, char *ftpbounces
     */
     sm->ctx = NULL;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_FTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
-    s->alproto = ALPROTO_FTP;
-    s->flags |= SIG_FLAG_APPLAYER;
+    SigMatchAppendSMToList(s, sm, g_ftp_request_list_id);
     SCReturnInt(0);
-
-error:
-    if (sm != NULL) {
-        SigMatchFree(sm);
-    }
-    SCReturnInt(-1);
 }
 
 #ifdef UNITTESTS
@@ -250,20 +256,19 @@ error:
 /**
  * \test DetectFtpbounceTestSetup01 is a test for the Setup ftpbounce
  */
-int DetectFtpbounceTestSetup01(void)
+static int DetectFtpbounceTestSetup01(void)
 {
-    int res = 0;
     DetectEngineCtx *de_ctx = NULL;
     Signature *s = SigAlloc();
-    if (s == NULL)
-        return 0;
+    FAIL_IF (s == NULL);
 
     /* ftpbounce doesn't accept options so the str is NULL */
-    res = !DetectFtpbounceSetup(de_ctx, s, NULL);
-    res &= s->sm_lists[DETECT_SM_LIST_AMATCH] != NULL && s->sm_lists[DETECT_SM_LIST_AMATCH]->type & DETECT_FTPBOUNCE;
+    FAIL_IF_NOT(DetectFtpbounceSetup(de_ctx, s, NULL) == 0);
+    FAIL_IF(s->sm_lists[g_ftp_request_list_id] == NULL);
+    FAIL_IF_NOT(s->sm_lists[g_ftp_request_list_id]->type & DETECT_FTPBOUNCE);
 
     SigFree(s);
-    return res;
+    PASS;
 }
 
 #include "stream-tcp-reassemble.h"
@@ -330,40 +335,44 @@ static int DetectFtpbounceTestALMatch02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *)de_ctx,(void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1, ftplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP,
+                                STREAM_TOSERVER, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf3, ftplen3);
     if (r != 0) {
         SCLogDebug("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf4, ftplen4);
     if (r != 0) {
         SCLogDebug("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     FtpState *ftp_state = f.alstate;
     if (ftp_state == NULL) {
@@ -471,39 +480,43 @@ static int DetectFtpbounceTestALMatch03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v,(void *)de_ctx,(void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER, ftpbuf1, ftplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP,
+                                STREAM_TOSERVER, ftpbuf1, ftplen1);
     if (r != 0) {
         SCLogDebug("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf2, ftplen2);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf2, ftplen2);
     if (r != 0) {
         SCLogDebug("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf3, ftplen3);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf3, ftplen3);
     if (r != 0) {
         SCLogDebug("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f,ALPROTO_FTP, STREAM_TOSERVER, ftpbuf4, ftplen4);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_FTP, STREAM_TOSERVER,
+                            ftpbuf4, ftplen4);
     if (r != 0) {
         SCLogDebug("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     FtpState *ftp_state = f.alstate;
     if (ftp_state == NULL) {
@@ -551,10 +564,10 @@ end:
 void DetectFtpbounceRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectFtpbounceTestSetup01", DetectFtpbounceTestSetup01, 1);
+    UtRegisterTest("DetectFtpbounceTestSetup01", DetectFtpbounceTestSetup01);
     UtRegisterTest("DetectFtpbounceTestALMatch02",
-                   DetectFtpbounceTestALMatch02, 1);
+                   DetectFtpbounceTestALMatch02);
     UtRegisterTest("DetectFtpbounceTestALMatch03",
-                   DetectFtpbounceTestALMatch03, 1);
+                   DetectFtpbounceTestALMatch03);
 #endif /* UNITTESTS */
 }

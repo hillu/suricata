@@ -30,7 +30,8 @@
 
 #include "detect-parse.h"
 #include "detect-engine.h"
-#include "detect-engine-mpm.h"
+#include "detect-engine-prefilter.h"
+#include "detect-engine-prefilter-common.h"
 
 #include "detect-seq.h"
 
@@ -39,22 +40,26 @@
 #include "util-unittest-helper.h"
 #include "util-debug.h"
 
-static int DetectSeqSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectSeqSetup(DetectEngineCtx *, Signature *, const char *);
 static int DetectSeqMatch(ThreadVars *, DetectEngineThreadCtx *,
-                          Packet *, Signature *, const SigMatchCtx *);
+                          Packet *, const Signature *, const SigMatchCtx *);
 static void DetectSeqRegisterTests(void);
 static void DetectSeqFree(void *);
-
+static int PrefilterSetupTcpSeq(SigGroupHead *sgh);
+static _Bool PrefilterTcpSeqIsPrefilterable(const Signature *s);
 
 void DetectSeqRegister(void)
 {
     sigmatch_table[DETECT_SEQ].name = "seq";
     sigmatch_table[DETECT_SEQ].desc = "check for a specific TCP sequence number";
-    sigmatch_table[DETECT_SEQ].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#seq";
+    sigmatch_table[DETECT_SEQ].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#seq";
     sigmatch_table[DETECT_SEQ].Match = DetectSeqMatch;
     sigmatch_table[DETECT_SEQ].Setup = DetectSeqSetup;
     sigmatch_table[DETECT_SEQ].Free = DetectSeqFree;
     sigmatch_table[DETECT_SEQ].RegisterTests = DetectSeqRegisterTests;
+
+    sigmatch_table[DETECT_SEQ].SupportsPrefilter = PrefilterTcpSeqIsPrefilterable;
+    sigmatch_table[DETECT_SEQ].SetupPrefilter = PrefilterSetupTcpSeq;
 }
 
 /**
@@ -70,7 +75,7 @@ void DetectSeqRegister(void)
  * \retval 1 match
  */
 static int DetectSeqMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                          Packet *p, Signature *s, const SigMatchCtx *ctx)
+                          Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectSeqData *data = (const DetectSeqData *)ctx;
 
@@ -93,7 +98,7 @@ static int DetectSeqMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectSeqSetup (DetectEngineCtx *de_ctx, Signature *s, char *optstr)
+static int DetectSeqSetup (DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
     DetectSeqData *data = NULL;
     SigMatch *sm = NULL;
@@ -137,6 +142,60 @@ static void DetectSeqFree(void *ptr)
 {
     DetectSeqData *data = (DetectSeqData *)ptr;
     SCFree(data);
+}
+
+/* prefilter code */
+
+static void
+PrefilterPacketSeqMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
+{
+    const PrefilterPacketHeaderCtx *ctx = pectx;
+
+    if (PrefilterPacketHeaderExtraMatch(ctx, p) == FALSE)
+        return;
+
+    if ((p->proto) == IPPROTO_TCP && !(PKT_IS_PSEUDOPKT(p)) &&
+        (p->tcph != NULL) && (TCP_GET_SEQ(p) == ctx->v1.u32[0]))
+    {
+        SCLogDebug("packet matches TCP seq %u", ctx->v1.u32[0]);
+        PrefilterAddSids(&det_ctx->pmq, ctx->sigs_array, ctx->sigs_cnt);
+    }
+}
+
+static void
+PrefilterPacketSeqSet(PrefilterPacketHeaderValue *v, void *smctx)
+{
+    const DetectSeqData *a = smctx;
+    v->u32[0] = a->seq;
+}
+
+static _Bool
+PrefilterPacketSeqCompare(PrefilterPacketHeaderValue v, void *smctx)
+{
+    const DetectSeqData *a = smctx;
+    if (v.u32[0] == a->seq)
+        return TRUE;
+    return FALSE;
+}
+
+static int PrefilterSetupTcpSeq(SigGroupHead *sgh)
+{
+    return PrefilterSetupPacketHeader(sgh, DETECT_SEQ,
+        PrefilterPacketSeqSet,
+        PrefilterPacketSeqCompare,
+        PrefilterPacketSeqMatch);
+}
+
+static _Bool PrefilterTcpSeqIsPrefilterable(const Signature *s)
+{
+    const SigMatch *sm;
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+        switch (sm->type) {
+            case DETECT_SEQ:
+                return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 
@@ -207,7 +266,7 @@ static int DetectSeqSigTest02(void)
     /* TCP w/seq=100 */
     p[1]->tcph->th_seq = htonl(100);
 
-    char *sigs[2];
+    const char *sigs[2];
     sigs[0]= "alert tcp any any -> any any (msg:\"Testing seq\"; seq:41; sid:1;)";
     sigs[1]= "alert tcp any any -> any any (msg:\"Testing seq\"; seq:42; sid:2;)";
 
@@ -236,8 +295,8 @@ end:
 static void DetectSeqRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectSeqSigTest01", DetectSeqSigTest01, 1);
-    UtRegisterTest("DetectSeqSigTest02", DetectSeqSigTest02, 1);
+    UtRegisterTest("DetectSeqSigTest01", DetectSeqSigTest01);
+    UtRegisterTest("DetectSeqSigTest02", DetectSeqSigTest02);
 #endif /* UNITTESTS */
 }
 

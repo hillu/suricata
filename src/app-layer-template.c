@@ -15,8 +15,18 @@
  * 02110-1301, USA.
  */
 
+/*
+ * TODO: Update \author in this file and app-layer-template.h.
+ * TODO: Implement your app-layer logic with unit tests.
+ * TODO: Remove SCLogNotice statements or convert to debug.
+ */
+
 /**
- * \file Template application layer detector and parser for learning and
+ * \file
+ *
+ * \author FirstName LastName <yourname@domain>
+ *
+ * Template application layer detector and parser for learning and
  * template pruposes.
  *
  * This template implements a simple application layer for something
@@ -49,7 +59,7 @@
  *
  * Example rule:
  *
- * alert template any any -> any any (msg:"SURCATA Template empty message"; \
+ * alert template any any -> any any (msg:"SURICATA Template empty message"; \
  *    app-layer-event:template.empty_message; sid:X; rev:Y;)
  */
 enum {
@@ -58,6 +68,9 @@ enum {
 
 SCEnumCharMap template_decoder_event_table[] = {
     {"EMPTY_MESSAGE", TEMPLATE_DECODER_EVENT_EMPTY_MESSAGE},
+
+    // event table must be NULL-terminated
+    { NULL, -1 },
 };
 
 static TemplateTransaction *TemplateTxAlloc(TemplateState *echo)
@@ -364,6 +377,21 @@ static void *TemplateGetTx(void *state, uint64_t tx_id)
     return NULL;
 }
 
+static void TemplateSetTxLogged(void *state, void *vtx, uint32_t logger)
+{
+    TemplateTransaction *tx = (TemplateTransaction *)vtx;
+    tx->logged |= logger;
+}
+
+static int TemplateGetTxLogged(void *state, void *vtx, uint32_t logger)
+{
+    TemplateTransaction *tx = (TemplateTransaction *)vtx;
+    if (tx->logged & logger)
+        return 1;
+
+    return 0;
+}
+
 /**
  * \brief Called by the application layer.
  *
@@ -427,14 +455,13 @@ static int TemplateSetTxDetectState(void *state, void *vtx,
 
 void RegisterTemplateParsers(void)
 {
-    char *proto_name = "template";
+    const char *proto_name = "template";
 
     /* TEMPLATE_START_REMOVE */
     if (ConfGetNode("app-layer.protocols.template") == NULL) {
         return;
     }
     /* TEMPLATE_END_REMOVE */
-
     /* Check if Template TCP detection is enabled. If it does not exist in
      * the configuration file then it will be enabled by default. */
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
@@ -448,21 +475,21 @@ void RegisterTemplateParsers(void)
             SCLogNotice("Unittest mode, registeringd default configuration.");
             AppLayerProtoDetectPPRegister(IPPROTO_TCP, TEMPLATE_DEFAULT_PORT,
                 ALPROTO_TEMPLATE, 0, TEMPLATE_MIN_FRAME_LEN, STREAM_TOSERVER,
-                TemplateProbingParser);
+                TemplateProbingParser, NULL);
 
         }
         else {
 
             if (!AppLayerProtoDetectPPParseConfPorts("tcp", IPPROTO_TCP,
                     proto_name, ALPROTO_TEMPLATE, 0, TEMPLATE_MIN_FRAME_LEN,
-                    TemplateProbingParser)) {
+                    TemplateProbingParser, NULL)) {
                 SCLogNotice("No echo app-layer configuration, enabling echo"
                     " detection TCP detection on port %s.",
                     TEMPLATE_DEFAULT_PORT);
                 AppLayerProtoDetectPPRegister(IPPROTO_TCP,
                     TEMPLATE_DEFAULT_PORT, ALPROTO_TEMPLATE, 0,
                     TEMPLATE_MIN_FRAME_LEN, STREAM_TOSERVER,
-                    TemplateProbingParser);
+                    TemplateProbingParser, NULL);
             }
 
         }
@@ -496,13 +523,16 @@ void RegisterTemplateParsers(void)
         AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_TEMPLATE,
             TemplateStateTxFree);
 
+        AppLayerParserRegisterLoggerFuncs(IPPROTO_TCP, ALPROTO_TEMPLATE,
+            TemplateGetTxLogged, TemplateSetTxLogged);
+
         /* Register a function to return the current transaction count. */
         AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_TEMPLATE,
             TemplateGetTxCnt);
 
         /* Transaction handling. */
-        AppLayerParserRegisterGetStateProgressCompletionStatus(IPPROTO_TCP,
-            ALPROTO_TEMPLATE, TemplateGetAlstateProgressCompletionStatus);
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_TEMPLATE,
+            TemplateGetAlstateProgressCompletionStatus);
         AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP,
             ALPROTO_TEMPLATE, TemplateGetStateProgress);
         AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_TEMPLATE,

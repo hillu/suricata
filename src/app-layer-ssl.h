@@ -26,6 +26,8 @@
 #ifndef __APP_LAYER_SSL_H__
 #define __APP_LAYER_SSL_H__
 
+#include "app-layer-protos.h"
+#include "app-layer-parser.h"
 #include "decode-events.h"
 #include "queue.h"
 
@@ -40,9 +42,11 @@ enum {
     TLS_DECODER_EVENT_INVALID_HEARTBEAT,
     TLS_DECODER_EVENT_OVERFLOW_HEARTBEAT,
     TLS_DECODER_EVENT_DATALEAK_HEARTBEAT_MISMATCH,
+    TLS_DECODER_EVENT_HANDSHAKE_INVALID_LENGTH,
     TLS_DECODER_EVENT_MULTIPLE_SNI_EXTENSIONS,
     TLS_DECODER_EVENT_INVALID_SNI_TYPE,
     TLS_DECODER_EVENT_INVALID_SNI_LENGTH,
+    TLS_DECODER_EVENT_TOO_MANY_RECORDS_IN_PACKET,
     /* Certificates decoding messages */
     TLS_DECODER_EVENT_INVALID_CERTIFICATE,
     TLS_DECODER_EVENT_CERTIFICATE_MISSING_ELEMENT,
@@ -51,6 +55,13 @@ enum {
     TLS_DECODER_EVENT_CERTIFICATE_INVALID_STRING,
     TLS_DECODER_EVENT_ERROR_MSG_ENCOUNTERED,
     TLS_DECODER_EVENT_INVALID_SSL_RECORD,
+};
+
+enum {
+    TLS_STATE_IN_PROGRESS = 0,
+    TLS_STATE_CERT_READY = 1,
+    TLS_HANDSHAKE_DONE = 2,
+    TLS_STATE_FINISHED = 3
 };
 
 /* Flag to indicate that server will now on send encrypted msgs */
@@ -74,17 +85,22 @@ enum {
 #define SSL_AL_FLAG_STATE_SERVER_KEYX           0x1000
 #define SSL_AL_FLAG_STATE_UNKNOWN               0x2000
 
-#define SSL_AL_FLAG_STATE_LOGGED                0x4000
+/* flag to indicate that session is finished */
+#define SSL_AL_FLAG_STATE_FINISHED              0x4000
 
 /* flags specific to HeartBeat state */
 #define SSL_AL_FLAG_HB_INFLIGHT                 0x8000
 #define SSL_AL_FLAG_HB_CLIENT_INIT              0x10000
 #define SSL_AL_FLAG_HB_SERVER_INIT              0x20000
 
-/* flags for file storage */
-#define SSL_AL_FLAG_STATE_STORED                0x40000
+/* flag to indicate that handshake is done */
+#define SSL_AL_FLAG_HANDSHAKE_DONE              0x80000
 
-#define SSL_AL_FLAG_STATE_LOGGED_LUA            0x80000
+/* A session ID in the Client Hello message, indicating the client
+   wants to resume a session */
+#define SSL_AL_FLAG_SSL_CLIENT_SESSION_ID       0x100000
+/* Session resumed without a full handshake */
+#define SSL_AL_FLAG_SESSION_RESUMED             0x200000
 
 /* config flags */
 #define SSL_TLS_LOG_PEM                         (1 << 0)
@@ -139,6 +155,9 @@ typedef struct SSLStateConnp_ {
 
     char *cert0_subject;
     char *cert0_issuerdn;
+    char *cert0_serial;
+    time_t cert0_not_before;
+    time_t cert0_not_after;
     char *cert0_fingerprint;
 
     /* ssl server name indication extension */
@@ -169,16 +188,30 @@ typedef struct SSLState_ {
     /* holds some state flags we need */
     uint32_t flags;
 
+    /* specifies which loggers are done logging */
+    uint32_t logged;
+
+    /* MPM/prefilter Id's */
+    uint64_t mpm_ids;
+
+    /* there might be a better place to store this*/
+    uint16_t hb_record_len;
+
+    uint16_t events;
+
+    uint32_t current_flags;
+
     SSLStateConnp *curr_connp;
 
     SSLStateConnp client_connp;
     SSLStateConnp server_connp;
 
-    /* there might be a better place to store this*/
-    uint16_t hb_record_len;
+    DetectEngineState *de_state;
+    AppLayerDecoderEvents *decoder_events;
 } SSLState;
 
 void RegisterSSLParsers(void);
 void SSLParserRegisterTests(void);
+void SSLSetEvent(SSLState *ssl_state, uint8_t event);
 
 #endif /* __APP_LAYER_SSL_H__ */

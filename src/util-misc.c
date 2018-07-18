@@ -27,6 +27,7 @@
 #include "util-byte.h"
 #include "util-debug.h"
 #include "util-unittest.h"
+#include "util-misc.h"
 
 #define PARSE_REGEX "^\\s*(\\d+(?:.\\d+)?)\\s*([a-zA-Z]{2})?\\s*$"
 static pcre *parse_regex = NULL;
@@ -34,7 +35,7 @@ static pcre_extra *parse_regex_study = NULL;
 
 void ParseSizeInit(void)
 {
-    const char *eb;
+    const char *eb = NULL;
     int eo;
     int opts = 0;
 
@@ -73,6 +74,18 @@ static int ParseSizeString(const char *size, double *res)
     char str2[128];
 
     *res = 0;
+
+    if (size == NULL) {
+        SCLogError(SC_ERR_INVALID_ARGUMENTS,"invalid size argument - NULL. Valid size "
+                   "argument should be in the format - \n"
+                   "xxx <- indicates it is just bytes\n"
+                   "xxxkb or xxxKb or xxxKB or xxxkB <- indicates kilobytes\n"
+                   "xxxmb or xxxMb or xxxMB or xxxmB <- indicates megabytes\n"
+                   "xxxgb or xxxGb or xxxGB or xxxgB <- indicates gigabytes.\n"
+			    );
+        retval = -2;
+        goto end;
+    }
 
     pcre_exec_ret = pcre_exec(parse_regex, parse_regex_study, size, strlen(size), 0, 0,
                     ov, MAX_SUBSTRINGS);
@@ -208,7 +221,7 @@ int ParseSizeStringU64(const char *size, uint64_t *res)
 
 #ifdef UNITTESTS
 
-int UtilMiscParseSizeStringTest01(void)
+static int UtilMiscParseSizeStringTest01(void)
 {
     const char *str;
     double result;
@@ -1134,7 +1147,8 @@ int UtilMiscParseSizeStringTest01(void)
 void UtilMiscRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("UtilMiscParseSizeStringTest01", UtilMiscParseSizeStringTest01, 1);
+    UtRegisterTest("UtilMiscParseSizeStringTest01",
+                   UtilMiscParseSizeStringTest01);
 #endif /* UNITTESTS */
 
     return;

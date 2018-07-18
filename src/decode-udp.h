@@ -30,10 +30,12 @@
 #define UDP_GET_RAW_LEN(udph)                ntohs((udph)->uh_len)
 #define UDP_GET_RAW_SRC_PORT(udph)           ntohs((udph)->uh_sport)
 #define UDP_GET_RAW_DST_PORT(udph)           ntohs((udph)->uh_dport)
+#define UDP_GET_RAW_SUM(udph)                ntohs((udph)->uh_sum)
 
 #define UDP_GET_LEN(p)                       UDP_GET_RAW_LEN(p->udph)
 #define UDP_GET_SRC_PORT(p)                  UDP_GET_RAW_SRC_PORT(p->udph)
 #define UDP_GET_DST_PORT(p)                  UDP_GET_RAW_DST_PORT(p->udph)
+#define UDP_GET_SUM(p)                       UDP_GET_RAW_SUM(p->udph)
 
 /* UDP header structure */
 typedef struct UDPHdr_
@@ -44,38 +46,37 @@ typedef struct UDPHdr_
 	uint16_t uh_sum;    /* checksum */
 } __attribute__((__packed__)) UDPHdr;
 
-typedef struct UDPVars_
-{
-} UDPVars;
-
-#define CLEAR_UDP_PACKET(p) do { \
-    (p)->udph = NULL; \
-    (p)->level4_comp_csum = -1; \
+#define CLEAR_UDP_PACKET(p) do {    \
+    (p)->level4_comp_csum = -1;     \
+    (p)->udph = NULL;               \
 } while (0)
 
 void DecodeUDPV4RegisterTests(void);
 
 /** ------ Inline function ------ */
-static inline uint16_t UDPV4CalculateChecksum(uint16_t *, uint16_t *, uint16_t);
-static inline uint16_t UDPV6CalculateChecksum(uint16_t *, uint16_t *, uint16_t);
+static inline uint16_t UDPV4Checksum(uint16_t *, uint16_t *, uint16_t, uint16_t);
+static inline uint16_t UDPV6Checksum(uint16_t *, uint16_t *, uint16_t, uint16_t);
 
 /**
- * \brief Calculates the checksum for the UDP packet
+ * \brief Calculate or valid the checksum for the UDP packet
  *
  * \param shdr Pointer to source address field from the IP packet.  Used as a
  *             part of the psuedoheader for computing the checksum
  * \param pkt  Pointer to the start of the UDP packet
  * \param hlen Total length of the UDP packet(header + payload)
+ * \param init For validation this is the UDP checksum, for calculation this
+ *    value should be set to 0.
  *
- * \retval csum Checksum for the UDP packet
+ * \retval csum For validation 0 will be returned for success, for calculation
+ *    this will be the checksum.
  */
-static inline uint16_t UDPV4CalculateChecksum(uint16_t *shdr, uint16_t *pkt,
-                                              uint16_t tlen)
+static inline uint16_t UDPV4Checksum(uint16_t *shdr, uint16_t *pkt,
+                                     uint16_t tlen, uint16_t init)
 {
     uint16_t pad = 0;
-    uint32_t csum = shdr[0];
+    uint32_t csum = init;
 
-    csum += shdr[1] + shdr[2] + shdr[3] + htons(17) + htons(tlen);
+    csum += shdr[0] + shdr[1] + shdr[2] + shdr[3] + htons(17) + htons(tlen);
 
     csum += pkt[0] + pkt[1] + pkt[2];
 
@@ -117,29 +118,32 @@ static inline uint16_t UDPV4CalculateChecksum(uint16_t *shdr, uint16_t *pkt,
     csum += (csum >> 16);
 
     uint16_t csum_u16 = (uint16_t)~csum;
-    if (csum_u16 == 0)
+    if (init == 0 && csum_u16 == 0)
         return 0xFFFF;
     else
         return csum_u16;
 }
 
 /**
- * \brief Calculates the checksum for the UDP packet
+ * \brief Calculate or valid the checksum for the UDP packet
  *
  * \param shdr Pointer to source address field from the IPV6 packet.  Used as a
  *             part of the psuedoheader for computing the checksum
  * \param pkt  Pointer to the start of the UDP packet
  * \param tlen Total length of the UDP packet(header + payload)
+ * \param init For validation this is the UDP checksum, for calculation this
+ *    value should be set to 0.
  *
- * \retval csum Checksum for the UDP packet
+ * \retval csum For validation 0 will be returned for success, for calculation
+ *    this will be the checksum.
  */
-static inline uint16_t UDPV6CalculateChecksum(uint16_t *shdr, uint16_t *pkt,
-                                              uint16_t tlen)
+static inline uint16_t UDPV6Checksum(uint16_t *shdr, uint16_t *pkt,
+                                     uint16_t tlen, uint16_t init)
 {
     uint16_t pad = 0;
-    uint32_t csum = shdr[0];
+    uint32_t csum = init;
 
-    csum += shdr[1] + shdr[2] + shdr[3] + shdr[4] + shdr[5] + shdr[6] +
+    csum += shdr[0] + shdr[1] + shdr[2] + shdr[3] + shdr[4] + shdr[5] + shdr[6] +
         shdr[7] + shdr[8] + shdr[9] + shdr[10] + shdr[11] + shdr[12] +
         shdr[13] + shdr[14] + shdr[15] + htons(17) + htons(tlen);
 
@@ -183,7 +187,7 @@ static inline uint16_t UDPV6CalculateChecksum(uint16_t *shdr, uint16_t *pkt,
     csum += (csum >> 16);
 
     uint16_t csum_u16 = (uint16_t)~csum;
-    if (csum_u16 == 0)
+    if (init == 0 && csum_u16 == 0)
         return 0xFFFF;
     else
         return csum_u16;

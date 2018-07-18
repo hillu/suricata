@@ -33,6 +33,7 @@
 #include "util-unittest.h"
 
 #include "detect-engine-address.h"
+#include "detect-engine-address-ipv6.h"
 #include "detect-engine-siggroup.h"
 #include "detect-engine-port.h"
 
@@ -367,7 +368,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
     uint32_t b_ip2[4] = { ntohl(b->ip2.addr_data32[0]), ntohl(b->ip2.addr_data32[1]),
                           ntohl(b->ip2.addr_data32[2]), ntohl(b->ip2.addr_data32[3]) };
 
-    DetectPort *port = NULL;
     DetectAddress *tmp = NULL;
 
     /* default to NULL */
@@ -407,19 +407,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
 
         *c = tmp_c;
 
-        /* copy old b to c */
-        SigGroupHeadCopySigs(de_ctx, b->sh, &tmp_c->sh);
-        /* copy old b to a */
-        SigGroupHeadCopySigs(de_ctx, a->sh, &b->sh);
-
-        for (port = b->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx, &tmp_c->port, port);
-        for (port = a->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx, &b->port, port);
-
-        tmp_c->cnt += b->cnt;
-        b->cnt += a->cnt;
-
     /* we have 3 parts: [bbb[baba]aaa]
      * part a: b_ip1 <-> a_ip1 - 1
      * part b: a_ip1 <-> b_ip2
@@ -441,40 +428,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
         AddressCutIPv6CopyAddOne(b_ip2, tmp_c->ip.addr_data32);
         AddressCutIPv6Copy(a_ip2, tmp_c->ip2.addr_data32);
         *c = tmp_c;
-
-        /* 'a' gets clean and then 'b' sigs
-         * 'b' gets clean, then 'a' then 'b' sigs
-         * 'c' gets 'a' sigs */
-        /* store old a list */
-        SigGroupHeadCopySigs(de_ctx, a->sh, &tmp->sh);
-        /* clean a list */
-        SigGroupHeadClearSigs(a->sh);
-        /* copy old b to c */
-        SigGroupHeadCopySigs(de_ctx, tmp->sh, &tmp_c->sh);
-        /* copy old b to a */
-        SigGroupHeadCopySigs(de_ctx, b->sh, &a->sh);
-        /* prepend old a before b */
-        SigGroupHeadCopySigs(de_ctx, tmp->sh, &b->sh);
-
-        /* clean tmp list */
-        SigGroupHeadClearSigs(tmp->sh);
-
-        for (port = a->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx,&tmp->port, port);
-        for (port = b->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx,&a->port, port);
-
-        for (port = tmp->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx,&b->port, port);
-        for (port = tmp->port; port != NULL; port = port->next)
-            DetectPortInsertCopy(de_ctx,&tmp_c->port, port);
-
-        tmp->cnt += a->cnt;
-        a->cnt = 0;
-        tmp_c->cnt += tmp->cnt;
-        a->cnt += b->cnt;
-        b->cnt += tmp->cnt;
-        tmp->cnt = 0;
 
     /* we have 2 or three parts:
      *
@@ -498,14 +451,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
             AddressCutIPv6CopyAddOne(a_ip2, b->ip.addr_data32);
             AddressCutIPv6Copy(b_ip2, b->ip2.addr_data32);
 
-            /* 'b' overlaps 'a' so 'a' needs the 'b' sigs */
-            SigGroupHeadCopySigs(de_ctx, b->sh, &a->sh);
-
-            for (port = b->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&a->port, port);
-
-            a->cnt += b->cnt;
-
         } else if (AddressIPv6EqU32(a_ip2, b_ip2) == 1) {
             AddressCutIPv6Copy(b_ip1, a->ip.addr_data32);
             AddressCutIPv6CopySubOne(a_ip1, a->ip2.addr_data32);
@@ -513,24 +458,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
             AddressCutIPv6Copy(a_ip1, b->ip.addr_data32);
             AddressCutIPv6Copy(a_ip2, b->ip2.addr_data32);
 
-            SigGroupHeadCopySigs(de_ctx, b->sh, &tmp->sh);
-            SigGroupHeadCopySigs(de_ctx, a->sh, &b->sh);
-            SigGroupHeadClearSigs(a->sh);
-            SigGroupHeadCopySigs(de_ctx, tmp->sh, &a->sh);
-            SigGroupHeadClearSigs(tmp->sh);
-
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&tmp->port, a->port);
-            for (port = b->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&a->port, port);
-            for (port = tmp->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&b->port, port);
-
-            tmp->cnt += a->cnt;
-            a->cnt = 0;
-            a->cnt += b->cnt;
-            b->cnt += tmp->cnt;
-            tmp->cnt = 0;
         } else {
             AddressCutIPv6Copy(b_ip1, a->ip.addr_data32);
             AddressCutIPv6CopySubOne(a_ip1, a->ip2.addr_data32);
@@ -548,39 +475,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
             AddressCutIPv6Copy(b_ip2, tmp_c->ip2.addr_data32);
             *c = tmp_c;
 
-            /* 'a' gets clean and then 'b' sigs
-             * 'b' gets clean, then 'a' then 'b' sigs
-             * 'c' gets 'b' sigs */
-            /* store old a list */
-            SigGroupHeadCopySigs(de_ctx, a->sh, &tmp->sh);
-            /* clean a list */
-            SigGroupHeadClearSigs(a->sh);
-            /* copy old b to c */
-            SigGroupHeadCopySigs(de_ctx, b->sh, &tmp_c->sh);
-            /* copy old b to a */
-            SigGroupHeadCopySigs(de_ctx, b->sh, &a->sh);
-            /* prepend old a before b */
-            SigGroupHeadCopySigs(de_ctx, tmp->sh, &b->sh);
-
-            /* clean tmp list */
-            SigGroupHeadClearSigs(tmp->sh);
-
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&tmp->port, port);
-            for (port = b->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&tmp_c->port, port);
-            for (port = b->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&a->port, port);
-
-            for (port = tmp->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&b->port, port);
-
-            tmp->cnt += a->cnt;
-            a->cnt = 0;
-            tmp_c->cnt += b->cnt;
-            a->cnt += b->cnt;
-            b->cnt += tmp->cnt;
-            tmp->cnt = 0;
         }
     /* we have 2 or three parts:
      *
@@ -603,40 +497,12 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
 
             AddressCutIPv6CopyAddOne(b_ip2, b->ip.addr_data32);
             AddressCutIPv6Copy(a_ip2, b->ip2.addr_data32);
-
-            /* 'b' overlaps 'a' so a needs the 'b' sigs */
-            SigGroupHeadCopySigs(de_ctx, b->sh, &tmp->sh);
-            SigGroupHeadClearSigs(b->sh);
-            SigGroupHeadCopySigs(de_ctx, a->sh, &b->sh);
-            SigGroupHeadCopySigs(de_ctx, tmp->sh, &a->sh);
-            SigGroupHeadClearSigs(tmp->sh);
-
-            for (port = b->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&tmp->port, b->port);
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&b->port, port);
-            for (port = tmp->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&a->port, port);
-
-            tmp->cnt += b->cnt;
-            b->cnt = 0;
-            b->cnt += a->cnt;
-            a->cnt += tmp->cnt;
-            tmp->cnt = 0;
         } else if (AddressIPv6EqU32(a_ip2, b_ip2) == 1) {
             AddressCutIPv6Copy(a_ip1, a->ip.addr_data32);
             AddressCutIPv6CopySubOne(b_ip1, a->ip2.addr_data32);
 
             AddressCutIPv6Copy(b_ip1, b->ip.addr_data32);
             AddressCutIPv6Copy(b_ip2, b->ip2.addr_data32);
-
-            /* 'a' overlaps 'b' so a needs the 'a' sigs */
-            SigGroupHeadCopySigs(de_ctx, a->sh, &b->sh);
-
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&b->port, port);
-
-            b->cnt += a->cnt;
         } else {
             AddressCutIPv6Copy(a_ip1, a->ip.addr_data32);
             AddressCutIPv6CopySubOne(b_ip1, a->ip2.addr_data32);
@@ -653,20 +519,6 @@ int DetectAddressCutIPv6(DetectEngineCtx *de_ctx, DetectAddress *a,
             AddressCutIPv6CopyAddOne(b_ip2, tmp_c->ip.addr_data32);
             AddressCutIPv6Copy(a_ip2, tmp_c->ip2.addr_data32);
             *c = tmp_c;
-
-            /* 'a' stays the same wrt sigs
-             * 'b' keeps it's own sigs and gets a's sigs prepended
-             * 'c' gets 'a' sigs */
-            SigGroupHeadCopySigs(de_ctx, a->sh, &b->sh);
-            SigGroupHeadCopySigs(de_ctx, a->sh, &tmp_c->sh);
-
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&b->port, port);
-            for (port = a->port; port != NULL; port = port->next)
-                DetectPortInsertCopy(de_ctx,&tmp_c->port, port);
-
-            b->cnt += a->cnt;
-            tmp_c->cnt += a->cnt;
         }
     }
 
@@ -960,7 +812,7 @@ int DetectAddressJoinIPv6(DetectEngineCtx *de_ctx, DetectAddress *target,
 
 #ifdef UNITTESTS
 
-int AddressTestIPv6Gt01(void)
+static int AddressTestIPv6Gt01(void)
 {
     int result = 0;
 
@@ -973,7 +825,7 @@ int AddressTestIPv6Gt01(void)
     return result;
 }
 
-int AddressTestIPv6Gt02(void)
+static int AddressTestIPv6Gt02(void)
 {
     int result = 0;
 
@@ -986,7 +838,7 @@ int AddressTestIPv6Gt02(void)
     return result;
 }
 
-int AddressTestIPv6Gt03(void)
+static int AddressTestIPv6Gt03(void)
 {
     int result = 0;
 
@@ -999,7 +851,7 @@ int AddressTestIPv6Gt03(void)
     return result;
 }
 
-int AddressTestIPv6Gt04(void)
+static int AddressTestIPv6Gt04(void)
 {
     int result = 0;
 
@@ -1012,7 +864,7 @@ int AddressTestIPv6Gt04(void)
     return result;
 }
 
-int AddressTestIPv6Lt01(void)
+static int AddressTestIPv6Lt01(void)
 {
     int result = 0;
 
@@ -1025,7 +877,7 @@ int AddressTestIPv6Lt01(void)
     return result;
 }
 
-int AddressTestIPv6Lt02(void)
+static int AddressTestIPv6Lt02(void)
 {
     int result = 0;
 
@@ -1038,7 +890,7 @@ int AddressTestIPv6Lt02(void)
     return result;
 }
 
-int AddressTestIPv6Lt03(void)
+static int AddressTestIPv6Lt03(void)
 {
     int result = 0;
 
@@ -1051,7 +903,7 @@ int AddressTestIPv6Lt03(void)
     return result;
 }
 
-int AddressTestIPv6Lt04(void)
+static int AddressTestIPv6Lt04(void)
 {
     int result = 0;
 
@@ -1064,7 +916,7 @@ int AddressTestIPv6Lt04(void)
     return result;
 }
 
-int AddressTestIPv6Eq01(void)
+static int AddressTestIPv6Eq01(void)
 {
     int result = 0;
 
@@ -1077,7 +929,7 @@ int AddressTestIPv6Eq01(void)
     return result;
 }
 
-int AddressTestIPv6Eq02(void)
+static int AddressTestIPv6Eq02(void)
 {
     int result = 0;
 
@@ -1090,7 +942,7 @@ int AddressTestIPv6Eq02(void)
     return result;
 }
 
-int AddressTestIPv6Eq03(void)
+static int AddressTestIPv6Eq03(void)
 {
     int result = 0;
 
@@ -1103,7 +955,7 @@ int AddressTestIPv6Eq03(void)
     return result;
 }
 
-int AddressTestIPv6Eq04(void)
+static int AddressTestIPv6Eq04(void)
 {
     int result = 0;
 
@@ -1116,7 +968,7 @@ int AddressTestIPv6Eq04(void)
     return result;
 }
 
-int AddressTestIPv6Le01(void)
+static int AddressTestIPv6Le01(void)
 {
     int result = 0;
 
@@ -1129,7 +981,7 @@ int AddressTestIPv6Le01(void)
     return result;
 }
 
-int AddressTestIPv6Le02(void)
+static int AddressTestIPv6Le02(void)
 {
     int result = 0;
 
@@ -1142,7 +994,7 @@ int AddressTestIPv6Le02(void)
     return result;
 }
 
-int AddressTestIPv6Le03(void)
+static int AddressTestIPv6Le03(void)
 {
     int result = 0;
 
@@ -1155,7 +1007,7 @@ int AddressTestIPv6Le03(void)
     return result;
 }
 
-int AddressTestIPv6Le04(void)
+static int AddressTestIPv6Le04(void)
 {
     int result = 0;
 
@@ -1168,7 +1020,7 @@ int AddressTestIPv6Le04(void)
     return result;
 }
 
-int AddressTestIPv6Le05(void)
+static int AddressTestIPv6Le05(void)
 {
     int result = 0;
 
@@ -1190,7 +1042,7 @@ int AddressTestIPv6Le05(void)
     return result;
 }
 
-int AddressTestIPv6Ge01(void)
+static int AddressTestIPv6Ge01(void)
 {
     int result = 0;
 
@@ -1203,7 +1055,7 @@ int AddressTestIPv6Ge01(void)
     return result;
 }
 
-int AddressTestIPv6Ge02(void)
+static int AddressTestIPv6Ge02(void)
 {
     int result = 0;
 
@@ -1216,7 +1068,7 @@ int AddressTestIPv6Ge02(void)
     return result;
 }
 
-int AddressTestIPv6Ge03(void)
+static int AddressTestIPv6Ge03(void)
 {
     int result = 0;
 
@@ -1229,7 +1081,7 @@ int AddressTestIPv6Ge03(void)
     return result;
 }
 
-int AddressTestIPv6Ge04(void)
+static int AddressTestIPv6Ge04(void)
 {
     int result = 0;
 
@@ -1242,7 +1094,7 @@ int AddressTestIPv6Ge04(void)
     return result;
 }
 
-int AddressTestIPv6Ge05(void)
+static int AddressTestIPv6Ge05(void)
 {
     int result = 0;
 
@@ -1264,7 +1116,7 @@ int AddressTestIPv6Ge05(void)
     return result;
 }
 
-int AddressTestIPv6SubOne01(void)
+static int AddressTestIPv6SubOne01(void)
 {
     int result = 0;
 
@@ -1293,7 +1145,7 @@ int AddressTestIPv6SubOne01(void)
     return result;
 }
 
-int AddressTestIPv6SubOne02(void)
+static int AddressTestIPv6SubOne02(void)
 {
     int result = 0;
 
@@ -1322,7 +1174,7 @@ int AddressTestIPv6SubOne02(void)
     return result;
 }
 
-int AddressTestIPv6AddOne01(void)
+static int AddressTestIPv6AddOne01(void)
 {
     int result = 0;
 
@@ -1351,7 +1203,7 @@ int AddressTestIPv6AddOne01(void)
     return result;
 }
 
-int AddressTestIPv6AddOne02(void)
+static int AddressTestIPv6AddOne02(void)
 {
     int result = 0;
 
@@ -2230,49 +2082,48 @@ void DetectAddressIPv6Tests(void)
 {
 
 #ifdef UNITTESTS
-    UtRegisterTest("AddressTestIPv6Gt01", AddressTestIPv6Gt01, 1);
-    UtRegisterTest("AddressTestIPv6Gt02", AddressTestIPv6Gt02, 1);
-    UtRegisterTest("AddressTestIPv6Gt03", AddressTestIPv6Gt03, 1);
-    UtRegisterTest("AddressTestIPv6Gt04", AddressTestIPv6Gt04, 1);
+    UtRegisterTest("AddressTestIPv6Gt01", AddressTestIPv6Gt01);
+    UtRegisterTest("AddressTestIPv6Gt02", AddressTestIPv6Gt02);
+    UtRegisterTest("AddressTestIPv6Gt03", AddressTestIPv6Gt03);
+    UtRegisterTest("AddressTestIPv6Gt04", AddressTestIPv6Gt04);
 
-    UtRegisterTest("AddressTestIPv6Lt01", AddressTestIPv6Lt01, 1);
-    UtRegisterTest("AddressTestIPv6Lt02", AddressTestIPv6Lt02, 1);
-    UtRegisterTest("AddressTestIPv6Lt03", AddressTestIPv6Lt03, 1);
-    UtRegisterTest("AddressTestIPv6Lt04", AddressTestIPv6Lt04, 1);
+    UtRegisterTest("AddressTestIPv6Lt01", AddressTestIPv6Lt01);
+    UtRegisterTest("AddressTestIPv6Lt02", AddressTestIPv6Lt02);
+    UtRegisterTest("AddressTestIPv6Lt03", AddressTestIPv6Lt03);
+    UtRegisterTest("AddressTestIPv6Lt04", AddressTestIPv6Lt04);
 
-    UtRegisterTest("AddressTestIPv6Eq01", AddressTestIPv6Eq01, 1);
-    UtRegisterTest("AddressTestIPv6Eq02", AddressTestIPv6Eq02, 1);
-    UtRegisterTest("AddressTestIPv6Eq03", AddressTestIPv6Eq03, 1);
-    UtRegisterTest("AddressTestIPv6Eq04", AddressTestIPv6Eq04, 1);
+    UtRegisterTest("AddressTestIPv6Eq01", AddressTestIPv6Eq01);
+    UtRegisterTest("AddressTestIPv6Eq02", AddressTestIPv6Eq02);
+    UtRegisterTest("AddressTestIPv6Eq03", AddressTestIPv6Eq03);
+    UtRegisterTest("AddressTestIPv6Eq04", AddressTestIPv6Eq04);
 
-    UtRegisterTest("AddressTestIPv6Le01", AddressTestIPv6Le01, 1);
-    UtRegisterTest("AddressTestIPv6Le02", AddressTestIPv6Le02, 1);
-    UtRegisterTest("AddressTestIPv6Le03", AddressTestIPv6Le03, 1);
-    UtRegisterTest("AddressTestIPv6Le04", AddressTestIPv6Le04, 1);
-    UtRegisterTest("AddressTestIPv6Le05", AddressTestIPv6Le05, 1);
+    UtRegisterTest("AddressTestIPv6Le01", AddressTestIPv6Le01);
+    UtRegisterTest("AddressTestIPv6Le02", AddressTestIPv6Le02);
+    UtRegisterTest("AddressTestIPv6Le03", AddressTestIPv6Le03);
+    UtRegisterTest("AddressTestIPv6Le04", AddressTestIPv6Le04);
+    UtRegisterTest("AddressTestIPv6Le05", AddressTestIPv6Le05);
 
-    UtRegisterTest("AddressTestIPv6Ge01", AddressTestIPv6Ge01, 1);
-    UtRegisterTest("AddressTestIPv6Ge02", AddressTestIPv6Ge02, 1);
-    UtRegisterTest("AddressTestIPv6Ge03", AddressTestIPv6Ge03, 1);
-    UtRegisterTest("AddressTestIPv6Ge04", AddressTestIPv6Ge04, 1);
-    UtRegisterTest("AddressTestIPv6Ge05", AddressTestIPv6Ge05, 1);
+    UtRegisterTest("AddressTestIPv6Ge01", AddressTestIPv6Ge01);
+    UtRegisterTest("AddressTestIPv6Ge02", AddressTestIPv6Ge02);
+    UtRegisterTest("AddressTestIPv6Ge03", AddressTestIPv6Ge03);
+    UtRegisterTest("AddressTestIPv6Ge04", AddressTestIPv6Ge04);
+    UtRegisterTest("AddressTestIPv6Ge05", AddressTestIPv6Ge05);
 
-    UtRegisterTest("AddressTestIPv6SubOne01", AddressTestIPv6SubOne01, 1);
-    UtRegisterTest("AddressTestIPv6SubOne02", AddressTestIPv6SubOne02, 1);
+    UtRegisterTest("AddressTestIPv6SubOne01", AddressTestIPv6SubOne01);
+    UtRegisterTest("AddressTestIPv6SubOne02", AddressTestIPv6SubOne02);
 
-    UtRegisterTest("AddressTestIPv6AddOne01", AddressTestIPv6AddOne01, 1);
-    UtRegisterTest("AddressTestIPv6AddOne02", AddressTestIPv6AddOne02, 1);
+    UtRegisterTest("AddressTestIPv6AddOne01", AddressTestIPv6AddOne01);
+    UtRegisterTest("AddressTestIPv6AddOne02", AddressTestIPv6AddOne02);
 
-    UtRegisterTest("AddressTestIPv6AddressCmp01",
-                   AddressTestIPv6AddressCmp01, 1);
+    UtRegisterTest("AddressTestIPv6AddressCmp01", AddressTestIPv6AddressCmp01);
 
-    UtRegisterTest("AddressTestIPv6CutNot01", AddressTestIPv6CutNot01, 1);
-    UtRegisterTest("AddressTestIPv6CutNot02", AddressTestIPv6CutNot02, 1);
-    UtRegisterTest("AddressTestIPv6CutNot03", AddressTestIPv6CutNot03, 1);
-    UtRegisterTest("AddressTestIPv6CutNot04", AddressTestIPv6CutNot04, 1);
-    UtRegisterTest("AddressTestIPv6CutNot05", AddressTestIPv6CutNot05, 1);
+    UtRegisterTest("AddressTestIPv6CutNot01", AddressTestIPv6CutNot01);
+    UtRegisterTest("AddressTestIPv6CutNot02", AddressTestIPv6CutNot02);
+    UtRegisterTest("AddressTestIPv6CutNot03", AddressTestIPv6CutNot03);
+    UtRegisterTest("AddressTestIPv6CutNot04", AddressTestIPv6CutNot04);
+    UtRegisterTest("AddressTestIPv6CutNot05", AddressTestIPv6CutNot05);
 
-    UtRegisterTest("AddressTestIPv6Join01", AddressTestIPv6Join01, 1);
+    UtRegisterTest("AddressTestIPv6Join01", AddressTestIPv6Join01);
 #endif /* UNITTESTS */
 
     return;

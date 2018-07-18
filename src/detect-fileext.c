@@ -52,10 +52,11 @@
 #include "detect-fileext.h"
 
 static int DetectFileextMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
-        uint8_t, File *, Signature *, SigMatch *);
-static int DetectFileextSetup (DetectEngineCtx *, Signature *, char *);
+        uint8_t, File *, const Signature *, const SigMatchCtx *);
+static int DetectFileextSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFileextRegisterTests(void);
 static void DetectFileextFree(void *);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for keyword: fileext
@@ -64,12 +65,14 @@ void DetectFileextRegister(void)
 {
     sigmatch_table[DETECT_FILEEXT].name = "fileext";
     sigmatch_table[DETECT_FILEEXT].desc = "match on the extension of a file name";
-    sigmatch_table[DETECT_FILEEXT].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#fileext";
+    sigmatch_table[DETECT_FILEEXT].url = DOC_URL DOC_VERSION "/rules/file-keywords.html#fileext";
     sigmatch_table[DETECT_FILEEXT].FileMatch = DetectFileextMatch;
-    sigmatch_table[DETECT_FILEEXT].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILEEXT].Setup = DetectFileextSetup;
     sigmatch_table[DETECT_FILEEXT].Free  = DetectFileextFree;
     sigmatch_table[DETECT_FILEEXT].RegisterTests = DetectFileextRegisterTests;
+    sigmatch_table[DETECT_FILEEXT].flags = SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION;
+
+    g_file_match_list_id = DetectBufferTypeRegister("files");
 
 	SCLogDebug("registering fileext rule option");
     return;
@@ -90,20 +93,14 @@ void DetectFileextRegister(void)
  * \retval 1 match
  */
 static int DetectFileextMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
+        Flow *f, uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
     int ret = 0;
 
-    DetectFileextData *fileext = (DetectFileextData *)m->ctx;
+    DetectFileextData *fileext = (DetectFileextData *)m;
 
     if (file->name == NULL)
-        SCReturnInt(0);
-
-    if (file->txid < det_ctx->tx_id)
-        SCReturnInt(0);
-
-    if (file->txid > det_ctx->tx_id)
         SCReturnInt(0);
 
     if (file->name_len <= fileext->len)
@@ -137,7 +134,7 @@ static int DetectFileextMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval pointer to DetectFileextData on success
  * \retval NULL on failure
  */
-static DetectFileextData *DetectFileextParse (char *str)
+static DetectFileextData *DetectFileextParse (const char *str, bool negate)
 {
     DetectFileextData *fileext = NULL;
 
@@ -148,12 +145,16 @@ static DetectFileextData *DetectFileextParse (char *str)
 
     memset(fileext, 0x00, sizeof(DetectFileextData));
 
-    if (DetectContentDataParse("fileext", str, &fileext->ext, &fileext->len, &fileext->flags) == -1) {
+    if (DetectContentDataParse("fileext", str, &fileext->ext, &fileext->len) == -1) {
         goto error;
     }
     uint16_t u;
     for (u = 0; u < fileext->len; u++)
         fileext->ext[u] = tolower(fileext->ext[u]);
+
+    if (negate) {
+        fileext->flags |= DETECT_CONTENT_NEGATED;
+    }
 
     SCLogDebug("flags %02X", fileext->flags);
     if (fileext->flags & DETECT_CONTENT_NEGATED) {
@@ -191,12 +192,12 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFileextSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFileextSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectFileextData *fileext= NULL;
     SigMatch *sm = NULL;
 
-    fileext = DetectFileextParse(str);
+    fileext = DetectFileextParse(str, s->init_data->negated);
     if (fileext == NULL)
         goto error;
 
@@ -209,16 +210,7 @@ static int DetectFileextSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
     sm->type = DETECT_FILEEXT;
     sm->ctx = (void *)fileext;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
-
-    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
-    if (s->alproto == ALPROTO_HTTP) {
-        AppLayerHtpNeedFileInspection();
-    }
+    SigMatchAppendSMToList(s, sm, g_file_match_list_id);
 
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_FILENAME);
     return 0;
@@ -252,9 +244,9 @@ static void DetectFileextFree(void *ptr)
 /**
  * \test DetectFileextTestParse01
  */
-int DetectFileextTestParse01 (void)
+static int DetectFileextTestParse01 (void)
 {
-    DetectFileextData *dfd = DetectFileextParse("\"doc\"");
+    DetectFileextData *dfd = DetectFileextParse("doc", false);
     if (dfd != NULL) {
         DetectFileextFree(dfd);
         return 1;
@@ -265,11 +257,11 @@ int DetectFileextTestParse01 (void)
 /**
  * \test DetectFileextTestParse02
  */
-int DetectFileextTestParse02 (void)
+static int DetectFileextTestParse02 (void)
 {
     int result = 0;
 
-    DetectFileextData *dfd = DetectFileextParse("\"tar.gz\"");
+    DetectFileextData *dfd = DetectFileextParse("tar.gz", false);
     if (dfd != NULL) {
         if (dfd->len == 6 && memcmp(dfd->ext, "tar.gz", 6) == 0) {
             result = 1;
@@ -284,11 +276,11 @@ int DetectFileextTestParse02 (void)
 /**
  * \test DetectFileextTestParse03
  */
-int DetectFileextTestParse03 (void)
+static int DetectFileextTestParse03 (void)
 {
     int result = 0;
 
-    DetectFileextData *dfd = DetectFileextParse("\"pdf\"");
+    DetectFileextData *dfd = DetectFileextParse("pdf", false);
     if (dfd != NULL) {
         if (dfd->len == 3 && memcmp(dfd->ext, "pdf", 3) == 0) {
             result = 1;
@@ -308,8 +300,8 @@ int DetectFileextTestParse03 (void)
 void DetectFileextRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectFileextTestParse01", DetectFileextTestParse01, 1);
-    UtRegisterTest("DetectFileextTestParse02", DetectFileextTestParse02, 1);
-    UtRegisterTest("DetectFileextTestParse03", DetectFileextTestParse03, 1);
+    UtRegisterTest("DetectFileextTestParse01", DetectFileextTestParse01);
+    UtRegisterTest("DetectFileextTestParse02", DetectFileextTestParse02);
+    UtRegisterTest("DetectFileextTestParse03", DetectFileextTestParse03);
 #endif /* UNITTESTS */
 }

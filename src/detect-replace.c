@@ -59,7 +59,7 @@ extern int run_mode;
 #include "host.h"
 #include "util-profiling.h"
 
-static int DetectReplaceSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectReplaceSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectReplaceRegisterTests(void);
 
 void DetectReplaceRegister (void)
@@ -69,27 +69,25 @@ void DetectReplaceRegister (void)
     sigmatch_table[DETECT_REPLACE].Setup = DetectReplaceSetup;
     sigmatch_table[DETECT_REPLACE].Free  = NULL;
     sigmatch_table[DETECT_REPLACE].RegisterTests = DetectReplaceRegisterTests;
-
-    sigmatch_table[DETECT_REPLACE].flags |= SIGMATCH_PAYLOAD;
+    sigmatch_table[DETECT_REPLACE].flags = (SIGMATCH_QUOTES_MANDATORY|SIGMATCH_HANDLE_NEGATION);
 }
 
-int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
+int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, const char *replacestr)
 {
     uint8_t *content = NULL;
     uint16_t len = 0;
-    uint32_t flags = 0;
     SigMatch *pm = NULL;
     DetectContentData *ud = NULL;
 
-    int ret = DetectContentDataParse("replace", replacestr, &content, &len, &flags);
-    if (ret == -1)
-        goto error;
-
-    if (flags & DETECT_CONTENT_NEGATED) {
+    if (s->init_data->negated) {
         SCLogError(SC_ERR_INVALID_VALUE, "Can't negate replacement string: %s",
                    replacestr);
         goto error;
     }
+
+    int ret = DetectContentDataParse("replace", replacestr, &content, &len);
+    if (ret == -1)
+        goto error;
 
     switch (run_mode) {
         case RUNMODE_NFQ:
@@ -103,9 +101,9 @@ int DetectReplaceSetup(DetectEngineCtx *de_ctx, Signature *s, char *replacestr)
             return 0;
     }
 
-    /* add to the latest "content" keyword from either dmatch or pmatch */
-    pm =  SigMatchGetLastSMFromLists(s, 2,
-            DETECT_CONTENT, s->sm_lists_tail[DETECT_SM_LIST_PMATCH]);
+    /* add to the latest "content" keyword from pmatch */
+    pm = DetectGetLastSMByListId(s, DETECT_SM_LIST_PMATCH,
+            DETECT_CONTENT, -1);
     if (pm == NULL) {
         SCLogError(SC_ERR_WITHIN_MISSING_CONTENT, "replace needs"
                 "preceding content option for raw sig");
@@ -222,7 +220,7 @@ void DetectReplaceFreeInternal(DetectReplaceList *replist)
  */
 static
 int DetectReplaceLongPatternMatchTest(uint8_t *raw_eth_pkt, uint16_t pktsize,
-                                      char *sig, uint32_t sid, uint8_t *pp,
+                                      const char *sig, uint32_t sid, uint8_t *pp,
                                       uint16_t *len)
 {
     int result = 0;
@@ -307,7 +305,7 @@ end:
 /**
  * \brief Wrapper for DetectContentLongPatternMatchTest
  */
-int DetectReplaceLongPatternMatchTestWrp(char *sig, uint32_t sid, char *sig_rep,  uint32_t sid_rep)
+static int DetectReplaceLongPatternMatchTestWrp(const char *sig, uint32_t sid, const char *sig_rep,  uint32_t sid_rep)
 {
     int ret;
     /** Real packet with the following tcp data:
@@ -355,7 +353,7 @@ int DetectReplaceLongPatternMatchTestWrp(char *sig, uint32_t sid, char *sig_rep,
 /**
  * \brief Wrapper for DetectContentLongPatternMatchTest
  */
-int DetectReplaceLongPatternMatchTestUDPWrp(char *sig, uint32_t sid, char *sig_rep,  uint32_t sid_rep)
+static int DetectReplaceLongPatternMatchTestUDPWrp(const char *sig, uint32_t sid, const char *sig_rep,  uint32_t sid_rep)
 {
     int ret;
     /** Real UDP DNS packet with a request A to a1.twimg.com
@@ -391,9 +389,9 @@ int DetectReplaceLongPatternMatchTestUDPWrp(char *sig, uint32_t sid, char *sig_r
  */
 static int DetectReplaceMatchTest01(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; replace:\"pig\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"this is a pig test\"; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -403,9 +401,9 @@ static int DetectReplaceMatchTest01(void)
  */
 static int DetectReplaceMatchTest02(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"th\"; offset: 4; replace:\"TH\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"THis\"; offset:4; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -415,9 +413,9 @@ static int DetectReplaceMatchTest02(void)
  */
 static int DetectReplaceMatchTest03(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"th\"; replace:\"TH\"; offset: 4; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"THis\"; offset:4; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -427,9 +425,9 @@ static int DetectReplaceMatchTest03(void)
  */
 static int DetectReplaceMatchTest04(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"th\"; replace:\"TH\"; content:\"patter\"; replace:\"matter\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"THis\"; content:\"matterns\"; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -439,11 +437,11 @@ static int DetectReplaceMatchTest04(void)
  */
 static int DetectReplaceMatchTest05(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"th\"; replace:\"TH\"; content:\"nutella\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"TH\"; sid:2;)";
-    return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
+    return !DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
 
 /**
@@ -452,11 +450,11 @@ static int DetectReplaceMatchTest05(void)
  */
 static int DetectReplaceMatchTest06(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"nutella\"; replace:\"commode\"; content:\"this is\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"commode\"; sid:2;)";
-    return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
+    return !DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
 
 /**
@@ -464,9 +462,9 @@ static int DetectReplaceMatchTest06(void)
  */
 static int DetectReplaceMatchTest07(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"BiG\"; nocase; replace:\"pig\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"this is a pig test\"; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -476,9 +474,9 @@ static int DetectReplaceMatchTest07(void)
  */
 static int DetectReplaceMatchTest08(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; depth:17; replace:\"pig\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"this is a pig test\"; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -488,11 +486,11 @@ static int DetectReplaceMatchTest08(void)
  */
 static int DetectReplaceMatchTest09(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; depth:16; replace:\"pig\"; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"this is a pig test\"; sid:2;)";
-    return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
+    return !DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
 
 /**
@@ -500,9 +498,9 @@ static int DetectReplaceMatchTest09(void)
  */
 static int DetectReplaceMatchTest10(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; depth:17; replace:\"pig\"; offset: 14; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"pig\"; depth:17; offset:14; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -512,9 +510,9 @@ static int DetectReplaceMatchTest10(void)
  */
 static int DetectReplaceMatchTest11(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; replace:\"pig\"; content:\"to\"; within: 11; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"pig\"; depth:17; offset:14; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -524,11 +522,11 @@ static int DetectReplaceMatchTest11(void)
  */
 static int DetectReplaceMatchTest12(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; replace:\"pig\"; content:\"to\"; within: 4; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"pig\"; depth:17; offset:14; sid:2;)";
-    return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
+    return !DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
 
 /**
@@ -536,9 +534,9 @@ static int DetectReplaceMatchTest12(void)
  */
 static int DetectReplaceMatchTest13(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; replace:\"pig\"; content:\"test\"; distance: 1; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"pig\"; depth:17; offset:14; sid:2;)";
     return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
@@ -548,11 +546,11 @@ static int DetectReplaceMatchTest13(void)
  */
 static int DetectReplaceMatchTest14(void)
 {
-    char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert tcp any any -> any any (msg:\"Nothing..\";"
                 " content:\"big\"; replace:\"pig\"; content:\"test\"; distance: 2; sid:1;)";
-    char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert tcp any any -> any any (msg:\"replace worked\";"
                 " content:\"pig\"; depth:17; offset:14; sid:2;)";
-    return DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
+    return !DetectReplaceLongPatternMatchTestWrp(sig, 1, sig_rep, 2);
 }
 
 /**
@@ -560,9 +558,9 @@ static int DetectReplaceMatchTest14(void)
  */
 static int DetectReplaceMatchTest15(void)
 {
-    char *sig = "alert udp any any -> any any (msg:\"Nothing..\";"
+    const char *sig = "alert udp any any -> any any (msg:\"Nothing..\";"
                 " content:\"com\"; replace:\"org\"; sid:1;)";
-    char *sig_rep = "alert udp any any -> any any (msg:\"replace worked\";"
+    const char *sig_rep = "alert udp any any -> any any (msg:\"replace worked\";"
                 " content:\"twimg|03|org\"; sid:2;)";
     return DetectReplaceLongPatternMatchTestUDPWrp(sig, 1, sig_rep, 2);
 }
@@ -818,28 +816,28 @@ void DetectReplaceRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
 /* matching */
-    UtRegisterTest("DetectReplaceMatchTest01", DetectReplaceMatchTest01, 1);
-    UtRegisterTest("DetectReplaceMatchTest02", DetectReplaceMatchTest02, 1);
-    UtRegisterTest("DetectReplaceMatchTest03", DetectReplaceMatchTest03, 1);
-    UtRegisterTest("DetectReplaceMatchTest04", DetectReplaceMatchTest04, 1);
-    UtRegisterTest("DetectReplaceMatchTest05", DetectReplaceMatchTest05, 0);
-    UtRegisterTest("DetectReplaceMatchTest06", DetectReplaceMatchTest06, 0);
-    UtRegisterTest("DetectReplaceMatchTest07", DetectReplaceMatchTest07, 1);
-    UtRegisterTest("DetectReplaceMatchTest08", DetectReplaceMatchTest08, 1);
-    UtRegisterTest("DetectReplaceMatchTest09", DetectReplaceMatchTest09, 0);
-    UtRegisterTest("DetectReplaceMatchTest10", DetectReplaceMatchTest10, 1);
-    UtRegisterTest("DetectReplaceMatchTest11", DetectReplaceMatchTest11, 1);
-    UtRegisterTest("DetectReplaceMatchTest12", DetectReplaceMatchTest12, 0);
-    UtRegisterTest("DetectReplaceMatchTest13", DetectReplaceMatchTest13, 1);
-    UtRegisterTest("DetectReplaceMatchTest14", DetectReplaceMatchTest14, 0);
-    UtRegisterTest("DetectReplaceMatchTest15", DetectReplaceMatchTest15, 1);
+    UtRegisterTest("DetectReplaceMatchTest01", DetectReplaceMatchTest01);
+    UtRegisterTest("DetectReplaceMatchTest02", DetectReplaceMatchTest02);
+    UtRegisterTest("DetectReplaceMatchTest03", DetectReplaceMatchTest03);
+    UtRegisterTest("DetectReplaceMatchTest04", DetectReplaceMatchTest04);
+    UtRegisterTest("DetectReplaceMatchTest05", DetectReplaceMatchTest05);
+    UtRegisterTest("DetectReplaceMatchTest06", DetectReplaceMatchTest06);
+    UtRegisterTest("DetectReplaceMatchTest07", DetectReplaceMatchTest07);
+    UtRegisterTest("DetectReplaceMatchTest08", DetectReplaceMatchTest08);
+    UtRegisterTest("DetectReplaceMatchTest09", DetectReplaceMatchTest09);
+    UtRegisterTest("DetectReplaceMatchTest10", DetectReplaceMatchTest10);
+    UtRegisterTest("DetectReplaceMatchTest11", DetectReplaceMatchTest11);
+    UtRegisterTest("DetectReplaceMatchTest12", DetectReplaceMatchTest12);
+    UtRegisterTest("DetectReplaceMatchTest13", DetectReplaceMatchTest13);
+    UtRegisterTest("DetectReplaceMatchTest14", DetectReplaceMatchTest14);
+    UtRegisterTest("DetectReplaceMatchTest15", DetectReplaceMatchTest15);
 /* parsing */
-    UtRegisterTest("DetectReplaceParseTest01", DetectReplaceParseTest01, 1);
-    UtRegisterTest("DetectReplaceParseTest02", DetectReplaceParseTest02, 1);
-    UtRegisterTest("DetectReplaceParseTest03", DetectReplaceParseTest03, 1);
-    UtRegisterTest("DetectReplaceParseTest04", DetectReplaceParseTest04, 1);
-    UtRegisterTest("DetectReplaceParseTest05", DetectReplaceParseTest05, 1);
-    UtRegisterTest("DetectReplaceParseTest06", DetectReplaceParseTest06, 1);
-    UtRegisterTest("DetectReplaceParseTest07", DetectReplaceParseTest07, 1);
+    UtRegisterTest("DetectReplaceParseTest01", DetectReplaceParseTest01);
+    UtRegisterTest("DetectReplaceParseTest02", DetectReplaceParseTest02);
+    UtRegisterTest("DetectReplaceParseTest03", DetectReplaceParseTest03);
+    UtRegisterTest("DetectReplaceParseTest04", DetectReplaceParseTest04);
+    UtRegisterTest("DetectReplaceParseTest05", DetectReplaceParseTest05);
+    UtRegisterTest("DetectReplaceParseTest06", DetectReplaceParseTest06);
+    UtRegisterTest("DetectReplaceParseTest07", DetectReplaceParseTest07);
 #endif /* UNITTESTS */
 }

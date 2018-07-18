@@ -39,7 +39,7 @@
 
 #ifndef HAVE_GEOIP
 
-static int DetectGeoipSetupNoSupport (DetectEngineCtx *a, Signature *b, char *c)
+static int DetectGeoipSetupNoSupport (DetectEngineCtx *a, Signature *b, const char *c)
 {
     SCLogError(SC_ERR_NO_GEOIP_SUPPORT, "no GeoIP support built in, needed for geoip keyword");
     return -1;
@@ -61,10 +61,9 @@ void DetectGeoipRegister(void)
 
 #include <GeoIP.h>
 
-
 static int DetectGeoipMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
-                             Signature *, const SigMatchCtx *);
-static int DetectGeoipSetup(DetectEngineCtx *, Signature *, char *);
+                            const Signature *, const SigMatchCtx *);
+static int DetectGeoipSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectGeoipRegisterTests(void);
 static void DetectGeoipDataFree(void *);
 
@@ -165,7 +164,7 @@ static int CheckGeoMatchIPv4(const DetectGeoipData *geoipdata, uint32_t ip)
  * \retval 1 match
  */
 static int DetectGeoipMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                             Packet *p, Signature *s, const SigMatchCtx *ctx)
+                            Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectGeoipData *geoipdata = (const DetectGeoipData *)ctx;
     int matches = 0;
@@ -211,7 +210,7 @@ static int DetectGeoipMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval pointer to DetectGeoipData on success
  * \retval NULL on failure
  */
-static DetectGeoipData *DetectGeoipDataParse (char *str)
+static DetectGeoipData *DetectGeoipDataParse (const char *str)
 {
     DetectGeoipData *geoipdata = NULL;
     uint16_t pos = 0;
@@ -264,8 +263,7 @@ static DetectGeoipData *DetectGeoipDataParse (char *str)
             if (geoipdata->flags != GEOIP_MATCH_NO_FLAG && skiplocationparsing == 0)
             {
                 /* Parse location string: for now just the country code(s) */
-                if (str[prevpos] == '!')
-                {
+                if (str[prevpos] == '!') {
                     geoipdata->flags |= GEOIP_MATCH_NEGATED;
                     prevpos++; /* dot not copy the ! */
                 }
@@ -324,7 +322,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectGeoipSetup(DetectEngineCtx *de_ctx, Signature *s, char *optstr)
+static int DetectGeoipSetup(DetectEngineCtx *de_ctx, Signature *s, const char *optstr)
 {
     DetectGeoipData *geoipdata = NULL;
     SigMatch *sm = NULL;
@@ -370,111 +368,83 @@ static void DetectGeoipDataFree(void *ptr)
 
 #ifdef UNITTESTS
 
-static int GeoipParseTest(char *rule, int ncountries, char **countries, uint32_t flags)
+static int GeoipParseTest(const char *rule, int ncountries, const char **countries, uint32_t flags)
 {
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
     Signature *s = NULL;
     DetectGeoipData *data = NULL;
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
-
+    FAIL_IF(de_ctx == NULL);
     de_ctx->flags |= DE_QUIET;
-    de_ctx->sig_list = SigInit(de_ctx, rule);
 
-    if (de_ctx->sig_list == NULL) {
-        printf("sig parse failed: ");
-        goto end;
-    }
+    de_ctx->sig_list = SigInit(de_ctx, rule);
+    FAIL_IF(de_ctx->sig_list == NULL);
 
     s = de_ctx->sig_list;
-    if (s->sm_lists_tail[DETECT_SM_LIST_MATCH] == NULL) {
-        printf("empty server body list: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_MATCH] == NULL);
 
-    if (s->sm_lists_tail[DETECT_SM_LIST_MATCH]->type != DETECT_GEOIP) {
-        printf("last sm not geoip: ");
-        goto end;
-    }
+    FAIL_IF(s->sm_lists_tail[DETECT_SM_LIST_MATCH]->type != DETECT_GEOIP);
 
     data = (DetectGeoipData *)s->sm_lists_tail[DETECT_SM_LIST_MATCH]->ctx;
-    if (data->flags != flags) {
-        printf("flags not right: (flags=%d)",data->flags);
-        goto end;
-    }
+    FAIL_IF(data->flags != flags);
 
-    if (data->nlocations!=ncountries)
-    {
-        printf("wrong number of parsed countries: ");
-        goto end;
-    }
+    FAIL_IF(data->nlocations!=ncountries);
 
     for (int i=0; i<ncountries; i++)
     {
-        if (strcmp((char *)data->location[i],countries[i])!=0)
-        {
-            printf("wrong parsed country code: ");
-            goto end;
-        }
+        FAIL_IF(strcmp((char *)data->location[i],countries[i])!=0);
     }
 
-    result = 1;
-end:
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-
-    return result;
+    PASS;
 }
 
 static int GeoipParseTest01(void)
 {
-    char *ccodes[1] = {"US"};
+    const char *ccodes[1] = {"US"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:US;sid:1;)", 1, ccodes,
                                 GEOIP_MATCH_ANY_FLAG);
 }
 
 static int GeoipParseTest02(void)
 {
-    char *ccodes[1] = {"US"};
+    const char *ccodes[1] = {"US"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:!US;sid:1;)", 1, ccodes,
                                 GEOIP_MATCH_ANY_FLAG | GEOIP_MATCH_NEGATED);
 }
 
 static int GeoipParseTest03(void)
 {
-    char *ccodes[1] = {"US"};
+    const char *ccodes[1] = {"US"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:!US;sid:1;)", 1, ccodes,
                                 GEOIP_MATCH_ANY_FLAG | GEOIP_MATCH_NEGATED);
 }
 
 static int GeoipParseTest04(void)
 {
-    char *ccodes[1] = {"US"};
+    const char *ccodes[1] = {"US"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:src,US;sid:1;)", 1, ccodes,
                                 GEOIP_MATCH_SRC_FLAG);
 }
 
 static int GeoipParseTest05(void)
 {
-    char *ccodes[1] = {"US"};
+    const char *ccodes[1] = {"US"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:dst,!US;sid:1;)", 1, ccodes,
                                 GEOIP_MATCH_DST_FLAG | GEOIP_MATCH_NEGATED);
 }
 
 static int GeoipParseTest06(void)
 {
-    char *ccodes[3] = {"US", "ES", "UK"};
+    const char *ccodes[3] = {"US", "ES", "UK"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:US,ES,UK;sid:1;)", 3, ccodes,
                                 GEOIP_MATCH_ANY_FLAG);
 }
 
 static int GeoipParseTest07(void)
 {
-    char *ccodes[3] = {"US", "ES", "UK"};
+    const char *ccodes[3] = {"US", "ES", "UK"};
     return GeoipParseTest("alert tcp any any -> any any (geoip:both,!US,ES,UK;sid:1;)", 3, ccodes,
                                 GEOIP_MATCH_BOTH_FLAG | GEOIP_MATCH_NEGATED);
 }
@@ -483,7 +453,7 @@ static int GeoipParseTest07(void)
  * \internal
  * \brief This test tests geoip success and failure.
  */
-static int GeoipMatchTest(char *rule, char *srcip, char *dstip)
+static int GeoipMatchTest(const char *rule, const char *srcip, const char *dstip)
 {
     uint8_t *buf = (uint8_t *) "GET / HTTP/1.0\r\n\r\n";
     uint16_t buflen = strlen((char *)buf);
@@ -597,21 +567,21 @@ static int GeoipMatchTest07(void)
 static void DetectGeoipRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("GeoipParseTest01", GeoipParseTest01, 1);
-    UtRegisterTest("GeoipParseTest02", GeoipParseTest02, 1);
-    UtRegisterTest("GeoipParseTest03", GeoipParseTest03, 1);
-    UtRegisterTest("GeoipParseTest04", GeoipParseTest04, 1);
-    UtRegisterTest("GeoipParseTest05", GeoipParseTest05, 1);
-    UtRegisterTest("GeoipParseTest06", GeoipParseTest06, 1);
-    UtRegisterTest("GeoipParseTest07", GeoipParseTest07, 1);
+    UtRegisterTest("GeoipParseTest01", GeoipParseTest01);
+    UtRegisterTest("GeoipParseTest02", GeoipParseTest02);
+    UtRegisterTest("GeoipParseTest03", GeoipParseTest03);
+    UtRegisterTest("GeoipParseTest04", GeoipParseTest04);
+    UtRegisterTest("GeoipParseTest05", GeoipParseTest05);
+    UtRegisterTest("GeoipParseTest06", GeoipParseTest06);
+    UtRegisterTest("GeoipParseTest07", GeoipParseTest07);
 
-    UtRegisterTest("GeoipMatchTest01", GeoipMatchTest01, 1);
-    UtRegisterTest("GeoipMatchTest02", GeoipMatchTest02, 1);
-    UtRegisterTest("GeoipMatchTest03", GeoipMatchTest03, 1);
-    UtRegisterTest("GeoipMatchTest04", GeoipMatchTest04, 2);
-    UtRegisterTest("GeoipMatchTest05", GeoipMatchTest05, 1);
-    UtRegisterTest("GeoipMatchTest06", GeoipMatchTest06, 1);
-    UtRegisterTest("GeoipMatchTest07", GeoipMatchTest07, 2);
+    UtRegisterTest("GeoipMatchTest01", GeoipMatchTest01);
+    UtRegisterTest("GeoipMatchTest02", GeoipMatchTest02);
+    UtRegisterTest("GeoipMatchTest03", GeoipMatchTest03);
+    UtRegisterTest("GeoipMatchTest04", GeoipMatchTest04);
+    UtRegisterTest("GeoipMatchTest05", GeoipMatchTest05);
+    UtRegisterTest("GeoipMatchTest06", GeoipMatchTest06);
+    UtRegisterTest("GeoipMatchTest07", GeoipMatchTest07);
 #endif /* UNITTESTS */
 }
 

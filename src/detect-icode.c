@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -29,6 +29,7 @@
 
 #include "detect.h"
 #include "detect-parse.h"
+#include "detect-engine-prefilter-common.h"
 
 #include "detect-icode.h"
 
@@ -45,11 +46,14 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectICodeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectICodeSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectICodeMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectICodeSetup(DetectEngineCtx *, Signature *, const char *);
 void DetectICodeRegisterTests(void);
 void DetectICodeFree(void *);
 
+static int PrefilterSetupICode(SigGroupHead *sgh);
+static _Bool PrefilterICodeIsPrefilterable(const Signature *s);
 
 /**
  * \brief Registration function for icode: keyword
@@ -58,33 +62,47 @@ void DetectICodeRegister (void)
 {
     sigmatch_table[DETECT_ICODE].name = "icode";
     sigmatch_table[DETECT_ICODE].desc = "match on specific ICMP id-value";
-    sigmatch_table[DETECT_ICODE].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Header_keywords#icode";
+    sigmatch_table[DETECT_ICODE].url = DOC_URL DOC_VERSION "/rules/header-keywords.html#icode";
     sigmatch_table[DETECT_ICODE].Match = DetectICodeMatch;
     sigmatch_table[DETECT_ICODE].Setup = DetectICodeSetup;
     sigmatch_table[DETECT_ICODE].Free = DetectICodeFree;
     sigmatch_table[DETECT_ICODE].RegisterTests = DetectICodeRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
+    sigmatch_table[DETECT_ICODE].SupportsPrefilter = PrefilterICodeIsPrefilterable;
+    sigmatch_table[DETECT_ICODE].SetupPrefilter = PrefilterSetupICode;
 
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
+}
+
+#define DETECT_ICODE_EQ   PREFILTER_U8HASH_MODE_EQ   /**< "equal" operator */
+#define DETECT_ICODE_LT   PREFILTER_U8HASH_MODE_LT   /**< "less than" operator */
+#define DETECT_ICODE_GT   PREFILTER_U8HASH_MODE_GT   /**< "greater than" operator */
+#define DETECT_ICODE_RN   PREFILTER_U8HASH_MODE_RA   /**< "range" operator */
+
+typedef struct DetectICodeData_ {
+    uint8_t code1;
+    uint8_t code2;
+
+    uint8_t mode;
+} DetectICodeData;
+
+static inline int ICodeMatch(const uint8_t pcode, const uint8_t mode,
+                             const uint8_t dcode1, const uint8_t dcode2)
+{
+    switch (mode) {
+        case DETECT_ICODE_EQ:
+            return (pcode == dcode1) ? 1 : 0;
+
+        case DETECT_ICODE_LT:
+            return (pcode < dcode1) ? 1 : 0;
+
+        case DETECT_ICODE_GT:
+            return (pcode > dcode1) ? 1 : 0;
+
+        case DETECT_ICODE_RN:
+            return (pcode > dcode1 && pcode < dcode2) ? 1 : 0;
     }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-    return;
-
-error:
-    return;
+    return 0;
 }
 
 /**
@@ -98,40 +116,24 @@ error:
  * \retval 0 no match
  * \retval 1 match
  */
-int DetectICodeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectICodeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
-    int ret = 0;
-    uint8_t picode;
-    const DetectICodeData *icd = (const DetectICodeData *)ctx;
-
     if (PKT_IS_PSEUDOPKT(p))
         return 0;
 
+    uint8_t picode;
     if (PKT_IS_ICMPV4(p)) {
         picode = ICMPV4_GET_CODE(p);
     } else if (PKT_IS_ICMPV6(p)) {
         picode = ICMPV6_GET_CODE(p);
     } else {
         /* Packet not ICMPv4 nor ICMPv6 */
-        return ret;
+        return 0;
     }
 
-    switch(icd->mode) {
-        case DETECT_ICODE_EQ:
-            ret = (picode == icd->code1) ? 1 : 0;
-            break;
-        case DETECT_ICODE_LT:
-            ret = (picode < icd->code1) ? 1 : 0;
-            break;
-        case DETECT_ICODE_GT:
-            ret = (picode > icd->code1) ? 1 : 0;
-            break;
-        case DETECT_ICODE_RN:
-            ret = (picode >= icd->code1 && picode <= icd->code2) ? 1 : 0;
-            break;
-    }
-
-    return ret;
+    const DetectICodeData *icd = (const DetectICodeData *)ctx;
+    return ICodeMatch(picode, icd->mode, icd->code1, icd->code2);
 }
 
 /**
@@ -142,7 +144,7 @@ int DetectICodeMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, 
  * \retval icd pointer to DetectICodeData on success
  * \retval NULL on failure
  */
-DetectICodeData *DetectICodeParse(char *icodestr)
+static DetectICodeData *DetectICodeParse(const char *icodestr)
 {
     DetectICodeData *icd = NULL;
     char *args[3] = {NULL, NULL, NULL};
@@ -246,7 +248,7 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectICodeSetup(DetectEngineCtx *de_ctx, Signature *s, char *icodestr)
+static int DetectICodeSetup(DetectEngineCtx *de_ctx, Signature *s, const char *icodestr)
 {
 
     DetectICodeData *icd = NULL;
@@ -283,16 +285,80 @@ void DetectICodeFree(void *ptr)
     SCFree(icd);
 }
 
-#ifdef UNITTESTS
+/* prefilter code */
 
-#include "detect-parse.h"
+static void PrefilterPacketICodeMatch(DetectEngineThreadCtx *det_ctx,
+        Packet *p, const void *pectx)
+{
+    if (PKT_IS_PSEUDOPKT(p)) {
+        SCReturn;
+    }
+
+    uint8_t picode;
+    if (PKT_IS_ICMPV4(p)) {
+        picode = ICMPV4_GET_CODE(p);
+    } else if (PKT_IS_ICMPV6(p)) {
+        picode = ICMPV6_GET_CODE(p);
+    } else {
+        /* Packet not ICMPv4 nor ICMPv6 */
+        return;
+    }
+
+    const PrefilterPacketU8HashCtx *h = pectx;
+    const SigsArray *sa = h->array[picode];
+    if (sa) {
+        PrefilterAddSids(&det_ctx->pmq, sa->sigs, sa->cnt);
+    }
+}
+
+static void
+PrefilterPacketICodeSet(PrefilterPacketHeaderValue *v, void *smctx)
+{
+    const DetectICodeData *a = smctx;
+    v->u8[0] = a->mode;
+    v->u8[1] = a->code1;
+    v->u8[2] = a->code2;
+}
+
+static _Bool
+PrefilterPacketICodeCompare(PrefilterPacketHeaderValue v, void *smctx)
+{
+    const DetectICodeData *a = smctx;
+    if (v.u8[0] == a->mode &&
+        v.u8[1] == a->code1 &&
+        v.u8[2] == a->code2)
+        return TRUE;
+    return FALSE;
+}
+
+static int PrefilterSetupICode(SigGroupHead *sgh)
+{
+    return PrefilterSetupPacketHeaderU8Hash(sgh, DETECT_ICODE,
+            PrefilterPacketICodeSet,
+            PrefilterPacketICodeCompare,
+            PrefilterPacketICodeMatch);
+}
+
+static _Bool PrefilterICodeIsPrefilterable(const Signature *s)
+{
+    const SigMatch *sm;
+    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
+        switch (sm->type) {
+            case DETECT_ICODE:
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+#ifdef UNITTESTS
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 
 /**
  * \test DetectICodeParseTest01 is a test for setting a valid icode value
  */
-int DetectICodeParseTest01(void)
+static int DetectICodeParseTest01(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -309,7 +375,7 @@ int DetectICodeParseTest01(void)
  * \test DetectICodeParseTest02 is a test for setting a valid icode value
  *       with ">" operator
  */
-int DetectICodeParseTest02(void)
+static int DetectICodeParseTest02(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -326,7 +392,7 @@ int DetectICodeParseTest02(void)
  * \test DetectICodeParseTest03 is a test for setting a valid icode value
  *       with "<" operator
  */
-int DetectICodeParseTest03(void)
+static int DetectICodeParseTest03(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -343,7 +409,7 @@ int DetectICodeParseTest03(void)
  * \test DetectICodeParseTest04 is a test for setting a valid icode value
  *       with "<>" operator
  */
-int DetectICodeParseTest04(void)
+static int DetectICodeParseTest04(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -360,7 +426,7 @@ int DetectICodeParseTest04(void)
  * \test DetectICodeParseTest05 is a test for setting a valid icode value
  *       with spaces all around
  */
-int DetectICodeParseTest05(void)
+static int DetectICodeParseTest05(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -377,7 +443,7 @@ int DetectICodeParseTest05(void)
  * \test DetectICodeParseTest06 is a test for setting a valid icode value
  *       with ">" operator and spaces all around
  */
-int DetectICodeParseTest06(void)
+static int DetectICodeParseTest06(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -394,7 +460,7 @@ int DetectICodeParseTest06(void)
  * \test DetectICodeParseTest07 is a test for setting a valid icode value
  *       with "<>" operator and spaces all around
  */
-int DetectICodeParseTest07(void)
+static int DetectICodeParseTest07(void)
 {
     DetectICodeData *icd = NULL;
     int result = 0;
@@ -410,7 +476,7 @@ int DetectICodeParseTest07(void)
 /**
  * \test DetectICodeParseTest08 is a test for setting an invalid icode value
  */
-int DetectICodeParseTest08(void)
+static int DetectICodeParseTest08(void)
 {
     DetectICodeData *icd = NULL;
     icd = DetectICodeParse("> 8 <> 20");
@@ -425,7 +491,7 @@ int DetectICodeParseTest08(void)
  *       keyword by creating 5 rules and matching a crafted packet against
  *       them. 4 out of 5 rules shall trigger.
  */
-int DetectICodeMatchTest01(void)
+static int DetectICodeMatchTest01(void)
 {
 
     Packet *p = NULL;
@@ -515,14 +581,14 @@ end:
 void DetectICodeRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectICodeParseTest01", DetectICodeParseTest01, 1);
-    UtRegisterTest("DetectICodeParseTest02", DetectICodeParseTest02, 1);
-    UtRegisterTest("DetectICodeParseTest03", DetectICodeParseTest03, 1);
-    UtRegisterTest("DetectICodeParseTest04", DetectICodeParseTest04, 1);
-    UtRegisterTest("DetectICodeParseTest05", DetectICodeParseTest05, 1);
-    UtRegisterTest("DetectICodeParseTest06", DetectICodeParseTest06, 1);
-    UtRegisterTest("DetectICodeParseTest07", DetectICodeParseTest07, 1);
-    UtRegisterTest("DetectICodeParseTest08", DetectICodeParseTest08, 1);
-    UtRegisterTest("DetectICodeMatchTest01", DetectICodeMatchTest01, 1);
+    UtRegisterTest("DetectICodeParseTest01", DetectICodeParseTest01);
+    UtRegisterTest("DetectICodeParseTest02", DetectICodeParseTest02);
+    UtRegisterTest("DetectICodeParseTest03", DetectICodeParseTest03);
+    UtRegisterTest("DetectICodeParseTest04", DetectICodeParseTest04);
+    UtRegisterTest("DetectICodeParseTest05", DetectICodeParseTest05);
+    UtRegisterTest("DetectICodeParseTest06", DetectICodeParseTest06);
+    UtRegisterTest("DetectICodeParseTest07", DetectICodeParseTest07);
+    UtRegisterTest("DetectICodeParseTest08", DetectICodeParseTest08);
+    UtRegisterTest("DetectICodeMatchTest01", DetectICodeMatchTest01);
 #endif /* UNITTESTS */
 }

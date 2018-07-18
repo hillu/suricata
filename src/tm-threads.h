@@ -44,12 +44,12 @@ typedef struct TmSlot_ {
 
     TmEcode (*PktAcqLoop)(ThreadVars *, void *, void *);
 
-    TmEcode (*SlotThreadInit)(ThreadVars *, void *, void **);
+    TmEcode (*SlotThreadInit)(ThreadVars *, const void *, void **);
     void (*SlotThreadExitPrintStats)(ThreadVars *, void *);
     TmEcode (*SlotThreadDeinit)(ThreadVars *, void *);
 
     /* data storage */
-    void *slot_initdata;
+    const void *slot_initdata;
     SC_ATOMIC_DECLARE(void *, slot_data);
 
     /* queue filled by the SlotFunc with packets that will
@@ -80,23 +80,20 @@ extern ThreadVars *tv_root[TVT_MAX];
 
 extern SCMutex tv_root_lock;
 
-void TmSlotSetFuncAppend(ThreadVars *, TmModule *, void *);
-void TmSlotSetFuncAppendDelayed(ThreadVars *, TmModule *, void *, int delayed);
+void TmSlotSetFuncAppend(ThreadVars *, TmModule *, const void *);
 TmSlot *TmSlotGetSlotForTM(int);
 
-ThreadVars *TmThreadCreate(char *, char *, char *, char *, char *, char *,
+ThreadVars *TmThreadCreate(const char *, const char *, const char *, const char *, const char *, const char *,
                            void *(fn_p)(void *), int);
-ThreadVars *TmThreadCreatePacketHandler(char *, char *, char *, char *, char *,
-                                        char *);
-ThreadVars *TmThreadCreateMgmtThread(char *name, void *(fn_p)(void *), int);
-ThreadVars *TmThreadCreateMgmtThreadByName(char *name, char *module,
+ThreadVars *TmThreadCreatePacketHandler(const char *, const char *, const char *, const char *, const char *,
+                                        const char *);
+ThreadVars *TmThreadCreateMgmtThread(const char *name, void *(fn_p)(void *), int);
+ThreadVars *TmThreadCreateMgmtThreadByName(const char *name, const char *module,
                                      int mucond);
-ThreadVars *TmThreadCreateCmdThreadByName(char *name, char *module,
+ThreadVars *TmThreadCreateCmdThreadByName(const char *name, const char *module,
                                      int mucond);
 TmEcode TmThreadSpawn(ThreadVars *);
 void TmThreadSetFlags(ThreadVars *, uint8_t);
-void TmThreadSetAOF(ThreadVars *, uint8_t);
-void TmThreadKillThread(ThreadVars *);
 void TmThreadKillThreadsFamily(int family);
 void TmThreadKillThreads(void);
 void TmThreadClearThreadsFamily(int family);
@@ -221,5 +218,8 @@ void TmThreadsListThreads(void);
 int TmThreadsRegisterThread(ThreadVars *tv, const int type);
 void TmThreadsUnregisterThread(const int id);
 int TmThreadsInjectPacketsById(Packet **, int id);
+
+void TmThreadsSetThreadTimestamp(const int id, const struct timeval *ts);
+void TmreadsGetMinimalTimestamp(struct timeval *ts);
 
 #endif /* __TM_THREADS_H__ */

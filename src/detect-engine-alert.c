@@ -67,30 +67,30 @@ PacketAlert *PacketAlertGetTag(void)
  * \retval 0 alert is suppressed
  */
 static int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-                       Signature *s, Packet *p, uint16_t pos)
+                             const Signature *s, Packet *p, PacketAlert *pa)
 {
     SCEnter();
     int ret = 1;
-    DetectThresholdData *td = NULL;
-    SigMatch *sm;
+    const DetectThresholdData *td = NULL;
+    const SigMatchData *smd;
 
     if (!(PKT_IS_IPV4(p) || PKT_IS_IPV6(p))) {
         SCReturnInt(1);
     }
 
     /* handle suppressions first */
-    if (s->sm_lists[DETECT_SM_LIST_SUPPRESS] != NULL) {
+    if (s->sm_arrays[DETECT_SM_LIST_SUPPRESS] != NULL) {
         KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_SUPPRESS);
-        sm = NULL;
+        smd = NULL;
         do {
-            td = SigGetThresholdTypeIter(s, p, &sm, DETECT_SM_LIST_SUPPRESS);
+            td = SigGetThresholdTypeIter(s, p, &smd, DETECT_SM_LIST_SUPPRESS);
             if (td != NULL) {
                 SCLogDebug("td %p", td);
 
                 /* PacketAlertThreshold returns 2 if the alert is suppressed but
                  * we do need to apply rule actions to the packet. */
                 KEYWORD_PROFILING_START;
-                ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+                ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s, pa);
                 if (ret == 0 || ret == 2) {
                     KEYWORD_PROFILING_END(det_ctx, DETECT_THRESHOLD, 0);
                     /* It doesn't match threshold, remove it */
@@ -98,22 +98,22 @@ static int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det
                 }
                 KEYWORD_PROFILING_END(det_ctx, DETECT_THRESHOLD, 1);
             }
-        } while (sm != NULL);
+        } while (smd != NULL);
     }
 
     /* if we're still here, consider thresholding */
-    if (s->sm_lists[DETECT_SM_LIST_THRESHOLD] != NULL) {
+    if (s->sm_arrays[DETECT_SM_LIST_THRESHOLD] != NULL) {
         KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_THRESHOLD);
-        sm = NULL;
+        smd = NULL;
         do {
-            td = SigGetThresholdTypeIter(s, p, &sm, DETECT_SM_LIST_THRESHOLD);
+            td = SigGetThresholdTypeIter(s, p, &smd, DETECT_SM_LIST_THRESHOLD);
             if (td != NULL) {
                 SCLogDebug("td %p", td);
 
                 /* PacketAlertThreshold returns 2 if the alert is suppressed but
                  * we do need to apply rule actions to the packet. */
                 KEYWORD_PROFILING_START;
-                ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s);
+                ret = PacketAlertThreshold(de_ctx, det_ctx, td, p, s, pa);
                 if (ret == 0 || ret == 2) {
                     KEYWORD_PROFILING_END(det_ctx, DETECT_THRESHOLD ,0);
                     /* It doesn't match threshold, remove it */
@@ -121,7 +121,7 @@ static int PacketAlertHandle(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det
                 }
                 KEYWORD_PROFILING_END(det_ctx, DETECT_THRESHOLD, 1);
             }
-        } while (sm != NULL);
+        } while (smd != NULL);
     }
     SCReturnInt(1);
 }
@@ -184,9 +184,9 @@ int PacketAlertRemove(Packet *p, uint16_t pos)
  *  \param s the signature that matched
  *  \param p packet
  *  \param flags alert flags
- *  \param alert_msg ptr to StreamMsg object that the signature matched on
  */
-int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, Signature *s, Packet *p, uint64_t tx_id, uint8_t flags)
+int PacketAlertAppend(DetectEngineThreadCtx *det_ctx, const Signature *s,
+        Packet *p, uint64_t tx_id, uint8_t flags)
 {
     int i = 0;
 
@@ -239,25 +239,27 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 {
     SCEnter();
     int i = 0;
-    Signature *s = NULL;
-    SigMatch *sm = NULL;
 
     while (i < p->alerts.cnt) {
         SCLogDebug("Sig->num: %"PRIu16, p->alerts.alerts[i].num);
-        s = de_ctx->sig_array[p->alerts.alerts[i].num];
+        const Signature *s = de_ctx->sig_array[p->alerts.alerts[i].num];
 
-        int res = PacketAlertHandle(de_ctx, det_ctx, s, p, i);
+        int res = PacketAlertHandle(de_ctx, det_ctx, s, p, &p->alerts.alerts[i]);
         if (res > 0) {
             /* Now, if we have an alert, we have to check if we want
              * to tag this session or src/dst host */
-            KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_TMATCH);
-            sm = s->sm_lists[DETECT_SM_LIST_TMATCH];
-            while (sm) {
-                /* tags are set only for alerts */
-                KEYWORD_PROFILING_START;
-                sigmatch_table[sm->type].Match(NULL, det_ctx, p, s, sm->ctx);
-                KEYWORD_PROFILING_END(det_ctx, sm->type, 1);
-                sm = sm->next;
+            if (s->sm_arrays[DETECT_SM_LIST_TMATCH] != NULL) {
+                KEYWORD_PROFILING_SET_LIST(det_ctx, DETECT_SM_LIST_TMATCH);
+                SigMatchData *smd = s->sm_arrays[DETECT_SM_LIST_TMATCH];
+                while (1) {
+                    /* tags are set only for alerts */
+                    KEYWORD_PROFILING_START;
+                    sigmatch_table[smd->type].Match(NULL, det_ctx, p, (Signature *)s, smd->ctx);
+                    KEYWORD_PROFILING_END(det_ctx, smd->type, 1);
+                    if (smd->is_last)
+                        break;
+                    smd++;
+                }
             }
 
             if (s->flags & SIG_FLAG_IPONLY) {
@@ -267,8 +269,7 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
 
                     if (p->flow != NULL) {
                         /* Update flow flags for iponly */
-                        FLOWLOCK_WRLOCK(p->flow);
-                        FlowSetIPOnlyFlagNoLock(p->flow, p->flowflags & FLOW_PKT_TOSERVER ? 1 : 0);
+                        FlowSetIPOnlyFlag(p->flow, (p->flowflags & FLOW_PKT_TOSERVER) ? 1 : 0);
 
                         if (s->action & ACTION_DROP)
                             p->flow->flags |= FLOW_ACTION_DROP;
@@ -281,26 +282,17 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                         if (s->action & ACTION_PASS) {
                             FlowSetNoPacketInspectionFlag(p->flow);
                         }
-                        FLOWLOCK_UNLOCK(p->flow);
                     }
                 }
             }
 
             /* set actions on packet */
-            DetectSignatureApplyActions(p, p->alerts.alerts[i].s);
+            DetectSignatureApplyActions(p, p->alerts.alerts[i].s, p->alerts.alerts[i].flags);
 
             if (PACKET_TEST_ACTION(p, ACTION_PASS)) {
                 /* Ok, reset the alert cnt to end in the previous of pass
                  * so we ignore the rest with less prio */
                 p->alerts.cnt = i;
-
-                /* if an stream/app-layer match we enforce the pass for the flow */
-                if ((p->flow != NULL) &&
-                    (p->alerts.alerts[i].flags &
-                        (PACKET_ALERT_FLAG_STATE_MATCH|PACKET_ALERT_FLAG_STREAM_MATCH)))
-                {
-                    FlowLockSetNoPacketInspectionFlag(p->flow);
-                }
                 break;
 
             /* if the signature wants to drop, check if the
@@ -310,10 +302,8 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
                          (s->flags & SIG_FLAG_APPLAYER))
                        && p->flow != NULL)
             {
-                FLOWLOCK_WRLOCK(p->flow);
                 /* This will apply only on IPS mode (check StreamTcpPacket) */
-                p->flow->flags |= FLOW_ACTION_DROP;
-                FLOWLOCK_UNLOCK(p->flow);
+                p->flow->flags |= FLOW_ACTION_DROP; // XXX API?
             }
         }
 
@@ -332,6 +322,12 @@ void PacketAlertFinalize(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx
      * keyword context for sessions and hosts */
     if (!(p->flags & PKT_PSEUDO_STREAM_END))
         TagHandlePacket(de_ctx, det_ctx, p);
+
+    /* Set flag on flow to indicate that it has alerts */
+    if (p->flow != NULL && p->alerts.cnt > 0) {
+        FlowSetHasAlertsFlag(p->flow);
+    }
+
 }
 
 

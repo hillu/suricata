@@ -34,6 +34,7 @@
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-state.h"
+#include "detect-engine-file.h"
 
 #include "flow.h"
 #include "flow-var.h"
@@ -49,12 +50,14 @@
 #include "stream-tcp.h"
 
 #include "detect-filename.h"
+#include "app-layer-parser.h"
 
 static int DetectFilenameMatch (ThreadVars *, DetectEngineThreadCtx *, Flow *,
-        uint8_t, File *, Signature *, SigMatch *);
-static int DetectFilenameSetup (DetectEngineCtx *, Signature *, char *);
+        uint8_t, File *, const Signature *, const SigMatchCtx *);
+static int DetectFilenameSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectFilenameRegisterTests(void);
 static void DetectFilenameFree(void *);
+static int g_file_match_list_id = 0;
 
 /**
  * \brief Registration function for keyword: filename
@@ -63,12 +66,32 @@ void DetectFilenameRegister(void)
 {
     sigmatch_table[DETECT_FILENAME].name = "filename";
     sigmatch_table[DETECT_FILENAME].desc = "match on the file name";
-    sigmatch_table[DETECT_FILENAME].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/File-keywords#filename";
+    sigmatch_table[DETECT_FILENAME].url = DOC_URL DOC_VERSION "/rules/file-keywords.html#filename";
     sigmatch_table[DETECT_FILENAME].FileMatch = DetectFilenameMatch;
-    sigmatch_table[DETECT_FILENAME].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_FILENAME].Setup = DetectFilenameSetup;
     sigmatch_table[DETECT_FILENAME].Free  = DetectFilenameFree;
     sigmatch_table[DETECT_FILENAME].RegisterTests = DetectFilenameRegisterTests;
+    sigmatch_table[DETECT_FILENAME].flags = SIGMATCH_QUOTES_OPTIONAL|SIGMATCH_HANDLE_NEGATION;
+
+    DetectAppLayerInspectEngineRegister("files",
+            ALPROTO_HTTP, SIG_FLAG_TOSERVER, HTP_REQUEST_BODY,
+            DetectFileInspectGeneric);
+    DetectAppLayerInspectEngineRegister("files",
+            ALPROTO_HTTP, SIG_FLAG_TOCLIENT, HTP_RESPONSE_BODY,
+            DetectFileInspectGeneric);
+
+    DetectAppLayerInspectEngineRegister("files",
+            ALPROTO_SMTP, SIG_FLAG_TOSERVER, 0,
+            DetectFileInspectGeneric);
+
+    DetectAppLayerInspectEngineRegister("files",
+            ALPROTO_NFS, SIG_FLAG_TOSERVER, 0,
+            DetectFileInspectGeneric);
+    DetectAppLayerInspectEngineRegister("files",
+            ALPROTO_NFS, SIG_FLAG_TOCLIENT, 0,
+            DetectFileInspectGeneric);
+
+    g_file_match_list_id = DetectBufferTypeGetByName("files");
 
 	SCLogDebug("registering filename rule option");
     return;
@@ -89,20 +112,14 @@ void DetectFilenameRegister(void)
  * \retval 1 match
  */
 static int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-        Flow *f, uint8_t flags, File *file, Signature *s, SigMatch *m)
+        Flow *f, uint8_t flags, File *file, const Signature *s, const SigMatchCtx *m)
 {
     SCEnter();
     int ret = 0;
 
-    DetectFilenameData *filename = (DetectFilenameData *)m->ctx;
+    DetectFilenameData *filename = (DetectFilenameData *)m;
 
     if (file->name == NULL)
-        SCReturnInt(0);
-
-    if (file->txid < det_ctx->tx_id)
-        SCReturnInt(0);
-
-    if (file->txid > det_ctx->tx_id)
         SCReturnInt(0);
 
     if (BoyerMooreNocase(filename->name, filename->len, file->name,
@@ -140,7 +157,7 @@ static int DetectFilenameMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval filename pointer to DetectFilenameData on success
  * \retval NULL on failure
  */
-static DetectFilenameData *DetectFilenameParse (char *str)
+static DetectFilenameData *DetectFilenameParse (const char *str, bool negate)
 {
     DetectFilenameData *filename = NULL;
 
@@ -151,13 +168,17 @@ static DetectFilenameData *DetectFilenameParse (char *str)
 
     memset(filename, 0x00, sizeof(DetectFilenameData));
 
-    if (DetectContentDataParse ("filename", str, &filename->name, &filename->len, &filename->flags) == -1) {
+    if (DetectContentDataParse ("filename", str, &filename->name, &filename->len) == -1) {
         goto error;
     }
 
     filename->bm_ctx = BoyerMooreNocaseCtxInit(filename->name, filename->len);
     if (filename->bm_ctx == NULL) {
         goto error;
+    }
+
+    if (negate) {
+        filename->flags |= DETECT_CONTENT_NEGATED;
     }
 
     SCLogDebug("flags %02X", filename->flags);
@@ -195,12 +216,12 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectFilenameSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectFilenameSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     DetectFilenameData *filename = NULL;
     SigMatch *sm = NULL;
 
-    filename = DetectFilenameParse(str);
+    filename = DetectFilenameParse(str, s->init_data->negated);
     if (filename == NULL)
         goto error;
 
@@ -213,16 +234,7 @@ static int DetectFilenameSetup (DetectEngineCtx *de_ctx, Signature *s, char *str
     sm->type = DETECT_FILENAME;
     sm->ctx = (void *)filename;
 
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_FILEMATCH);
-
-    if (s->alproto != ALPROTO_HTTP && s->alproto != ALPROTO_SMTP) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS, "rule contains conflicting keywords.");
-        goto error;
-    }
-
-    if (s->alproto == ALPROTO_HTTP) {
-        AppLayerHtpNeedFileInspection();
-    }
+    SigMatchAppendSMToList(s, sm, g_file_match_list_id);
 
     s->file_flags |= (FILE_SIG_NEED_FILE|FILE_SIG_NEED_FILENAME);
     return 0;
@@ -258,9 +270,9 @@ static void DetectFilenameFree(void *ptr)
 /**
  * \test DetectFilenameTestParse01
  */
-int DetectFilenameTestParse01 (void)
+static int DetectFilenameTestParse01 (void)
 {
-    DetectFilenameData *dnd = DetectFilenameParse("\"secret.pdf\"");
+    DetectFilenameData *dnd = DetectFilenameParse("secret.pdf", false);
     if (dnd != NULL) {
         DetectFilenameFree(dnd);
         return 1;
@@ -271,11 +283,11 @@ int DetectFilenameTestParse01 (void)
 /**
  * \test DetectFilenameTestParse02
  */
-int DetectFilenameTestParse02 (void)
+static int DetectFilenameTestParse02 (void)
 {
     int result = 0;
 
-    DetectFilenameData *dnd = DetectFilenameParse("\"backup.tar.gz\"");
+    DetectFilenameData *dnd = DetectFilenameParse("backup.tar.gz", false);
     if (dnd != NULL) {
         if (dnd->len == 13 && memcmp(dnd->name, "backup.tar.gz", 13) == 0) {
             result = 1;
@@ -290,11 +302,11 @@ int DetectFilenameTestParse02 (void)
 /**
  * \test DetectFilenameTestParse03
  */
-int DetectFilenameTestParse03 (void)
+static int DetectFilenameTestParse03 (void)
 {
     int result = 0;
 
-    DetectFilenameData *dnd = DetectFilenameParse("\"cmd.exe\"");
+    DetectFilenameData *dnd = DetectFilenameParse("cmd.exe", false);
     if (dnd != NULL) {
         if (dnd->len == 7 && memcmp(dnd->name, "cmd.exe", 7) == 0) {
             result = 1;
@@ -314,8 +326,8 @@ int DetectFilenameTestParse03 (void)
 void DetectFilenameRegisterTests(void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
-    UtRegisterTest("DetectFilenameTestParse01", DetectFilenameTestParse01, 1);
-    UtRegisterTest("DetectFilenameTestParse02", DetectFilenameTestParse02, 1);
-    UtRegisterTest("DetectFilenameTestParse03", DetectFilenameTestParse03, 1);
+    UtRegisterTest("DetectFilenameTestParse01", DetectFilenameTestParse01);
+    UtRegisterTest("DetectFilenameTestParse02", DetectFilenameTestParse02);
+    UtRegisterTest("DetectFilenameTestParse03", DetectFilenameTestParse03);
 #endif /* UNITTESTS */
 }

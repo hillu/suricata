@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -24,11 +24,13 @@
 #ifndef __UTIL_VAR_NAME_H__
 #define __UTIL_VAR_NAME_H__
 
-int VariableNameInitHash(DetectEngineCtx *);
-void VariableNameFreeHash(DetectEngineCtx *);
-
-uint16_t VariableNameGetIdx(DetectEngineCtx *, char *, enum VarTypes);
-char * VariableIdxGetName(DetectEngineCtx *, uint16_t , enum VarTypes);
+int VarNameStoreSetupStaging(uint32_t de_ctx_version);
+const char *VarNameStoreLookupById(const uint32_t id, const enum VarTypes type);
+uint32_t VarNameStoreLookupByName(const char *name, const enum VarTypes type);
+uint32_t VarNameStoreSetupAdd(const char *name, const enum VarTypes type);
+void VarNameStoreActivateStaging(void);
+void VarNameStoreFreeOld(void);
+void VarNameStoreFree(uint32_t de_ctx_version);
 
 #endif
 

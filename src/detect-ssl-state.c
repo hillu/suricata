@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -51,19 +51,28 @@
 #include "stream-tcp.h"
 #include "app-layer-ssl.h"
 
-#define PARSE_REGEX1 "^\\s*([_a-zA-Z0-9]+)(.*)$"
+#define PARSE_REGEX1 "^(!?)([_a-zA-Z0-9]+)(.*)$"
 static pcre *parse_regex1;
 static pcre_extra *parse_regex1_study;
 
-#define PARSE_REGEX2 "^(?:\\s*[|]\\s*([_a-zA-Z0-9]+))(.*)$"
+#define PARSE_REGEX2 "^(?:\\s*[|,]\\s*(!?)([_a-zA-Z0-9]+))(.*)$"
 static pcre *parse_regex2;
 static pcre_extra *parse_regex2_study;
 
-int DetectSslStateMatch(ThreadVars *, DetectEngineThreadCtx *, Flow *,
-                        uint8_t, void *, Signature *, SigMatch *);
-int DetectSslStateSetup(DetectEngineCtx *, Signature *, char *);
-void DetectSslStateRegisterTests(void);
-void DetectSslStateFree(void *);
+static int DetectSslStateMatch(ThreadVars *, DetectEngineThreadCtx *,
+        Flow *, uint8_t, void *, void *,
+        const Signature *, const SigMatchCtx *);
+static int DetectSslStateSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectSslStateRegisterTests(void);
+static void DetectSslStateFree(void *);
+
+static int InspectTlsGeneric(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id);
+
+static int g_tls_generic_list_id = 0;
 
 /**
  * \brief Registers the keyword handlers for the "ssl_state" keyword.
@@ -71,49 +80,35 @@ void DetectSslStateFree(void *);
 void DetectSslStateRegister(void)
 {
     sigmatch_table[DETECT_AL_SSL_STATE].name = "ssl_state";
-    sigmatch_table[DETECT_AL_SSL_STATE].Match = NULL;
-    sigmatch_table[DETECT_AL_SSL_STATE].AppLayerMatch = DetectSslStateMatch;
-    sigmatch_table[DETECT_AL_SSL_STATE].alproto = ALPROTO_TLS;
+    sigmatch_table[DETECT_AL_SSL_STATE].AppLayerTxMatch = DetectSslStateMatch;
     sigmatch_table[DETECT_AL_SSL_STATE].Setup = DetectSslStateSetup;
     sigmatch_table[DETECT_AL_SSL_STATE].Free  = DetectSslStateFree;
     sigmatch_table[DETECT_AL_SSL_STATE].RegisterTests = DetectSslStateRegisterTests;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
+    DetectSetupParseRegexes(PARSE_REGEX1, &parse_regex1, &parse_regex1_study);
+    DetectSetupParseRegexes(PARSE_REGEX2, &parse_regex2, &parse_regex2_study);
 
-	SCLogDebug("registering ssl_state rule option");
+    g_tls_generic_list_id = DetectBufferTypeRegister("tls_generic");
 
-    /* PARSE_REGEX1 */
-    parse_regex1 = pcre_compile(PARSE_REGEX1, opts, &eb, &eo, NULL);
-    if (parse_regex1 == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                   PARSE_REGEX1, eo, eb);
-        goto error;
-    }
+    DetectBufferTypeSetDescriptionByName("tls_generic",
+            "generic ssl/tls inspection");
 
-    parse_regex1_study = pcre_study(parse_regex1, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
+    DetectAppLayerInspectEngineRegister("tls_generic",
+            ALPROTO_TLS, SIG_FLAG_TOSERVER, 0,
+            InspectTlsGeneric);
+    DetectAppLayerInspectEngineRegister("tls_generic",
+            ALPROTO_TLS, SIG_FLAG_TOCLIENT, 0,
+            InspectTlsGeneric);
+}
 
-    /* PARSE_REGEX2 */
-    parse_regex2 = pcre_compile(PARSE_REGEX2, opts, &eb, &eo, NULL);
-    if (parse_regex2 == NULL) {
-        SCLogError(SC_ERR_PCRE_COMPILE, "Compile of \"%s\" failed at offset %" PRId32 ": %s",
-                   PARSE_REGEX2, eo, eb);
-        goto error;
-    }
-
-    parse_regex2_study = pcre_study(parse_regex2, 0, &eb);
-    if (eb != NULL) {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-error:
-    return;
+static int InspectTlsGeneric(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate,
+        void *txv, uint64_t tx_id)
+{
+    return DetectEngineInspectGenericList(tv, de_ctx, det_ctx, s, smd,
+                                          f, flags, alstate, txv, tx_id);
 }
 
 /**
@@ -130,41 +125,24 @@ error:
  * \retval 1 Match.
  * \retval 0 No match.
  */
-int DetectSslStateMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
-                        Flow *f, uint8_t flags, void *alstate, Signature *s,
-                        SigMatch *m)
+static int DetectSslStateMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
+        Flow *f, uint8_t flags, void *alstate, void *txv,
+        const Signature *s, const SigMatchCtx *m)
 {
-    int result = 1;
-    DetectSslStateData *ssd = (DetectSslStateData *)m->ctx;
+    const DetectSslStateData *ssd = (const DetectSslStateData *)m;
     SSLState *ssl_state = (SSLState *)alstate;
     if (ssl_state == NULL) {
         SCLogDebug("no app state, no match");
         return 0;
     }
 
-    if ((ssd->flags & SSL_AL_FLAG_STATE_CLIENT_HELLO) &&
-        !(ssl_state->flags & SSL_AL_FLAG_STATE_CLIENT_HELLO)) {
-        result = 0;
-        goto end;
-    }
-    if ((ssd->flags & SSL_AL_FLAG_STATE_SERVER_HELLO) &&
-        !(ssl_state->flags & SSL_AL_FLAG_STATE_SERVER_HELLO)) {
-        result = 0;
-        goto end;
-    }
-    if ((ssd->flags & SSL_AL_FLAG_STATE_CLIENT_KEYX) &&
-        !(ssl_state->flags & SSL_AL_FLAG_STATE_CLIENT_KEYX)) {
-        result = 0;
-        goto end;
-    }
-    if ((ssd->flags & SSL_AL_FLAG_STATE_SERVER_KEYX) &&
-        !(ssl_state->flags & SSL_AL_FLAG_STATE_SERVER_KEYX)) {
-        result = 0;
-        goto end;
+    uint32_t ssl_flags = ssl_state->current_flags;
+
+    if ((ssd->flags & ssl_flags) ^ ssd->mask) {
+        return 1;
     }
 
- end:
-    return result;
+    return 0;
 }
 
 /**
@@ -176,7 +154,7 @@ int DetectSslStateMatch(ThreadVars *t, DetectEngineThreadCtx *det_ctx,
  * \retval ssd  Pointer to DetectSslStateData on succese.
  * \retval NULL On failure.
  */
-DetectSslStateData *DetectSslStateParse(char *arg)
+static DetectSslStateData *DetectSslStateParse(const char *arg)
 {
 #define MAX_SUBSTRINGS 30
     int ret = 0, res = 0;
@@ -184,7 +162,8 @@ DetectSslStateData *DetectSslStateParse(char *arg)
     int ov2[MAX_SUBSTRINGS];
     const char *str1;
     const char *str2;
-    uint32_t flags = 0;
+    int negate = 0;
+    uint32_t flags = 0, mask = 0;
     DetectSslStateData *ssd = NULL;
 
     ret = pcre_exec(parse_regex1, parse_regex1_study, arg, strlen(arg), 0, 0,
@@ -194,7 +173,16 @@ DetectSslStateData *DetectSslStateParse(char *arg)
                    "ssl_state keyword.", arg);
         goto error;
     }
+
     res = pcre_get_substring((char *)arg, ov1, MAX_SUBSTRINGS, 1, &str1);
+    if (res < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
+    }
+    negate = !strcmp("!", str1);
+    pcre_free_substring(str1);
+
+    res = pcre_get_substring((char *)arg, ov1, MAX_SUBSTRINGS, 2, &str1);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
@@ -202,14 +190,24 @@ DetectSslStateData *DetectSslStateParse(char *arg)
 
     if (strcmp("client_hello", str1) == 0) {
         flags |= DETECT_SSL_STATE_CLIENT_HELLO;
+        if (negate)
+            mask |= DETECT_SSL_STATE_CLIENT_HELLO;
     } else if (strcmp("server_hello", str1) == 0) {
         flags |= DETECT_SSL_STATE_SERVER_HELLO;
+        if (negate)
+            mask |= DETECT_SSL_STATE_SERVER_HELLO;
     } else if (strcmp("client_keyx", str1) == 0) {
         flags |= DETECT_SSL_STATE_CLIENT_KEYX;
+        if (negate)
+            mask |= DETECT_SSL_STATE_CLIENT_KEYX;
     } else if (strcmp("server_keyx", str1) == 0) {
         flags |= DETECT_SSL_STATE_SERVER_KEYX;
+        if (negate)
+            mask |= DETECT_SSL_STATE_SERVER_KEYX;
     } else if (strcmp("unknown", str1) == 0) {
         flags |= DETECT_SSL_STATE_UNKNOWN;
+        if (negate)
+            mask |= DETECT_SSL_STATE_UNKNOWN;
     } else {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Found invalid option \"%s\" "
                    "in ssl_state keyword.", str1);
@@ -218,7 +216,7 @@ DetectSslStateData *DetectSslStateParse(char *arg)
 
     pcre_free_substring(str1);
 
-    res = pcre_get_substring((char *)arg, ov1, MAX_SUBSTRINGS, 2, &str1);
+    res = pcre_get_substring((char *)arg, ov1, MAX_SUBSTRINGS, 3, &str1);
     if (res < 0) {
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
@@ -231,28 +229,47 @@ DetectSslStateData *DetectSslStateParse(char *arg)
                        "ssl_state keyword.", arg);
             goto error;
         }
+
         res = pcre_get_substring((char *)str1, ov2, MAX_SUBSTRINGS, 1, &str2);
+        if (res < 0) {
+            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+            goto error;
+        }
+        negate = !strcmp("!", str2);
+        pcre_free_substring(str2);
+
+        res = pcre_get_substring((char *)str1, ov2, MAX_SUBSTRINGS, 2, &str2);
         if (res <= 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
         }
         if (strcmp("client_hello", str2) == 0) {
             flags |= DETECT_SSL_STATE_CLIENT_HELLO;
+            if (negate)
+                mask |= DETECT_SSL_STATE_CLIENT_HELLO;
         } else if (strcmp("server_hello", str2) == 0) {
             flags |= DETECT_SSL_STATE_SERVER_HELLO;
+            if (negate)
+                mask |= DETECT_SSL_STATE_SERVER_HELLO;
         } else if (strcmp("client_keyx", str2) == 0) {
             flags |= DETECT_SSL_STATE_CLIENT_KEYX;
+            if (negate)
+                mask |= DETECT_SSL_STATE_CLIENT_KEYX;
         } else if (strcmp("server_keyx", str2) == 0) {
             flags |= DETECT_SSL_STATE_SERVER_KEYX;
+            if (negate)
+                mask |= DETECT_SSL_STATE_SERVER_KEYX;
         } else if (strcmp("unknown", str2) == 0) {
             flags |= DETECT_SSL_STATE_UNKNOWN;
+            if (negate)
+                mask |= DETECT_SSL_STATE_UNKNOWN;
         } else {
             SCLogError(SC_ERR_INVALID_SIGNATURE, "Found invalid option \"%s\" "
                        "in ssl_state keyword.", str2);
             goto error;
         }
 
-        res = pcre_get_substring((char *)str1, ov2, MAX_SUBSTRINGS, 2, &str2);
+        res = pcre_get_substring((char *)str1, ov2, MAX_SUBSTRINGS, 3, &str2);
         if (res < 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
             goto error;
@@ -267,12 +284,11 @@ DetectSslStateData *DetectSslStateParse(char *arg)
         goto error;
     }
     ssd->flags = flags;
+    ssd->mask = mask;
 
     return ssd;
 
 error:
-    if (ssd != NULL)
-        DetectSslStateFree(ssd);
     return NULL;
 }
 
@@ -287,10 +303,13 @@ error:
  * \retval  0 On success.
  * \retval -1 On failure.
  */
-int DetectSslStateSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectSslStateSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     DetectSslStateData *ssd = NULL;
     SigMatch *sm = NULL;
+
+    if (DetectSignatureSetAppProto(s, ALPROTO_TLS) != 0)
+        return -1;
 
     ssd = DetectSslStateParse(arg);
     if (ssd == NULL)
@@ -303,16 +322,7 @@ int DetectSslStateSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
     sm->type = DETECT_AL_SSL_STATE;
     sm->ctx = (SigMatchCtx*)ssd;
 
-    if (s->alproto != ALPROTO_UNKNOWN && s->alproto != ALPROTO_TLS) {
-        SCLogError(SC_ERR_CONFLICTING_RULE_KEYWORDS,
-                   "Rule contains conflicting keywords.  Have non-tls alproto "
-                   "set for a rule containing \"ssl_state\" keyword");
-        goto error;
-    }
-    s->alproto = ALPROTO_TLS;
-
-    SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_AMATCH);
-
+    SigMatchAppendSMToList(s, sm, g_tls_generic_list_id);
     return 0;
 
 error:
@@ -328,7 +338,7 @@ error:
  *
  * \param ptr pointer to the data to be freed.
  */
-void DetectSslStateFree(void *ptr)
+static void DetectSslStateFree(void *ptr)
 {
     if (ptr != NULL)
         SCFree(ptr);
@@ -340,103 +350,69 @@ void DetectSslStateFree(void *ptr)
 
 #ifdef UNITTESTS
 
-int DetectSslStateTest01(void)
+static int DetectSslStateTest01(void)
 {
     DetectSslStateData *ssd = DetectSslStateParse("client_hello");
-    if (ssd == NULL) {
-        printf("ssd == NULL\n");
-        return 0;
-    }
-    if (ssd->flags == DETECT_SSL_STATE_CLIENT_HELLO) {
-        SCFree(ssd);
-        return 1;
-    }
-
-    return 0;
+    FAIL_IF_NULL(ssd);
+    FAIL_IF_NOT(ssd->flags == DETECT_SSL_STATE_CLIENT_HELLO);
+    SCFree(ssd);
+    PASS;
 }
 
-int DetectSslStateTest02(void)
+static int DetectSslStateTest02(void)
 {
-    DetectSslStateData *ssd = DetectSslStateParse("server_hello | client_hello");
-    if (ssd == NULL) {
-        printf("ssd == NULL\n");
-        return 0;
-    }
-    if (ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
-                       DETECT_SSL_STATE_CLIENT_HELLO)) {
-        SCFree(ssd);
-        return 1;
-    }
-
-    return 0;
+    DetectSslStateData *ssd = DetectSslStateParse("server_hello , client_hello");
+    FAIL_IF_NULL(ssd);
+    FAIL_IF_NOT(ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
+            DETECT_SSL_STATE_CLIENT_HELLO));
+    SCFree(ssd);
+    PASS;
 }
 
-int DetectSslStateTest03(void)
+static int DetectSslStateTest03(void)
 {
-    DetectSslStateData *ssd = DetectSslStateParse("server_hello | client_keyx | "
+    DetectSslStateData *ssd = DetectSslStateParse("server_hello , client_keyx , "
                                                   "client_hello");
-    if (ssd == NULL) {
-        printf("ssd == NULL\n");
-        return 0;
-    }
-    if (ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
+    FAIL_IF_NULL(ssd);
+    FAIL_IF_NOT(ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
                        DETECT_SSL_STATE_CLIENT_KEYX |
-                       DETECT_SSL_STATE_CLIENT_HELLO)) {
-        SCFree(ssd);
-        return 1;
-    }
-
-    return 0;
+                       DETECT_SSL_STATE_CLIENT_HELLO));
+    SCFree(ssd);
+    PASS;
 }
 
-int DetectSslStateTest04(void)
+static int DetectSslStateTest04(void)
 {
-    DetectSslStateData *ssd = DetectSslStateParse("server_hello | client_keyx | "
-                                                  "client_hello | server_keyx | "
+    DetectSslStateData *ssd = DetectSslStateParse("server_hello , client_keyx , "
+                                                  "client_hello , server_keyx , "
                                                   "unknown");
-    if (ssd == NULL) {
-        printf("ssd == NULL\n");
-        return 0;
-    }
-    if (ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
+    FAIL_IF_NULL(ssd);
+    FAIL_IF_NOT(ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
                        DETECT_SSL_STATE_CLIENT_KEYX |
                        DETECT_SSL_STATE_CLIENT_HELLO |
                        DETECT_SSL_STATE_SERVER_KEYX |
-                       DETECT_SSL_STATE_UNKNOWN)) {
-        SCFree(ssd);
-        return 1;
-    }
-
-    return 0;
+                       DETECT_SSL_STATE_UNKNOWN));
+    SCFree(ssd);
+    PASS;
 }
 
-int DetectSslStateTest05(void)
+static int DetectSslStateTest05(void)
 {
-    DetectSslStateData *ssd = DetectSslStateParse("| server_hello | client_keyx | "
-                                                  "client_hello | server_keyx | "
+    DetectSslStateData *ssd = DetectSslStateParse(", server_hello , client_keyx , "
+                                                  "client_hello , server_keyx , "
                                                   "unknown");
 
-    if (ssd != NULL) {
-        printf("ssd != NULL - failure\n");
-        SCFree(ssd);
-        return 0;
-    }
-
-    return 1;
+    FAIL_IF_NOT_NULL(ssd);
+    PASS;
 }
 
-int DetectSslStateTest06(void)
+static int DetectSslStateTest06(void)
 {
-    DetectSslStateData *ssd = DetectSslStateParse("server_hello | client_keyx | "
-                                                  "client_hello | server_keyx | "
-                                                  "unknown | ");
-    if (ssd != NULL) {
-        printf("ssd != NULL - failure\n");
-        SCFree(ssd);
-        return 0;
-    }
-
-    return 1;
+    DetectSslStateData *ssd = DetectSslStateParse("server_hello , client_keyx , "
+                                                  "client_hello , server_keyx , "
+                                                  "unknown , ");
+    FAIL_IF_NOT_NULL(ssd);
+    PASS;
 }
 
 /**
@@ -689,7 +665,6 @@ static int DetectSslStateTest07(void)
     };
     uint32_t toserver_app_data_buf_len = sizeof(toserver_app_data_buf);
 
-    int result = 0;
     Signature *s = NULL;
     ThreadVars th_v;
     Packet *p = NULL;
@@ -720,168 +695,127 @@ static int DetectSslStateTest07(void)
     StreamTcpInitConfig(TRUE);
 
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    FAIL_IF_NULL(de_ctx);
 
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
                               "(msg:\"ssl state\"; ssl_state:client_hello; "
                               "sid:1;)");
-    if (s == NULL)
-        goto end;
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
                               "(msg:\"ssl state\"; "
-                              "ssl_state:client_hello | server_hello; "
+                              "ssl_state:server_hello; "
                               "sid:2;)");
-    if (s == NULL)
-        goto end;
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
                               "(msg:\"ssl state\"; "
-                              "ssl_state:client_hello | server_hello | "
-                              "client_keyx; sid:3;)");
-    if (s == NULL)
-        goto end;
+                              "ssl_state:client_keyx; "
+                              "sid:3;)");
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
                               "(msg:\"ssl state\"; "
-                              "ssl_state:client_hello | server_hello | "
-                              "client_keyx | server_keyx; sid:4;)");
-    if (s == NULL)
-        goto end;
+                              "ssl_state:server_keyx; "
+                              "sid:4;)");
+    FAIL_IF_NULL(s);
+
+    s = DetectEngineAppendSig(de_ctx, "alert tcp any any -> any any "
+                              "(msg:\"ssl state\"; "
+                              "ssl_state:!client_hello; "
+                              "sid:5;)");
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER | STREAM_START, chello_buf,
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS,
+                            STREAM_TOSERVER | STREAM_START, chello_buf,
                             chello_buf_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     ssl_state = f.alstate;
-    if (ssl_state == NULL) {
-        printf("no ssl state: ");
-        goto end;
-    }
+    FAIL_IF(ssl_state == NULL);
 
     /* do detect */
     p->alerts.cnt = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (!PacketAlertCheck(p, 1))
-        goto end;
-    if (PacketAlertCheck(p, 2))
-        goto end;
-    if (PacketAlertCheck(p, 3))
-        goto end;
-    if (PacketAlertCheck(p, 4))
-        goto end;
+    FAIL_IF(!PacketAlertCheck(p, 1));
+    FAIL_IF(PacketAlertCheck(p, 2));
+    FAIL_IF(PacketAlertCheck(p, 3));
+    FAIL_IF(PacketAlertCheck(p, 4));
+    FAIL_IF(PacketAlertCheck(p, 5));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, shello_buf,
-                            shello_buf_len);
-    if (r != 0) {
-        printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT,
+                            shello_buf, shello_buf_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     p->alerts.cnt = 0;
+    p->flowflags = (FLOW_PKT_TOCLIENT | FLOW_PKT_ESTABLISHED);
+
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(p, 1))
-        goto end;
-    if (!PacketAlertCheck(p, 2))
-        goto end;
-    if (PacketAlertCheck(p, 3))
-        goto end;
-    if (PacketAlertCheck(p, 4))
-        goto end;
+    FAIL_IF(PacketAlertCheck(p, 1));
+    FAIL_IF(!PacketAlertCheck(p, 2));
+    FAIL_IF(PacketAlertCheck(p, 3));
+    FAIL_IF(PacketAlertCheck(p, 4));
+    FAIL_IF(!PacketAlertCheck(p, 5));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, client_change_cipher_spec_buf,
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            client_change_cipher_spec_buf,
                             client_change_cipher_spec_buf_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     p->alerts.cnt = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(p, 1))
-        goto end;
-    if (PacketAlertCheck(p, 2))
-        goto end;
-    if (!PacketAlertCheck(p, 3))
-        goto end;
-    if (PacketAlertCheck(p, 4))
-        goto end;
+    FAIL_IF(PacketAlertCheck(p, 1));
+    FAIL_IF(PacketAlertCheck(p, 2));
+    FAIL_IF(!PacketAlertCheck(p, 3));
+    FAIL_IF(PacketAlertCheck(p, 4));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT, server_change_cipher_spec_buf,
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOCLIENT,
+                            server_change_cipher_spec_buf,
                             server_change_cipher_spec_buf_len);
-    if (r != 0) {
-        printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     p->alerts.cnt = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(p, 1))
-        goto end;
-    if (PacketAlertCheck(p, 2))
-        goto end;
-    if (PacketAlertCheck(p, 3))
-        goto end;
-    if (PacketAlertCheck(p, 4))
-        goto end;
+    FAIL_IF(PacketAlertCheck(p, 1));
+    FAIL_IF(PacketAlertCheck(p, 2));
+    FAIL_IF(PacketAlertCheck(p, 3));
+    FAIL_IF(PacketAlertCheck(p, 4));
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER, toserver_app_data_buf,
-                            toserver_app_data_buf_len);
-    if (r != 0) {
-        printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        result = 0;
-        SCMutexUnlock(&f.m);
-        goto end;
-    }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_TLS, STREAM_TOSERVER,
+                            toserver_app_data_buf, toserver_app_data_buf_len);
+    FAIL_IF(r != 0);
+    FLOWLOCK_UNLOCK(&f);
 
     /* do detect */
     p->alerts.cnt = 0;
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
-    if (PacketAlertCheck(p, 1))
-        goto end;
-    if (PacketAlertCheck(p, 2))
-        goto end;
-    if (PacketAlertCheck(p, 3))
-        goto end;
-    if (PacketAlertCheck(p, 4))
-        goto end;
+    FAIL_IF(PacketAlertCheck(p, 1));
+    FAIL_IF(PacketAlertCheck(p, 2));
+    FAIL_IF(PacketAlertCheck(p, 3));
+    FAIL_IF(PacketAlertCheck(p, 4));
 
-    result = 1;
-
- end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     SigGroupCleanup(de_ctx);
@@ -893,22 +827,58 @@ static int DetectSslStateTest07(void)
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
     UTHFreePackets(&p, 1);
-    return result;
+    PASS;
+}
+
+/**
+ * \brief Test that the "|" character still works as a separate for
+ * compatibility with older Suricata rules.
+ */
+static int DetectSslStateTest08(void)
+{
+    DetectSslStateData *ssd = DetectSslStateParse("server_hello|client_hello");
+    FAIL_IF_NULL(ssd);
+    FAIL_IF_NOT(ssd->flags == (DETECT_SSL_STATE_SERVER_HELLO |
+            DETECT_SSL_STATE_CLIENT_HELLO));
+    SCFree(ssd);
+    PASS;
+}
+
+/**
+ * \test Test parsing of negated states.
+ */
+static int DetectSslStateTestParseNegate(void)
+{
+    DetectSslStateData *ssd = DetectSslStateParse("!client_hello");
+    FAIL_IF_NULL(ssd);
+    uint32_t expected = DETECT_SSL_STATE_CLIENT_HELLO;
+    FAIL_IF(ssd->flags != expected || ssd->mask != expected);
+    SCFree(ssd);
+
+    ssd = DetectSslStateParse("!client_hello,!server_hello");
+    FAIL_IF_NULL(ssd);
+    expected = DETECT_SSL_STATE_CLIENT_HELLO | DETECT_SSL_STATE_SERVER_HELLO;
+    FAIL_IF(ssd->flags != expected || ssd->mask != expected);
+    SCFree(ssd);
+
+    PASS;
 }
 
 #endif /* UNITTESTS */
 
-void DetectSslStateRegisterTests(void)
+static void DetectSslStateRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectSslStateTest01", DetectSslStateTest01, 1);
-    UtRegisterTest("DetectSslStateTest02", DetectSslStateTest02, 1);
-    UtRegisterTest("DetectSslStateTest03", DetectSslStateTest03, 1);
-    UtRegisterTest("DetectSslStateTest04", DetectSslStateTest04, 1);
-    UtRegisterTest("DetectSslStateTest05", DetectSslStateTest05, 1);
-    UtRegisterTest("DetectSslStateTest06", DetectSslStateTest06, 1);
-    UtRegisterTest("DetectSslStateTest07", DetectSslStateTest07, 1);
+    UtRegisterTest("DetectSslStateTest01", DetectSslStateTest01);
+    UtRegisterTest("DetectSslStateTest02", DetectSslStateTest02);
+    UtRegisterTest("DetectSslStateTest03", DetectSslStateTest03);
+    UtRegisterTest("DetectSslStateTest04", DetectSslStateTest04);
+    UtRegisterTest("DetectSslStateTest05", DetectSslStateTest05);
+    UtRegisterTest("DetectSslStateTest06", DetectSslStateTest06);
+    UtRegisterTest("DetectSslStateTest07", DetectSslStateTest07);
+    UtRegisterTest("DetectSslStateTest08", DetectSslStateTest08);
+    UtRegisterTest("DetectSslStateTestParseNegate",
+        DetectSslStateTestParseNegate);
 #endif
-
     return;
 }

@@ -32,33 +32,20 @@
 
 #include "stream.h"
 
-uint16_t PatternMatchDefaultMatcher(void);
+void DetectMpmInitializeAppMpms(DetectEngineCtx *de_ctx);
+int DetectMpmPrepareAppMpms(DetectEngineCtx *de_ctx);
+void DetectMpmInitializeBuiltinMpms(DetectEngineCtx *de_ctx);
+int DetectMpmPrepareBuiltinMpms(DetectEngineCtx *de_ctx);
 
 uint32_t PatternStrength(uint8_t *, uint16_t);
-uint32_t PacketPatternSearchWithStreamCtx(DetectEngineThreadCtx *, Packet *);
-uint32_t PacketPatternSearch(DetectEngineThreadCtx *, Packet *);
-uint32_t UriPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint16_t, uint8_t);
-uint32_t StreamPatternSearch(DetectEngineThreadCtx *, Packet *, StreamMsg *, uint8_t);
-uint32_t HttpClientBodyPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpServerBodyPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpHeaderPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpRawHeaderPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpMethodPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpCookiePatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpRawUriPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpStatMsgPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpStatCodePatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpUAPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpHHPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
-uint32_t HttpHRHPatternSearch(DetectEngineThreadCtx *, uint8_t *, uint32_t, uint8_t);
+
+uint16_t PatternMatchDefaultMatcher(void);
 uint32_t DnsQueryPatternSearch(DetectEngineThreadCtx *det_ctx, uint8_t *buffer, uint32_t buffer_len, uint8_t flags);
-uint32_t SMTPFiledataPatternSearch(DetectEngineThreadCtx *det_ctx, uint8_t *buffer, uint32_t buffer_len, uint8_t flags);
 
 void PacketPatternCleanup(ThreadVars *, DetectEngineThreadCtx *);
-void StreamPatternCleanup(ThreadVars *t, DetectEngineThreadCtx *det_ctx, StreamMsg *smsg);
 
 void PatternMatchPrepare(MpmCtx *, uint16_t);
-void PatternMatchThreadPrepare(MpmThreadCtx *, uint16_t type, uint32_t max_id);
+void PatternMatchThreadPrepare(MpmThreadCtx *, uint16_t type);
 
 void PatternMatchDestroy(MpmCtx *, uint16_t);
 void PatternMatchThreadDestroy(MpmThreadCtx *mpm_thread_ctx, uint16_t);
@@ -66,23 +53,19 @@ void PatternMatchThreadPrint(MpmThreadCtx *, uint16_t);
 
 int PatternMatchPrepareGroup(DetectEngineCtx *, SigGroupHead *);
 void DetectEngineThreadCtxInfo(ThreadVars *, DetectEngineThreadCtx *);
-void PatternMatchDestroyGroup(SigGroupHead *);
 
 TmEcode DetectEngineThreadCtxInit(ThreadVars *, void *, void **);
 TmEcode DetectEngineThreadCtxDeinit(ThreadVars *, void *);
 
-void DbgPrintSearchStats();
+int SignatureHasPacketContent(const Signature *);
+int SignatureHasStreamContent(const Signature *);
 
-MpmPatternIdStore *MpmPatternIdTableInitHash(void);
-void MpmPatternIdTableFreeHash(MpmPatternIdStore *);
-uint32_t MpmPatternIdStoreGetMaxId(MpmPatternIdStore *);
-uint32_t DetectContentGetId(MpmPatternIdStore *, DetectContentData *);
+void RetrieveFPForSig(Signature *s);
 
-int SignatureHasPacketContent(Signature *);
-int SignatureHasStreamContent(Signature *);
-
-SigMatch *RetrieveFPForSig(Signature *s);
-SigMatch *RetrieveFPForSigV2(Signature *s);
+int MpmStoreInit(DetectEngineCtx *);
+void MpmStoreFree(DetectEngineCtx *);
+void MpmStoreReportStats(const DetectEngineCtx *de_ctx);
+MpmStore *MpmStorePrepareBuffer(DetectEngineCtx *de_ctx, SigGroupHead *sgh, enum MpmBuiltinBuffers buf);
 
 /**
  * \brief Figured out the FP and their respective content ids for all the
@@ -94,6 +77,18 @@ SigMatch *RetrieveFPForSigV2(Signature *s);
  * \retval -1 On failure.
  */
 int DetectSetFastPatternAndItsId(DetectEngineCtx *de_ctx);
+
+/** \brief register an app layer keyword for mpm
+ *  \param name keyword name
+ *  \param direction SIG_FLAG_TOSERVER or SIG_FLAG_TOCLIENT
+ *  \param PrefilterRegister Prefilter api registration function
+ *
+ *  \note direction must be set to either toserver or toclient.
+ *        If both are needed, register the keyword twice.
+ */
+void DetectAppLayerMpmRegister(const char *name,
+        int direction, int priority,
+        int (*PrefilterRegister)(SigGroupHead *sgh, MpmCtx *mpm_ctx));
 
 #endif /* __DETECT_ENGINE_MPM_H__ */
 

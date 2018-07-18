@@ -206,8 +206,8 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, const Packet *p, const
 
     fprintf(fp, "{ ");
 
-    if (ff->file_id > 0)
-        fprintf(fp, "\"id\": %u, ", ff->file_id);
+    if (ff->file_store_id > 0)
+        fprintf(fp, "\"id\": %u, ", ff->file_store_id);
 
     fprintf(fp, "\"timestamp\": \"");
     PrintRawJsonFp(fp, (uint8_t *)timebuf, strlen(timebuf));
@@ -269,7 +269,7 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, const Packet *p, const
     fprintf(fp, "\"filename\": \"");
     PrintRawJsonFp(fp, ff->name, ff->name_len);
     fprintf(fp, "\", ");
-
+#ifdef HAVE_MAGIC
     fprintf(fp, "\"magic\": \"");
     if (ff->magic) {
         PrintRawJsonFp(fp, (uint8_t *)ff->magic, strlen(ff->magic));
@@ -277,7 +277,7 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, const Packet *p, const
         fprintf(fp, "unknown");
     }
     fprintf(fp, "\", ");
-
+#endif
     switch (ff->state) {
         case FILE_STATE_CLOSED:
             fprintf(fp, "\"state\": \"CLOSED\", ");
@@ -287,6 +287,22 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, const Packet *p, const
                 size_t x;
                 for (x = 0; x < sizeof(ff->md5); x++) {
                     fprintf(fp, "%02x", ff->md5[x]);
+                }
+                fprintf(fp, "\", ");
+            }
+            if (ff->flags & FILE_SHA1) {
+                fprintf(fp, "\"sha1\": \"");
+                size_t x;
+                for (x = 0; x < sizeof(ff->sha1); x++) {
+                    fprintf(fp, "%02x", ff->sha1[x]);
+                }
+                fprintf(fp, "\", ");
+            }
+            if (ff->flags & FILE_SHA256) {
+                fprintf(fp, "\"sha256\": \"");
+                size_t x;
+                for (x = 0; x < sizeof(ff->sha256); x++) {
+                    fprintf(fp, "%02x", ff->sha256[x]);
                 }
                 fprintf(fp, "\", ");
             }
@@ -303,7 +319,7 @@ static void LogFileWriteJsonRecord(LogFileLogThread *aft, const Packet *p, const
             break;
     }
     fprintf(fp, "\"stored\": %s, ", ff->flags & FILE_STORED ? "true" : "false");
-    fprintf(fp, "\"size\": %"PRIu64" ", ff->size);
+    fprintf(fp, "\"size\": %"PRIu64" ", FileTrackedSize(ff));
     fprintf(fp, "}\n");
     fflush(fp);
     SCMutexUnlock(&aft->file_ctx->fp_mutex);
@@ -333,7 +349,7 @@ static int LogFileLogger(ThreadVars *tv, void *thread_data, const Packet *p, con
     return 0;
 }
 
-static TmEcode LogFileLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode LogFileLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogFileLogThread *aft = SCMalloc(sizeof(LogFileLogThread));
     if (unlikely(aft == NULL))
@@ -354,7 +370,7 @@ static TmEcode LogFileLogThreadInit(ThreadVars *t, void *initdata, void **data)
     return TM_ECODE_OK;
 }
 
-TmEcode LogFileLogThreadDeinit(ThreadVars *t, void *data)
+static TmEcode LogFileLogThreadDeinit(ThreadVars *t, void *data)
 {
     LogFileLogThread *aft = (LogFileLogThread *)data;
     if (aft == NULL) {
@@ -368,7 +384,7 @@ TmEcode LogFileLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void LogFileLogExitPrintStats(ThreadVars *tv, void *data)
+static void LogFileLogExitPrintStats(ThreadVars *tv, void *data)
 {
     LogFileLogThread *aft = (LogFileLogThread *)data;
     if (aft == NULL) {
@@ -428,44 +444,16 @@ static OutputCtx *LogFileLogInitCtx(ConfNode *conf)
         SCLogInfo("forcing magic lookup for logged files");
     }
 
-    const char *force_md5 = ConfNodeLookupChildValue(conf, "force-md5");
-    if (force_md5 != NULL && ConfValIsTrue(force_md5)) {
-#ifdef HAVE_NSS
-        FileForceMd5Enable();
-        SCLogInfo("forcing md5 calculation for logged files");
-#else
-        SCLogInfo("md5 calculation requires linking against libnss");
-#endif
-    }
-
+    FileForceHashParseCfg(conf);
     FileForceTrackingEnable();
     SCReturnPtr(output_ctx, "OutputCtx");
 }
 
-/** \brief Read the config set the file pointer, open the file
- *  \param file_ctx pointer to a created LogFileCtx using LogFileNewCtx()
- *  \param config_file for loading separate configs
- *  \return -1 if failure, 0 if succesful
- * */
-int LogFileLogOpenFileCtx(LogFileCtx *file_ctx, const char *filename, const
-                            char *mode)
+void LogFileLogRegister (void)
 {
-    return 0;
-}
-
-void TmModuleLogFileLogRegister (void)
-{
-    tmm_modules[TMM_FILELOG].name = MODULE_NAME;
-    tmm_modules[TMM_FILELOG].ThreadInit = LogFileLogThreadInit;
-    tmm_modules[TMM_FILELOG].Func = NULL;
-    tmm_modules[TMM_FILELOG].ThreadExitPrintStats = LogFileLogExitPrintStats;
-    tmm_modules[TMM_FILELOG].ThreadDeinit = LogFileLogThreadDeinit;
-    tmm_modules[TMM_FILELOG].RegisterTests = NULL;
-    tmm_modules[TMM_FILELOG].cap_flags = 0;
-    tmm_modules[TMM_FILELOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterFileModule(MODULE_NAME, "file-log", LogFileLogInitCtx,
-            LogFileLogger);
+    OutputRegisterFileModule(LOGGER_FILE, MODULE_NAME, "file-log",
+        LogFileLogInitCtx, LogFileLogger, LogFileLogThreadInit,
+        LogFileLogThreadDeinit, LogFileLogExitPrintStats);
 
     SCLogDebug("registered");
 }

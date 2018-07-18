@@ -45,6 +45,7 @@
 #include "util-logopenfile.h"
 #include "util-time.h"
 #include "output-json.h"
+#include "output-json-flow.h"
 
 #include "stream-tcp-private.h"
 
@@ -68,7 +69,7 @@ typedef struct JsonFlowLogThread_ {
 #define LOG_HTTP_EXTENDED 1
 #define LOG_HTTP_CUSTOM 2
 
-static json_t *CreateJSONHeaderFromFlow(Flow *f, char *event_type)
+static json_t *CreateJSONHeaderFromFlow(Flow *f, const char *event_type)
 {
     char timebuf[64];
     char srcip[46], dstip[46];
@@ -176,6 +177,41 @@ static json_t *CreateJSONHeaderFromFlow(Flow *f, char *event_type)
     return js;
 }
 
+void JsonAddFlow(Flow *f, json_t *js, json_t *hjs)
+{
+    json_object_set_new(js, "app_proto",
+            json_string(AppProtoToString(f->alproto)));
+    if (f->alproto_ts != f->alproto) {
+        json_object_set_new(js, "app_proto_ts",
+                json_string(AppProtoToString(f->alproto_ts)));
+    }
+    if (f->alproto_tc != f->alproto) {
+        json_object_set_new(js, "app_proto_tc",
+                json_string(AppProtoToString(f->alproto_tc)));
+    }
+    if (f->alproto_orig != f->alproto && f->alproto_orig != ALPROTO_UNKNOWN) {
+        json_object_set_new(js, "app_proto_orig",
+                json_string(AppProtoToString(f->alproto_orig)));
+    }
+    if (f->alproto_expect != f->alproto && f->alproto_expect != ALPROTO_UNKNOWN) {
+        json_object_set_new(js, "app_proto_expected",
+                json_string(AppProtoToString(f->alproto_expect)));
+    }
+
+    json_object_set_new(hjs, "pkts_toserver",
+            json_integer(f->todstpktcnt));
+    json_object_set_new(hjs, "pkts_toclient",
+            json_integer(f->tosrcpktcnt));
+    json_object_set_new(hjs, "bytes_toserver",
+            json_integer(f->todstbytecnt));
+    json_object_set_new(hjs, "bytes_toclient",
+            json_integer(f->tosrcbytecnt));
+
+    char timebuf1[64];
+    CreateIsoTimeString(&f->startts, timebuf1, sizeof(timebuf1));
+    json_object_set_new(hjs, "start", json_string(timebuf1));
+}
+
 /* JSON format logging */
 static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
 {
@@ -187,23 +223,10 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
         return;
     }
 
-    json_object_set_new(js, "app_proto", json_string(AppProtoToString(f->alproto)));
+    JsonAddFlow(f, js, hjs);
 
-    json_object_set_new(hjs, "pkts_toserver",
-            json_integer(f->todstpktcnt));
-    json_object_set_new(hjs, "pkts_toclient",
-            json_integer(f->tosrcpktcnt));
-    json_object_set_new(hjs, "bytes_toserver",
-            json_integer(f->todstbytecnt));
-    json_object_set_new(hjs, "bytes_toclient",
-            json_integer(f->tosrcbytecnt));
-
-    char timebuf1[64], timebuf2[64];
-
-    CreateIsoTimeString(&f->startts, timebuf1, sizeof(timebuf1));
+    char timebuf2[64];
     CreateIsoTimeString(&f->lastts, timebuf2, sizeof(timebuf2));
-
-    json_object_set_new(hjs, "start", json_string(timebuf1));
     json_object_set_new(hjs, "end", json_string(timebuf2));
 
     int32_t age = f->lastts.tv_sec - f->startts.tv_sec;
@@ -219,6 +242,24 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
         state = "established";
     else if (f->flow_end_flags & FLOW_END_FLAG_STATE_CLOSED)
         state = "closed";
+    else if (f->flow_end_flags & FLOW_END_FLAG_STATE_BYPASSED) {
+        state = "bypassed";
+        int flow_state = SC_ATOMIC_GET(f->flow_state);
+        switch (flow_state) {
+            case FLOW_STATE_LOCAL_BYPASSED:
+                json_object_set_new(hjs, "bypass",
+                        json_string("local"));
+                break;
+            case FLOW_STATE_CAPTURE_BYPASSED:
+                json_object_set_new(hjs, "bypass",
+                        json_string("capture"));
+                break;
+            default:
+                SCLogError(SC_ERR_INVALID_VALUE,
+                           "Invalid flow state: %d, contact developers",
+                           flow_state);
+        }
+    }
 
     json_object_set_new(hjs, "state",
             json_string(state));
@@ -233,6 +274,8 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
 
     json_object_set_new(hjs, "reason",
             json_string(reason));
+
+    json_object_set_new(hjs, "alerted", json_boolean(FlowHasAlerts(f)));
 
     json_object_set_new(js, "flow", hjs);
 
@@ -262,46 +305,46 @@ static void JsonFlowLogJSON(JsonFlowLogThread *aft, json_t *js, Flow *f)
         JsonTcpFlags(ssn ? ssn->tcp_packet_flags : 0, tjs);
 
         if (ssn) {
-            char *state = NULL;
+            const char *tcp_state = NULL;
             switch (ssn->state) {
                 case TCP_NONE:
-                    state = "none";
+                    tcp_state = "none";
                     break;
                 case TCP_LISTEN:
-                    state = "listen";
+                    tcp_state = "listen";
                     break;
                 case TCP_SYN_SENT:
-                    state = "syn_sent";
+                    tcp_state = "syn_sent";
                     break;
                 case TCP_SYN_RECV:
-                    state = "syn_recv";
+                    tcp_state = "syn_recv";
                     break;
                 case TCP_ESTABLISHED:
-                    state = "established";
+                    tcp_state = "established";
                     break;
                 case TCP_FIN_WAIT1:
-                    state = "fin_wait1";
+                    tcp_state = "fin_wait1";
                     break;
                 case TCP_FIN_WAIT2:
-                    state = "fin_wait2";
+                    tcp_state = "fin_wait2";
                     break;
                 case TCP_TIME_WAIT:
-                    state = "time_wait";
+                    tcp_state = "time_wait";
                     break;
                 case TCP_LAST_ACK:
-                    state = "last_ack";
+                    tcp_state = "last_ack";
                     break;
                 case TCP_CLOSE_WAIT:
-                    state = "close_wait";
+                    tcp_state = "close_wait";
                     break;
                 case TCP_CLOSING:
-                    state = "closing";
+                    tcp_state = "closing";
                     break;
                 case TCP_CLOSED:
-                    state = "closed";
+                    tcp_state = "closed";
                     break;
             }
-            json_object_set_new(tjs, "state", json_string(state));
+            json_object_set_new(tjs, "state", json_string(tcp_state));
         }
 
         json_object_set_new(js, "tcp", tjs);
@@ -341,12 +384,11 @@ static void OutputFlowLogDeinit(OutputCtx *output_ctx)
 }
 
 #define DEFAULT_LOG_FILENAME "flow.json"
-OutputCtx *OutputFlowLogInit(ConfNode *conf)
+static OutputCtx *OutputFlowLogInit(ConfNode *conf)
 {
-    SCLogInfo("hi");
     LogFileCtx *file_ctx = LogFileNewCtx();
     if(file_ctx == NULL) {
-        SCLogError(SC_ERR_HTTP_LOG_GENERIC, "couldn't create new file_ctx");
+        SCLogError(SC_ERR_FLOW_LOG_GENERIC, "couldn't create new file_ctx");
         return NULL;
     }
 
@@ -382,7 +424,7 @@ static void OutputFlowLogDeinitSub(OutputCtx *output_ctx)
     SCFree(output_ctx);
 }
 
-OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
     OutputJsonCtx *ojc = parent_ctx->data;
 
@@ -406,7 +448,7 @@ OutputCtx *OutputFlowLogInitSub(ConfNode *conf, OutputCtx *parent_ctx)
 }
 
 #define OUTPUT_BUFFER_SIZE 65535
-static TmEcode JsonFlowLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonFlowLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     JsonFlowLogThread *aft = SCMalloc(sizeof(JsonFlowLogThread));
     if (unlikely(aft == NULL))
@@ -415,7 +457,7 @@ static TmEcode JsonFlowLogThreadInit(ThreadVars *t, void *initdata, void **data)
 
     if(initdata == NULL)
     {
-        SCLogDebug("Error getting context for HTTPLog.  \"initdata\" argument NULL");
+        SCLogDebug("Error getting context for EveLogFlow.  \"initdata\" argument NULL");
         SCFree(aft);
         return TM_ECODE_FAILED;
     }
@@ -448,36 +490,23 @@ static TmEcode JsonFlowLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void TmModuleJsonFlowLogRegister (void)
+void JsonFlowLogRegister (void)
 {
-    tmm_modules[TMM_JSONFLOWLOG].name = "JsonFlowLog";
-    tmm_modules[TMM_JSONFLOWLOG].ThreadInit = JsonFlowLogThreadInit;
-    tmm_modules[TMM_JSONFLOWLOG].ThreadDeinit = JsonFlowLogThreadDeinit;
-    tmm_modules[TMM_JSONFLOWLOG].RegisterTests = NULL;
-    tmm_modules[TMM_JSONFLOWLOG].cap_flags = 0;
-    tmm_modules[TMM_JSONFLOWLOG].flags = TM_FLAG_LOGAPI_TM;
-
     /* register as separate module */
-    OutputRegisterFlowModule("JsonFlowLog", "flow-json-log",
-            OutputFlowLogInit, JsonFlowLogger);
+    OutputRegisterFlowModule(LOGGER_JSON_FLOW, "JsonFlowLog", "flow-json-log",
+        OutputFlowLogInit, JsonFlowLogger, JsonFlowLogThreadInit,
+        JsonFlowLogThreadDeinit, NULL);
 
     /* also register as child of eve-log */
-    OutputRegisterFlowSubModule("eve-log", "JsonFlowLog", "eve-log.flow",
-            OutputFlowLogInitSub, JsonFlowLogger);
+    OutputRegisterFlowSubModule(LOGGER_JSON_FLOW, "eve-log", "JsonFlowLog",
+        "eve-log.flow", OutputFlowLogInitSub, JsonFlowLogger,
+        JsonFlowLogThreadInit, JsonFlowLogThreadDeinit, NULL);
 }
 
 #else
 
-static TmEcode OutputJsonThreadInit(ThreadVars *t, void *initdata, void **data)
+void JsonFlowLogRegister (void)
 {
-    SCLogInfo("Can't init JSON output - JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonFlowLogRegister (void)
-{
-    tmm_modules[TMM_JSONFLOWLOG].name = "JsonFlowLog";
-    tmm_modules[TMM_JSONFLOWLOG].ThreadInit = OutputJsonThreadInit;
 }
 
 #endif

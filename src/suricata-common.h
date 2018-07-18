@@ -57,6 +57,10 @@
 #include <stdint.h>
 #endif
 
+#if HAVE_STDBOOL_H
+#include <stdbool.h>
+#endif
+
 #if HAVE_STDARG_H
 #include <stdarg.h>
 #endif
@@ -87,6 +91,10 @@
 
 #if HAVE_STRING_H
 #include <string.h>
+#endif
+
+#if HAVE_STRINGS_H
+#include <strings.h>
 #endif
 
 #if HAVE_FCNTL_H
@@ -156,6 +164,14 @@
 #include <sys/stat.h>
 #endif
 
+#if HAVE_SYS_MMAN_H
+#include <sys/mman.h>
+#endif
+
+#if HAVE_SYS_RANDOM_H
+#include <sys/random.h>
+#endif
+
 #if HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -215,23 +231,38 @@
 #ifndef JSON_ESCAPE_SLASH
 #define JSON_ESCAPE_SLASH 0
 #endif
+/* Appears not all current distros have jansson that defines this. */
+#ifndef json_boolean
+#define json_boolean(val)      SCJsonBool((val))
+//#define json_boolean(val)      ((val) ? json_true() : json_false())
+#endif
 #endif
 
-#if CPPCHECK==1
-#define BUG_ON(x) if (((x))) exit(1)
-#else
-#ifdef HAVE_ASSERT_H
-#include <assert.h>
-#define BUG_ON(x) assert(!(x))
-#else
-#define BUG_ON(x)
-#endif
+#ifdef HAVE_MAGIC
+#include <magic.h>
 #endif
 
 /* we need this to stringify the defines which are supplied at compiletime see:
    http://gcc.gnu.org/onlinedocs/gcc-3.4.1/cpp/Stringification.html#Stringification */
 #define xstr(s) str(s)
 #define str(s) #s
+
+#if CPPCHECK==1
+    #define BUG_ON(x) if (((x))) exit(1)
+#else
+    #if defined HAVE_ASSERT_H && !defined NDEBUG
+    #include <assert.h>
+        #define BUG_ON(x) assert(!(x))
+    #else
+        #define BUG_ON(x) do {      \
+            if (((x))) {            \
+                fprintf(stderr, "BUG at %s:%d(%s)\n", __FILE__, __LINE__, __func__);    \
+                fprintf(stderr, "Code: '%s'\n", xstr((x)));                             \
+                exit(EXIT_FAILURE); \
+            }                       \
+        } while(0)
+    #endif
+#endif
 
 /** type for the internal signature id. Since it's used in the matching engine
  *  extensively keeping this as small as possible reduces the overall memory
@@ -256,37 +287,61 @@
 
 /** Windows does not define __WORDSIZE, but it uses __X86__ */
 #ifndef __WORDSIZE
-	#if defined(__X86__) || defined(_X86_)
-		#define __WORDSIZE 32
-	#else
-		#if defined(__X86_64__) || defined(_X86_64_)
-			#define __WORDSIZE 64
-		#endif
-	#endif
+    #if defined(__X86__) || defined(_X86_) || defined(_M_IX86)
+        #define __WORDSIZE 32
+    #else
+        #if defined(__X86_64__) || defined(_X86_64_) || \
+            defined(__x86_64)   || defined(__x86_64__) || \
+            defined(__amd64)    || defined(__amd64__)
+            #define __WORDSIZE 64
+        #endif
+    #endif
+#endif
 
-    #ifndef __WORDSIZE
-        #warning Defaulting to __WORDSIZE 32
+/** if not succesful yet try the data models */
+#ifndef __WORDSIZE
+    #if defined(_ILP32) || defined(__ILP32__)
         #define __WORDSIZE 32
     #endif
+    #if defined(_LP64) || defined(__LP64__)
+        #define __WORDSIZE 64
+    #endif
+#endif
+
+#ifndef __WORDSIZE
+    #warning Defaulting to __WORDSIZE 32
+    #define __WORDSIZE 32
 #endif
 
 /** darwin doesn't defined __BYTE_ORDER and friends, but BYTE_ORDER */
 #ifndef __BYTE_ORDER
-#ifdef BYTE_ORDER
-#define __BYTE_ORDER BYTE_ORDER
-#endif
+    #if defined(BYTE_ORDER)
+        #define __BYTE_ORDER BYTE_ORDER
+    #elif defined(__BYTE_ORDER__)
+        #define __BYTE_ORDER __BYTE_ORDER__
+    #else
+        #error "byte order not detected"
+    #endif
 #endif
 
 #ifndef __LITTLE_ENDIAN
-#ifdef LITTLE_ENDIAN
-#define __LITTLE_ENDIAN LITTLE_ENDIAN
-#endif
+    #if defined(LITTLE_ENDIAN)
+        #define __LITTLE_ENDIAN LITTLE_ENDIAN
+    #elif defined(__ORDER_LITTLE_ENDIAN__)
+        #define __LITTLE_ENDIAN __ORDER_LITTLE_ENDIAN__
+    #endif
 #endif
 
 #ifndef __BIG_ENDIAN
-#ifdef BIG_ENDIAN
-#define __BIG_ENDIAN BIG_ENDIAN
+    #if defined(BIG_ENDIAN)
+        #define __BIG_ENDIAN BIG_ENDIAN
+    #elif defined(__ORDER_BIG_ENDIAN__)
+        #define __BIG_ENDIAN __ORDER_BIG_ENDIAN__
+    #endif
 #endif
+
+#if !defined(__LITTLE_ENDIAN) && !defined(__BIG_ENDIAN)
+    #error "byte order: can't figure out big or little"
 #endif
 
 #ifndef HAVE_PCRE_FREE_STUDY
@@ -301,29 +356,25 @@
 #define MAX(x, y) (((x)<(y))?(y):(x))
 #endif
 
+#define BIT_U8(n)  ((uint8_t)(1 << (n)))
+#define BIT_U16(n) ((uint16_t)(1 << (n)))
+#define BIT_U32(n) (1UL  << (n))
+#define BIT_U64(n) (1ULL << (n))
+
+#define WARN_UNUSED __attribute__((warn_unused_result))
+
 typedef enum PacketProfileDetectId_ {
-    PROF_DETECT_MPM,
-    PROF_DETECT_MPM_PACKET,         /* PKT MPM */
-    PROF_DETECT_MPM_PKT_STREAM,     /* PKT inspected with stream MPM */
-    PROF_DETECT_MPM_STREAM,         /* STREAM MPM */
-    PROF_DETECT_MPM_URI,
-    PROF_DETECT_MPM_HCBD,
-    PROF_DETECT_MPM_HSBD,
-    PROF_DETECT_MPM_HHD,
-    PROF_DETECT_MPM_HRHD,
-    PROF_DETECT_MPM_HMD,
-    PROF_DETECT_MPM_HCD,
-    PROF_DETECT_MPM_HRUD,
-    PROF_DETECT_MPM_HSMD,
-    PROF_DETECT_MPM_HSCD,
-    PROF_DETECT_MPM_HUAD,
-    PROF_DETECT_MPM_HHHD,
-    PROF_DETECT_MPM_HRHHD,
-    PROF_DETECT_MPM_DNSQUERY,
     PROF_DETECT_IPONLY,
     PROF_DETECT_RULES,
-    PROF_DETECT_STATEFUL,
+    PROF_DETECT_STATEFUL_START,
+    PROF_DETECT_STATEFUL_CONT,
+    PROF_DETECT_STATEFUL_UPDATE,
     PROF_DETECT_PREFILTER,
+    PROF_DETECT_PF_PKT,
+    PROF_DETECT_PF_PAYLOAD,
+    PROF_DETECT_PF_TX,
+    PROF_DETECT_PF_SORT1,
+    PROF_DETECT_PF_SORT2,
     PROF_DETECT_NONMPMLIST,
     PROF_DETECT_ALERT,
     PROF_DETECT_CLEANUP,
@@ -332,6 +383,41 @@ typedef enum PacketProfileDetectId_ {
 
     PROF_DETECT_SIZE,
 } PacketProfileDetectId;
+
+typedef enum {
+    LOGGER_UNDEFINED,
+    LOGGER_ALERT_DEBUG,
+    LOGGER_ALERT_FAST,
+    LOGGER_UNIFIED2,
+    LOGGER_ALERT_SYSLOG,
+    LOGGER_DROP,
+    LOGGER_JSON_ALERT,
+    LOGGER_JSON_DROP,
+    LOGGER_JSON_SSH,
+    LOGGER_DNS,
+    LOGGER_HTTP,
+    LOGGER_JSON_DNS,
+    LOGGER_JSON_HTTP,
+    LOGGER_JSON_SMTP,
+    LOGGER_JSON_TLS,
+    LOGGER_JSON_NFS,
+    LOGGER_JSON_TEMPLATE,
+    LOGGER_TLS_STORE,
+    LOGGER_TLS,
+    LOGGER_FILE,
+    LOGGER_FILE_STORE,
+    LOGGER_JSON_FILE,
+    LOGGER_TCP_DATA,
+    LOGGER_JSON_FLOW,
+    LOGGER_JSON_NETFLOW,
+    LOGGER_STATS,
+    LOGGER_JSON_STATS,
+    LOGGER_PRELUDE,
+    LOGGER_PCAP,
+    LOGGER_JSON_DNP3,
+    LOGGER_JSON_VARS,
+    LOGGER_SIZE,
+} LoggerId;
 
 #include <htp/htp.h>
 #include "threads.h"
@@ -343,6 +429,12 @@ typedef enum PacketProfileDetectId_ {
 #include "util-optimize.h"
 #include "util-path.h"
 #include "util-conf.h"
+
+#ifdef HAVE_LUA
+#include <lua.h>
+#include <lualib.h>
+#include <lauxlib.h>
+#endif
 
 #ifndef HAVE_STRLCAT
 size_t strlcat(char *, const char *src, size_t siz);

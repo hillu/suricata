@@ -5,14 +5,17 @@ ACLOCAL_AMFLAGS = -I m4
 EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
              reference.config
-SUBDIRS = $(HTP_DIR) src qa rules doc contrib scripts
+SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts etc
 
 CLEANFILES = stamp-h[0-9]*
 
 install-data-am:
 	@echo "Run 'make install-conf' if you want to install initial configuration files. Or 'make install-full' to install configuration and rules";
 
-install-full: install install-conf install-rules
+install-full:
+	$(MAKE) install
+	$(MAKE) install-conf
+	$(MAKE) install-rules
 
 install-conf:
 	install -d "$(DESTDIR)$(e_sysconfdir)"
@@ -29,9 +32,9 @@ install-rules:
 	install -d "$(DESTDIR)$(e_sysconfrulesdir)"
 if HAVE_FETCH_COMMAND
 if HAVE_WGET_COMMAND
-	$(HAVE_WGET) -qO - https://rules.emergingthreats.net/open/suricata-3.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
+	$(HAVE_WGET) -qO - https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
 else
-	$(HAVE_CURL) -s https://rules.emergingthreats.net/open/suricata-3.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
+	$(HAVE_CURL) -s https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
 endif
 else
 	@echo "UNABLE to load ruleset wget or curl are not installed on system."
@@ -41,8 +44,10 @@ endif
 	@test -e "$(DESTDIR)$(e_sysconfrulesdir)smtp-events.rules" || install -m 600 "$(top_srcdir)/rules/smtp-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
 	@test -e "$(DESTDIR)$(e_sysconfrulesdir)http-events.rules" || install -m 600 "$(top_srcdir)/rules/http-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
 	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dns-events.rules" || install -m 600 "$(top_srcdir)/rules/dns-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+	@test -e "$(DESTDIR)$(e_sysconfrulesdir)tls-events.rules" || install -m 600 "$(top_srcdir)/rules/tls-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
 	@test -e "$(DESTDIR)$(e_sysconfrulesdir)modbus-events.rules" || install -m 600 "$(top_srcdir)/rules/modbus-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
 	@test -e "$(DESTDIR)$(e_sysconfrulesdir)app-layer-events.rules" || install -m 600 "$(top_srcdir)/rules/app-layer-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dnp3-events.rules" || install -m 600 "$(top_srcdir)/rules/dnp3-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
 	@echo ""
 	@echo "You can now start suricata by running as root something like '$(DESTDIR)$(bindir)/suricata -c $(DESTDIR)$(e_sysconfdir)/suricata.yaml -i eth0'."
 	@echo ""

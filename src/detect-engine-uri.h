@@ -24,12 +24,13 @@
 #ifndef __DETECT_ENGINE_URICONTENT_H__
 #define __DETECT_ENGINE_URICONTENT_H__
 
-int DetectEngineInspectPacketUris(ThreadVars *tv,
-                                  DetectEngineCtx *de_ctx,
-                                  DetectEngineThreadCtx *det_ctx,
-                                  Signature *s, Flow *f, uint8_t flags,
-                                  void *alstate,
-                                  void *tx, uint64_t tx_id);
+int PrefilterTxUriRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx);
+
+int DetectEngineInspectHttpUri(ThreadVars *tv,
+        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, uint8_t flags, void *alstate, void *tx, uint64_t tx_id);
+
 void UriRegisterTests(void);
 
 #endif /* __DETECT_ENGINE_URICONTENT_H__ */

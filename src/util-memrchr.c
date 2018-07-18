@@ -24,6 +24,7 @@
 
 #include "suricata-common.h"
 #include "util-unittest.h"
+#include "util-memrchr.h"
 
 #ifndef HAVE_MEMRCHR
 void *memrchr (const void *s, int c, size_t n)
@@ -42,7 +43,7 @@ void *memrchr (const void *s, int c, size_t n)
 #ifdef UNITTESTS
 static int MemrchrTest01 (void)
 {
-    char *haystack = "abcabc";
+    const char *haystack = "abcabc";
     char needle = 'b';
 
     char *ptr = memrchr(haystack, needle, strlen(haystack));
@@ -62,6 +63,6 @@ static int MemrchrTest01 (void)
 void MemrchrRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("MemrchrTest01", MemrchrTest01, 1);
+    UtRegisterTest("MemrchrTest01", MemrchrTest01);
 #endif
 }

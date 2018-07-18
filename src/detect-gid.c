@@ -36,9 +36,7 @@
 #include "util-unittest.h"
 #include "util-debug.h"
 
-#define PARSE_REGEX "[0-9]+"
-
-static int DetectGidSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectGidSetup (DetectEngineCtx *, Signature *, const char *);
 
 /**
  * \brief Registration function for gid: keyword
@@ -48,7 +46,7 @@ void DetectGidRegister (void)
 {
     sigmatch_table[DETECT_GID].name = "gid";
     sigmatch_table[DETECT_GID].desc = "give different groups of signatures another id value";
-    sigmatch_table[DETECT_GID].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Meta-settings#Gid-group-id";
+    sigmatch_table[DETECT_GID].url = DOC_URL DOC_VERSION "/rules/meta.html#gid-group-id";
     sigmatch_table[DETECT_GID].Match = NULL;
     sigmatch_table[DETECT_GID].Setup = DetectGidSetup;
     sigmatch_table[DETECT_GID].Free  = NULL;
@@ -66,23 +64,8 @@ void DetectGidRegister (void)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectGidSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectGidSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
-    char *str = rawstr;
-    char duped = 0;
-
-    /* Strip leading and trailing "s. */
-    if (rawstr[0] == '\"') {
-        str = SCStrdup(rawstr + 1);
-        if (unlikely(str == NULL)) {
-            return -1;
-        }
-        if (strlen(str) && str[strlen(str) - 1] == '\"') {
-            str[strlen(str) - 1] = '\"';
-        }
-        duped = 1;
-    }
-
     unsigned long gid = 0;
     char *endptr = NULL;
     gid = strtoul(rawstr, &endptr, 10);
@@ -98,13 +81,9 @@ static int DetectGidSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 
     s->gid = (uint32_t)gid;
 
-    if (duped)
-        SCFree(str);
     return 0;
 
  error:
-    if (duped)
-        SCFree(str);
     return -1;
 }
 
@@ -195,8 +174,8 @@ end:
 void GidRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("GidTestParse01", GidTestParse01, 1);
-    UtRegisterTest("GidTestParse02", GidTestParse02, 1);
-    UtRegisterTest("GidTestParse03", GidTestParse03, 1);
+    UtRegisterTest("GidTestParse01", GidTestParse01);
+    UtRegisterTest("GidTestParse02", GidTestParse02);
+    UtRegisterTest("GidTestParse03", GidTestParse03);
 #endif /* UNITTESTS */
 }

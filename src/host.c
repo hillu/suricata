@@ -96,7 +96,7 @@ void HostFree(Host *h)
     }
 }
 
-Host *HostNew(Address *a)
+static Host *HostNew(Address *a)
 {
     Host *h = HostAlloc();
     if (h == NULL)
@@ -141,20 +141,18 @@ void HostInitConfig(char quiet)
     SC_ATOMIC_INIT(host_prune_idx);
     HostQueueInit(&host_spare_q);
 
-    unsigned int seed = RandomTimePreseed();
     /* set defaults */
-    host_config.hash_rand   = (int)( HOST_DEFAULT_HASHSIZE * (rand_r(&seed) / RAND_MAX + 1.0));
-
+    host_config.hash_rand   = (uint32_t)RandomGet();
     host_config.hash_size   = HOST_DEFAULT_HASHSIZE;
     host_config.memcap      = HOST_DEFAULT_MEMCAP;
     host_config.prealloc    = HOST_DEFAULT_PREALLOC;
 
     /* Check if we have memcap and hash_size defined at config */
-    char *conf_val;
+    const char *conf_val;
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
-    if ((ConfGet("host.memcap", &conf_val)) == 1)
+    if ((ConfGetValue("host.memcap", &conf_val)) == 1)
     {
         if (ParseSizeStringU64(conf_val, &host_config.memcap) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing host.memcap "
@@ -163,7 +161,7 @@ void HostInitConfig(char quiet)
             exit(EXIT_FAILURE);
         }
     }
-    if ((ConfGet("host.hash-size", &conf_val)) == 1)
+    if ((ConfGetValue("host.hash-size", &conf_val)) == 1)
     {
         if (ByteExtractStringUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
@@ -171,7 +169,7 @@ void HostInitConfig(char quiet)
         }
     }
 
-    if ((ConfGet("host.prealloc", &conf_val)) == 1)
+    if ((ConfGetValue("host.prealloc", &conf_val)) == 1)
     {
         if (ByteExtractStringUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
@@ -195,7 +193,7 @@ void HostInitConfig(char quiet)
                 (uintmax_t)sizeof(HostHashRow));
         exit(EXIT_FAILURE);
     }
-    host_hash = SCCalloc(host_config.hash_size, sizeof(HostHashRow));
+    host_hash = SCMallocAligned(host_config.hash_size * sizeof(HostHashRow), CLS);
     if (unlikely(host_hash == NULL)) {
         SCLogError(SC_ERR_FATAL, "Fatal error encountered in HostInitConfig. Exiting...");
         exit(EXIT_FAILURE);
@@ -209,7 +207,7 @@ void HostInitConfig(char quiet)
     (void) SC_ATOMIC_ADD(host_memuse, (host_config.hash_size * sizeof(HostHashRow)));
 
     if (quiet == FALSE) {
-        SCLogInfo("allocated %llu bytes of memory for the host hash... "
+        SCLogConfig("allocated %"PRIu64" bytes of memory for the host hash... "
                   "%" PRIu32 " buckets of size %" PRIuMAX "",
                   SC_ATOMIC_GET(host_memuse), host_config.hash_size,
                   (uintmax_t)sizeof(HostHashRow));
@@ -234,9 +232,9 @@ void HostInitConfig(char quiet)
     }
 
     if (quiet == FALSE) {
-        SCLogInfo("preallocated %" PRIu32 " hosts of size %" PRIu16 "",
+        SCLogConfig("preallocated %" PRIu32 " hosts of size %" PRIu16 "",
                 host_spare_q.len, g_host_size);
-        SCLogInfo("host memory usage: %llu bytes, maximum: %"PRIu64,
+        SCLogConfig("host memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(host_memuse), host_config.memcap);
     }
 
@@ -248,10 +246,10 @@ void HostInitConfig(char quiet)
 void HostPrintStats (void)
 {
 #ifdef HOSTBITS_STATS
-    SCLogInfo("hostbits added: %" PRIu32 ", removed: %" PRIu32 ", max memory usage: %" PRIu32 "",
+    SCLogPerf("hostbits added: %" PRIu32 ", removed: %" PRIu32 ", max memory usage: %" PRIu32 "",
         hostbits_added, hostbits_removed, hostbits_memuse_max);
 #endif /* HOSTBITS_STATS */
-    SCLogInfo("host memory usage: %llu bytes, maximum: %"PRIu64,
+    SCLogPerf("host memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
             SC_ATOMIC_GET(host_memuse), host_config.memcap);
     return;
 }
@@ -274,7 +272,7 @@ void HostShutdown(void)
     /* clear and free the hash */
     if (host_hash != NULL) {
         for (u = 0; u < host_config.hash_size; u++) {
-            Host *h = host_hash[u].head;
+            h = host_hash[u].head;
             while (h) {
                 Host *n = h->hnext;
                 HostFree(h);
@@ -283,7 +281,7 @@ void HostShutdown(void)
 
             HRLOCK_DESTROY(&host_hash[u]);
         }
-        SCFree(host_hash);
+        SCFreeAligned(host_hash);
         host_hash = NULL;
     }
     (void) SC_ATOMIC_SUB(host_memuse, host_config.hash_size * sizeof(HostHashRow));
@@ -347,7 +345,7 @@ void HostCleanup(void)
  *  hash_rand -- set at init time
  *  source address
  */
-uint32_t HostGetKey(Address *a)
+static inline uint32_t HostGetKey(Address *a)
 {
     uint32_t key;
 
@@ -426,7 +424,7 @@ static Host *HostGetNew(Address *a)
     return h;
 }
 
-void HostInit(Host *h, Address *a)
+static void HostInit(Host *h, Address *a)
 {
     COPY_ADDRESS(a, &h->a);
     (void) HostIncrUsecnt(h);

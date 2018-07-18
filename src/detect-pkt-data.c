@@ -29,7 +29,7 @@
 
 #include "detect.h"
 #include "detect-parse.h"
-
+#include "detect-pkt-data.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "detect-engine-state.h"
@@ -43,7 +43,7 @@
 #include "util-unittest.h"
 #include "util-unittest-helper.h"
 
-static int DetectPktDataSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectPktDataSetup (DetectEngineCtx *, Signature *, const char *);
 static void DetectPktDataTestRegister(void);
 
 /**
@@ -53,8 +53,6 @@ void DetectPktDataRegister(void)
 {
     sigmatch_table[DETECT_PKT_DATA].name = "pkt_data";
     sigmatch_table[DETECT_PKT_DATA].Match = NULL;
-    sigmatch_table[DETECT_PKT_DATA].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_PKT_DATA].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_PKT_DATA].Setup = DetectPktDataSetup;
     sigmatch_table[DETECT_PKT_DATA].Free  = NULL;
     sigmatch_table[DETECT_PKT_DATA].RegisterTests = DetectPktDataTestRegister;
@@ -72,10 +70,10 @@ void DetectPktDataRegister(void)
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectPktDataSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
+static int DetectPktDataSetup (DetectEngineCtx *de_ctx, Signature *s, const char *str)
 {
     SCEnter();
-    s->list = DETECT_SM_LIST_NOTSET;
+    s->init_data->list = DETECT_SM_LIST_NOTSET;
 
     return 0;
 }
@@ -83,6 +81,7 @@ static int DetectPktDataSetup (DetectEngineCtx *de_ctx, Signature *s, char *str)
 #ifdef UNITTESTS
 
 /************************************Unittests*********************************/
+static int g_file_data_buffer_id = 0;
 
 static int DetectPktDataTest01(void)
 {
@@ -106,9 +105,9 @@ static int DetectPktDataTest01(void)
     }
 
     /* sm should be in the MATCH list */
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_FILEDATA];
+    sm = de_ctx->sig_list->sm_lists[g_file_data_buffer_id];
     if (sm == NULL) {
-        printf("sm not in DETECT_SM_LIST_FILEDATA: ");
+        printf("sm not in g_file_data_buffer_id: ");
         goto end;
     }
 
@@ -128,7 +127,7 @@ static int DetectPktDataTest01(void)
     }
 
 
-    if (sig->list != DETECT_SM_LIST_NOTSET) {
+    if (sig->init_data->list != DETECT_SM_LIST_NOTSET) {
         printf("sticky buffer set: ");
         goto end;
     }
@@ -146,7 +145,9 @@ end:
 static void DetectPktDataTestRegister(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("DetectPktDataTest01", DetectPktDataTest01, 1);
+    g_file_data_buffer_id = DetectBufferTypeGetByName("file_data");
+
+    UtRegisterTest("DetectPktDataTest01", DetectPktDataTest01);
 #endif
 }
 

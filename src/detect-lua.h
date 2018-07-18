@@ -26,10 +26,6 @@
 
 #ifdef HAVE_LUA
 
-#include <lua.h>
-#include <lualib.h>
-#include <lauxlib.h>
-
 typedef struct DetectLuaThreadData {
     lua_State *luastate;
     uint32_t flags;
@@ -44,12 +40,12 @@ typedef struct DetectLuaData {
     int negated;
     char *filename;
     uint32_t flags;
-    int alproto;
+    AppProto alproto;
     char *buffername; /* buffer name in case of a single buffer */
-    uint16_t flowint[DETECT_LUAJIT_MAX_FLOWINTS];
+    uint32_t flowint[DETECT_LUAJIT_MAX_FLOWINTS];
     uint16_t flowints;
-    uint16_t flowvar[DETECT_LUAJIT_MAX_FLOWVARS];
     uint16_t flowvars;
+    uint32_t flowvar[DETECT_LUAJIT_MAX_FLOWVARS];
     uint32_t sid;
     uint32_t rev;
     uint32_t gid;
@@ -59,13 +55,10 @@ typedef struct DetectLuaData {
 
 /* prototypes */
 void DetectLuaRegister (void);
-int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx, Signature *s, SigMatch *sm,
+int DetectLuaMatchBuffer(DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
         uint8_t *buffer, uint32_t buffer_len, uint32_t offset,
-        Flow *f, int flow_lock);
-
-#ifdef HAVE_LUAJIT
-int DetectLuajitSetupStatesPool(int num, int reloads);
-#endif /* HAVE_LUAJIT */
+        Flow *f);
 
 void DetectLuaPostSetup(Signature *s);
 

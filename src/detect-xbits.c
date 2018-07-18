@@ -57,8 +57,8 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-int DetectXbitMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectXbitSetup (DetectEngineCtx *, Signature *, char *);
+static int DetectXbitMatch (ThreadVars *, DetectEngineThreadCtx *, Packet *, const Signature *, const SigMatchCtx *);
+static int DetectXbitSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectXbitFree (void *);
 void XBitsRegisterTests(void);
 
@@ -66,7 +66,7 @@ void DetectXbitsRegister (void)
 {
     sigmatch_table[DETECT_XBITS].name = "xbits";
     sigmatch_table[DETECT_XBITS].desc = "operate on bits";
-//    sigmatch_table[DETECT_XBITS].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Flow-keywords#Flowbits";
+    sigmatch_table[DETECT_XBITS].url = DOC_URL DOC_VERSION "/rules/xbits.html";
     sigmatch_table[DETECT_XBITS].Match = DetectXbitMatch;
     sigmatch_table[DETECT_XBITS].Setup = DetectXbitSetup;
     sigmatch_table[DETECT_XBITS].Free  = DetectXbitFree;
@@ -74,28 +74,7 @@ void DetectXbitsRegister (void)
     /* this is compatible to ip-only signatures */
     sigmatch_table[DETECT_XBITS].flags |= SIGMATCH_IPONLY_COMPAT;
 
-    const char *eb;
-    int eo;
-    int opts = 0;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if(parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if(eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-    return;
-
-error:
-    return;
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
 static int DetectIPPairbitMatchToggle (Packet *p, const DetectXbitsData *fd)
@@ -182,7 +161,7 @@ static int DetectXbitMatchIPPair(Packet *p, const DetectXbitsData *xd)
  *        -1: error
  */
 
-int DetectXbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectXbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, const Signature *s, const SigMatchCtx *ctx)
 {
     const DetectXbitsData *fd = (const DetectXbitsData *)ctx;
     if (fd == NULL)
@@ -201,10 +180,16 @@ int DetectXbitMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx, Packet *p, S
     return 0;
 }
 
-int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+/** \internal
+ *  \brief parse xbits rule options
+ *  \retval 0 ok
+ *  \retval -1 bad
+ *  \param[out] cdout return DetectXbitsData structure or NULL if noalert
+ */
+static int DetectXbitParse(DetectEngineCtx *de_ctx,
+        const char *rawstr, DetectXbitsData **cdout)
 {
     DetectXbitsData *cd = NULL;
-    SigMatch *sm = NULL;
     uint8_t fb_cmd = 0;
     uint8_t hb_dir = 0;
 #define MAX_SUBSTRINGS 30
@@ -213,7 +198,7 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     char fb_cmd_str[16] = "", fb_name[256] = "";
     char hb_dir_str[16] = "";
     enum VarTypes var_type = VAR_TYPE_NOT_SET;
-    int expire = 30;
+    int expire = DETECT_XBITS_EXPIRE_DEFAULT;
 
     ret = pcre_exec(parse_regex, parse_regex_study, rawstr, strlen(rawstr), 0, 0, ov, MAX_SUBSTRINGS);
     if (ret != 2 && ret != 3 && ret != 4 && ret != 5) {
@@ -231,13 +216,13 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         res = pcre_copy_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 2, fb_name, sizeof(fb_name));
         if (res < 0) {
             SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
-            goto error;
+            return -1;
         }
         if (ret >= 4) {
             res = pcre_copy_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 3, hb_dir_str, sizeof(hb_dir_str));
             if (res < 0) {
                 SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
-                goto error;
+                return -1;
             }
             SCLogDebug("hb_dir_str %s", hb_dir_str);
             if (strlen(hb_dir_str) > 0) {
@@ -252,7 +237,7 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
                     var_type = VAR_TYPE_IPPAIR_BIT;
                 } else {
                     // TODO
-                    goto error;
+                    return -1;
                 }
             }
 
@@ -261,10 +246,19 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
                 res = pcre_copy_substring((char *)rawstr, ov, MAX_SUBSTRINGS, 4, expire_str, sizeof(expire_str));
                 if (res < 0) {
                     SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_copy_substring failed");
-                    goto error;
+                    return -1;
                 }
                 SCLogDebug("expire_str %s", expire_str);
                 expire = atoi(expire_str);
+                if (expire < 0) {
+                    SCLogError(SC_ERR_INVALID_VALUE, "expire must be positive. "
+                            "Got %d (\"%s\")", expire, expire_str);
+                    return -1;
+                }
+                if (expire == 0) {
+                    SCLogError(SC_ERR_INVALID_VALUE, "expire must be bigger than 0");
+                    return -1;
+                }
                 SCLogDebug("expire %d", expire);
             }
         }
@@ -283,16 +277,18 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     } else if (strcmp(fb_cmd_str,"toggle") == 0) {
         fb_cmd = DETECT_XBITS_CMD_TOGGLE;
     } else {
-        SCLogError(SC_ERR_UNKNOWN_VALUE, "ERROR: flowbits action \"%s\" is not supported.", fb_cmd_str);
-        goto error;
+        SCLogError(SC_ERR_UNKNOWN_VALUE, "xbits action \"%s\" is not supported.", fb_cmd_str);
+        return -1;
     }
 
     switch (fb_cmd) {
-        case DETECT_XBITS_CMD_NOALERT:
+        case DETECT_XBITS_CMD_NOALERT: {
             if (strlen(fb_name) != 0)
-                goto error;
-            s->flags |= SIG_FLAG_NOALERT;
+                return -1;
+            /* return ok, cd is NULL. Flag sig. */
+            *cdout = NULL;
             return 0;
+        }
         case DETECT_XBITS_CMD_ISNOTSET:
         case DETECT_XBITS_CMD_ISSET:
         case DETECT_XBITS_CMD_SET:
@@ -300,15 +296,15 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
         case DETECT_XBITS_CMD_TOGGLE:
         default:
             if (strlen(fb_name) == 0)
-                goto error;
+                return -1;
             break;
     }
 
     cd = SCMalloc(sizeof(DetectXbitsData));
     if (unlikely(cd == NULL))
-        goto error;
+        return -1;
 
-    cd->idx = VariableNameGetIdx(de_ctx, fb_name, var_type);
+    cd->idx = VarNameStoreSetupAdd(fb_name, var_type);
     cd->cmd = fb_cmd;
     cd->tracker = hb_dir;
     cd->type = var_type;
@@ -316,6 +312,24 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 
     SCLogDebug("idx %" PRIu32 ", cmd %s, name %s",
         cd->idx, fb_cmd_str, strlen(fb_name) ? fb_name : "(none)");
+
+    *cdout = cd;
+    return 0;
+}
+
+int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
+{
+    SigMatch *sm = NULL;
+    DetectXbitsData *cd = NULL;
+
+    int result = DetectXbitParse(de_ctx, rawstr, &cd);
+    if (result < 0) {
+        return -1;
+    /* noalert doesn't use a cd/sm struct. It flags the sig. We're done. */
+    } else if (result == 0 && cd == NULL) {
+        s->flags |= SIG_FLAG_NOALERT;
+        return 0;
+    }
 
     /* Okay so far so good, lets get this into a SigMatch
      * and put it in the Signature. */
@@ -326,7 +340,7 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
     sm->type = DETECT_XBITS;
     sm->ctx = (void *)cd;
 
-    switch (fb_cmd) {
+    switch (cd->cmd) {
         /* case DETECT_XBITS_CMD_NOALERT can't happen here */
 
         case DETECT_XBITS_CMD_ISNOTSET:
@@ -348,8 +362,6 @@ int DetectXbitSetup (DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
 error:
     if (cd != NULL)
         SCFree(cd);
-    if (sm != NULL)
-        SCFree(sm);
     return -1;
 }
 
@@ -382,11 +394,59 @@ static void XBitsTestShutdown(void)
     StorageCleanup();
 }
 
+
+static int XBitsTestParse01(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+    de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
+    DetectXbitsData *cd = NULL;
+
+#define BAD_INPUT(str) \
+    FAIL_IF_NOT(DetectXbitParse(de_ctx, (str), &cd) == -1);
+
+    BAD_INPUT("alert");
+    BAD_INPUT("n0alert");
+    BAD_INPUT("nOalert");
+    BAD_INPUT("set,abc,track nonsense, expire 3600");
+    BAD_INPUT("set,abc,track ip_source, expire 3600");
+    BAD_INPUT("set,abc,track ip_src, expire -1");
+    BAD_INPUT("set,abc,track ip_src, expire 0");
+
+#undef BAD_INPUT
+
+#define GOOD_INPUT(str, command, trk, typ, exp)             \
+    FAIL_IF_NOT(DetectXbitParse(de_ctx, (str), &cd) == 0);  \
+    FAIL_IF_NULL(cd);                                       \
+    FAIL_IF_NOT(cd->cmd == (command));                      \
+    FAIL_IF_NOT(cd->tracker == (trk));                      \
+    FAIL_IF_NOT(cd->type == (typ));                         \
+    FAIL_IF_NOT(cd->expire == (exp));                       \
+    DetectXbitFree(cd);                                     \
+    cd = NULL;
+
+    GOOD_INPUT("set,abc,track ip_pair",
+            DETECT_XBITS_CMD_SET,
+            DETECT_XBITS_TRACK_IPPAIR, VAR_TYPE_IPPAIR_BIT,
+            DETECT_XBITS_EXPIRE_DEFAULT);
+    GOOD_INPUT("set,abc,track ip_pair, expire 3600",
+            DETECT_XBITS_CMD_SET,
+            DETECT_XBITS_TRACK_IPPAIR, VAR_TYPE_IPPAIR_BIT,
+            3600);
+    GOOD_INPUT("set,abc,track ip_src, expire 1234",
+            DETECT_XBITS_CMD_SET,
+            DETECT_XBITS_TRACK_IPSRC, VAR_TYPE_HOST_BIT,
+            1234);
+
+#undef GOOD_INPUT
+
+    DetectEngineCtxFree(de_ctx);
+    PASS;
+}
+
 /**
- * \test HostBitsTestSig01 is a test for a valid noalert flowbits option
- *
- *  \retval 1 on succces
- *  \retval 0 on failure
+ * \test
  */
 
 static int XBitsTestSig01(void)
@@ -397,13 +457,11 @@ static int XBitsTestSig01(void)
                     "\r\n";
     uint16_t buflen = strlen((char *)buf);
     Packet *p = SCMalloc(SIZE_OF_PACKET);
-    if (unlikely(p == NULL))
-        return 0;
+    FAIL_IF_NULL(p);
     Signature *s = NULL;
     ThreadVars th_v;
     DetectEngineThreadCtx *det_ctx = NULL;
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
 
     memset(&th_v, 0, sizeof(th_v));
     memset(p, 0, SIZE_OF_PACKET);
@@ -416,46 +474,23 @@ static int XBitsTestSig01(void)
     XBitsTestSetup();
 
     de_ctx = DetectEngineCtxInit();
-
-    if (de_ctx == NULL) {
-        printf("bad de_ctx: ");
-        goto end;
-    }
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:set,abc,track ip_pair; content:\"GET \"; sid:1;)");
-    if (s == NULL) {
-        printf("bad sig: ");
-        goto end;
-    }
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
-
     SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
-
-    result = 1;
-
-end:
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-    }
-
-    if (det_ctx != NULL) {
-        DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
-    }
-
-    if (de_ctx != NULL) {
-        DetectEngineCtxFree(de_ctx);
-    }
-
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    DetectEngineCtxFree(de_ctx);
     XBitsTestShutdown();
-
     SCFree(p);
-    return result;
+    StatsThreadCleanup(&th_v);
+    StatsReleaseResources();
+    PASS;
 }
 
 /**
@@ -468,67 +503,33 @@ end:
 static int XBitsTestSig02(void)
 {
     Signature *s = NULL;
-    ThreadVars th_v;
     DetectEngineCtx *de_ctx = NULL;
-    int result = 0;
-    int error_count = 0;
-
-    memset(&th_v, 0, sizeof(th_v));
-
     de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL) {
-        goto end;
-    }
-
+    FAIL_IF_NULL(de_ctx);
     de_ctx->flags |= DE_QUIET;
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:isset,abc,track ip_src; content:\"GET \"; sid:1;)");
-    if (s == NULL) {
-        error_count++;
-    }
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:isnotset,abc,track ip_dst; content:\"GET \"; sid:2;)");
-    if (s == NULL) {
-        error_count++;
-    }
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:set,abc,track ip_pair; content:\"GET \"; sid:3;)");
-    if (s == NULL) {
-        error_count++;
-    }
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:unset,abc,track ip_src; content:\"GET \"; sid:4;)");
-    if (s == NULL) {
-        error_count++;
-    }
+    FAIL_IF_NULL(s);
 
     s = DetectEngineAppendSig(de_ctx,
             "alert ip any any -> any any (xbits:toggle,abc,track ip_dst; content:\"GET \"; sid:5;)");
-    if (s == NULL) {
-        error_count++;
-    }
+    FAIL_IF_NULL(s);
 
-    if (error_count != 0)
-        goto end;
-
-    result = 1;
-
-    SigGroupCleanup(de_ctx);
-    SigCleanSignatures(de_ctx);
     DetectEngineCtxFree(de_ctx);
-    return result;
-end:
-    if (de_ctx != NULL) {
-        SigGroupCleanup(de_ctx);
-        SigCleanSignatures(de_ctx);
-        DetectEngineCtxFree(de_ctx);
-    }
-
-    return result;
+    PASS;
 }
 
 #endif /* UNITTESTS */
@@ -539,7 +540,8 @@ end:
 void XBitsRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("XBitsTestSig01", XBitsTestSig01, 1);
-    UtRegisterTest("XBitsTestSig02", XBitsTestSig02, 1);
+    UtRegisterTest("XBitsTestParse01", XBitsTestParse01);
+    UtRegisterTest("XBitsTestSig01", XBitsTestSig01);
+    UtRegisterTest("XBitsTestSig02", XBitsTestSig02);
 #endif /* UNITTESTS */
 }

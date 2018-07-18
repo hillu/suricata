@@ -53,107 +53,6 @@ SC_ATOMIC_EXTERN(unsigned int, flow_prune_idx);
 SC_ATOMIC_EXTERN(unsigned int, flow_flags);
 
 static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv);
-static int handle_tcp_reuse = 1;
-
-#ifdef FLOW_DEBUG_STATS
-#define FLOW_DEBUG_STATS_PROTO_ALL      0
-#define FLOW_DEBUG_STATS_PROTO_TCP      1
-#define FLOW_DEBUG_STATS_PROTO_UDP      2
-#define FLOW_DEBUG_STATS_PROTO_ICMP     3
-#define FLOW_DEBUG_STATS_PROTO_OTHER    4
-
-static uint64_t flow_hash_count[5] = { 0, 0, 0, 0, 0 };        /* how often are we looking for a hash */
-static uint64_t flow_hash_loop_count[5] = { 0, 0, 0, 0, 0 };   /* how often do we loop through a hash bucket */
-static FILE *flow_hash_count_fp = NULL;
-static SCSpinlock flow_hash_count_lock;
-
-#define FlowHashCountUpdate do { \
-    SCSpinLock(&flow_hash_count_lock); \
-    flow_hash_count[FLOW_DEBUG_STATS_PROTO_ALL]++; \
-    flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ALL] += _flow_hash_counter; \
-    if (f != NULL) { \
-        if (p->proto == IPPROTO_TCP) { \
-            flow_hash_count[FLOW_DEBUG_STATS_PROTO_TCP]++; \
-            flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_TCP] += _flow_hash_counter; \
-        } else if (p->proto == IPPROTO_UDP) {\
-            flow_hash_count[FLOW_DEBUG_STATS_PROTO_UDP]++; \
-            flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_UDP] += _flow_hash_counter; \
-        } else if (p->proto == IPPROTO_ICMP) {\
-            flow_hash_count[FLOW_DEBUG_STATS_PROTO_ICMP]++; \
-            flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ICMP] += _flow_hash_counter; \
-        } else  {\
-            flow_hash_count[FLOW_DEBUG_STATS_PROTO_OTHER]++; \
-            flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_OTHER] += _flow_hash_counter; \
-        } \
-    } \
-    SCSpinUnlock(&flow_hash_count_lock); \
-} while(0);
-
-#define FlowHashCountInit uint64_t _flow_hash_counter = 0
-#define FlowHashCountIncr _flow_hash_counter++;
-
-void FlowHashDebugInit(void)
-{
-#ifdef FLOW_DEBUG_STATS
-    SCSpinInit(&flow_hash_count_lock, 0);
-#endif
-    flow_hash_count_fp = fopen("flow-debug.log", "w+");
-    if (flow_hash_count_fp != NULL) {
-        fprintf(flow_hash_count_fp, "ts,all,tcp,udp,icmp,other\n");
-    }
-}
-
-void FlowHashDebugPrint(uint32_t ts)
-{
-#ifdef FLOW_DEBUG_STATS
-    if (flow_hash_count_fp == NULL)
-        return;
-
-    float avg_all = 0, avg_tcp = 0, avg_udp = 0, avg_icmp = 0, avg_other = 0;
-    SCSpinLock(&flow_hash_count_lock);
-    if (flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ALL] != 0)
-        avg_all = (float)(flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ALL]/(float)(flow_hash_count[FLOW_DEBUG_STATS_PROTO_ALL]));
-    if (flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_TCP] != 0)
-        avg_tcp = (float)(flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_TCP]/(float)(flow_hash_count[FLOW_DEBUG_STATS_PROTO_TCP]));
-    if (flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_UDP] != 0)
-        avg_udp = (float)(flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_UDP]/(float)(flow_hash_count[FLOW_DEBUG_STATS_PROTO_UDP]));
-    if (flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ICMP] != 0)
-        avg_icmp= (float)(flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_ICMP]/(float)(flow_hash_count[FLOW_DEBUG_STATS_PROTO_ICMP]));
-    if (flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_OTHER] != 0)
-        avg_other= (float)(flow_hash_loop_count[FLOW_DEBUG_STATS_PROTO_OTHER]/(float)(flow_hash_count[FLOW_DEBUG_STATS_PROTO_OTHER]));
-    fprintf(flow_hash_count_fp, "%"PRIu32",%02.3f,%02.3f,%02.3f,%02.3f,%02.3f\n", ts, avg_all, avg_tcp, avg_udp, avg_icmp, avg_other);
-    fflush(flow_hash_count_fp);
-    memset(&flow_hash_count, 0, sizeof(flow_hash_count));
-    memset(&flow_hash_loop_count, 0, sizeof(flow_hash_loop_count));
-    SCSpinUnlock(&flow_hash_count_lock);
-#endif
-}
-
-void FlowHashDebugDeinit(void)
-{
-#ifdef FLOW_DEBUG_STATS
-    struct timeval ts;
-    memset(&ts, 0, sizeof(ts));
-    TimeGet(&ts);
-    FlowHashDebugPrint((uint32_t)ts.tv_sec);
-    if (flow_hash_count_fp != NULL)
-        fclose(flow_hash_count_fp);
-    SCSpinDestroy(&flow_hash_count_lock);
-#endif
-}
-
-#else
-
-#define FlowHashCountUpdate
-#define FlowHashCountInit
-#define FlowHashCountIncr
-
-#endif /* FLOW_DEBUG_STATS */
-
-void FlowDisableTcpReuseHandling(void)
-{
-    handle_tcp_reuse = 0;
-}
 
 /** \brief compare two raw ipv6 addrs
  *
@@ -182,8 +81,8 @@ static inline int FlowHashRawAddressIPv6GtU32(const uint32_t *a, const uint32_t 
 typedef struct FlowHashKey4_ {
     union {
         struct {
-            uint32_t src, dst;
-            uint16_t sp, dp;
+            uint32_t addrs[2];
+            uint16_t ports[2];
             uint16_t proto; /**< u16 so proto and recur add up to u32 */
             uint16_t recur; /**< u16 so proto and recur add up to u32 */
             uint16_t vlan_id[2];
@@ -196,7 +95,7 @@ typedef struct FlowHashKey6_ {
     union {
         struct {
             uint32_t src[4], dst[4];
-            uint16_t sp, dp;
+            uint16_t ports[2];
             uint16_t proto; /**< u16 so proto and recur add up to u32 */
             uint16_t recur; /**< u16 so proto and recur add up to u32 */
             uint16_t vlan_id[2];
@@ -225,20 +124,15 @@ static inline uint32_t FlowGetHash(const Packet *p)
     if (p->ip4h != NULL) {
         if (p->tcph != NULL || p->udph != NULL) {
             FlowHashKey4 fhk;
-            if (p->src.addr_data32[0] > p->dst.addr_data32[0]) {
-                fhk.src = p->src.addr_data32[0];
-                fhk.dst = p->dst.addr_data32[0];
-            } else {
-                fhk.src = p->dst.addr_data32[0];
-                fhk.dst = p->src.addr_data32[0];
-            }
-            if (p->sp > p->dp) {
-                fhk.sp = p->sp;
-                fhk.dp = p->dp;
-            } else {
-                fhk.sp = p->dp;
-                fhk.dp = p->sp;
-            }
+
+            int ai = (p->src.addr_data32[0] > p->dst.addr_data32[0]);
+            fhk.addrs[1-ai] = p->src.addr_data32[0];
+            fhk.addrs[ai] = p->dst.addr_data32[0];
+
+            const int pi = (p->sp > p->dp);
+            fhk.ports[1-pi] = p->sp;
+            fhk.ports[pi] = p->dp;
+
             fhk.proto = (uint16_t)p->proto;
             fhk.recur = (uint16_t)p->recursion_level;
             fhk.vlan_id[0] = p->vlan_id[0];
@@ -250,20 +144,15 @@ static inline uint32_t FlowGetHash(const Packet *p)
             uint32_t psrc = IPV4_GET_RAW_IPSRC_U32(ICMPV4_GET_EMB_IPV4(p));
             uint32_t pdst = IPV4_GET_RAW_IPDST_U32(ICMPV4_GET_EMB_IPV4(p));
             FlowHashKey4 fhk;
-            if (psrc > pdst) {
-                fhk.src = psrc;
-                fhk.dst = pdst;
-            } else {
-                fhk.src = pdst;
-                fhk.dst = psrc;
-            }
-            if (p->icmpv4vars.emb_sport > p->icmpv4vars.emb_dport) {
-                fhk.sp = p->icmpv4vars.emb_sport;
-                fhk.dp = p->icmpv4vars.emb_dport;
-            } else {
-                fhk.sp = p->icmpv4vars.emb_dport;
-                fhk.dp = p->icmpv4vars.emb_sport;
-            }
+
+            const int ai = (psrc > pdst);
+            fhk.addrs[1-ai] = psrc;
+            fhk.addrs[ai] = pdst;
+
+            const int pi = (p->icmpv4vars.emb_sport > p->icmpv4vars.emb_dport);
+            fhk.ports[1-pi] = p->icmpv4vars.emb_sport;
+            fhk.ports[pi] = p->icmpv4vars.emb_dport;
+
             fhk.proto = (uint16_t)ICMPV4_GET_EMB_PROTO(p);
             fhk.recur = (uint16_t)p->recursion_level;
             fhk.vlan_id[0] = p->vlan_id[0];
@@ -273,15 +162,11 @@ static inline uint32_t FlowGetHash(const Packet *p)
 
         } else {
             FlowHashKey4 fhk;
-            if (p->src.addr_data32[0] > p->dst.addr_data32[0]) {
-                fhk.src = p->src.addr_data32[0];
-                fhk.dst = p->dst.addr_data32[0];
-            } else {
-                fhk.src = p->dst.addr_data32[0];
-                fhk.dst = p->src.addr_data32[0];
-            }
-            fhk.sp = 0xfeed;
-            fhk.dp = 0xbeef;
+            const int ai = (p->src.addr_data32[0] > p->dst.addr_data32[0]);
+            fhk.addrs[1-ai] = p->src.addr_data32[0];
+            fhk.addrs[ai] = p->dst.addr_data32[0];
+            fhk.ports[0] = 0xfeed;
+            fhk.ports[1] = 0xbeef;
             fhk.proto = (uint16_t)p->proto;
             fhk.recur = (uint16_t)p->recursion_level;
             fhk.vlan_id[0] = p->vlan_id[0];
@@ -310,13 +195,10 @@ static inline uint32_t FlowGetHash(const Packet *p)
             fhk.dst[2] = p->src.addr_data32[2];
             fhk.dst[3] = p->src.addr_data32[3];
         }
-        if (p->sp > p->dp) {
-            fhk.sp = p->sp;
-            fhk.dp = p->dp;
-        } else {
-            fhk.sp = p->dp;
-            fhk.dp = p->sp;
-        }
+
+        const int pi = (p->sp > p->dp);
+        fhk.ports[1-pi] = p->sp;
+        fhk.ports[pi] = p->dp;
         fhk.proto = (uint16_t)p->proto;
         fhk.recur = (uint16_t)p->recursion_level;
         fhk.vlan_id[0] = p->vlan_id[0];
@@ -392,6 +274,12 @@ static inline int FlowCompareICMPv4(Flow *f, const Packet *p)
     return 0;
 }
 
+void FlowSetupPacket(Packet *p)
+{
+    p->flags |= PKT_WANTS_FLOW;
+    p->flow_hash = FlowGetHash(p);
+}
+
 int TcpSessionPacketSsnReuse(const Packet *p, const Flow *f, void *tcp_ssn);
 
 static inline int FlowCompare(Flow *f, const Packet *p)
@@ -407,17 +295,6 @@ static inline int FlowCompare(Flow *f, const Packet *p)
         if (f->flags & FLOW_TCP_REUSED)
             return 0;
 
-        if (handle_tcp_reuse == 1) {
-            /* lets see if we need to consider the existing session reuse */
-            if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx) == 1)) {
-                /* okay, we need to setup a new flow for this packet.
-                 * Flag the flow that it's been replaced by a new one */
-                f->flags |= FLOW_TCP_REUSED;
-                SCLogDebug("flow obsolete: TCP reuse will use a new flow "
-                        "starting with packet %"PRIu64, p->pcap_cnt);
-                return 0;
-            }
-        }
         return 1;
     } else {
         return CMP_FLOW(f, p);
@@ -443,6 +320,31 @@ static inline int FlowCreateCheck(const Packet *p)
     }
 
     return 1;
+}
+
+static inline void FlowUpdateCounter(ThreadVars *tv, DecodeThreadVars *dtv,
+        uint8_t proto)
+{
+#ifdef UNITTESTS
+    if (tv && dtv) {
+#endif
+        switch (proto){
+            case IPPROTO_UDP:
+                StatsIncr(tv, dtv->counter_flow_udp);
+                break;
+            case IPPROTO_TCP:
+                StatsIncr(tv, dtv->counter_flow_tcp);
+                break;
+            case IPPROTO_ICMP:
+                StatsIncr(tv, dtv->counter_flow_icmp4);
+                break;
+            case IPPROTO_ICMPV6:
+                StatsIncr(tv, dtv->counter_flow_icmp6);
+                break;
+        }
+#ifdef UNITTESTS
+    }
+#endif
 }
 
 /**
@@ -472,6 +374,8 @@ static Flow *FlowGetNew(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p)
             /* declare state of emergency */
             if (!(SC_ATOMIC_GET(flow_flags) & FLOW_EMERGENCY)) {
                 SC_ATOMIC_OR(flow_flags, FLOW_EMERGENCY);
+
+                FlowTimeoutsEmergency();
 
                 /* under high load, waking up the flow mgr each time leads
                  * to high cpu usage. Flows are not timed out much faster if
@@ -510,122 +414,41 @@ static Flow *FlowGetNew(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p)
     }
 
     FLOWLOCK_WRLOCK(f);
+    FlowUpdateCounter(tv, dtv, p->proto);
     return f;
 }
 
-Flow *FlowGetFlowFromHashByPacket(const Packet *p)
+static Flow *TcpReuseReplace(ThreadVars *tv, DecodeThreadVars *dtv,
+                             FlowBucket *fb, Flow *old_f,
+                             const uint32_t hash, const Packet *p)
 {
-    Flow *f = NULL;
+    /* tag flow as reused so future lookups won't find it */
+    old_f->flags |= FLOW_TCP_REUSED;
+    /* get some settings that we move over to the new flow */
+    FlowThreadId thread_id = old_f->thread_id;
 
-    /* get the key to our bucket */
-    uint32_t hash = FlowGetHash(p);
-    /* get our hash bucket and lock it */
-    FlowBucket *fb = &flow_hash[hash % flow_config.hash_size];
-    FBLOCK_LOCK(fb);
+    /* since fb lock is still held this flow won't be found until we are done */
+    FLOWLOCK_UNLOCK(old_f);
 
-    SCLogDebug("fb %p fb->head %p", fb, fb->head);
-
-    f = FlowGetNew(NULL, NULL, p);
-    if (f != NULL) {
-        /* flow is locked */
-        if (fb->head == NULL) {
-            fb->head = f;
-            fb->tail = f;
-        } else {
-            f->hprev = fb->tail;
-            fb->tail->hnext = f;
-            fb->tail = f;
-        }
-
-        /* got one, now lock, initialize and return */
-        FlowInit(f, p);
-        f->flow_hash = hash;
-        f->fb = fb;
-        /* update the last seen timestamp of this flow */
-        COPY_TIMESTAMP(&p->ts,&f->lastts);
-
-    }
-    FBLOCK_UNLOCK(fb);
-    return f;
-}
-
-/** \brief Lookup flow based on packet
- *
- *  Find the flow belonging to this packet. If not found, no new flow
- *  is set up.
- *
- *  \param p packet to lookup the flow for
- *
- *  \retval f flow or NULL if not found
- */
-Flow *FlowLookupFlowFromHash(const Packet *p)
-{
-    Flow *f = NULL;
-
-    /* get the key to our bucket */
-    uint32_t hash = FlowGetHash(p);
-    /* get our hash bucket and lock it */
-    FlowBucket *fb = &flow_hash[hash  % flow_config.hash_size];
-    FBLOCK_LOCK(fb);
-
-    SCLogDebug("fb %p fb->head %p", fb, fb->head);
-
-    /* see if the bucket already has a flow */
-    if (fb->head == NULL) {
-        FBLOCK_UNLOCK(fb);
+    /* Get a new flow. It will be either a locked flow or NULL */
+    Flow *f = FlowGetNew(tv, dtv, p);
+    if (f == NULL) {
         return NULL;
     }
 
-    /* ok, we have a flow in the bucket. Let's find out if it is our flow */
-    f = fb->head;
+    /* flow is locked */
 
-    /* see if this is the flow we are looking for */
-    if (FlowCompare(f, p) == 0) {
-        while (f) {
-            FlowHashCountIncr;
+    /* put at the start of the list */
+    f->hnext = fb->head;
+    fb->head->hprev = f;
+    fb->head = f;
 
-            f = f->hnext;
+    /* initialize and return */
+    FlowInit(f, p);
+    f->flow_hash = hash;
+    f->fb = fb;
 
-            if (f == NULL) {
-                FBLOCK_UNLOCK(fb);
-                return NULL;
-            }
-
-            if (FlowCompare(f, p) != 0) {
-                /* we found our flow, lets put it on top of the
-                 * hash list -- this rewards active flows */
-                if (f->hnext) {
-                    f->hnext->hprev = f->hprev;
-                }
-                if (f->hprev) {
-                    f->hprev->hnext = f->hnext;
-                }
-                if (f == fb->tail) {
-                    fb->tail = f->hprev;
-                }
-
-                f->hnext = fb->head;
-                f->hprev = NULL;
-                fb->head->hprev = f;
-                fb->head = f;
-
-                /* found our flow, lock & return */
-                FLOWLOCK_WRLOCK(f);
-                /* update the last seen timestamp of this flow */
-                COPY_TIMESTAMP(&p->ts,&f->lastts);
-
-                FBLOCK_UNLOCK(fb);
-                return f;
-            }
-        }
-    }
-
-    /* lock & return */
-    FLOWLOCK_WRLOCK(f);
-    /* update the last seen timestamp of this flow */
-    COPY_TIMESTAMP(&p->ts,&f->lastts);
-
-    FBLOCK_UNLOCK(fb);
+    f->thread_id = thread_id;
     return f;
 }
 
@@ -646,27 +469,22 @@ Flow *FlowLookupFlowFromHash(const Packet *p)
  *
  *  \retval f *LOCKED* flow or NULL
  */
-Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p)
+Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p, Flow **dest)
 {
     Flow *f = NULL;
-    FlowHashCountInit;
 
-    /* get the key to our bucket */
-    uint32_t hash = FlowGetHash(p);
     /* get our hash bucket and lock it */
-    FlowBucket *fb = &flow_hash[hash  % flow_config.hash_size];
+    const uint32_t hash = p->flow_hash;
+    FlowBucket *fb = &flow_hash[hash % flow_config.hash_size];
     FBLOCK_LOCK(fb);
 
     SCLogDebug("fb %p fb->head %p", fb, fb->head);
-
-    FlowHashCountIncr;
 
     /* see if the bucket already has a flow */
     if (fb->head == NULL) {
         f = FlowGetNew(tv, dtv, p);
         if (f == NULL) {
             FBLOCK_UNLOCK(fb);
-            FlowHashCountUpdate;
             return NULL;
         }
 
@@ -678,12 +496,11 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
         FlowInit(f, p);
         f->flow_hash = hash;
         f->fb = fb;
+        FlowUpdateState(f, FLOW_STATE_NEW);
 
-        /* update the last seen timestamp of this flow */
-        COPY_TIMESTAMP(&p->ts,&f->lastts);
+        FlowReference(dest, f);
 
         FBLOCK_UNLOCK(fb);
-        FlowHashCountUpdate;
         return f;
     }
 
@@ -695,8 +512,6 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
         Flow *pf = NULL; /* previous flow */
 
         while (f) {
-            FlowHashCountIncr;
-
             pf = f;
             f = f->hnext;
 
@@ -704,7 +519,6 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
                 f = pf->hnext = FlowGetNew(tv, dtv, p);
                 if (f == NULL) {
                     FBLOCK_UNLOCK(fb);
-                    FlowHashCountUpdate;
                     return NULL;
                 }
                 fb->tail = f;
@@ -717,12 +531,11 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
                 FlowInit(f, p);
                 f->flow_hash = hash;
                 f->fb = fb;
+                FlowUpdateState(f, FLOW_STATE_NEW);
 
-                /* update the last seen timestamp of this flow */
-                COPY_TIMESTAMP(&p->ts,&f->lastts);
+                FlowReference(dest, f);
 
                 FBLOCK_UNLOCK(fb);
-                FlowHashCountUpdate;
                 return f;
             }
 
@@ -746,11 +559,17 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
 
                 /* found our flow, lock & return */
                 FLOWLOCK_WRLOCK(f);
-                /* update the last seen timestamp of this flow */
-                COPY_TIMESTAMP(&p->ts,&f->lastts);
+                if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx) == 1)) {
+                    f = TcpReuseReplace(tv, dtv, fb, f, hash, p);
+                    if (f == NULL) {
+                        FBLOCK_UNLOCK(fb);
+                        return NULL;
+                    }
+                }
+
+                FlowReference(dest, f);
 
                 FBLOCK_UNLOCK(fb);
-                FlowHashCountUpdate;
                 return f;
             }
         }
@@ -758,11 +577,17 @@ Flow *FlowGetFlowFromHash(ThreadVars *tv, DecodeThreadVars *dtv, const Packet *p
 
     /* lock & return */
     FLOWLOCK_WRLOCK(f);
-    /* update the last seen timestamp of this flow */
-    COPY_TIMESTAMP(&p->ts,&f->lastts);
+    if (unlikely(TcpSessionPacketSsnReuse(p, f, f->protoctx) == 1)) {
+        f = TcpReuseReplace(tv, dtv, fb, f, hash, p);
+        if (f == NULL) {
+            FBLOCK_UNLOCK(fb);
+            return NULL;
+        }
+    }
+
+    FlowReference(dest, f);
 
     FBLOCK_UNLOCK(fb);
-    FlowHashCountUpdate;
     return f;
 }
 
@@ -827,6 +652,7 @@ static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv)
         f->hnext = NULL;
         f->hprev = NULL;
         f->fb = NULL;
+        SC_ATOMIC_SET(fb->next_ts, 0);
         FBLOCK_UNLOCK(fb);
 
         int state = SC_ATOMIC_GET(f->flow_state);
@@ -836,6 +662,10 @@ static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv)
             f->flow_end_flags |= FLOW_END_FLAG_STATE_ESTABLISHED;
         else if (state == FLOW_STATE_CLOSED)
             f->flow_end_flags |= FLOW_END_FLAG_STATE_CLOSED;
+        else if (state == FLOW_STATE_CAPTURE_BYPASSED)
+            f->flow_end_flags |= FLOW_END_FLAG_STATE_BYPASSED;
+        else if (state == FLOW_STATE_LOCAL_BYPASSED)
+            f->flow_end_flags |= FLOW_END_FLAG_STATE_BYPASSED;
 
         f->flow_end_flags |= FLOW_END_FLAG_FORCED;
 
@@ -847,6 +677,8 @@ static Flow *FlowGetUsedFlow(ThreadVars *tv, DecodeThreadVars *dtv)
             (void)OutputFlowLog(tv, dtv->output_flow_thread_data, f);
 
         FlowClearMemory(f, f->protomap);
+
+        FlowUpdateState(f, FLOW_STATE_NEW);
 
         FLOWLOCK_UNLOCK(f);
 

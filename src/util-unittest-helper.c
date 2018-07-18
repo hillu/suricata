@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2013 Open Information Security Foundation
+/* Copyright (C) 2007-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -36,6 +36,9 @@
 #include "detect-engine.h"
 #include "detect-engine-sigorder.h"
 
+#include "stream-tcp.h"
+#include "stream-tcp-private.h"
+
 #include "util-debug.h"
 #include "util-time.h"
 #include "util-error.h"
@@ -51,7 +54,7 @@
  *
  *  \retval uint the uin32_t representation
  */
-uint32_t UTHSetIPv4Address(char *str)
+uint32_t UTHSetIPv4Address(const char *str)
 {
     struct in_addr in;
     if (inet_pton(AF_INET, str, &in) != 1) {
@@ -76,7 +79,7 @@ uint32_t UTHSetIPv4Address(char *str)
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
-                           uint8_t ipproto, char *src, char *dst,
+                           uint8_t ipproto, const char *src, const char *dst,
                            uint16_t sport, uint16_t dport)
 {
     uint32_t in[4];
@@ -85,7 +88,7 @@ Packet *UTHBuildPacketIPV6Real(uint8_t *payload, uint16_t payload_len,
     if (unlikely(p == NULL))
         return NULL;
 
-    TimeSet(&p->ts);
+    TimeGet(&p->ts);
 
     p->src.family = AF_INET6;
     p->dst.family = AF_INET6;
@@ -162,7 +165,7 @@ error:
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
-                           uint8_t ipproto, char *src, char *dst,
+                           uint8_t ipproto, const char *src, const char *dst,
                            uint16_t sport, uint16_t dport)
 {
     struct in_addr in;
@@ -233,7 +236,9 @@ Packet *UTHBuildPacketReal(uint8_t *payload, uint16_t payload_len,
         /* TODO: Add more protocols */
     }
 
-    PacketCopyDataOffset(p, hdr_offset, payload, payload_len);
+    if (payload && payload_len) {
+        PacketCopyDataOffset(p, hdr_offset, payload, payload_len);
+    }
     SET_PKT_LEN(p, hdr_offset + payload_len);
     p->payload = GET_PKT_DATA(p)+hdr_offset;
 
@@ -336,7 +341,7 @@ Packet *UTHBuildPacketFromEth(uint8_t *raw_eth, uint16_t pktsize)
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketSrcDst(uint8_t *payload, uint16_t payload_len,
-                           uint8_t ipproto, char *src, char *dst)
+                             uint8_t ipproto, const char *src, const char *dst)
 {
     return UTHBuildPacketReal(payload, payload_len, ipproto,
                               src, dst,
@@ -354,7 +359,7 @@ Packet *UTHBuildPacketSrcDst(uint8_t *payload, uint16_t payload_len,
  * \retval Packet pointer to the built in packet
  */
 Packet *UTHBuildPacketIPV6SrcDst(uint8_t *payload, uint16_t payload_len,
-                           uint8_t ipproto, char *src, char *dst)
+                           uint8_t ipproto, const char *src, const char *dst)
 {
     return UTHBuildPacketIPV6Real(payload, payload_len, ipproto,
                               src, dst,
@@ -430,7 +435,15 @@ void UTHFreePacket(Packet *p)
     SCFree(p);
 }
 
-Flow *UTHBuildFlow(int family, char *src, char *dst, Port sp, Port dp)
+void UTHAssignFlow(Packet *p, Flow *f)
+{
+    if (p && f) {
+        p->flow = f;
+        p->flags |= PKT_HAS_FLOW;
+    }
+}
+
+Flow *UTHBuildFlow(int family, const char *src, const char *dst, Port sp, Port dp)
 {
     struct in_addr in;
 
@@ -488,6 +501,54 @@ void UTHFreeFlow(Flow *flow)
     }
 }
 
+int UTHAddStreamToFlow(Flow *f, int direction,
+    uint8_t *data, uint32_t data_len)
+{
+    FAIL_IF_NULL(f);
+    FAIL_IF_NOT(f->proto == IPPROTO_TCP);
+    FAIL_IF_NULL(f->protoctx);
+    TcpSession *ssn = f->protoctx;
+
+    StreamingBufferSegment seg;
+    TcpStream *stream = direction == 0 ? &ssn->client : &ssn->server;
+    int r = StreamingBufferAppend(&stream->sb, &seg, data, data_len);
+    FAIL_IF_NOT(r == 0);
+    stream->last_ack += data_len;
+    return 1;
+}
+
+int UTHAddSessionToFlow(Flow *f,
+    uint32_t ts_isn,
+    uint32_t tc_isn)
+{
+    FAIL_IF_NULL(f);
+
+    TcpSession *ssn = SCCalloc(1, sizeof(*ssn));
+    FAIL_IF_NULL(ssn);
+
+    StreamingBuffer x = STREAMING_BUFFER_INITIALIZER(&stream_config.sbcnf);
+    ssn->client.sb = x;
+    ssn->server.sb = x;
+
+    ssn->client.isn = ts_isn;
+    ssn->server.isn = tc_isn;
+
+    f->protoctx = ssn;
+    return 1;
+}
+
+int UTHRemoveSessionFromFlow(Flow *f)
+{
+    FAIL_IF_NULL(f);
+    FAIL_IF_NOT(f->proto == IPPROTO_TCP);
+    TcpSession *ssn = f->protoctx;
+    FAIL_IF_NULL(ssn);
+    StreamTcpSessionCleanup(ssn);
+    SCFree(ssn);
+    f->protoctx = NULL;
+    return 1;
+}
+
 /**
  * \brief UTHGenericTest: function that perfom a generic check taking care of
  *                      as maximum common unittest elements as possible.
@@ -511,7 +572,7 @@ void UTHFreeFlow(Flow *flow)
  * \retval int 1 if the match of all the sids is the specified has the
  *             specified results; 0 if not
  */
-int UTHGenericTest(Packet **pkt, int numpkts, char *sigs[], uint32_t sids[], uint32_t *results, int numsigs)
+int UTHGenericTest(Packet **pkt, int numpkts, const char *sigs[], uint32_t sids[], uint32_t *results, int numsigs)
 {
 
     int result = 0;
@@ -568,7 +629,7 @@ int UTHCheckPacketMatchResults(Packet *p, uint32_t sids[],
     for (; i < numsids; i++) {
         uint16_t r = PacketAlertCheck(p, sids[i]);
         if (r != results[i]) {
-            SCLogInfo("Sid %"PRIu32" matched %"PRIu16" times, and not %"PRIu16
+            SCLogInfo("Sid %"PRIu32" matched %"PRIu16" times, and not %"PRIu32
                     " as expected", sids[i], r, results[i]);
             res = 0;
         } else {
@@ -588,7 +649,7 @@ int UTHCheckPacketMatchResults(Packet *p, uint32_t sids[],
  *
  * \retval int 0 if we have errors; 1 if all the signatures loaded succesfuly
  */
-int UTHAppendSigs(DetectEngineCtx *de_ctx, char *sigs[], int numsigs)
+int UTHAppendSigs(DetectEngineCtx *de_ctx, const char *sigs[], int numsigs)
 {
     if (de_ctx == NULL || numsigs <= 0 || sigs == NULL) {
         SCLogError(SC_ERR_INVALID_ARGUMENT, "Arguments invalid, check if sigs or de_ctx are NULL, and if the array contain sigs");
@@ -789,7 +850,7 @@ end:
  * \retval return 1 if match
  * \retval return 0 if not
  */
-int UTHPacketMatchSig(Packet *p, char *sig)
+int UTHPacketMatchSig(Packet *p, const char *sig)
 {
     int result = 1;
 
@@ -852,8 +913,10 @@ uint32_t UTHBuildPacketOfFlows(uint32_t start, uint32_t end, uint8_t dir)
             p->dst.addr_data32[0] = i;
         }
         FlowHandlePacket(NULL, NULL, p);
-        if (p->flow != NULL)
+        if (p->flow != NULL) {
             SC_ATOMIC_RESET(p->flow->use_cnt);
+            FLOWLOCK_UNLOCK(p->flow);
+        }
 
         /* Now the queues shoul be updated */
         UTHFreePacket(p);
@@ -869,7 +932,7 @@ uint32_t UTHBuildPacketOfFlows(uint32_t start, uint32_t end, uint8_t dir)
 /**
  * \brief CheckUTHTestPacket wrapper to check packets for unittests
  */
-int CheckUTHTestPacket(Packet *p, uint8_t ipproto)
+static int CheckUTHTestPacket(Packet *p, uint8_t ipproto)
 {
     uint16_t sport = 41424;
     uint16_t dport = 80;
@@ -917,7 +980,7 @@ int CheckUTHTestPacket(Packet *p, uint8_t ipproto)
 /**
  * \brief UTHBuildPacketRealTest01 wrapper to check packets for unittests
  */
-int UTHBuildPacketRealTest01(void)
+static int UTHBuildPacketRealTest01(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -933,7 +996,7 @@ int UTHBuildPacketRealTest01(void)
 /**
  * \brief UTHBuildPacketRealTest02 wrapper to check packets for unittests
  */
-int UTHBuildPacketRealTest02(void)
+static int UTHBuildPacketRealTest02(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -948,7 +1011,7 @@ int UTHBuildPacketRealTest02(void)
 /**
  * \brief UTHBuildPacketTest01 wrapper to check packets for unittests
  */
-int UTHBuildPacketTest01(void)
+static int UTHBuildPacketTest01(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -963,7 +1026,7 @@ int UTHBuildPacketTest01(void)
 /**
  * \brief UTHBuildPacketTest02 wrapper to check packets for unittests
  */
-int UTHBuildPacketTest02(void)
+static int UTHBuildPacketTest02(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -978,7 +1041,7 @@ int UTHBuildPacketTest02(void)
 /**
  * \brief UTHBuildPacketOfFlowsTest01 wrapper to check packets for unittests
  */
-int UTHBuildPacketOfFlowsTest01(void)
+static int UTHBuildPacketOfFlowsTest01(void)
 {
     int result = 0;
 
@@ -1000,7 +1063,7 @@ int UTHBuildPacketOfFlowsTest01(void)
 /**
  * \brief UTHBuildPacketSrcDstTest01 wrapper to check packets for unittests
  */
-int UTHBuildPacketSrcDstTest01(void)
+static int UTHBuildPacketSrcDstTest01(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -1016,7 +1079,7 @@ int UTHBuildPacketSrcDstTest01(void)
 /**
  * \brief UTHBuildPacketSrcDstTest02 wrapper to check packets for unittests
  */
-int UTHBuildPacketSrcDstTest02(void)
+static int UTHBuildPacketSrcDstTest02(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -1032,7 +1095,7 @@ int UTHBuildPacketSrcDstTest02(void)
 /**
  * \brief UTHBuildPacketSrcDstPortsTest01 wrapper to check packets for unittests
  */
-int UTHBuildPacketSrcDstPortsTest01(void)
+static int UTHBuildPacketSrcDstPortsTest01(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -1048,7 +1111,7 @@ int UTHBuildPacketSrcDstPortsTest01(void)
 /**
  * \brief UTHBuildPacketSrcDstPortsTest02 wrapper to check packets for unittests
  */
-int UTHBuildPacketSrcDstPortsTest02(void)
+static int UTHBuildPacketSrcDstPortsTest02(void)
 {
     uint8_t payload[] = "Payload";
 
@@ -1066,15 +1129,17 @@ int UTHBuildPacketSrcDstPortsTest02(void)
 void UTHRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("UTHBuildPacketRealTest01", UTHBuildPacketRealTest01, 1);
-    UtRegisterTest("UTHBuildPacketRealTest02", UTHBuildPacketRealTest02, 1);
-    UtRegisterTest("UTHBuildPacketTest01", UTHBuildPacketTest01, 1);
-    UtRegisterTest("UTHBuildPacketTest02", UTHBuildPacketTest02, 1);
-    UtRegisterTest("UTHBuildPacketSrcDstTest01", UTHBuildPacketSrcDstTest01, 1);
-    UtRegisterTest("UTHBuildPacketSrcDstTest02", UTHBuildPacketSrcDstTest02, 1);
-    UtRegisterTest("UTHBuildPacketSrcDstPortsTest01", UTHBuildPacketSrcDstPortsTest01, 1);
-    UtRegisterTest("UTHBuildPacketSrcDstPortsTest02", UTHBuildPacketSrcDstPortsTest02, 1);
-    UtRegisterTest("UTHBuildPacketOfFlowsTest01", UTHBuildPacketOfFlowsTest01, 1);
+    UtRegisterTest("UTHBuildPacketRealTest01", UTHBuildPacketRealTest01);
+    UtRegisterTest("UTHBuildPacketRealTest02", UTHBuildPacketRealTest02);
+    UtRegisterTest("UTHBuildPacketTest01", UTHBuildPacketTest01);
+    UtRegisterTest("UTHBuildPacketTest02", UTHBuildPacketTest02);
+    UtRegisterTest("UTHBuildPacketSrcDstTest01", UTHBuildPacketSrcDstTest01);
+    UtRegisterTest("UTHBuildPacketSrcDstTest02", UTHBuildPacketSrcDstTest02);
+    UtRegisterTest("UTHBuildPacketSrcDstPortsTest01",
+                   UTHBuildPacketSrcDstPortsTest01);
+    UtRegisterTest("UTHBuildPacketSrcDstPortsTest02",
+                   UTHBuildPacketSrcDstPortsTest02);
+    UtRegisterTest("UTHBuildPacketOfFlowsTest01", UTHBuildPacketOfFlowsTest01);
 
 #endif /* UNITTESTS */
 }

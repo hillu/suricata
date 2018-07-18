@@ -41,7 +41,7 @@ void DefragTrackerMoveToSpare(DefragTracker *h)
     (void) SC_ATOMIC_SUB(defragtracker_counter, 1);
 }
 
-DefragTracker *DefragTrackerAlloc(void)
+static DefragTracker *DefragTrackerAlloc(void)
 {
     if (!(DEFRAG_CHECK_MEMCAP(sizeof(DefragTracker)))) {
         return NULL;
@@ -63,7 +63,7 @@ error:
     return NULL;
 }
 
-void DefragTrackerFree(DefragTracker *dt)
+static void DefragTrackerFree(DefragTracker *dt)
 {
     if (dt != NULL) {
         DefragTrackerClearMemory(dt);
@@ -92,6 +92,7 @@ static void DefragTrackerInit(DefragTracker *dt, Packet *p)
         dt->id = (int32_t)IPV6_EXTHDR_GET_FH_ID(p);
         dt->af = AF_INET6;
     }
+    dt->proto = IP_GET_IPPROTO(p);
     dt->vlan_id[0] = p->vlan_id[0];
     dt->vlan_id[1] = p->vlan_id[1];
     dt->policy = DefragGetOsPolicy(p);
@@ -132,16 +133,14 @@ void DefragInitConfig(char quiet)
     SC_ATOMIC_INIT(defragtracker_prune_idx);
     DefragTrackerQueueInit(&defragtracker_spare_q);
 
-    unsigned int seed = RandomTimePreseed();
     /* set defaults */
-    defrag_config.hash_rand   = (int)(DEFRAG_DEFAULT_HASHSIZE * (rand_r(&seed) / RAND_MAX + 1.0));
-
+    defrag_config.hash_rand   = (uint32_t)RandomGet();
     defrag_config.hash_size   = DEFRAG_DEFAULT_HASHSIZE;
     defrag_config.memcap      = DEFRAG_DEFAULT_MEMCAP;
     defrag_config.prealloc    = DEFRAG_DEFAULT_PREALLOC;
 
     /* Check if we have memcap and hash_size defined at config */
-    char *conf_val;
+    const char *conf_val;
     uint32_t configval = 0;
 
     /** set config values for memcap, prealloc and hash_size */
@@ -203,7 +202,7 @@ void DefragInitConfig(char quiet)
     (void) SC_ATOMIC_ADD(defrag_memuse, (defrag_config.hash_size * sizeof(DefragTrackerHashRow)));
 
     if (quiet == FALSE) {
-        SCLogInfo("allocated %llu bytes of memory for the defrag hash... "
+        SCLogConfig("allocated %"PRIu64" bytes of memory for the defrag hash... "
                   "%" PRIu32 " buckets of size %" PRIuMAX "",
                   SC_ATOMIC_GET(defrag_memuse), defrag_config.hash_size,
                   (uintmax_t)sizeof(DefragTrackerHashRow));
@@ -230,14 +229,14 @@ void DefragInitConfig(char quiet)
                 DefragTrackerEnqueue(&defragtracker_spare_q,h);
             }
             if (quiet == FALSE) {
-                SCLogInfo("preallocated %" PRIu32 " defrag trackers of size %" PRIuMAX "",
+                SCLogConfig("preallocated %" PRIu32 " defrag trackers of size %" PRIuMAX "",
                         defragtracker_spare_q.len, (uintmax_t)sizeof(DefragTracker));
             }
         }
     }
 
     if (quiet == FALSE) {
-        SCLogInfo("defrag memory usage: %llu bytes, maximum: %"PRIu64,
+        SCLogConfig("defrag memory usage: %"PRIu64" bytes, maximum: %"PRIu64,
                 SC_ATOMIC_GET(defrag_memuse), defrag_config.memcap);
     }
 
@@ -405,6 +404,7 @@ static inline uint32_t DefragHashGetKey(Packet *p)
        CMP_ADDR(&(d1)->dst_addr, &(d2)->dst)) || \
       (CMP_ADDR(&(d1)->src_addr, &(d2)->dst) && \
        CMP_ADDR(&(d1)->dst_addr, &(d2)->src))) && \
+     (d1)->proto == IP_GET_IPPROTO(d2) &&   \
      (d1)->id == (id) && \
      (d1)->vlan_id[0] == (d2)->vlan_id[0] && \
      (d1)->vlan_id[1] == (d2)->vlan_id[1])

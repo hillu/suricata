@@ -48,12 +48,8 @@
 
 enum {
     RECEIVE_CPU_SET,
-    DECODE_CPU_SET,
-    STREAM_CPU_SET,
-    DETECT_CPU_SET,
+    WORKER_CPU_SET,
     VERDICT_CPU_SET,
-    REJECT_CPU_SET,
-    OUTPUT_CPU_SET,
     MANAGEMENT_CPU_SET,
     MAX_CPU_SET
 };
@@ -65,20 +61,19 @@ enum {
 };
 
 typedef struct ThreadsAffinityType_ {
-    char *name;
-#if !defined __CYGWIN__ && !defined OS_WIN32 && !defined __OpenBSD__
-    cpu_set_t cpu_set;
-#endif
+    const char *name;
     uint8_t mode_flag;
     int prio;
     int nb_threads;
-#if !defined __CYGWIN__ && !defined OS_WIN32 && !defined __OpenBSD__
+    SCMutex taf_mutex;
+    uint16_t lcpu; /* use by exclusive mode */
+
+#if !defined __CYGWIN__ && !defined OS_WIN32 && !defined __OpenBSD__ && !defined sun
+    cpu_set_t cpu_set;
     cpu_set_t lowprio_cpu;
     cpu_set_t medprio_cpu;
     cpu_set_t hiprio_cpu;
 #endif
-    SCMutex taf_mutex;
-    uint16_t lcpu; /* use by exclusive mode */
 } ThreadsAffinityType;
 
 /** store thread affinity mode for all type of threads */
@@ -86,7 +81,7 @@ typedef struct ThreadsAffinityType_ {
 extern ThreadsAffinityType thread_affinity[MAX_CPU_SET];
 #endif
 
-void AffinitySetupLoadFromConfig();
+void AffinitySetupLoadFromConfig(void);
 ThreadsAffinityType * GetAffinityTypeFromName(const char *name);
 
 int AffinityGetNextCPU(ThreadsAffinityType *taf);

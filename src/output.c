@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2016 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -18,9 +18,18 @@
 /**
  * \file
  *
+ * \author OISF, Jason Ish <jason.ish@oisf.net>
  * \author Endace Technology Limited, Jason Ish <jason.ish@endace.com>
  *
- * Output registration functions
+ * The root logging output for all non-application logging.
+ *
+ * The loggers are made up of a hierarchy of loggers. At the top we
+ * have the root logger which is the main entry point to
+ * logging. Under the root there exists parent loggers that are the
+ * entry point for specific types of loggers such as packet logger,
+ * transaction loggers, etc. Each parent logger may have 0 or more
+ * loggers that actual handle the job of producing output to something
+ * like a file.
  */
 
 #include "suricata-common.h"
@@ -31,8 +40,63 @@
 #include "util-debug.h"
 #include "output.h"
 
-static TAILQ_HEAD(, OutputModule_) output_modules =
-    TAILQ_HEAD_INITIALIZER(output_modules);
+#include "alert-fastlog.h"
+#include "alert-unified2-alert.h"
+#include "alert-debuglog.h"
+#include "alert-prelude.h"
+#include "alert-syslog.h"
+#include "output-json-alert.h"
+#include "output-json-flow.h"
+#include "output-json-netflow.h"
+#include "log-cf-common.h"
+#include "log-droplog.h"
+#include "output-json-drop.h"
+#include "log-httplog.h"
+#include "output-json-http.h"
+#include "log-dnslog.h"
+#include "output-json-dns.h"
+#include "log-tlslog.h"
+#include "log-tlsstore.h"
+#include "output-json-tls.h"
+#include "output-json-ssh.h"
+#include "log-pcap.h"
+#include "log-file.h"
+#include "output-json-file.h"
+#include "output-json-smtp.h"
+#include "output-json-stats.h"
+#include "log-filestore.h"
+#include "log-tcp-data.h"
+#include "log-stats.h"
+#include "output-json.h"
+#include "output-json-nfs.h"
+#include "output-json-template.h"
+#include "output-lua.h"
+#include "output-json-dnp3.h"
+#include "output-json-vars.h"
+
+typedef struct RootLogger_ {
+    ThreadInitFunc ThreadInit;
+    ThreadDeinitFunc ThreadDeinit;
+    ThreadExitPrintStatsFunc ThreadExitPrintStats;
+    OutputLogFunc LogFunc;
+
+    TAILQ_ENTRY(RootLogger_) entries;
+} RootLogger;
+
+static TAILQ_HEAD(, RootLogger_) RootLoggers =
+    TAILQ_HEAD_INITIALIZER(RootLoggers);
+
+typedef struct LoggerThreadStoreNode_ {
+    void *thread_data;
+    TAILQ_ENTRY(LoggerThreadStoreNode_) entries;
+} LoggerThreadStoreNode;
+
+typedef TAILQ_HEAD(LoggerThreadStore_, LoggerThreadStoreNode_) LoggerThreadStore;
+
+/**
+ * The list of all registered (known) output modules.
+ */
+OutputModuleList output_modules = TAILQ_HEAD_INITIALIZER(output_modules);
 
 /**
  * Registry of flags to be updated on file rotation notification.
@@ -46,6 +110,9 @@ typedef struct OutputFileRolloverFlag_ {
 TAILQ_HEAD(, OutputFileRolloverFlag_) output_file_rotation_flags =
     TAILQ_HEAD_INITIALIZER(output_file_rotation_flags);
 
+void OutputRegisterRootLoggers(void);
+void OutputRegisterLoggers(void);
+
 /**
  * \brief Register an output module.
  *
@@ -54,9 +121,8 @@ TAILQ_HEAD(, OutputFileRolloverFlag_) output_file_rotation_flags =
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *))
+void OutputRegisterModule(const char *name, const char *conf_name,
+    OutputInitFunc InitFunc)
 {
     OutputModule *module = SCCalloc(1, sizeof(*module));
     if (unlikely(module == NULL))
@@ -84,10 +150,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterPacketModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *),
-    PacketLogger PacketLogFunc, PacketLogCondition PacketConditionFunc)
+void OutputRegisterPacketModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc,
+    PacketLogger PacketLogFunc, PacketLogCondition PacketConditionFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(PacketLogFunc == NULL || PacketConditionFunc == NULL)) {
         goto error;
@@ -98,11 +165,15 @@ OutputRegisterPacketModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->PacketLogFunc = PacketLogFunc;
     module->PacketConditionFunc = PacketConditionFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Packet logger \"%s\" registered.", name);
@@ -120,10 +191,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterPacketSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *parent_ctx),
-    PacketLogger PacketLogFunc, PacketLogCondition PacketConditionFunc)
+void OutputRegisterPacketSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    PacketLogger PacketLogFunc, PacketLogCondition PacketConditionFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(PacketLogFunc == NULL || PacketConditionFunc == NULL)) {
         goto error;
@@ -134,12 +206,16 @@ OutputRegisterPacketSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->PacketLogFunc = PacketLogFunc;
     module->PacketConditionFunc = PacketConditionFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Packet logger \"%s\" registered.", name);
@@ -150,17 +226,19 @@ error:
 }
 
 /**
- * \brief Register a tx output module.
+ * \brief Wrapper function for tx output modules.
  *
  * This function will register an output module so it can be
  * configured with the configuration file.
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterTxModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), AppProto alproto,
-    TxLogger TxLogFunc)
+static void OutputRegisterTxModuleWrapper(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, AppProto alproto,
+    TxLogger TxLogFunc, int tc_log_progress, int ts_log_progress,
+    TxLoggerCondition TxLogCondition, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(TxLogFunc == NULL)) {
         goto error;
@@ -171,11 +249,18 @@ OutputRegisterTxModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->TxLogFunc = TxLogFunc;
+    module->TxLogCondition = TxLogCondition;
     module->alproto = alproto;
+    module->tc_log_progress = tc_log_progress;
+    module->ts_log_progress = ts_log_progress;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Tx logger \"%s\" registered.", name);
@@ -185,10 +270,12 @@ error:
     exit(EXIT_FAILURE);
 }
 
-void
-OutputRegisterTxSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *parent_ctx),
-    AppProto alproto, TxLogger TxLogFunc)
+static void OutputRegisterTxSubModuleWrapper(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    AppProto alproto, TxLogger TxLogFunc, int tc_log_progress,
+    int ts_log_progress, TxLoggerCondition TxLogCondition,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(TxLogFunc == NULL)) {
         goto error;
@@ -199,12 +286,19 @@ OutputRegisterTxSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->TxLogFunc = TxLogFunc;
+    module->TxLogCondition = TxLogCondition;
     module->alproto = alproto;
+    module->tc_log_progress = tc_log_progress;
+    module->ts_log_progress = ts_log_progress;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Tx logger \"%s\" registered.", name);
@@ -215,6 +309,98 @@ error:
 }
 
 /**
+ * \brief Register a tx output module with condition.
+ *
+ * This function will register an output module so it can be
+ * configured with the configuration file.
+ *
+ * \retval Returns 0 on success, -1 on failure.
+ */
+void OutputRegisterTxModuleWithCondition(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, AppProto alproto,
+    TxLogger TxLogFunc, TxLoggerCondition TxLogCondition,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxModuleWrapper(id, name, conf_name, InitFunc, alproto,
+        TxLogFunc, -1, -1, TxLogCondition, ThreadInit, ThreadDeinit,
+        ThreadExitPrintStats);
+}
+
+void OutputRegisterTxSubModuleWithCondition(LoggerId id,
+    const char *parent_name, const char *name, const char *conf_name,
+    OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
+    TxLoggerCondition TxLogCondition, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc,
+        alproto, TxLogFunc, -1, -1, TxLogCondition, ThreadInit, ThreadDeinit,
+        ThreadExitPrintStats);
+}
+
+/**
+ * \brief Register a tx output module with progress.
+ *
+ * This function will register an output module so it can be
+ * configured with the configuration file.
+ *
+ * \retval Returns 0 on success, -1 on failure.
+ */
+void OutputRegisterTxModuleWithProgress(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, AppProto alproto,
+    TxLogger TxLogFunc, int tc_log_progress, int ts_log_progress,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxModuleWrapper(id, name, conf_name, InitFunc, alproto,
+        TxLogFunc, tc_log_progress, ts_log_progress, NULL, ThreadInit,
+        ThreadDeinit, ThreadExitPrintStats);
+}
+
+void OutputRegisterTxSubModuleWithProgress(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    AppProto alproto, TxLogger TxLogFunc, int tc_log_progress,
+    int ts_log_progress, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name, InitFunc,
+        alproto, TxLogFunc, tc_log_progress, ts_log_progress, NULL, ThreadInit,
+        ThreadDeinit, ThreadExitPrintStats);
+}
+
+/**
+ * \brief Register a tx output module.
+ *
+ * This function will register an output module so it can be
+ * configured with the configuration file.
+ *
+ * \retval Returns 0 on success, -1 on failure.
+ */
+void OutputRegisterTxModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, AppProto alproto,
+    TxLogger TxLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxModuleWrapper(id, name, conf_name, InitFunc, alproto,
+        TxLogFunc, -1, -1, NULL, ThreadInit, ThreadDeinit,
+        ThreadExitPrintStats);
+}
+
+void OutputRegisterTxSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name,
+    OutputInitSubFunc InitFunc, AppProto alproto, TxLogger TxLogFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
+{
+    OutputRegisterTxSubModuleWrapper(id, parent_name, name, conf_name,
+        InitFunc, alproto, TxLogFunc, -1, -1, NULL, ThreadInit, ThreadDeinit,
+        ThreadExitPrintStats);
+}
+
+/**
  * \brief Register a file output module.
  *
  * This function will register an output module so it can be
@@ -222,9 +408,10 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFileModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), FileLogger FileLogFunc)
+void OutputRegisterFileModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, FileLogger FileLogFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FileLogFunc == NULL)) {
         goto error;
@@ -235,10 +422,14 @@ OutputRegisterFileModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->FileLogFunc = FileLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("File logger \"%s\" registered.", name);
@@ -256,10 +447,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFileSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
-    FileLogger FileLogFunc)
+void OutputRegisterFileSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    FileLogger FileLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FileLogFunc == NULL)) {
         goto error;
@@ -270,11 +462,15 @@ OutputRegisterFileSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->FileLogFunc = FileLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("File logger \"%s\" registered.", name);
@@ -292,9 +488,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFiledataModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), FiledataLogger FiledataLogFunc)
+void OutputRegisterFiledataModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc,
+    FiledataLogger FiledataLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FiledataLogFunc == NULL)) {
         goto error;
@@ -305,10 +503,14 @@ OutputRegisterFiledataModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->FiledataLogFunc = FiledataLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Filedata logger \"%s\" registered.", name);
@@ -326,10 +528,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFiledataSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
-    FiledataLogger FiledataLogFunc)
+void OutputRegisterFiledataSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    FiledataLogger FiledataLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FiledataLogFunc == NULL)) {
         goto error;
@@ -340,11 +543,15 @@ OutputRegisterFiledataSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->FiledataLogFunc = FiledataLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Filedata logger \"%s\" registered.", name);
@@ -362,9 +569,10 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFlowModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), FlowLogger FlowLogFunc)
+void OutputRegisterFlowModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, FlowLogger FlowLogFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FlowLogFunc == NULL)) {
         goto error;
@@ -375,10 +583,14 @@ OutputRegisterFlowModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->FlowLogFunc = FlowLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Flow logger \"%s\" registered.", name);
@@ -396,10 +608,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterFlowSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
-    FlowLogger FlowLogFunc)
+void OutputRegisterFlowSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    FlowLogger FlowLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(FlowLogFunc == NULL)) {
         goto error;
@@ -410,11 +623,15 @@ OutputRegisterFlowSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->FlowLogFunc = FlowLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Flow logger \"%s\" registered.", name);
@@ -432,10 +649,12 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterStreamingModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), StreamingLogger StreamingLogFunc,
-    enum OutputStreamingType stream_type)
+void OutputRegisterStreamingModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc,
+    StreamingLogger StreamingLogFunc,
+    enum OutputStreamingType stream_type, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(StreamingLogFunc == NULL)) {
         goto error;
@@ -446,11 +665,15 @@ OutputRegisterStreamingModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->StreamingLogFunc = StreamingLogFunc;
     module->stream_type = stream_type;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Streaming logger \"%s\" registered.", name);
@@ -468,10 +691,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterStreamingSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
-    StreamingLogger StreamingLogFunc, enum OutputStreamingType stream_type)
+void OutputRegisterStreamingSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    StreamingLogger StreamingLogFunc, enum OutputStreamingType stream_type,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(StreamingLogFunc == NULL)) {
         goto error;
@@ -482,12 +706,16 @@ OutputRegisterStreamingSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->StreamingLogFunc = StreamingLogFunc;
     module->stream_type = stream_type;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Streaming logger \"%s\" registered.", name);
@@ -505,9 +733,10 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterStatsModule(const char *name, const char *conf_name,
-    OutputCtx *(*InitFunc)(ConfNode *), StatsLogger StatsLogFunc)
+void OutputRegisterStatsModule(LoggerId id, const char *name,
+    const char *conf_name, OutputInitFunc InitFunc, StatsLogger StatsLogFunc,
+    ThreadInitFunc ThreadInit, ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(StatsLogFunc == NULL)) {
         goto error;
@@ -518,10 +747,14 @@ OutputRegisterStatsModule(const char *name, const char *conf_name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->InitFunc = InitFunc;
     module->StatsLogFunc = StatsLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Stats logger \"%s\" registered.", name);
@@ -539,10 +772,11 @@ error:
  *
  * \retval Returns 0 on success, -1 on failure.
  */
-void
-OutputRegisterStatsSubModule(const char *parent_name, const char *name,
-    const char *conf_name, OutputCtx *(*InitFunc)(ConfNode *, OutputCtx *),
-    StatsLogger StatsLogFunc)
+void OutputRegisterStatsSubModule(LoggerId id, const char *parent_name,
+    const char *name, const char *conf_name, OutputInitSubFunc InitFunc,
+    StatsLogger StatsLogFunc, ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats)
 {
     if (unlikely(StatsLogFunc == NULL)) {
         goto error;
@@ -553,11 +787,15 @@ OutputRegisterStatsSubModule(const char *parent_name, const char *name,
         goto error;
     }
 
+    module->logger_id = id;
     module->name = name;
     module->conf_name = conf_name;
     module->parent_name = parent_name;
     module->InitSubFunc = InitFunc;
     module->StatsLogFunc = StatsLogFunc;
+    module->ThreadInit = ThreadInit;
+    module->ThreadDeinit = ThreadDeinit;
+    module->ThreadExitPrintStats = ThreadExitPrintStats;
     TAILQ_INSERT_TAIL(&output_modules, module, entries);
 
     SCLogDebug("Stats logger \"%s\" registered.", name);
@@ -573,8 +811,7 @@ error:
  * \retval The OutputModule with the given name or NULL if no output module
  * with the given name is registered.
  */
-OutputModule *
-OutputGetModuleByConfName(const char *conf_name)
+OutputModule *OutputGetModuleByConfName(const char *conf_name)
 {
     OutputModule *module;
 
@@ -589,8 +826,7 @@ OutputGetModuleByConfName(const char *conf_name)
 /**
  * \brief Deregister all modules.  Useful for a memory clean exit.
  */
-void
-OutputDeregisterAll(void)
+void OutputDeregisterAll(void)
 {
     OutputModule *module;
 
@@ -614,38 +850,6 @@ void OutputDropLoggerDisable(void)
 {
     if (drop_loggers)
         drop_loggers--;
-}
-
-static int tls_loggers = 0;
-
-int OutputTlsLoggerEnable(void)
-{
-    if (tls_loggers)
-        return -1;
-    tls_loggers++;
-    return 0;
-}
-
-void OutputTlsLoggerDisable(void)
-{
-    if (tls_loggers)
-        tls_loggers--;
-}
-
-static int ssh_loggers = 0;
-
-int OutputSshLoggerEnable(void)
-{
-    if (ssh_loggers)
-        return -1;
-    ssh_loggers++;
-    return 0;
-}
-
-void OutputSshLoggerDisable(void)
-{
-    if (ssh_loggers)
-        ssh_loggers--;
 }
 
 /**
@@ -698,4 +902,191 @@ void OutputNotifyFileRotation(void) {
     TAILQ_FOREACH(flag, &output_file_rotation_flags, entries) {
         *(flag->flag) = 1;
     }
+}
+
+TmEcode OutputLoggerLog(ThreadVars *tv, Packet *p, void *thread_data)
+{
+    LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
+    RootLogger *logger = TAILQ_FIRST(&RootLoggers);
+    LoggerThreadStoreNode *thread_store_node = TAILQ_FIRST(thread_store);
+    while (logger && thread_store_node) {
+        if (logger->LogFunc != NULL) {
+            logger->LogFunc(tv, p, thread_store_node->thread_data);
+        }
+        logger = TAILQ_NEXT(logger, entries);
+        thread_store_node = TAILQ_NEXT(thread_store_node, entries);
+    }
+
+    return TM_ECODE_OK;
+}
+
+TmEcode OutputLoggerThreadInit(ThreadVars *tv, const void *initdata, void **data)
+{
+    LoggerThreadStore *thread_store = SCCalloc(1, sizeof(*thread_store));
+    if (thread_store == NULL) {
+        return TM_ECODE_FAILED;
+    }
+    TAILQ_INIT(thread_store);
+    *data = (void *)thread_store;
+
+    RootLogger *logger;
+    TAILQ_FOREACH(logger, &RootLoggers, entries) {
+
+        void *child_thread_data = NULL;
+        if (logger->ThreadInit != NULL) {
+            if (logger->ThreadInit(tv, initdata, &child_thread_data) == TM_ECODE_OK) {
+                LoggerThreadStoreNode *thread_store_node =
+                    SCCalloc(1, sizeof(*thread_store_node));
+                if (thread_store_node == NULL) {
+                    /* Undo everything, calling de-init will take care
+                     * of that. */
+                    OutputLoggerThreadDeinit(tv, thread_store);
+                    return TM_ECODE_FAILED;
+                }
+                thread_store_node->thread_data = child_thread_data;
+                TAILQ_INSERT_TAIL(thread_store, thread_store_node, entries);
+            }
+        }
+    }
+    return TM_ECODE_OK;
+}
+
+TmEcode OutputLoggerThreadDeinit(ThreadVars *tv, void *thread_data)
+{
+    if (thread_data == NULL)
+        return TM_ECODE_FAILED;
+
+    LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
+    RootLogger *logger = TAILQ_FIRST(&RootLoggers);
+    LoggerThreadStoreNode *thread_store_node = TAILQ_FIRST(thread_store);
+    while (logger && thread_store_node) {
+        if (logger->ThreadDeinit != NULL) {
+            logger->ThreadDeinit(tv, thread_store_node->thread_data);
+        }
+        logger = TAILQ_NEXT(logger, entries);
+        thread_store_node = TAILQ_NEXT(thread_store_node, entries);
+    }
+
+    /* Free the thread store. */
+    while ((thread_store_node = TAILQ_FIRST(thread_store)) != NULL) {
+        TAILQ_REMOVE(thread_store, thread_store_node, entries);
+        SCFree(thread_store_node);
+    }
+    SCFree(thread_store);
+
+    return TM_ECODE_OK;
+}
+
+void OutputLoggerExitPrintStats(ThreadVars *tv, void *thread_data)
+{
+    LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
+    RootLogger *logger = TAILQ_FIRST(&RootLoggers);
+    LoggerThreadStoreNode *thread_store_node = TAILQ_FIRST(thread_store);
+    while (logger && thread_store_node) {
+        if (logger->ThreadExitPrintStats != NULL) {
+            logger->ThreadExitPrintStats(tv, thread_store_node->thread_data);
+        }
+        logger = TAILQ_NEXT(logger, entries);
+        thread_store_node = TAILQ_NEXT(thread_store_node, entries);
+    }
+}
+
+void OutputRegisterRootLogger(ThreadInitFunc ThreadInit,
+    ThreadDeinitFunc ThreadDeinit,
+    ThreadExitPrintStatsFunc ThreadExitPrintStats,
+    OutputLogFunc LogFunc)
+{
+    RootLogger *logger = SCCalloc(1, sizeof(*logger));
+    if (logger == NULL) {
+        return;
+    }
+    logger->ThreadInit = ThreadInit;
+    logger->ThreadDeinit = ThreadDeinit;
+    logger->ThreadExitPrintStats = ThreadExitPrintStats;
+    logger->LogFunc = LogFunc;
+    TAILQ_INSERT_TAIL(&RootLoggers, logger, entries);
+}
+
+void TmModuleLoggerRegister(void)
+{
+    OutputRegisterRootLoggers();
+    OutputRegisterLoggers();
+}
+
+/**
+ * \brief Register all root loggers.
+ */
+void OutputRegisterRootLoggers(void)
+{
+    OutputPacketLoggerRegister();
+    OutputTxLoggerRegister();
+    OutputFiledataLoggerRegister();
+    OutputFileLoggerRegister();
+    OutputStreamingLoggerRegister();
+}
+
+/**
+ * \brief Register all non-root logging modules.
+ */
+void OutputRegisterLoggers(void)
+{
+    /* custom format log*/
+    LogCustomFormatRegister();
+
+    LuaLogRegister();
+    /* fast log */
+    AlertFastLogRegister();
+    /* debug log */
+    AlertDebugLogRegister();
+    /* prelue log */
+    AlertPreludeRegister();
+    /* syslog log */
+    AlertSyslogRegister();
+    /* unified2 log */
+    Unified2AlertRegister();
+    /* drop log */
+    LogDropLogRegister();
+    JsonDropLogRegister();
+    /* json log */
+    OutputJsonRegister();
+    /* email logs */
+    JsonSmtpLogRegister();
+    /* http log */
+    LogHttpLogRegister();
+    JsonHttpLogRegister();
+    /* tls log */
+    LogTlsLogRegister();
+    JsonTlsLogRegister();
+    LogTlsStoreRegister();
+    /* ssh */
+    JsonSshLogRegister();
+    /* pcap log */
+    PcapLogRegister();
+    /* file log */
+    LogFileLogRegister();
+    JsonFileLogRegister();
+    LogFilestoreRegister();
+    /* dns log */
+    LogDnsLogRegister();
+    JsonDnsLogRegister();
+    /* tcp streaming data */
+    LogTcpDataLogRegister();
+    /* log stats */
+    LogStatsLogRegister();
+
+    JsonAlertLogRegister();
+    /* flow/netflow */
+    JsonFlowLogRegister();
+    JsonNetFlowLogRegister();
+    /* json stats */
+    JsonStatsLogRegister();
+
+    /* DNP3. */
+    JsonDNP3LogRegister();
+    JsonVarsLogRegister();
+
+    /* NFS JSON logger. */
+    JsonNFSLogRegister();
+    /* Template JSON logger. */
+    JsonTemplateLogRegister();
 }

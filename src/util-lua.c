@@ -56,6 +56,32 @@
 
 #include "util-lua.h"
 
+lua_State *LuaGetState(void)
+{
+    lua_State *s = NULL;
+#ifdef HAVE_LUAJIT
+    s = LuajitGetState();
+#else
+    s = luaL_newstate();
+#endif
+    return s;
+}
+
+void LuaReturnState(lua_State *s)
+{
+    if (s != NULL) {
+        /* clear the stack */
+        while (lua_gettop(s) > 0) {
+            lua_pop(s, 1);
+        }
+#ifdef HAVE_LUAJIT
+        LuajitReturnState(s);
+#else
+        lua_close(s);
+#endif
+    }
+}
+
 /* key for tv (threadvars) pointer */
 const char lua_ext_key_tv[] = "suricata:lua:tv:ptr";
 /* key for tx pointer */
@@ -124,10 +150,9 @@ void LuaStateSetTX(lua_State *luastate, void *txptr)
     lua_settable(luastate, LUA_REGISTRYINDEX);
 }
 
-Flow *LuaStateGetFlow(lua_State *luastate, int *lock_hint)
+Flow *LuaStateGetFlow(lua_State *luastate)
 {
     Flow *f = NULL;
-    int need_flow_lock = 0;
 
     lua_pushlightuserdata(luastate, (void *)&lua_ext_key_flow);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
@@ -136,13 +161,11 @@ Flow *LuaStateGetFlow(lua_State *luastate, int *lock_hint)
     /* need flow lock hint */
     lua_pushlightuserdata(luastate, (void *)&lua_ext_key_flow_lock_hint);
     lua_gettable(luastate, LUA_REGISTRYINDEX);
-    need_flow_lock = lua_toboolean(luastate, -1);
 
-    *lock_hint = need_flow_lock;
     return f;
 }
 
-void LuaStateSetFlow(lua_State *luastate, Flow *f, int need_flow_lock)
+void LuaStateSetFlow(lua_State *luastate, Flow *f)
 {
     /* flow */
     lua_pushlightuserdata(luastate, (void *)&lua_ext_key_flow);
@@ -151,7 +174,8 @@ void LuaStateSetFlow(lua_State *luastate, Flow *f, int need_flow_lock)
 
     /* flow lock status hint */
     lua_pushlightuserdata(luastate, (void *)&lua_ext_key_flow_lock_hint);
-    lua_pushboolean(luastate, need_flow_lock);
+    /* locking is not required, set to 0 for backwards compatibility */
+    lua_pushboolean(luastate, 0);
     lua_settable(luastate, LUA_REGISTRYINDEX);
 }
 
@@ -270,6 +294,12 @@ int LuaPushStringBuffer(lua_State *luastate, const uint8_t *input, size_t input_
     } else {
         lua_pushlstring(luastate, (char *)input, input_len);
     }
+    return 1;
+}
+
+int LuaPushInteger(lua_State *luastate, lua_Integer n)
+{
+    lua_pushinteger(luastate, n);
     return 1;
 }
 

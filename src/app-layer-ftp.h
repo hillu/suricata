@@ -24,12 +24,19 @@
 #ifndef __APP_LAYER_FTP_H__
 #define __APP_LAYER_FTP_H__
 
+enum {
+    FTP_STATE_IN_PROGRESS,
+    FTP_STATE_PORT_DONE,
+    FTP_STATE_FINISHED,
+};
+
 typedef enum {
     FTP_COMMAND_UNKNOWN = 0,
     FTP_COMMAND_ABOR,
     FTP_COMMAND_ACCT,
     FTP_COMMAND_ALLO,
     FTP_COMMAND_APPE,
+    FTP_COMMAND_AUTH_TLS,
     FTP_COMMAND_CDUP,
     FTP_COMMAND_CHMOD,
     FTP_COMMAND_CWD,
@@ -123,6 +130,11 @@ typedef struct FtpState_ {
     uint32_t port_line_len;
     uint32_t port_line_size;
     uint8_t *port_line;
+
+    /* specifies which loggers are done logging */
+    uint32_t logged;
+
+    DetectEngineState *de_state;
 } FtpState;
 
 void RegisterFTPParsers(void);

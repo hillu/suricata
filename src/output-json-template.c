@@ -15,6 +15,20 @@
  * 02110-1301, USA.
  */
 
+/*
+ * TODO: Update \author in this file and in output-json-template.h.
+ * TODO: Remove SCLogNotice statements, or convert to debug.
+ * TODO: Implement your app-layers logging.
+ */
+
+/**
+ * \file
+ *
+ * \author FirstName LastName <yourname@domain>
+ *
+ * Implement JSON/eve logging app-layer Template.
+ */
+
 #include "suricata-common.h"
 #include "debug.h"
 #include "detect.h"
@@ -37,6 +51,7 @@
 #include "app-layer-parser.h"
 
 #include "app-layer-template.h"
+#include "output-json-template.h"
 
 #ifdef HAVE_LIBJANSSON
 
@@ -96,9 +111,6 @@ static int JsonTemplateLogger(ThreadVars *tv, void *thread_data,
     return TM_ECODE_OK;
     
 error:
-    if (templatejs != NULL) {
-        json_decref(templatejs);
-    }
     json_decref(js);
     return TM_ECODE_FAILED;
 }
@@ -138,7 +150,7 @@ static OutputCtx *OutputTemplateLogInitSub(ConfNode *conf,
 
 #define OUTPUT_BUFFER_SIZE 65535
 
-static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     LogTemplateLogThread *thread = SCCalloc(1, sizeof(*thread));
     if (unlikely(thread == NULL)) {
@@ -146,7 +158,7 @@ static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, void *initdata, void **d
     }
 
     if (initdata == NULL) {
-        SCLogDebug("Error getting context for Template.  \"initdata\" is NULL.");
+        SCLogDebug("Error getting context for EveLogTemplate.  \"initdata\" is NULL.");
         SCFree(thread);
         return TM_ECODE_FAILED;
     }
@@ -176,40 +188,26 @@ static TmEcode JsonTemplateLogThreadDeinit(ThreadVars *t, void *data)
     return TM_ECODE_OK;
 }
 
-void TmModuleJsonTemplateLogRegister(void)
+void JsonTemplateLogRegister(void)
 {
+    /* TEMPLATE_START_REMOVE */
     if (ConfGetNode("app-layer.protocols.template") == NULL) {
         return;
     }
-
-    tmm_modules[TMM_JSONTEMPLATELOG].name = "JsonTemplateLog";
-    tmm_modules[TMM_JSONTEMPLATELOG].ThreadInit = JsonTemplateLogThreadInit;
-    tmm_modules[TMM_JSONTEMPLATELOG].ThreadDeinit = JsonTemplateLogThreadDeinit;
-    tmm_modules[TMM_JSONTEMPLATELOG].RegisterTests = NULL;
-    tmm_modules[TMM_JSONTEMPLATELOG].cap_flags = 0;
-    tmm_modules[TMM_JSONTEMPLATELOG].flags = TM_FLAG_LOGAPI_TM;
-
+    /* TEMPLATE_END_REMOVE */
     /* Register as an eve sub-module. */
-    OutputRegisterTxSubModule("eve-log", "JsonTemplateLog", "eve-log.template",
-        OutputTemplateLogInitSub, ALPROTO_TEMPLATE, JsonTemplateLogger);
+    OutputRegisterTxSubModule(LOGGER_JSON_TEMPLATE, "eve-log", "JsonTemplateLog",
+        "eve-log.template", OutputTemplateLogInitSub, ALPROTO_TEMPLATE,
+        JsonTemplateLogger, JsonTemplateLogThreadInit,
+        JsonTemplateLogThreadDeinit, NULL);
 
     SCLogNotice("Template JSON logger registered.");
 }
 
 #else /* No JSON support. */
 
-static TmEcode JsonTemplateLogThreadInit(ThreadVars *t, void *initdata,
-    void **data)
+void JsonTemplateLogRegister(void)
 {
-    SCLogInfo("Cannot initialize JSON output for template. "
-        "JSON support was disabled during build.");
-    return TM_ECODE_FAILED;
-}
-
-void TmModuleJsonTemplateLogRegister(void)
-{
-    tmm_modules[TMM_JSONTEMPLATELOG].name = "JsonTemplateLog";
-    tmm_modules[TMM_JSONTEMPLATELOG].ThreadInit = JsonTemplateLogThreadInit;
 }
 
 #endif /* HAVE_LIBJANSSON */

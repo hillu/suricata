@@ -56,7 +56,7 @@ void RunModeErfFileRegister(void)
 
 int RunModeErfFileSingle(void)
 {
-    char *file;
+    const char *file;
 
     SCEnter();
 
@@ -71,7 +71,7 @@ int RunModeErfFileSingle(void)
 
     /* Basically the same setup as PCAP files. */
 
-    ThreadVars *tv = TmThreadCreatePacketHandler("ErfFile",
+    ThreadVars *tv = TmThreadCreatePacketHandler(thread_name_single,
         "packetpool", "packetpool",
         "packetpool", "packetpool",
         "pktacqloop");
@@ -94,23 +94,12 @@ int RunModeErfFileSingle(void)
     }
     TmSlotSetFuncAppend(tv, tm_module, NULL);
 
-    tm_module = TmModuleGetByName("StreamTcp");
+    tm_module = TmModuleGetByName("FlowWorker");
     if (tm_module == NULL) {
-        printf("ERROR: TmModuleGetByName StreamTcp failed\n");
+        SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName for FlowWorker failed");
         exit(EXIT_FAILURE);
     }
     TmSlotSetFuncAppend(tv, tm_module, NULL);
-
-    if (DetectEngineEnabled()) {
-        tm_module = TmModuleGetByName("Detect");
-        if (tm_module == NULL) {
-            printf("ERROR: TmModuleGetByName Detect failed\n");
-            exit(EXIT_FAILURE);
-        }
-        TmSlotSetFuncAppend(tv, tm_module, NULL);
-    }
-
-    SetupOutputs(tv);
 
     if (TmThreadSpawn(tv) != TM_ECODE_OK) {
         printf("ERROR: TmThreadSpawn failed\n");
@@ -129,12 +118,11 @@ int RunModeErfFileAutoFp(void)
     char qname[TM_QUEUE_NAME_MAX];
     uint16_t cpu = 0;
     char *queues = NULL;
-    int thread;
+    uint16_t thread;
 
     RunModeInitialize();
-    RunmodeSetFlowStreamAsync();
 
-    char *file = NULL;
+    const char *file = NULL;
     if (ConfGet("erf-file.file", &file) == 0) {
         SCLogError(SC_ERR_RUNMODE,
             "Failed retrieving erf-file.file from config");
@@ -152,11 +140,13 @@ int RunModeErfFileAutoFp(void)
         cpu = 1;
 
     /* always create at least one thread */
-    int thread_max = TmThreadGetNbThreads(DETECT_CPU_SET);
+    int thread_max = TmThreadGetNbThreads(WORKER_CPU_SET);
     if (thread_max == 0)
         thread_max = ncpus * threading_detect_ratio;
     if (thread_max < 1)
         thread_max = 1;
+    if (thread_max > 1024)
+        thread_max = 1024;
 
     queues = RunmodeAutoFpCreatePickupQueuesString(thread_max);
     if (queues == NULL) {
@@ -166,7 +156,7 @@ int RunModeErfFileAutoFp(void)
 
     /* create the threads */
     ThreadVars *tv =
-        TmThreadCreatePacketHandler("ReceiveErfFile",
+        TmThreadCreatePacketHandler(thread_name_autofp,
                                     "packetpool", "packetpool",
                                     queues, "flow",
                                     "pktacqloop");
@@ -201,11 +191,13 @@ int RunModeErfFileAutoFp(void)
         exit(EXIT_FAILURE);
     }
 
-    for (thread = 0; thread < thread_max; thread++) {
-        snprintf(tname, sizeof(tname), "Detect%d", thread+1);
-        snprintf(qname, sizeof(qname), "pickup%d", thread+1);
+    for (thread = 0; thread < (uint16_t)thread_max; thread++) {
+        snprintf(tname, sizeof(tname), "%s#%02u", thread_name_workers, thread+1);
+        snprintf(qname, sizeof(qname), "pickup%u", thread+1);
 
         SCLogDebug("tname %s, qname %s", tname, qname);
+
+        SCLogDebug("Assigning %s affinity to cpu %u", tname, cpu);
 
         ThreadVars *tv_detect_ncpu =
             TmThreadCreatePacketHandler(tname,
@@ -216,21 +208,13 @@ int RunModeErfFileAutoFp(void)
             printf("ERROR: TmThreadsCreate failed\n");
             exit(EXIT_FAILURE);
         }
-        tm_module = TmModuleGetByName("StreamTcp");
+
+        tm_module = TmModuleGetByName("FlowWorker");
         if (tm_module == NULL) {
-            printf("ERROR: TmModuleGetByName StreamTcp failed\n");
+            SCLogError(SC_ERR_RUNMODE, "TmModuleGetByName for FlowWorker failed");
             exit(EXIT_FAILURE);
         }
         TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, NULL);
-
-        if (DetectEngineEnabled()) {
-            tm_module = TmModuleGetByName("Detect");
-            if (tm_module == NULL) {
-                printf("ERROR: TmModuleGetByName Detect failed\n");
-                exit(EXIT_FAILURE);
-            }
-            TmSlotSetFuncAppend(tv_detect_ncpu, tm_module, NULL);
-        }
 
         if (threading_set_cpu_affinity) {
             TmThreadSetCPUAffinity(tv_detect_ncpu, (int)cpu);
@@ -246,9 +230,6 @@ int RunModeErfFileAutoFp(void)
         }
 
         TmThreadSetGroupName(tv_detect_ncpu, "Detect");
-
-        /* add outputs as well */
-        SetupOutputs(tv_detect_ncpu);
 
         if (TmThreadSpawn(tv_detect_ncpu) != TM_ECODE_OK) {
             printf("ERROR: TmThreadSpawn failed\n");

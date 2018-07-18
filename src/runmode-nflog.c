@@ -56,14 +56,14 @@ void RunModeIdsNflogRegister(void)
     return;
 }
 
-
+#ifdef HAVE_NFLOG
 static void NflogDerefConfig(void *data)
 {
     NflogGroupConfig *nflogconf = (NflogGroupConfig *)data;
     SCFree(nflogconf);
 }
 
-void *ParseNflogConfig(const char *group)
+static void *ParseNflogConfig(const char *group)
 {
     ConfNode *group_root;
     ConfNode *group_default = NULL;
@@ -163,11 +163,12 @@ void *ParseNflogConfig(const char *group)
     return nflogconf;
 }
 
-int NflogConfigGeThreadsCount(void *conf)
+static int NflogConfigGeThreadsCount(void *conf)
 {
     /* for each nflog group there is no reason to use more than 1 thread */
     return 1;
 }
+#endif
 
 int RunModeIdsNflogAutoFp(void)
 {
@@ -184,7 +185,7 @@ int RunModeIdsNflogAutoFp(void)
                                       NflogConfigGeThreadsCount,
                                       "ReceiveNFLOG",
                                       "DecodeNFLOG",
-                                      "RecvNFLOG",
+                                      thread_name_autofp,
                                       live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");
@@ -212,7 +213,7 @@ int RunModeIdsNflogSingle(void)
                                       NflogConfigGeThreadsCount,
                                       "ReceiveNFLOG",
                                       "DecodeNFLOG",
-                                      "RecvNFLOG",
+                                      thread_name_single,
                                       live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");
@@ -240,7 +241,7 @@ int RunModeIdsNflogWorkers(void)
                                        NflogConfigGeThreadsCount,
                                        "ReceiveNFLOG",
                                        "DecodeNFLOG",
-                                       "RecvNFLOG",
+                                       thread_name_workers,
                                        live_dev);
     if (ret != 0) {
         SCLogError(SC_ERR_RUNMODE, "Unable to start runmode");

@@ -45,36 +45,6 @@
 #include "util-debug.h"
 
 /**
- *  \brief   Function to initialize the protocol detection and
- *           allocate memory to the DetectProto structure.
- *
- *  \retval  DetectProto instance pointer if successful otherwise NULL
- */
-
-DetectProto *DetectProtoInit(void)
-{
-    DetectProto *dp = SCMalloc(sizeof(DetectProto));
-    if (unlikely(dp == NULL))
-        return NULL;
-    memset(dp,0,sizeof(DetectProto));
-
-    return dp;
-}
-
-/**
- * \brief Free a DetectProto object
- *
- * \param dp Pointer to the DetectProto instance to be freed
- */
-void DetectProtoFree(DetectProto *dp)
-{
-    if (dp == NULL)
-        return;
-
-    SCFree(dp);
-}
-
-/**
  * \brief Parses a protocol sent as a string.
  *
  * \param dp  Pointer to the DetectProto instance which will be updated with the
@@ -83,7 +53,7 @@ void DetectProtoFree(DetectProto *dp)
  *
  * \retval >=0 If proto is detected, -1 otherwise.
  */
-int DetectProtoParse(DetectProto *dp, char *str)
+int DetectProtoParse(DetectProto *dp, const char *str)
 {
     if (strcasecmp(str, "tcp") == 0) {
         dp->proto[IPPROTO_TCP / 8] |= 1 << (IPPROTO_TCP % 8);
@@ -162,7 +132,7 @@ error:
  *  \param proto protocol (such as IPPROTO_TCP) to look for
  *  \retval 0 protocol not in the set
  *  \retval 1 protocol is in the set */
-int DetectProtoContainsProto(DetectProto *dp, int proto)
+int DetectProtoContainsProto(const DetectProto *dp, int proto)
 {
     if (dp->flags & DETECT_PROTO_ANY)
         return 1;
@@ -184,7 +154,7 @@ int DetectProtoContainsProto(DetectProto *dp, int proto)
  *        setup the signature with passed values.
  */
 static int DetectProtoInitTest(DetectEngineCtx **de_ctx, Signature **sig,
-                               DetectProto *dp, char *str)
+                               DetectProto *dp, const char *str)
 {
     char fullstr[1024];
     int result = 0;
@@ -609,19 +579,19 @@ end:
 void DetectProtoTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("ProtoTestParse01", ProtoTestParse01, 1);
-    UtRegisterTest("ProtoTestParse02", ProtoTestParse02, 1);
-    UtRegisterTest("ProtoTestParse03", ProtoTestParse03, 1);
-    UtRegisterTest("ProtoTestParse04", ProtoTestParse04, 1);
-    UtRegisterTest("ProtoTestParse05", ProtoTestParse05, 1);
-    UtRegisterTest("ProtoTestParse06", ProtoTestParse06, 1);
-    UtRegisterTest("ProtoTestParse07", ProtoTestParse07, 1);
+    UtRegisterTest("ProtoTestParse01", ProtoTestParse01);
+    UtRegisterTest("ProtoTestParse02", ProtoTestParse02);
+    UtRegisterTest("ProtoTestParse03", ProtoTestParse03);
+    UtRegisterTest("ProtoTestParse04", ProtoTestParse04);
+    UtRegisterTest("ProtoTestParse05", ProtoTestParse05);
+    UtRegisterTest("ProtoTestParse06", ProtoTestParse06);
+    UtRegisterTest("ProtoTestParse07", ProtoTestParse07);
 
-    UtRegisterTest("DetectProtoTestSetup01", DetectProtoTestSetup01, 1);
-    UtRegisterTest("DetectProtoTestSetup02", DetectProtoTestSetup02, 1);
+    UtRegisterTest("DetectProtoTestSetup01", DetectProtoTestSetup01);
+    UtRegisterTest("DetectProtoTestSetup02", DetectProtoTestSetup02);
 
-    UtRegisterTest("DetectProtoTestSig01", DetectProtoTestSig01, 1);
-    UtRegisterTest("DetectProtoTestSig02", DetectProtoTestSig02, 1);
+    UtRegisterTest("DetectProtoTestSig01", DetectProtoTestSig01);
+    UtRegisterTest("DetectProtoTestSig02", DetectProtoTestSig02);
 #endif /* UNITTESTS */
 }
 

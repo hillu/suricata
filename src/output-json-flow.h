@@ -24,6 +24,9 @@
 #ifndef __OUTPUT_JSON_FLOW_H__
 #define __OUTPUT_JSON_FLOW_H__
 
-void TmModuleJsonFlowLogRegister (void);
+void JsonFlowLogRegister(void);
+#ifdef HAVE_LIBJANSSON
+void JsonAddFlow(Flow *f, json_t *js, json_t *hjs);
+#endif /* HAVE_LIBJANSSON */
 
 #endif /* __OUTPUT_JSON_FLOW_H__ */

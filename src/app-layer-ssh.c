@@ -69,7 +69,7 @@ static int SSHParseBanner(SshState *state, SshHeader *header, const uint8_t *inp
     uint32_t line_len = input_len;
 
     /* is it the version line? */
-    if (SCMemcmp("SSH-", line_ptr, 4) != 0) {
+    if (line_len >= 4 && SCMemcmp("SSH-", line_ptr, 4) != 0) {
         SCReturnInt(-1);
     }
 
@@ -85,7 +85,7 @@ static int SSHParseBanner(SshState *state, SshHeader *header, const uint8_t *inp
     if ((banner_end - line_ptr) > 255) {
         SCLogDebug("Invalid version string, it should be less than 255 "
                 "characters including <CR><NL>, input value is %"PRIuMAX,
-                (banner_end - line_ptr));
+                (uintmax_t)(banner_end - line_ptr));
         SCReturnInt(-1);
     }
 
@@ -434,6 +434,7 @@ static int SSHParseRequest(Flow *f, void *state, AppLayerParserState *pstate,
         ssh_state->srv_hdr.flags & SSH_FLAG_PARSER_DONE) {
         AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_INSPECTION);
         AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_REASSEMBLY);
+        AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_BYPASS_READY);
     }
 
     SCReturnInt(r);
@@ -458,6 +459,7 @@ static int SSHParseResponse(Flow *f, void *state, AppLayerParserState *pstate,
         ssh_state->srv_hdr.flags & SSH_FLAG_PARSER_DONE) {
         AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_INSPECTION);
         AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_NO_REASSEMBLY);
+        AppLayerParserStateSetFlag(pstate, APP_LAYER_PARSER_BYPASS_READY);
     }
 
     SCReturnInt(r);
@@ -494,7 +496,107 @@ static void SSHStateFree(void *state)
     if (s->srv_hdr.banner_buffer != NULL)
         SCFree(s->srv_hdr.banner_buffer);
 
+    //AppLayerDecoderEventsFreeEvents(&s->decoder_events);
+
+    if (s->de_state != NULL) {
+        DetectEngineStateFree(s->de_state);
+    }
+
     SCFree(s);
+}
+
+static int SSHStateHasTxDetectState(void *state)
+{
+    SshState *ssh_state = (SshState *)state;
+    if (ssh_state->de_state)
+        return 1;
+    return 0;
+}
+
+static int SSHSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
+{
+    SshState *ssh_state = (SshState *)state;
+    ssh_state->de_state = de_state;
+    return 0;
+}
+
+static DetectEngineState *SSHGetTxDetectState(void *vtx)
+{
+    SshState *ssh_state = (SshState *)vtx;
+    return ssh_state->de_state;
+}
+
+static void SSHStateTransactionFree(void *state, uint64_t tx_id)
+{
+    /* do nothing */
+}
+
+static void *SSHGetTx(void *state, uint64_t tx_id)
+{
+    SshState *ssh_state = (SshState *)state;
+    return ssh_state;
+}
+
+static uint64_t SSHGetTxCnt(void *state)
+{
+    /* single tx */
+    return 1;
+}
+
+static void SSHSetTxLogged(void *state, void *tx, uint32_t logger)
+{
+    SshState *ssh_state = (SshState *)state;
+    if (ssh_state)
+        ssh_state->logged |= logger;
+}
+
+static int SSHGetTxLogged(void *state, void *tx, uint32_t logger)
+{
+    SshState *ssh_state = (SshState *)state;
+    if (ssh_state && (ssh_state->logged & logger)) {
+        return 1;
+    }
+    return 0;
+}
+
+static uint64_t SSHGetTxMpmIDs(void *vtx)
+{
+    SshState *ssh_state = (SshState *)vtx;
+    return ssh_state->mpm_ids;
+}
+
+static int SSHSetTxMpmIDs(void *vtx, uint64_t mpm_ids)
+{
+    SshState *ssh_state = (SshState *)vtx;
+    ssh_state->mpm_ids = mpm_ids;
+    return 0;
+}
+
+static int SSHGetAlstateProgressCompletionStatus(uint8_t direction)
+{
+    return SSH_STATE_FINISHED;
+}
+
+static int SSHGetAlstateProgress(void *tx, uint8_t direction)
+{
+    SshState *ssh_state = (SshState *)tx;
+
+    if (ssh_state->cli_hdr.flags & SSH_FLAG_PARSER_DONE &&
+        ssh_state->srv_hdr.flags & SSH_FLAG_PARSER_DONE) {
+        return SSH_STATE_FINISHED;
+    }
+
+    if (direction == STREAM_TOSERVER) {
+        if (ssh_state->cli_hdr.flags & SSH_FLAG_VERSION_PARSED) {
+            return SSH_STATE_BANNER_DONE;
+        }
+    } else {
+        if (ssh_state->srv_hdr.flags & SSH_FLAG_VERSION_PARSED) {
+            return SSH_STATE_BANNER_DONE;
+        }
+    }
+
+    return SSH_STATE_IN_PROGRESS;
 }
 
 static int SSHRegisterPatternsForProtocolDetection(void)
@@ -516,7 +618,7 @@ static int SSHRegisterPatternsForProtocolDetection(void)
  */
 void RegisterSSHParsers(void)
 {
-    char *proto_name = "ssh";
+    const char *proto_name = "ssh";
 
     if (AppLayerProtoDetectConfProtoDetectionEnabled("tcp", proto_name)) {
         AppLayerProtoDetectRegisterProtocol(ALPROTO_SSH, proto_name);
@@ -532,6 +634,24 @@ void RegisterSSHParsers(void)
         AppLayerParserRegisterStateFuncs(IPPROTO_TCP, ALPROTO_SSH, SSHStateAlloc, SSHStateFree);
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_TCP,
                 ALPROTO_SSH, STREAM_TOSERVER|STREAM_TOCLIENT);
+
+        AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_SSH, SSHStateTransactionFree);
+
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_SSH, SSHStateHasTxDetectState,
+                                               SSHGetTxDetectState, SSHSetTxDetectState);
+
+        AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_SSH, SSHGetTx);
+
+        AppLayerParserRegisterGetTxCnt(IPPROTO_TCP, ALPROTO_SSH, SSHGetTxCnt);
+
+        AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_SSH, SSHGetAlstateProgress);
+
+        AppLayerParserRegisterLoggerFuncs(IPPROTO_TCP, ALPROTO_SSH, SSHGetTxLogged, SSHSetTxLogged);
+        AppLayerParserRegisterMpmIDsFuncs(IPPROTO_TCP, ALPROTO_SSH,
+                SSHGetTxMpmIDs, SSHSetTxMpmIDs);
+
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_SSH,
+                                                               SSHGetAlstateProgressCompletionStatus);
     } else {
 //        SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
 //                  "still on.", proto_name);
@@ -544,6 +664,7 @@ void RegisterSSHParsers(void)
 
 /* UNITTESTS */
 #ifdef UNITTESTS
+#include "flow-util.h"
 
 /** \test Send a version string in one chunk (client version str). */
 static int SSHParserTest01(void)
@@ -557,18 +678,20 @@ static int SSHParserTest01(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER | STREAM_EOF, sshbuf, sshlen);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -606,6 +729,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -623,18 +747,20 @@ static int SSHParserTest02(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER | STREAM_EOF, sshbuf, sshlen);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -672,6 +798,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -689,18 +816,20 @@ static int SSHParserTest03(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER | STREAM_EOF, sshbuf, sshlen);
     if (r == 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected != 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -726,6 +855,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -741,18 +871,20 @@ static int SSHParserTest04(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT | STREAM_EOF, sshbuf, sshlen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -791,6 +923,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -807,18 +940,20 @@ static int SSHParserTest05(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT | STREAM_EOF, sshbuf, sshlen);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -856,6 +991,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -872,18 +1008,20 @@ static int SSHParserTest06(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT | STREAM_EOF, sshbuf, sshlen);
     if (r == 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected != 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     /* Ok, it returned an error. Let's make sure we didn't parse the string at all */
 
     SshState *ssh_state = f.alstate;
@@ -910,6 +1048,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -926,27 +1065,30 @@ static int SSHParserTest07(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -985,6 +1127,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1004,36 +1147,40 @@ static int SSHParserTest08(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1071,6 +1218,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1087,27 +1235,30 @@ static int SSHParserTest09(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1146,6 +1297,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1165,36 +1317,40 @@ static int SSHParserTest10(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1232,6 +1388,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1249,27 +1406,30 @@ static int SSHParserTest11(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1312,6 +1472,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1331,36 +1492,40 @@ static int SSHParserTest12(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1403,6 +1568,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1423,37 +1589,41 @@ static int SSHParserTest13(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
     for (u = 0; u < sshlen2; u++) {
-        SCMutexLock(&f.m);
-        r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, &sshbuf2[u], 1);
+        FLOWLOCK_WRLOCK(&f);
+        r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, &sshbuf2[u], 1);
         if (r != 0) {
             printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-            SCMutexUnlock(&f.m);
+            FLOWLOCK_UNLOCK(&f);
             goto end;
         }
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
     }
     for (u = 0; u < sshlen3; u++) {
-        SCMutexLock(&f.m);
-        r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, &sshbuf3[u], 1);
+        FLOWLOCK_WRLOCK(&f);
+        r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, &sshbuf3[u], 1);
         if (r != 0) {
             printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-            SCMutexUnlock(&f.m);
+            FLOWLOCK_UNLOCK(&f);
             goto end;
         }
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
     }
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1496,6 +1666,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1522,50 +1693,56 @@ static int SSHParserTest14(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf3, sshlen3);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf4, sshlen4);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf5, sshlen5);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf5, sshlen5);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1608,6 +1785,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1634,50 +1812,56 @@ static int SSHParserTest15(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf3, sshlen3);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf4, sshlen4);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf5, sshlen5);
+    FLOWLOCK_UNLOCK(&f);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf5, sshlen5);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1720,6 +1904,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1739,36 +1924,40 @@ static int SSHParserTest16(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1811,6 +2000,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1832,45 +2022,50 @@ static int SSHParserTest17(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf4, sshlen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -1913,6 +2108,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -1942,54 +2138,60 @@ static int SSHParserTest18(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, server1, serverlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, server1, serverlen1);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, server2, serverlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            server2, serverlen2);
     if (r != 0) {
         printf("toclient chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2017,6 +2219,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2048,45 +2251,50 @@ static int SSHParserTest19(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf4, sshlen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2135,6 +2343,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2168,46 +2377,51 @@ static int SSHParserTest20(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SCLogDebug("chunk 4:");
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf4, sshlen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2244,6 +2458,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2275,46 +2490,51 @@ static int SSHParserTest21(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SCLogDebug("chunk 4:");
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf4, sshlen4);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2352,6 +2572,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2410,46 +2631,50 @@ static int SSHParserTest22(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf1, sshlen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOCLIENT, sshbuf1, sshlen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf2, sshlen2);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf2, sshlen2);
     if (r != 0) {
         printf("toserver chunk 2 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
-    SCMutexLock(&f.m);
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf3, sshlen3);
+    FLOWLOCK_WRLOCK(&f);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT,
+                            sshbuf3, sshlen3);
     if (r != 0) {
         printf("toserver chunk 3 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 #if 0
     SCLogDebug("chunk 4:");
-    SCMutexLock(&f.m);
+    FLOWLOCK_WRLOCK(&f);
     r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOCLIENT, sshbuf4, sshlen4);
     if (r != 0) {
         printf("toserver chunk 4 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 #endif
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2487,6 +2712,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2502,24 +2728,27 @@ static int SSHParserTest23(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER | STREAM_EOF, sshbuf, sshlen);
     if (r == 0) {
         printf("toclient chunk 1 returned 0 expected non null: ");
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     result = 1;
 end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2535,18 +2764,20 @@ static int SSHParserTest24(void)
 
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
+    FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
 
     StreamTcpInitConfig(TRUE);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_SSH, STREAM_TOSERVER|STREAM_EOF, sshbuf, sshlen);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_SSH,
+                                STREAM_TOSERVER | STREAM_EOF, sshbuf, sshlen);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     SshState *ssh_state = f.alstate;
     if (ssh_state == NULL) {
@@ -2569,6 +2800,7 @@ end:
     if (alp_tctx != NULL)
         AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
+    FLOW_DESTROY(&f);
     return result;
 }
 
@@ -2578,30 +2810,30 @@ end:
 void SSHParserRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("SSHParserTest01 - ToServer", SSHParserTest01, 1);
-    UtRegisterTest("SSHParserTest02 - ToServer", SSHParserTest02, 1);
-    UtRegisterTest("SSHParserTest03 - ToServer", SSHParserTest03, 1);
-    UtRegisterTest("SSHParserTest04 - ToClient", SSHParserTest04, 1);
-    UtRegisterTest("SSHParserTest05 - ToClient", SSHParserTest05, 1);
-    UtRegisterTest("SSHParserTest06 - ToClient", SSHParserTest06, 1);
-    UtRegisterTest("SSHParserTest07 - ToServer 2 chunks", SSHParserTest07, 1);
-    UtRegisterTest("SSHParserTest08 - ToServer 3 chunks", SSHParserTest08, 1);
-    UtRegisterTest("SSHParserTest09 - ToClient 2 chunks", SSHParserTest09, 1);
-    UtRegisterTest("SSHParserTest10 - ToClient 3 chunks", SSHParserTest10, 1);
-    UtRegisterTest("SSHParserTest11 - ToClient 4 chunks", SSHParserTest11, 1);
-    UtRegisterTest("SSHParserTest12 - ToClient 4 chunks", SSHParserTest12, 1);
-    UtRegisterTest("SSHParserTest13 - ToClient 4 chunks", SSHParserTest13, 1);
-    UtRegisterTest("SSHParserTest14 - ToClient 4 chunks", SSHParserTest14, 1);
-    UtRegisterTest("SSHParserTest15", SSHParserTest15, 1);
-    UtRegisterTest("SSHParserTest16", SSHParserTest16, 1);
-    UtRegisterTest("SSHParserTest17", SSHParserTest17, 1);
-    UtRegisterTest("SSHParserTest18", SSHParserTest18, 1);
-    UtRegisterTest("SSHParserTest19", SSHParserTest19, 1);
-    UtRegisterTest("SSHParserTest20", SSHParserTest20, 1);
-    UtRegisterTest("SSHParserTest21", SSHParserTest21, 1);
-    UtRegisterTest("SSHParserTest22", SSHParserTest22, 1);
-    UtRegisterTest("SSHParserTest23", SSHParserTest23, 1);
-    UtRegisterTest("SSHParserTest24", SSHParserTest24, 1);
+    UtRegisterTest("SSHParserTest01 - ToServer", SSHParserTest01);
+    UtRegisterTest("SSHParserTest02 - ToServer", SSHParserTest02);
+    UtRegisterTest("SSHParserTest03 - ToServer", SSHParserTest03);
+    UtRegisterTest("SSHParserTest04 - ToClient", SSHParserTest04);
+    UtRegisterTest("SSHParserTest05 - ToClient", SSHParserTest05);
+    UtRegisterTest("SSHParserTest06 - ToClient", SSHParserTest06);
+    UtRegisterTest("SSHParserTest07 - ToServer 2 chunks", SSHParserTest07);
+    UtRegisterTest("SSHParserTest08 - ToServer 3 chunks", SSHParserTest08);
+    UtRegisterTest("SSHParserTest09 - ToClient 2 chunks", SSHParserTest09);
+    UtRegisterTest("SSHParserTest10 - ToClient 3 chunks", SSHParserTest10);
+    UtRegisterTest("SSHParserTest11 - ToClient 4 chunks", SSHParserTest11);
+    UtRegisterTest("SSHParserTest12 - ToClient 4 chunks", SSHParserTest12);
+    UtRegisterTest("SSHParserTest13 - ToClient 4 chunks", SSHParserTest13);
+    UtRegisterTest("SSHParserTest14 - ToClient 4 chunks", SSHParserTest14);
+    UtRegisterTest("SSHParserTest15", SSHParserTest15);
+    UtRegisterTest("SSHParserTest16", SSHParserTest16);
+    UtRegisterTest("SSHParserTest17", SSHParserTest17);
+    UtRegisterTest("SSHParserTest18", SSHParserTest18);
+    UtRegisterTest("SSHParserTest19", SSHParserTest19);
+    UtRegisterTest("SSHParserTest20", SSHParserTest20);
+    UtRegisterTest("SSHParserTest21", SSHParserTest21);
+    UtRegisterTest("SSHParserTest22", SSHParserTest22);
+    UtRegisterTest("SSHParserTest23", SSHParserTest23);
+    UtRegisterTest("SSHParserTest24", SSHParserTest24);
 #endif /* UNITTESTS */
 }
 

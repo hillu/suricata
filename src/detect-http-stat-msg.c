@@ -59,15 +59,14 @@
 
 #include "app-layer-htp.h"
 #include "detect-http-stat-msg.h"
+#include "detect-engine-hsmd.h"
 #include "stream-tcp-private.h"
 #include "stream-tcp.h"
 
-int DetectHttpStatMsgMatch (ThreadVars *, DetectEngineThreadCtx *,
-                           Flow *, uint8_t , void *, Signature *,
-                           SigMatch *);
-static int DetectHttpStatMsgSetup(DetectEngineCtx *, Signature *, char *);
-void DetectHttpStatMsgRegisterTests(void);
-void DetectHttpStatMsgFree(void *);
+static int DetectHttpStatMsgSetup(DetectEngineCtx *, Signature *, const char *);
+static void DetectHttpStatMsgRegisterTests(void);
+static void DetectHttpStatMsgSetupCallback(Signature *s);
+static int g_http_stat_msg_buffer_id = 0;
 
 /**
  * \brief Registration function for keyword: http_stat_msg
@@ -76,16 +75,28 @@ void DetectHttpStatMsgRegister (void)
 {
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].name = "http_stat_msg";
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].desc = "content modifier to match on HTTP stat-msg-buffer";
-    sigmatch_table[DETECT_AL_HTTP_STAT_MSG].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/HTTP-keywords#http_stat_msg";
+    sigmatch_table[DETECT_AL_HTTP_STAT_MSG].url = DOC_URL DOC_VERSION "/rules/http-keywords.html#http_stat-msg";
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].Match = NULL;
-    sigmatch_table[DETECT_AL_HTTP_STAT_MSG].AppLayerMatch = NULL;
-    sigmatch_table[DETECT_AL_HTTP_STAT_MSG].alproto = ALPROTO_HTTP;
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].Setup = DetectHttpStatMsgSetup;
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].Free  = NULL;
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].RegisterTests = DetectHttpStatMsgRegisterTests;
 
     sigmatch_table[DETECT_AL_HTTP_STAT_MSG].flags |= SIGMATCH_NOOPT;
-    sigmatch_table[DETECT_AL_HTTP_STAT_MSG].flags |= SIGMATCH_PAYLOAD;
+
+    DetectAppLayerMpmRegister("http_stat_msg", SIG_FLAG_TOCLIENT, 3,
+            PrefilterTxHttpStatMsgRegister);
+
+    DetectAppLayerInspectEngineRegister("http_stat_msg",
+            ALPROTO_HTTP, SIG_FLAG_TOCLIENT, HTP_RESPONSE_LINE,
+            DetectEngineInspectHttpStatMsg);
+
+    DetectBufferTypeSetDescriptionByName("http_stat_msg",
+            "http response status message");
+
+    DetectBufferTypeRegisterSetupCallback("http_stat_msg",
+            DetectHttpStatMsgSetupCallback);
+
+    g_http_stat_msg_buffer_id = DetectBufferTypeGetByName("http_stat_msg");
 }
 
 /**
@@ -99,13 +110,18 @@ void DetectHttpStatMsgRegister (void)
  * \retval -1 On failure
  */
 
-static int DetectHttpStatMsgSetup(DetectEngineCtx *de_ctx, Signature *s, char *arg)
+static int DetectHttpStatMsgSetup(DetectEngineCtx *de_ctx, Signature *s, const char *arg)
 {
     return DetectEngineContentModifierBufferSetup(de_ctx, s, arg,
                                                   DETECT_AL_HTTP_STAT_MSG,
-                                                  DETECT_SM_LIST_HSMDMATCH,
-                                                  ALPROTO_HTTP,
-                                                  NULL);
+                                                  g_http_stat_msg_buffer_id,
+                                                  ALPROTO_HTTP);
+}
+
+static void DetectHttpStatMsgSetupCallback(Signature *s)
+{
+    SCLogDebug("callback invoked by %u", s->id);
+    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
 }
 
 #ifdef UNITTESTS
@@ -115,7 +131,7 @@ static int DetectHttpStatMsgSetup(DetectEngineCtx *de_ctx, Signature *s, char *a
  *       specified in the signature or rawbyes is specified or fast_pattern is
  *       provided in the signature.
  */
-int DetectHttpStatMsgTest01(void)
+static int DetectHttpStatMsgTest01(void)
 {
     DetectEngineCtx *de_ctx = NULL;
     int result = 0;
@@ -140,7 +156,7 @@ int DetectHttpStatMsgTest01(void)
             "fast_pattern; http_stat_msg; sid:1;)");
     if (de_ctx->sig_list == NULL)
         goto end;
-    if (!(((DetectContentData *)de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH]->ctx)->flags &
+    if (!(((DetectContentData *)de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id]->ctx)->flags &
         DETECT_CONTENT_FAST_PATTERN))
     {
         goto end;
@@ -157,7 +173,7 @@ end:
  * \test Checks if a http_stat_msg is registered in a Signature and also checks
  *       the nocase
  */
-int DetectHttpStatMsgTest02(void)
+static int DetectHttpStatMsgTest02(void)
 {
     SigMatch *sm = NULL;
     DetectEngineCtx *de_ctx = NULL;
@@ -178,7 +194,7 @@ int DetectHttpStatMsgTest02(void)
     }
 
     result = 0;
-    sm = de_ctx->sig_list->sm_lists[DETECT_SM_LIST_HSMDMATCH];
+    sm = de_ctx->sig_list->sm_lists[g_http_stat_msg_buffer_id];
     if (sm == NULL) {
         printf("no sigmatch(es): ");
         goto end;
@@ -267,23 +283,25 @@ static int DetectHttpStatMsgSigTest01(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOCLIENT, httpbuf2, httplen2);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOCLIENT, httpbuf2, httplen2);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -375,23 +393,25 @@ static int DetectHttpStatMsgSigTest02(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOCLIENT, httpbuf2, httplen2);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOCLIENT, httpbuf2, httplen2);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -487,23 +507,25 @@ static int DetectHttpStatMsgSigTest03(void)
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
 
-    SCMutexLock(&f.m);
-    int r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOSERVER, httpbuf1, httplen1);
+    FLOWLOCK_WRLOCK(&f);
+    int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                                STREAM_TOSERVER, httpbuf1, httplen1);
     if (r != 0) {
         printf("toserver chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
 
-    r = AppLayerParserParse(alp_tctx, &f, ALPROTO_HTTP, STREAM_TOCLIENT, httpbuf2, httplen2);
+    r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
+                            STREAM_TOCLIENT, httpbuf2, httplen2);
     if (r != 0) {
         printf("toclient chunk 1 returned %" PRId32 ", expected 0: ", r);
         result = 0;
-        SCMutexUnlock(&f.m);
+        FLOWLOCK_UNLOCK(&f);
         goto end;
     }
-    SCMutexUnlock(&f.m);
+    FLOWLOCK_UNLOCK(&f);
 
     http_state = f.alstate;
     if (http_state == NULL) {
@@ -551,11 +573,11 @@ void DetectHttpStatMsgRegisterTests (void)
 {
 #ifdef UNITTESTS /* UNITTESTS */
 
-    UtRegisterTest("DetectHttpStatMsgTest01", DetectHttpStatMsgTest01, 1);
-    UtRegisterTest("DetectHttpStatMsgTest02", DetectHttpStatMsgTest02, 1);
-    UtRegisterTest("DetectHttpStatMsgSigTest01", DetectHttpStatMsgSigTest01, 1);
-    UtRegisterTest("DetectHttpStatMsgSigTest02", DetectHttpStatMsgSigTest02, 1);
-    UtRegisterTest("DetectHttpStatMsgSigTest03", DetectHttpStatMsgSigTest03, 1);
+    UtRegisterTest("DetectHttpStatMsgTest01", DetectHttpStatMsgTest01);
+    UtRegisterTest("DetectHttpStatMsgTest02", DetectHttpStatMsgTest02);
+    UtRegisterTest("DetectHttpStatMsgSigTest01", DetectHttpStatMsgSigTest01);
+    UtRegisterTest("DetectHttpStatMsgSigTest02", DetectHttpStatMsgSigTest02);
+    UtRegisterTest("DetectHttpStatMsgSigTest03", DetectHttpStatMsgSigTest03);
 
 #endif /* UNITTESTS */
 }

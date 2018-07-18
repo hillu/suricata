@@ -88,7 +88,7 @@ static void AlertSyslogDeInitCtx(OutputCtx *output_ctx)
  * \param conf The configuration node for this output.
  * \return A OutputCtx pointer on success, NULL on failure.
  */
-OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
+static OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
 {
     const char *facility_s = ConfNodeLookupChildValue(conf, "facility");
     if (facility_s == NULL) {
@@ -146,7 +146,7 @@ OutputCtx *AlertSyslogInitCtx(ConfNode *conf)
  * \param initdata      Pointer to the output context
  * \param data          pointer to pointer to point to the AlertSyslogThread
  */
-static TmEcode AlertSyslogThreadInit(ThreadVars *t, void *initdata, void **data)
+static TmEcode AlertSyslogThreadInit(ThreadVars *t, const void *initdata, void **data)
 {
     if(initdata == NULL) {
         SCLogDebug("Error getting context for AlertSyslog. \"initdata\" "
@@ -200,14 +200,13 @@ static TmEcode AlertSyslogIPv4(ThreadVars *tv, const Packet *p, void *data)
 {
     AlertSyslogThread *ast = (AlertSyslogThread *)data;
     int i;
-    char *action = "";
+    const char *action = "";
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
+    /* Not sure if this mutex is needed around calls to syslog. */
     SCMutexLock(&ast->file_ctx->fp_mutex);
-
-    ast->file_ctx->alerts += p->alerts.cnt;
 
     for (i = 0; i < p->alerts.cnt; i++) {
         const PacketAlert *pa = &p->alerts.alerts[i];
@@ -258,14 +257,12 @@ static TmEcode AlertSyslogIPv6(ThreadVars *tv, const Packet *p, void *data)
 {
     AlertSyslogThread *ast = (AlertSyslogThread *)data;
     int i;
-    char *action = "";
+    const char *action = "";
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
     SCMutexLock(&ast->file_ctx->fp_mutex);
-
-    ast->file_ctx->alerts += p->alerts.cnt;
 
     for (i = 0; i < p->alerts.cnt; i++) {
         const PacketAlert *pa = &p->alerts.alerts[i];
@@ -321,14 +318,13 @@ static TmEcode AlertSyslogDecoderEvent(ThreadVars *tv, const Packet *p, void *da
 {
     AlertSyslogThread *ast = (AlertSyslogThread *)data;
     int i;
-    char *action = "";
+    const char *action = "";
 
     if (p->alerts.cnt == 0)
         return TM_ECODE_OK;
 
     SCMutexLock(&ast->file_ctx->fp_mutex);
 
-    ast->file_ctx->alerts += p->alerts.cnt;
     char temp_buf_hdr[512];
     char temp_buf_pkt[65] = "";
     char temp_buf_tail[32];
@@ -371,22 +367,6 @@ static TmEcode AlertSyslogDecoderEvent(ThreadVars *tv, const Packet *p, void *da
     return TM_ECODE_OK;
 }
 
-/**
- * \brief   Function to print the total alert while closing the engine
- *
- * \param tv    Pointer to the output threadvars
- * \param data  Pointer to the AlertSyslogThread data
- */
-static void AlertSyslogExitPrintStats(ThreadVars *tv, void *data)
-{
-    AlertSyslogThread *ast = (AlertSyslogThread *)data;
-    if (ast == NULL) {
-        return;
-    }
-
-    SCLogInfo("(%s) Alerts %" PRIu64 "", tv->name, ast->file_ctx->alerts);
-}
-
 static int AlertSyslogCondition(ThreadVars *tv, const Packet *p)
 {
     return (p->alerts.cnt > 0 ? TRUE : FALSE);
@@ -408,20 +388,11 @@ static int AlertSyslogLogger(ThreadVars *tv, void *thread_data, const Packet *p)
 #endif /* !OS_WIN32 */
 
 /** \brief   Function to register the AlertSyslog module */
-void TmModuleAlertSyslogRegister (void)
+void AlertSyslogRegister (void)
 {
 #ifndef OS_WIN32
-    tmm_modules[TMM_ALERTSYSLOG].name = MODULE_NAME;
-    tmm_modules[TMM_ALERTSYSLOG].ThreadInit = AlertSyslogThreadInit;
-    tmm_modules[TMM_ALERTSYSLOG].Func = NULL;
-    tmm_modules[TMM_ALERTSYSLOG].ThreadExitPrintStats = AlertSyslogExitPrintStats;
-    tmm_modules[TMM_ALERTSYSLOG].ThreadDeinit = AlertSyslogThreadDeinit;
-    tmm_modules[TMM_ALERTSYSLOG].RegisterTests = NULL;
-    tmm_modules[TMM_ALERTSYSLOG].cap_flags = 0;
-    tmm_modules[TMM_ALERTSYSLOG].flags = TM_FLAG_LOGAPI_TM;
-
-    OutputRegisterPacketModule(MODULE_NAME, "syslog",
-        AlertSyslogInitCtx, AlertSyslogLogger, AlertSyslogCondition);
-
+    OutputRegisterPacketModule(LOGGER_ALERT_SYSLOG, MODULE_NAME, "syslog",
+        AlertSyslogInitCtx, AlertSyslogLogger, AlertSyslogCondition,
+        AlertSyslogThreadInit, AlertSyslogThreadDeinit, NULL);
 #endif /* !OS_WIN32 */
 }

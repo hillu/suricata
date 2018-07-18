@@ -394,9 +394,9 @@ void PacketPoolInit(void)
         }
         PacketPoolStorePacket(p);
     }
-    SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
-            max_pending_packets, (uintmax_t)(max_pending_packets*SIZE_OF_PACKET));
 
+    //SCLogInfo("preallocated %"PRIiMAX" packets. Total memory %"PRIuMAX"",
+    //        max_pending_packets, (uintmax_t)(max_pending_packets*SIZE_OF_PACKET));
 }
 
 void PacketPoolDestroy(void)
@@ -443,19 +443,10 @@ Packet *TmqhInputPacketpool(ThreadVars *tv)
 
 void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 {
-    int proot = 0;
+    bool proot = false;
 
     SCEnter();
     SCLogDebug("Packet %p, p->root %p, alloced %s", p, p->root, p->flags & PKT_ALLOC ? "true" : "false");
-
-    /** \todo make this a callback
-     *  Release tcp segments. Done here after alerting can use them. */
-    if (p->flow != NULL && p->proto == IPPROTO_TCP) {
-        SCMutexLock(&p->flow->m);
-        StreamTcpPruneSession(p->flow, p->flowflags & FLOW_PKT_TOSERVER ?
-                STREAM_TOSERVER : STREAM_TOCLIENT);
-        SCMutexUnlock(&p->flow->m);
-    }
 
     if (IS_TUNNEL_PKT(p)) {
         SCLogDebug("Packet %p is a tunnel packet: %s",
@@ -467,17 +458,19 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
 
         if (IS_TUNNEL_ROOT_PKT(p)) {
             SCLogDebug("IS_TUNNEL_ROOT_PKT == TRUE");
-            if (TUNNEL_PKT_TPR(p) == 0) {
-                SCLogDebug("TUNNEL_PKT_TPR(p) == 0, no more tunnel packet "
-                        "depending on this root");
+            const uint16_t outstanding = TUNNEL_PKT_TPR(p) - TUNNEL_PKT_RTV(p);
+            SCLogDebug("root pkt: outstanding %u", outstanding);
+            if (outstanding == 0) {
+                SCLogDebug("no tunnel packets outstanding, no more tunnel "
+                        "packet(s) depending on this root");
                 /* if this packet is the root and there are no
-                 * more tunnel packets, return it to the pool */
-
-                /* fall through */
+                 * more tunnel packets to consider
+                 *
+                 * return it to the pool */
             } else {
-                SCLogDebug("tunnel root Packet %p: TUNNEL_PKT_TPR(p) > 0, so "
+                SCLogDebug("tunnel root Packet %p: outstanding > 0, so "
                         "packets are still depending on this root, setting "
-                        "p->tunnel_verdicted == 1", p);
+                        "SET_TUNNEL_PKT_VERDICTED", p);
                 /* if this is the root and there are more tunnel
                  * packets, return this to the pool. It's still referenced
                  * by the tunnel packets, and we will return it
@@ -491,34 +484,34 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
         } else {
             SCLogDebug("NOT IS_TUNNEL_ROOT_PKT, so tunnel pkt");
 
-            /* the p->root != NULL here seems unnecessary: IS_TUNNEL_PKT checks
-             * that p->tunnel_pkt == 1, IS_TUNNEL_ROOT_PKT checks that +
-             * p->root == NULL. So when we are here p->root can only be
-             * non-NULL, right? CLANG thinks differently. May be a FP, but
-             * better safe than sorry. VJ */
-            if (p->root != NULL && IS_TUNNEL_PKT_VERDICTED(p->root) &&
-                    TUNNEL_PKT_TPR(p) == 1)
+            TUNNEL_INCR_PKT_RTV_NOLOCK(p);
+            const uint16_t outstanding = TUNNEL_PKT_TPR(p) - TUNNEL_PKT_RTV(p);
+            SCLogDebug("tunnel pkt: outstanding %u", outstanding);
+            /* all tunnel packets are processed except us. Root already
+             * processed. So return tunnel pkt and root packet to the
+             * pool. */
+            if (outstanding == 0 &&
+                    p->root && IS_TUNNEL_PKT_VERDICTED(p->root))
             {
-                SCLogDebug("p->root->tunnel_verdicted == 1 && TUNNEL_PKT_TPR(p) == 1");
-                /* the root is ready and we are the last tunnel packet,
-                 * lets enqueue them both. */
-                TUNNEL_DECR_PKT_TPR_NOLOCK(p);
+                SCLogDebug("root verdicted == true && no outstanding");
 
-                /* handle the root */
+                /* handle freeing the root as well*/
                 SCLogDebug("setting proot = 1 for root pkt, p->root %p "
                         "(tunnel packet %p)", p->root, p);
-                proot = 1;
+                proot = true;
 
                 /* fall through */
+
             } else {
-                /* root not ready yet, so get rid of the tunnel pkt only */
+                /* root not ready yet, or not the last tunnel packet,
+                 * so get rid of the tunnel pkt only */
 
-                SCLogDebug("NOT p->root->tunnel_verdicted == 1 && "
-                        "TUNNEL_PKT_TPR(p) == 1 (%" PRIu32 ")", TUNNEL_PKT_TPR(p));
+                SCLogDebug("NOT IS_TUNNEL_PKT_VERDICTED (%s) || "
+                        "outstanding > 0 (%u)",
+                        (p->root && IS_TUNNEL_PKT_VERDICTED(p->root)) ? "true" : "false",
+                        outstanding);
 
-                TUNNEL_DECR_PKT_TPR_NOLOCK(p);
-
-                 /* fall through */
+                /* fall through */
             }
         }
         SCMutexUnlock(m);
@@ -526,20 +519,18 @@ void TmqhOutputPacketpool(ThreadVars *t, Packet *p)
         SCLogDebug("tunnel stuff done, move on (proot %d)", proot);
     }
 
-    FlowDeReference(&p->flow);
-
     /* we're done with the tunnel root now as well */
-    if (proot == 1) {
+    if (proot == true) {
         SCLogDebug("getting rid of root pkt... alloc'd %s", p->root->flags & PKT_ALLOC ? "true" : "false");
 
-        FlowDeReference(&p->root->flow);
-
+        PACKET_RELEASE_REFS(p->root);
         p->root->ReleasePacket(p->root);
         p->root = NULL;
     }
 
     PACKET_PROFILING_END(p);
 
+    PACKET_RELEASE_REFS(p);
     p->ReleasePacket(p);
 
     SCReturn;
@@ -596,5 +587,5 @@ void PacketPoolPostRunmodes(void)
         max_pending_return_packets = packets;
 
     SCLogDebug("detect threads %u, max packets %u, max_pending_return_packets %u",
-            threads, (uint)threads, max_pending_return_packets);
+            threads, threads, max_pending_return_packets);
 }

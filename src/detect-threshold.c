@@ -48,7 +48,6 @@
 
 #include "detect-threshold.h"
 #include "detect-engine-threshold.h"
-#include "detect-parse.h"
 #include "detect-engine-address.h"
 
 #include "util-unittest.h"
@@ -65,8 +64,9 @@
 static pcre *parse_regex;
 static pcre_extra *parse_regex_study;
 
-static int DetectThresholdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *, Signature *, const SigMatchCtx *);
-static int DetectThresholdSetup(DetectEngineCtx *, Signature *, char *);
+static int DetectThresholdMatch(ThreadVars *, DetectEngineThreadCtx *, Packet *,
+        const Signature *, const SigMatchCtx *);
+static int DetectThresholdSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectThresholdFree(void *);
 
 /**
@@ -77,7 +77,7 @@ void DetectThresholdRegister(void)
 {
     sigmatch_table[DETECT_THRESHOLD].name = "threshold";
     sigmatch_table[DETECT_THRESHOLD].desc = "control the rule's alert frequency";
-    sigmatch_table[DETECT_THRESHOLD].url = "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule-Thresholding#threshold";
+    sigmatch_table[DETECT_THRESHOLD].url = DOC_URL DOC_VERSION "/rules/thresholding.html#threshold";
     sigmatch_table[DETECT_THRESHOLD].Match = DetectThresholdMatch;
     sigmatch_table[DETECT_THRESHOLD].Setup = DetectThresholdSetup;
     sigmatch_table[DETECT_THRESHOLD].Free  = DetectThresholdFree;
@@ -85,30 +85,11 @@ void DetectThresholdRegister(void)
     /* this is compatible to ip-only signatures */
     sigmatch_table[DETECT_THRESHOLD].flags |= SIGMATCH_IPONLY_COMPAT;
 
-    const char *eb;
-    int opts = 0;
-    int eo;
-
-    parse_regex = pcre_compile(PARSE_REGEX, opts, &eb, &eo, NULL);
-    if (parse_regex == NULL)
-    {
-        SCLogError(SC_ERR_PCRE_COMPILE, "pcre compile of \"%s\" failed at offset %" PRId32 ": %s", PARSE_REGEX, eo, eb);
-        goto error;
-    }
-
-    parse_regex_study = pcre_study(parse_regex, 0, &eb);
-    if (eb != NULL)
-    {
-        SCLogError(SC_ERR_PCRE_STUDY, "pcre study failed: %s", eb);
-        goto error;
-    }
-
-error:
-    return;
-
+    DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
 
-static int DetectThresholdMatch(ThreadVars *thv, DetectEngineThreadCtx *det_ctx, Packet *p, Signature *s, const SigMatchCtx *ctx)
+static int DetectThresholdMatch(ThreadVars *thv, DetectEngineThreadCtx *det_ctx, Packet *p,
+        const Signature *s, const SigMatchCtx *ctx)
 {
     return 1;
 }
@@ -122,7 +103,7 @@ static int DetectThresholdMatch(ThreadVars *thv, DetectEngineThreadCtx *det_ctx,
  * \retval de pointer to DetectThresholdData on success
  * \retval NULL on failure
  */
-static DetectThresholdData *DetectThresholdParse(char *rawstr)
+static DetectThresholdData *DetectThresholdParse(const char *rawstr)
 {
     DetectThresholdData *de = NULL;
 #define MAX_SUBSTRINGS 30
@@ -241,17 +222,17 @@ error:
  * \retval 0 on Success
  * \retval -1 on Failure
  */
-static int DetectThresholdSetup(DetectEngineCtx *de_ctx, Signature *s, char *rawstr)
+static int DetectThresholdSetup(DetectEngineCtx *de_ctx, Signature *s, const char *rawstr)
 {
     DetectThresholdData *de = NULL;
     SigMatch *sm = NULL;
     SigMatch *tmpm = NULL;
 
     /* checks if there is a previous instance of detection_filter */
-    tmpm = SigMatchGetLastSMFromLists(s, 2,
-                                      DETECT_DETECTION_FILTER, s->sm_lists[DETECT_SM_LIST_MATCH]);
+    tmpm = DetectGetLastSMFromLists(s, DETECT_DETECTION_FILTER, -1);
     if (tmpm != NULL) {
-        SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and \"threshold\" are not allowed in the same rule");
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "\"detection_filter\" and "
+                "\"threshold\" are not allowed in the same rule");
         SCReturnInt(-1);
     }
 
@@ -295,11 +276,8 @@ static void DetectThresholdFree(void *de_ptr)
  * ONLY TESTS BELOW THIS COMMENT
  */
 #ifdef UNITTESTS
-
-#include "detect-parse.h"
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
-#include "detect-engine-threshold.h"
 #include "util-time.h"
 #include "util-hashlist.h"
 
@@ -333,10 +311,10 @@ static int ThresholdTestParse02(void)
     de = DetectThresholdParse("type any,track by_dst,count 10,seconds 60");
     if (de && (de->type == TYPE_LIMIT) && (de->track == TRACK_DST) && (de->count == 10) && (de->seconds == 60)) {
         DetectThresholdFree(de);
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 /**
@@ -370,10 +348,10 @@ static int ThresholdTestParse04(void)
     de = DetectThresholdParse("count 10, track by_dst, seconds 60, type both, count 10");
     if (de && (de->type == TYPE_BOTH) && (de->track == TRACK_DST) && (de->count == 10) && (de->seconds == 60)) {
         DetectThresholdFree(de);
-        return 1;
+        return 0;
     }
 
-    return 0;
+    return 1;
 }
 
 /**
@@ -1500,23 +1478,24 @@ end:
 void ThresholdRegisterTests(void)
 {
 #ifdef UNITTESTS
-    UtRegisterTest("ThresholdTestParse01", ThresholdTestParse01, 1);
-    UtRegisterTest("ThresholdTestParse02", ThresholdTestParse02, 0);
-    UtRegisterTest("ThresholdTestParse03", ThresholdTestParse03, 1);
-    UtRegisterTest("ThresholdTestParse04", ThresholdTestParse04, 0);
-    UtRegisterTest("ThresholdTestParse05", ThresholdTestParse05, 1);
-    UtRegisterTest("DetectThresholdTestSig1", DetectThresholdTestSig1, 1);
-    UtRegisterTest("DetectThresholdTestSig2", DetectThresholdTestSig2, 1);
-    UtRegisterTest("DetectThresholdTestSig3", DetectThresholdTestSig3, 1);
-    UtRegisterTest("DetectThresholdTestSig4", DetectThresholdTestSig4, 1);
-    UtRegisterTest("DetectThresholdTestSig5", DetectThresholdTestSig5, 1);
-    UtRegisterTest("DetectThresholdTestSig6Ticks", DetectThresholdTestSig6Ticks, 1);
-    UtRegisterTest("DetectThresholdTestSig7", DetectThresholdTestSig7, 1);
-    UtRegisterTest("DetectThresholdTestSig8", DetectThresholdTestSig8, 1);
-    UtRegisterTest("DetectThresholdTestSig9", DetectThresholdTestSig9, 1);
-    UtRegisterTest("DetectThresholdTestSig10", DetectThresholdTestSig10, 1);
-    UtRegisterTest("DetectThresholdTestSig11", DetectThresholdTestSig11, 1);
-    UtRegisterTest("DetectThresholdTestSig12", DetectThresholdTestSig12, 1);
+    UtRegisterTest("ThresholdTestParse01", ThresholdTestParse01);
+    UtRegisterTest("ThresholdTestParse02", ThresholdTestParse02);
+    UtRegisterTest("ThresholdTestParse03", ThresholdTestParse03);
+    UtRegisterTest("ThresholdTestParse04", ThresholdTestParse04);
+    UtRegisterTest("ThresholdTestParse05", ThresholdTestParse05);
+    UtRegisterTest("DetectThresholdTestSig1", DetectThresholdTestSig1);
+    UtRegisterTest("DetectThresholdTestSig2", DetectThresholdTestSig2);
+    UtRegisterTest("DetectThresholdTestSig3", DetectThresholdTestSig3);
+    UtRegisterTest("DetectThresholdTestSig4", DetectThresholdTestSig4);
+    UtRegisterTest("DetectThresholdTestSig5", DetectThresholdTestSig5);
+    UtRegisterTest("DetectThresholdTestSig6Ticks",
+                   DetectThresholdTestSig6Ticks);
+    UtRegisterTest("DetectThresholdTestSig7", DetectThresholdTestSig7);
+    UtRegisterTest("DetectThresholdTestSig8", DetectThresholdTestSig8);
+    UtRegisterTest("DetectThresholdTestSig9", DetectThresholdTestSig9);
+    UtRegisterTest("DetectThresholdTestSig10", DetectThresholdTestSig10);
+    UtRegisterTest("DetectThresholdTestSig11", DetectThresholdTestSig11);
+    UtRegisterTest("DetectThresholdTestSig12", DetectThresholdTestSig12);
 #endif /* UNITTESTS */
 }
 
