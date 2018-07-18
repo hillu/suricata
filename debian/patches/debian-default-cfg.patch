@@ -6,9 +6,11 @@ Subject: Debian default configuration
 Forwarded: not-needed
 Last-Update: 2016-12-01
 
---- a/suricata.yaml.in
-+++ b/suricata.yaml.in
-@@ -996,8 +996,8 @@
+Index: suricata/suricata.yaml.in
+===================================================================
+--- suricata.orig/suricata.yaml.in
++++ suricata/suricata.yaml.in
+@@ -996,8 +996,8 @@ host-mode: auto
  # activated in live capture mode. You can use the filename variable to set
  # the file name of the socket.
  unix-command:
@@ -19,8 +21,10 @@ Last-Update: 2016-12-01
  
  # Magic file. The extension .mgc is added to the value here.
  #magic-file: /usr/share/file/magic
---- a/src/unix-manager.c
-+++ b/src/unix-manager.c
+Index: suricata/src/unix-manager.c
+===================================================================
+--- suricata.orig/src/unix-manager.c
++++ suricata/src/unix-manager.c
 @@ -51,7 +51,7 @@
  # endif
  #endif
@@ -30,9 +34,11 @@ Last-Update: 2016-12-01
  #define SOCKET_FILENAME "suricata-command.socket"
  #define SOCKET_TARGET SOCKET_PATH SOCKET_FILENAME
  
---- a/configure.ac
-+++ b/configure.ac
-@@ -2138,7 +2138,7 @@
+Index: suricata/configure.ac
+===================================================================
+--- suricata.orig/configure.ac
++++ suricata/configure.ac
+@@ -2142,7 +2142,7 @@ else
    EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
    EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
    EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
