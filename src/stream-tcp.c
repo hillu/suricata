@@ -105,6 +105,9 @@ static int StreamTcpValidateTimestamp(TcpSession * , Packet *);
 static int StreamTcpHandleTimestamp(TcpSession * , Packet *);
 static int StreamTcpValidateRst(TcpSession * , Packet *);
 static inline int StreamTcpValidateAck(TcpSession *ssn, TcpStream *, Packet *);
+static int StreamTcpStateDispatch(ThreadVars *tv, Packet *p,
+        StreamTcpThread *stt, TcpSession *ssn, PacketQueue *pq,
+        uint8_t state);
 
 extern int g_detect_disabled;
 
@@ -697,6 +700,7 @@ static void StreamTcpPacketSetState(Packet *p, TcpSession *ssn,
     if (state == ssn->state || PKT_IS_PSEUDOPKT(p))
         return;
 
+    ssn->pstate = ssn->state;
     ssn->state = state;
 
     /* update the flow state */
@@ -1333,11 +1337,16 @@ static int StreamTcpPacketStateSynSent(ThreadVars *tv, Packet *p,
                     SEQ_EQ(TCP_GET_WINDOW(p), 0) &&
                     SEQ_EQ(TCP_GET_ACK(p), (ssn->client.isn + 1)))
             {
+                SCLogDebug("ssn->server.flags |= STREAMTCP_STREAM_FLAG_RST_RECV");
+                ssn->server.flags |= STREAMTCP_STREAM_FLAG_RST_RECV;
+
                 StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
                 SCLogDebug("ssn %p: Reset received and state changed to "
                         "TCP_CLOSED", ssn);
             }
         } else {
+            ssn->client.flags |= STREAMTCP_STREAM_FLAG_RST_RECV;
+            SCLogDebug("ssn->client.flags |= STREAMTCP_STREAM_FLAG_RST_RECV");
             StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
             SCLogDebug("ssn %p: Reset received and state changed to "
                     "TCP_CLOSED", ssn);
@@ -4189,6 +4198,68 @@ static int StreamTcpPacketStateTimeWait(ThreadVars *tv, Packet *p,
     return 0;
 }
 
+static int StreamTcpPacketStateClosed(ThreadVars *tv, Packet *p,
+                        StreamTcpThread *stt, TcpSession *ssn, PacketQueue *pq)
+{
+    if (ssn == NULL)
+        return -1;
+
+    if (p->tcph->th_flags & TH_RST) {
+        SCLogDebug("RST on closed state");
+        return 0;
+    }
+
+    TcpStream *stream = NULL, *ostream = NULL;
+    if (PKT_IS_TOSERVER(p)) {
+        stream = &ssn->client;
+        ostream = &ssn->server;
+    } else {
+        stream = &ssn->server;
+        ostream = &ssn->client;
+    }
+
+    SCLogDebug("stream %s ostream %s",
+            stream->flags & STREAMTCP_STREAM_FLAG_RST_RECV?"true":"false",
+            ostream->flags & STREAMTCP_STREAM_FLAG_RST_RECV ? "true":"false");
+
+    /* if we've seen a RST on our direction, but not on the other
+     * see if we perhaps need to continue processing anyway. */
+    if ((stream->flags & STREAMTCP_STREAM_FLAG_RST_RECV) == 0) {
+        if (ostream->flags & STREAMTCP_STREAM_FLAG_RST_RECV) {
+            if (StreamTcpStateDispatch(tv, p, stt, ssn, &stt->pseudo_queue, ssn->pstate) < 0)
+                return -1;
+        }
+    }
+    return 0;
+}
+
+static void StreamTcpPacketCheckPostRst(TcpSession *ssn, Packet *p)
+{
+    if (p->flags & PKT_PSEUDO_STREAM_END) {
+        return;
+    }
+    /* more RSTs are not unusual */
+    if ((p->tcph->th_flags & (TH_RST)) != 0) {
+        return;
+    }
+
+    TcpStream *ostream = NULL;
+    if (PKT_IS_TOSERVER(p)) {
+        ostream = &ssn->server;
+    } else {
+        ostream = &ssn->client;
+    }
+
+    if (ostream->flags & STREAMTCP_STREAM_FLAG_RST_RECV) {
+        SCLogDebug("regular packet %"PRIu64" from same sender as "
+                "the previous RST. Looks like it injected!", p->pcap_cnt);
+        ostream->flags &= ~STREAMTCP_STREAM_FLAG_RST_RECV;
+        StreamTcpSetEvent(p, STREAM_SUSPECTED_RST_INJECT);
+        return;
+    }
+    return;
+}
+
 /**
  *  \retval 1 packet is a keep alive pkt
  *  \retval 0 packet is not a keep alive pkt
@@ -4473,6 +4544,76 @@ static int StreamTcpPacketIsBadWindowUpdate(TcpSession *ssn, Packet *p)
     return 0;
 }
 
+/** \internal
+ *  \brief call packet handling function for 'state'
+ *  \param state current TCP state
+ */
+static inline int StreamTcpStateDispatch(ThreadVars *tv, Packet *p,
+        StreamTcpThread *stt, TcpSession *ssn, PacketQueue *pq,
+        const uint8_t state)
+{
+    switch (state) {
+        case TCP_SYN_SENT:
+            if (StreamTcpPacketStateSynSent(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_SYN_RECV:
+            if (StreamTcpPacketStateSynRecv(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_ESTABLISHED:
+            if (StreamTcpPacketStateEstablished(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_FIN_WAIT1:
+            if (StreamTcpPacketStateFinWait1(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_FIN_WAIT2:
+            if (StreamTcpPacketStateFinWait2(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_CLOSING:
+            if (StreamTcpPacketStateClosing(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_CLOSE_WAIT:
+            if (StreamTcpPacketStateCloseWait(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_LAST_ACK:
+            if (StreamTcpPacketStateLastAck(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_TIME_WAIT:
+            if (StreamTcpPacketStateTimeWait(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+            break;
+        case TCP_CLOSED:
+            /* TCP session memory is not returned to pool until timeout. */
+            SCLogDebug("packet received on closed state");
+
+            if (StreamTcpPacketStateClosed(tv, p, stt, ssn, pq)) {
+                return -1;
+            }
+
+            break;
+        default:
+            SCLogDebug("packet received on default state");
+            break;
+    }
+    return 0;
+}
+
 /* flow is and stays locked */
 int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
                      PacketQueue *pq)
@@ -4588,61 +4729,12 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
                 if (StreamTcpPacketIsBadWindowUpdate(ssn,p))
                     goto skip;
 
-        switch (ssn->state) {
-            case TCP_SYN_SENT:
-                if(StreamTcpPacketStateSynSent(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_SYN_RECV:
-                if(StreamTcpPacketStateSynRecv(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_ESTABLISHED:
-                if(StreamTcpPacketStateEstablished(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_FIN_WAIT1:
-                if(StreamTcpPacketStateFinWait1(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_FIN_WAIT2:
-                if(StreamTcpPacketStateFinWait2(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_CLOSING:
-                if(StreamTcpPacketStateClosing(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_CLOSE_WAIT:
-                if(StreamTcpPacketStateCloseWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_LAST_ACK:
-                if(StreamTcpPacketStateLastAck(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_TIME_WAIT:
-                if(StreamTcpPacketStateTimeWait(tv, p, stt, ssn, &stt->pseudo_queue)) {
-                    goto error;
-                }
-                break;
-            case TCP_CLOSED:
-                /* TCP session memory is not returned to pool until timeout. */
-                SCLogDebug("packet received on closed state");
-                break;
-            default:
-                SCLogDebug("packet received on default state");
-                break;
-        }
+        /* handle the per 'state' logic */
+        if (StreamTcpStateDispatch(tv, p, stt, ssn, &stt->pseudo_queue, ssn->state) < 0)
+            goto error;
+
     skip:
+        StreamTcpPacketCheckPostRst(ssn, p);
 
         if (ssn->state >= TCP_ESTABLISHED) {
             p->flags |= PKT_STREAM_EST;
@@ -5855,67 +5947,185 @@ void StreamTcpPseudoPacketCreateStreamEndPacket(ThreadVars *tv, StreamTcpThread 
 /** \brief Create a pseudo packet injected into the engine to signal the
  *         opposing direction of this stream trigger detection/logging.
  *
- *  \param p real packet
+ *  \param parent real packet
  *  \param pq packet queue to store the new pseudo packet in
  *  \param dir 0 ts 1 tc
  */
 static void StreamTcpPseudoPacketCreateDetectLogFlush(ThreadVars *tv,
-        StreamTcpThread *stt, Packet *p, TcpSession *ssn, PacketQueue *pq, bool dir)
+        StreamTcpThread *stt, Packet *parent,
+        TcpSession *ssn, PacketQueue *pq, int dir)
 {
     SCEnter();
+    Flow *f = parent->flow;
 
-    if (p->flags & PKT_PSEUDO_DETECTLOG_FLUSH) {
+    if (parent->flags & PKT_PSEUDO_DETECTLOG_FLUSH) {
         SCReturn;
     }
 
-    Packet *np = StreamTcpPseudoSetup(p, GET_PKT_DATA(p), GET_PKT_LEN(p));
+    Packet *np = PacketPoolGetPacket();
     if (np == NULL) {
-        SCLogDebug("The packet received from packet allocation is NULL");
-        StatsIncr(tv, stt->counter_tcp_pseudo_failed);
         SCReturn;
     }
     PKT_SET_SRC(np, PKT_SRC_STREAM_TCP_DETECTLOG_FLUSH);
 
-    /* Setup the IP and TCP headers */
-    StreamTcpPseudoPacketSetupHeader(np,p);
-
-    np->tenant_id = p->flow->tenant_id;
-    np->flowflags = p->flowflags;
-
+    np->tenant_id = f->tenant_id;
+    np->datalink = DLT_RAW;
+    np->proto = IPPROTO_TCP;
+    FlowReference(&np->flow, f);
     np->flags |= PKT_STREAM_EST;
     np->flags |= PKT_HAS_FLOW;
     np->flags |= PKT_IGNORE_CHECKSUM;
     np->flags |= PKT_PSEUDO_DETECTLOG_FLUSH;
 
-    if (p->flags & PKT_NOPACKET_INSPECTION) {
+    if (f->flags & FLOW_NOPACKET_INSPECTION) {
         DecodeSetNoPacketInspectionFlag(np);
     }
-    if (p->flags & PKT_NOPAYLOAD_INSPECTION) {
+    if (f->flags & FLOW_NOPAYLOAD_INSPECTION) {
         DecodeSetNoPayloadInspectionFlag(np);
     }
 
-    if (dir == false) {
-        SCLogDebug("pseudo is to_client");
-        np->flowflags &= ~(FLOW_PKT_TOSERVER|FLOW_PKT_TOCLIENT);
-        np->flowflags |= FLOW_PKT_TOCLIENT;
-#ifdef DEBUG
-        BUG_ON(!(PKT_IS_TOCLIENT(np)));
-        BUG_ON((PKT_IS_TOSERVER(np)));
-#endif
-    } else {
+    if (dir == 0) {
         SCLogDebug("pseudo is to_server");
-        np->flowflags &= ~(FLOW_PKT_TOCLIENT|FLOW_PKT_TOSERVER);
         np->flowflags |= FLOW_PKT_TOSERVER;
-#ifdef DEBUG
-        BUG_ON(!(PKT_IS_TOSERVER(np)));
-        BUG_ON((PKT_IS_TOCLIENT(np)));
-#endif
+    } else {
+        SCLogDebug("pseudo is to_client");
+        np->flowflags |= FLOW_PKT_TOCLIENT;
     }
+    np->flowflags |= FLOW_PKT_ESTABLISHED;
+    np->payload = NULL;
+    np->payload_len = 0;
+
+    if (FLOW_IS_IPV4(f)) {
+        if (dir == 0) {
+            FLOW_COPY_IPV4_ADDR_TO_PACKET(&f->src, &np->src);
+            FLOW_COPY_IPV4_ADDR_TO_PACKET(&f->dst, &np->dst);
+            np->sp = f->sp;
+            np->dp = f->dp;
+        } else {
+            FLOW_COPY_IPV4_ADDR_TO_PACKET(&f->src, &np->dst);
+            FLOW_COPY_IPV4_ADDR_TO_PACKET(&f->dst, &np->src);
+            np->sp = f->dp;
+            np->dp = f->sp;
+        }
+
+        /* Check if we have enough room in direct data. We need ipv4 hdr + tcp hdr.
+         * Force an allocation if it is not the case.
+         */
+        if (GET_PKT_DIRECT_MAX_SIZE(np) <  40) {
+            if (PacketCallocExtPkt(np, 40) == -1) {
+                goto error;
+            }
+        }
+        /* set the ip header */
+        np->ip4h = (IPV4Hdr *)GET_PKT_DATA(np);
+        /* version 4 and length 20 bytes for the tcp header */
+        np->ip4h->ip_verhl = 0x45;
+        np->ip4h->ip_tos = 0;
+        np->ip4h->ip_len = htons(40);
+        np->ip4h->ip_id = 0;
+        np->ip4h->ip_off = 0;
+        np->ip4h->ip_ttl = 64;
+        np->ip4h->ip_proto = IPPROTO_TCP;
+        if (dir == 0) {
+            np->ip4h->s_ip_src.s_addr = f->src.addr_data32[0];
+            np->ip4h->s_ip_dst.s_addr = f->dst.addr_data32[0];
+        } else {
+            np->ip4h->s_ip_src.s_addr = f->dst.addr_data32[0];
+            np->ip4h->s_ip_dst.s_addr = f->src.addr_data32[0];
+        }
+
+        /* set the tcp header */
+        np->tcph = (TCPHdr *)((uint8_t *)GET_PKT_DATA(np) + 20);
+
+        SET_PKT_LEN(np, 40); /* ipv4 hdr + tcp hdr */
+
+    } else if (FLOW_IS_IPV6(f)) {
+        if (dir == 0) {
+            FLOW_COPY_IPV6_ADDR_TO_PACKET(&f->src, &np->src);
+            FLOW_COPY_IPV6_ADDR_TO_PACKET(&f->dst, &np->dst);
+            np->sp = f->sp;
+            np->dp = f->dp;
+        } else {
+            FLOW_COPY_IPV6_ADDR_TO_PACKET(&f->src, &np->dst);
+            FLOW_COPY_IPV6_ADDR_TO_PACKET(&f->dst, &np->src);
+            np->sp = f->dp;
+            np->dp = f->sp;
+        }
+
+        /* Check if we have enough room in direct data. We need ipv6 hdr + tcp hdr.
+         * Force an allocation if it is not the case.
+         */
+        if (GET_PKT_DIRECT_MAX_SIZE(np) <  60) {
+            if (PacketCallocExtPkt(np, 60) == -1) {
+                goto error;
+            }
+        }
+        /* set the ip header */
+        np->ip6h = (IPV6Hdr *)GET_PKT_DATA(np);
+        /* version 6 */
+        np->ip6h->s_ip6_vfc = 0x60;
+        np->ip6h->s_ip6_flow = 0;
+        np->ip6h->s_ip6_nxt = IPPROTO_TCP;
+        np->ip6h->s_ip6_plen = htons(20);
+        np->ip6h->s_ip6_hlim = 64;
+        if (dir == 0) {
+            np->ip6h->s_ip6_src[0] = f->src.addr_data32[0];
+            np->ip6h->s_ip6_src[1] = f->src.addr_data32[1];
+            np->ip6h->s_ip6_src[2] = f->src.addr_data32[2];
+            np->ip6h->s_ip6_src[3] = f->src.addr_data32[3];
+            np->ip6h->s_ip6_dst[0] = f->dst.addr_data32[0];
+            np->ip6h->s_ip6_dst[1] = f->dst.addr_data32[1];
+            np->ip6h->s_ip6_dst[2] = f->dst.addr_data32[2];
+            np->ip6h->s_ip6_dst[3] = f->dst.addr_data32[3];
+        } else {
+            np->ip6h->s_ip6_src[0] = f->dst.addr_data32[0];
+            np->ip6h->s_ip6_src[1] = f->dst.addr_data32[1];
+            np->ip6h->s_ip6_src[2] = f->dst.addr_data32[2];
+            np->ip6h->s_ip6_src[3] = f->dst.addr_data32[3];
+            np->ip6h->s_ip6_dst[0] = f->src.addr_data32[0];
+            np->ip6h->s_ip6_dst[1] = f->src.addr_data32[1];
+            np->ip6h->s_ip6_dst[2] = f->src.addr_data32[2];
+            np->ip6h->s_ip6_dst[3] = f->src.addr_data32[3];
+        }
+
+        /* set the tcp header */
+        np->tcph = (TCPHdr *)((uint8_t *)GET_PKT_DATA(np) + 40);
+
+        SET_PKT_LEN(np, 60); /* ipv6 hdr + tcp hdr */
+    }
+
+    np->tcph->th_offx2 = 0x50;
+    np->tcph->th_flags |= TH_ACK;
+    np->tcph->th_win = 10;
+    np->tcph->th_urp = 0;
+
+    /* to server */
+    if (dir == 0) {
+        np->tcph->th_sport = htons(f->sp);
+        np->tcph->th_dport = htons(f->dp);
+
+        np->tcph->th_seq = htonl(ssn->client.next_seq);
+        np->tcph->th_ack = htonl(ssn->server.last_ack);
+
+    /* to client */
+    } else {
+        np->tcph->th_sport = htons(f->dp);
+        np->tcph->th_dport = htons(f->sp);
+
+        np->tcph->th_seq = htonl(ssn->server.next_seq);
+        np->tcph->th_ack = htonl(ssn->client.last_ack);
+    }
+
+    /* use parent time stamp */
+    memcpy(&np->ts, &parent->ts, sizeof(struct timeval));
 
     SCLogDebug("np %p", np);
     PacketEnqueue(pq, np);
 
     StatsIncr(tv, stt->counter_tcp_pseudo);
+    SCReturn;
+error:
+    FlowDeReference(&np->flow);
     SCReturn;
 }
 

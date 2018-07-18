@@ -140,6 +140,7 @@ static inline int SCLogMapLogLevelToSyslogLevel(int log_level)
         case SC_LOG_INFO:
             syslog_log_level = LOG_INFO;
             break;
+        case SC_LOG_CONFIG:
         case SC_LOG_DEBUG:
         case SC_LOG_PERF:
             syslog_log_level = LOG_DEBUG;
@@ -1407,8 +1408,7 @@ void SCLogLoadConfig(int daemon, int verbose)
                     facility = SC_LOG_DEF_SYSLOG_FACILITY;
                 }
             }
-            printf("Initialization syslog logging with format \"%s\".\n",
-                format);
+            SCLogDebug("Initializing syslog logging with format \"%s\"", format);
             have_logging = 1;
             op_iface_ctx = SCLogInitSyslogOPIface(facility, format, level, type);
         }

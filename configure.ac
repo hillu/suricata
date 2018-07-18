@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 4.0.4)
+    AC_INIT(suricata, 4.0.5)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
@@ -1482,15 +1482,8 @@
     fi
 
   # libnspr
-    enable_nspr="no"
-
-    # Try pkg-config first:
-    PKG_CHECK_MODULES([libnspr], nspr,, [with_pkgconfig_nspr=no])
-    if test "$with_pkgconfig_nspr" != "no"; then
-        CPPFLAGS="${CPPFLAGS} ${libnspr_CFLAGS}"
-        LIBS="${LIBS} ${libnspr_LIBS}"
-    fi
-
+    AC_ARG_ENABLE(nspr,
+            AS_HELP_STRING([--disable-nspr],[Disable libnspr support]))
     AC_ARG_WITH(libnspr_includes,
             [  --with-libnspr-includes=DIR  libnspr include directory],
             [with_libnspr_includes="$withval"],[with_libnspr_includes=no])
@@ -1498,41 +1491,43 @@
             [  --with-libnspr-libraries=DIR    libnspr library directory],
             [with_libnspr_libraries="$withval"],[with_libnspr_libraries="no"])
 
-    if test "$with_libnspr_includes" != "no"; then
-        CPPFLAGS="${CPPFLAGS} -I${with_libnspr_includes}"
-    fi
+    if test "$enable_nspr" != "no"; then
+      # Try pkg-config first:
+      PKG_CHECK_MODULES([libnspr], nspr,, [with_pkgconfig_nspr=no])
+      if test "$with_pkgconfig_nspr" != "no"; then
+          CPPFLAGS="${CPPFLAGS} ${libnspr_CFLAGS}"
+          LIBS="${LIBS} ${libnspr_LIBS}"
+      fi
 
-    AC_CHECK_HEADER(nspr.h,NSPR="yes",NSPR="no")
-    if test "$NSPR" = "yes"; then
-        if test "$with_libnspr_libraries" != "no"; then
-            LDFLAGS="${LDFLAGS}  -L${with_libnspr_libraries}"
-        fi
+      if test "$with_libnspr_includes" != "no"; then
+          CPPFLAGS="${CPPFLAGS} -I${with_libnspr_includes}"
+      fi
 
-        AC_CHECK_LIB(nspr4, PR_GetCurrentThread,, NSPR="no")
+      AC_CHECK_HEADER(nspr.h,NSPR="yes",NSPR="no")
+      if test "$NSPR" = "yes"; then
+          if test "$with_libnspr_libraries" != "no"; then
+              LDFLAGS="${LDFLAGS}  -L${with_libnspr_libraries}"
+          fi
 
-        if test "$NSPR" = "no"; then
-            echo
-            echo "   ERROR!  libnspr library not found, go get it"
-            echo "   from Mozilla or your distribution:"
-            echo
-            echo "   Ubuntu: apt-get install libnspr4-dev"
-            echo "   Fedora: yum install nspr-devel"
-            echo
-            exit 1
-        fi
-        enable_nspr="yes"
+          AC_CHECK_LIB(nspr4, PR_GetCurrentThread,, NSPR="no")
+
+          if test "$NSPR" = "no"; then
+              echo
+              echo "   ERROR!  libnspr library not found, go get it"
+              echo "   from Mozilla or your distribution:"
+              echo
+              echo "   Ubuntu: apt-get install libnspr4-dev"
+              echo "   Fedora: yum install nspr-devel"
+              echo
+              exit 1
+          fi
+          enable_nspr="yes"
+      fi
     fi
 
   # libnss
-    enable_nss="no"
-
-    # Try pkg-config first:
-    PKG_CHECK_MODULES([libnss], nss,, [with_pkgconfig_nss=no])
-    if test "$with_pkgconfig_nss" != "no"; then
-        CPPFLAGS="${CPPFLAGS} ${libnss_CFLAGS}"
-        LIBS="${LIBS} ${libnss_LIBS}"
-    fi
-
+    AC_ARG_ENABLE(nss,
+            AS_HELP_STRING([--disable-nss],[Disable libnss support]))
     AC_ARG_WITH(libnss_includes,
             [  --with-libnss-includes=DIR  libnss include directory],
             [with_libnss_includes="$withval"],[with_libnss_includes=no])
@@ -1540,31 +1535,40 @@
             [  --with-libnss-libraries=DIR    libnss library directory],
             [with_libnss_libraries="$withval"],[with_libnss_libraries="no"])
 
-    if test "$with_libnss_includes" != "no"; then
-        CPPFLAGS="${CPPFLAGS} -I${with_libnss_includes}"
-    fi
+    if test "$enable_nss" != "no"; then
+      # Try pkg-config first:
+      PKG_CHECK_MODULES([libnss], nss,, [with_pkgconfig_nss=no])
+      if test "$with_pkgconfig_nss" != "no"; then
+          CPPFLAGS="${CPPFLAGS} ${libnss_CFLAGS}"
+          LIBS="${LIBS} ${libnss_LIBS}"
+      fi
 
-    AC_CHECK_HEADER(sechash.h,NSS="yes",NSS="no")
-    if test "$NSS" = "yes"; then
-        if test "$with_libnss_libraries" != "no"; then
-            LDFLAGS="${LDFLAGS}  -L${with_libnss_libraries}"
-        fi
+      if test "$with_libnss_includes" != "no"; then
+          CPPFLAGS="${CPPFLAGS} -I${with_libnss_includes}"
+      fi
 
-        AC_CHECK_LIB(nss3, HASH_Begin,, NSS="no")
+      AC_CHECK_HEADER(sechash.h,NSS="yes",NSS="no")
+      if test "$NSS" = "yes"; then
+          if test "$with_libnss_libraries" != "no"; then
+              LDFLAGS="${LDFLAGS}  -L${with_libnss_libraries}"
+          fi
 
-        if test "$NSS" = "no"; then
-            echo
-            echo "   ERROR!  libnss library not found, go get it"
-            echo "   from Mozilla or your distribution:"
-            echo
-            echo "   Ubuntu: apt-get install libnss3-dev"
-            echo "   Fedora: yum install nss-devel"
-            echo
-            exit 1
-        fi
+          AC_CHECK_LIB(nss3, HASH_Begin,, NSS="no")
 
-        AC_DEFINE([HAVE_NSS],[1],[libnss available for md5])
-        enable_nss="yes"
+          if test "$NSS" = "no"; then
+              echo
+              echo "   ERROR!  libnss library not found, go get it"
+              echo "   from Mozilla or your distribution:"
+              echo
+              echo "   Ubuntu: apt-get install libnss3-dev"
+              echo "   Fedora: yum install nss-devel"
+              echo
+              exit 1
+          fi
+
+          AC_DEFINE([HAVE_NSS],[1],[libnss available for md5])
+          enable_nss="yes"
+      fi
     fi
 
   # libmagic
@@ -1917,7 +1921,7 @@
                     AC_CHECK_LIB(event, event_base_free,, HAVE_LIBEVENT="no")
                     AC_CHECK_LIB(event_pthreads, evthread_use_pthreads,, HAVE_LIBEVENT_PTHREADS="no")
                 fi
-                if test "$HAVE_LIBEVENT" = "no" -o test "$HAVE_LIBEVENT_PTHREADS" = "no" ; then
+                if [ test "$HAVE_LIBEVENT" = "no" ] && [ -o test "$HAVE_LIBEVENT_PTHREADS" = "no"]; then
                     if test "$HAVE_LIBEVENT" = "no"; then
                         echo
                         echo "  Async mode for redis output will not be available."

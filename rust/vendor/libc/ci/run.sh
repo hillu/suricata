@@ -24,6 +24,13 @@ if [ "$QEMU" != "" ]; then
       curl https://s3-us-west-1.amazonaws.com/rust-lang-ci2/libc/$QEMU | \
         gunzip -d > $tmpdir/$qemufile
     fi
+  elif [ -z "${QEMU#*.xz}" ]; then
+    # image is .xz : download and uncompress it
+    qemufile=$(echo ${QEMU%.xz} | sed 's/\//__/g')
+    if [ ! -f $tmpdir/$qemufile ]; then
+      curl https://s3-us-west-1.amazonaws.com/rust-lang-ci2/libc/$QEMU | \
+        unxz > $tmpdir/$qemufile
+    fi
   else
     # plain qcow2 image: just download it
     qemufile=$(echo ${QEMU} | sed 's/\//__/g')
@@ -79,4 +86,5 @@ if [ "$TARGET" = "x86_64-unknown-linux-gnux32" ]; then
   opt="--release"
 fi
 
+cargo test $opt --no-default-features --manifest-path libc-test/Cargo.toml --target $TARGET
 exec cargo test $opt --manifest-path libc-test/Cargo.toml --target $TARGET

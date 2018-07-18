@@ -149,6 +149,10 @@ SCEnumCharMap http_decoder_event_table[ ] = {
         HTTP_DECODER_EVENT_METHOD_DELIM_NON_COMPLIANT},
     { "REQUEST_LINE_LEADING_WHITESPACE",
         HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE},
+    { "TOO_MANY_ENCODING_LAYERS",
+        HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS},
+    { "ABNORMAL_CE_HEADER",
+        HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
 
     /* suricata warnings/errors */
     { "MULTIPART_GENERIC_ERROR",
@@ -245,6 +249,8 @@ static void HTPSetEvent(HtpState *s, HtpTxUserData *htud, uint8_t e)
     }
 
     htp_tx_t *tx = HTPStateGetTx(s, s->transaction_cnt);
+    if (tx == NULL && s->transaction_cnt > 0)
+        tx = HTPStateGetTx(s, s->transaction_cnt - 1);
     if (tx != NULL) {
         htud = (HtpTxUserData *) htp_tx_get_user_data(tx);
         if (htud != NULL) {
@@ -515,6 +521,10 @@ struct {
     { "Request line: URI contains non-compliant delimiter", HTTP_DECODER_EVENT_URI_DELIM_NON_COMPLIANT},
     { "Request line: non-compliant delimiter between Method and URI", HTTP_DECODER_EVENT_METHOD_DELIM_NON_COMPLIANT},
     { "Request line: leading whitespace", HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE},
+    { "Too many response content encoding layers", HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS},
+    { "C-E gzip has abnormal value", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
+    { "C-E deflate has abnormal value", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
+    { "C-E unknown setting", HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER},
 };
 
 #define HTP_ERROR_MAX (sizeof(htp_errors) / sizeof(htp_errors[0]))
@@ -2903,21 +2913,18 @@ void HtpConfigRestoreBackup(void)
  *        response of the parser from HTP library. */
 static int HTPParserTest01(void)
 {
-    int result = 0;
-    Flow *f = NULL;
     uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent: Victor/1.0\r\n\r\nPost"
                          " Data is c0oL!";
     uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
-    TcpSession ssn;
-    HtpState *htp_state =  NULL;
-    int r = 0;
-    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
 
+    TcpSession ssn;
     memset(&ssn, 0, sizeof(ssn));
 
-    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
-    if (f == NULL)
-        goto end;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
+
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    FAIL_IF_NULL(f);
     f->protoctx = &ssn;
     f->proto = IPPROTO_TCP;
     f->alproto = ALPROTO_HTTP;
@@ -2935,45 +2942,129 @@ static int HTPParserTest01(void)
         else
             flags = STREAM_TOSERVER;
 
-        FLOWLOCK_WRLOCK(f);
-        r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
+        int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
                                 &httpbuf1[u], 1);
-        if (r != 0) {
-            printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
-                    " 0: ", u, r);
-            FLOWLOCK_UNLOCK(f);
-            goto end;
-        }
-        FLOWLOCK_UNLOCK(f);
+        FAIL_IF(r != 0);
     }
 
-    htp_state = f->alstate;
-    if (htp_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    HtpState *htp_state = f->alstate;
+    FAIL_IF_NULL(htp_state);
 
     htp_tx_t *tx = HTPStateGetTx(htp_state, 0);
-    htp_header_t *h =  htp_table_get_index(tx->request_headers, 0, NULL);
-    if (strcmp(bstr_util_strdup_to_c(h->value), "Victor/1.0")
-        || tx->request_method_number != HTP_M_POST ||
-        tx->request_protocol_number != HTP_PROTOCOL_1_0)
-    {
-        printf("expected header value: Victor/1.0 and got %s: and expected"
-                " method: POST and got %s, expected protocol number HTTP/1.0"
-                "  and got: %s \n", bstr_util_strdup_to_c(h->value),
-                bstr_util_strdup_to_c(tx->request_method),
-                bstr_util_strdup_to_c(tx->request_protocol));
-        goto end;
-    }
+    FAIL_IF_NULL(tx);
 
-    result = 1;
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
+    htp_header_t *h =  htp_table_get_index(tx->request_headers, 0, NULL);
+    FAIL_IF_NULL(h);
+
+    FAIL_IF(strcmp(bstr_util_strdup_to_c(h->value), "Victor/1.0"));
+    FAIL_IF(tx->request_method_number != HTP_M_POST);
+    FAIL_IF(tx->request_protocol_number != HTP_PROTOCOL_1_0);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     UTHFreeFlow(f);
-    return result;
+    PASS;
+}
+
+/** \test Test folding in 1 read case */
+static int HTPParserTest01b(void)
+{
+    uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent:\r\n Victor/1.0\r\n\r\nPost"
+                         " Data is c0oL!";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+
+    TcpSession ssn;
+    memset(&ssn, 0, sizeof(ssn));
+
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
+
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    FAIL_IF_NULL(f);
+    f->protoctx = &ssn;
+    f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint8_t flags =STREAM_TOSERVER|STREAM_START|STREAM_EOF;
+    int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
+            httpbuf1, httplen1);
+    FAIL_IF(r != 0);
+
+    HtpState *htp_state = f->alstate;
+    FAIL_IF_NULL(htp_state);
+
+    htp_tx_t *tx = HTPStateGetTx(htp_state, 0);
+    FAIL_IF_NULL(tx);
+
+    htp_header_t *h =  htp_table_get_index(tx->request_headers, 0, NULL);
+    FAIL_IF_NULL(h);
+
+    FAIL_IF(strcmp(bstr_util_strdup_to_c(h->value), "Victor/1.0"));
+    FAIL_IF(tx->request_method_number != HTP_M_POST);
+    FAIL_IF(tx->request_protocol_number != HTP_PROTOCOL_1_0);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
+    UTHFreeFlow(f);
+    PASS;
+}
+
+/** \test Test folding in 1byte per read case */
+static int HTPParserTest01c(void)
+{
+    uint8_t httpbuf1[] = "POST / HTTP/1.0\r\nUser-Agent:\r\n Victor/1.0\r\n\r\nPost"
+                         " Data is c0oL!";
+    uint32_t httplen1 = sizeof(httpbuf1) - 1; /* minus the \0 */
+
+    TcpSession ssn;
+    memset(&ssn, 0, sizeof(ssn));
+
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
+
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    FAIL_IF_NULL(f);
+    f->protoctx = &ssn;
+    f->proto = IPPROTO_TCP;
+    f->alproto = ALPROTO_HTTP;
+
+    StreamTcpInitConfig(TRUE);
+
+    uint32_t u;
+    for (u = 0; u < httplen1; u++) {
+        uint8_t flags = 0;
+
+        if (u == 0)
+            flags = STREAM_TOSERVER|STREAM_START;
+        else if (u == (httplen1 - 1))
+            flags = STREAM_TOSERVER|STREAM_EOF;
+        else
+            flags = STREAM_TOSERVER;
+
+        int r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
+                                &httpbuf1[u], 1);
+        FAIL_IF(r != 0);
+    }
+
+    HtpState *htp_state = f->alstate;
+    FAIL_IF_NULL(htp_state);
+
+    htp_tx_t *tx = HTPStateGetTx(htp_state, 0);
+    FAIL_IF_NULL(tx);
+
+    htp_header_t *h =  htp_table_get_index(tx->request_headers, 0, NULL);
+    FAIL_IF_NULL(h);
+
+    FAIL_IF(strcmp(bstr_util_strdup_to_c(h->value), "Victor/1.0"));
+    FAIL_IF(tx->request_method_number != HTP_M_POST);
+    FAIL_IF(tx->request_protocol_number != HTP_PROTOCOL_1_0);
+
+    AppLayerParserThreadCtxFree(alp_tctx);
+    StreamTcpFreeConfig(TRUE);
+    UTHFreeFlow(f);
+    PASS;
 }
 
 /** \test Test case where chunks are sent in smaller chunks and check the
@@ -5855,13 +5946,8 @@ end:
 /** \test Test really long request, this should result in HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG */
 static int HTPParserTest14(void)
 {
-    int result = 0;
-    Flow *f = NULL;
-    char *httpbuf = NULL;
     size_t len = 18887;
     TcpSession ssn;
-    HtpState *htp_state =  NULL;
-    int r = 0;
     char input[] = "\
 %YAML 1.1\n\
 ---\n\
@@ -5875,6 +5961,7 @@ libhtp:\n\
     response-body-limit: 0\n\
 ";
     AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
 
     memset(&ssn, 0, sizeof(ssn));
 
@@ -5884,9 +5971,8 @@ libhtp:\n\
     ConfYamlLoadString(input, strlen(input));
     HTPConfigure();
 
-    httpbuf = SCMalloc(len);
-    if (unlikely(httpbuf == NULL))
-        goto end;
+    char *httpbuf = SCMalloc(len);
+    FAIL_IF_NULL(httpbuf);
     memset(httpbuf, 0x00, len);
 
     /* create the request with a longer than 18k cookie */
@@ -5907,9 +5993,8 @@ libhtp:\n\
     httpbuf[len - 2] = '\r';
     httpbuf[len - 1] = '\n';
 
-    f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
-    if (f == NULL)
-        goto end;
+    Flow *f = UTHBuildFlow(AF_INET, "1.2.3.4", "1.2.3.5", 1024, 80);
+    FAIL_IF_NULL(f);
     f->protoctx = &ssn;
     f->alproto = ALPROTO_HTTP;
     f->proto = IPPROTO_TCP;
@@ -5924,72 +6009,31 @@ libhtp:\n\
         else if (u == (len - 1)) flags = STREAM_TOSERVER|STREAM_EOF;
         else flags = STREAM_TOSERVER;
 
-        FLOWLOCK_WRLOCK(f);
-        r = AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
+        (void)AppLayerParserParse(NULL, alp_tctx, f, ALPROTO_HTTP, flags,
                                 (uint8_t *)&httpbuf[u], 1);
-        if (u < 18294) { /* first 18294 bytes should result in 0 */
-            if (r != 0) {
-                printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
-                        " 0: ", u, r);
-                FLOWLOCK_UNLOCK(f);
-                goto end;
-            }
-        } else if (u == 18294UL) { /* byte 18294 should result in error */
-            if (r != -1) {
-                printf("toserver chunk %" PRIu32 " returned %" PRId32 ", expected"
-                        " -1: ", u, r);
-                FLOWLOCK_UNLOCK(f);
-                goto end;
-            }
-
-            /* break out, htp state is in error state now */
-            FLOWLOCK_UNLOCK(f);
-            break;
-        }
-        FLOWLOCK_UNLOCK(f);
     }
-    htp_state = f->alstate;
-    if (htp_state == NULL) {
-        printf("no http state: ");
-        goto end;
-    }
+    HtpState *htp_state = f->alstate;
+    FAIL_IF_NULL(htp_state);
 
     htp_tx_t *tx = HTPStateGetTx(htp_state, 0);
-    if (tx == NULL || tx->request_method_number != HTP_M_GET || tx->request_protocol_number != HTP_PROTOCOL_1_1)
-    {
-        printf("expected method M_GET and got %s: , expected protocol "
-                "HTTP/1.1 and got %s \n", bstr_util_strdup_to_c(tx->request_method),
-                bstr_util_strdup_to_c(tx->request_protocol));
-        goto end;
-    }
+    FAIL_IF_NULL(tx);
+    FAIL_IF(tx->request_method_number != HTP_M_GET);
+    FAIL_IF(tx->request_protocol_number != HTP_PROTOCOL_1_1);
 
-    FLOWLOCK_WRLOCK(f);
     AppLayerDecoderEvents *decoder_events = AppLayerParserGetEventsByTx(IPPROTO_TCP, ALPROTO_HTTP,f->alstate, 0);
-    if (decoder_events == NULL) {
-        printf("no app events: ");
-        FLOWLOCK_UNLOCK(f);
-        goto end;
-    }
-    FLOWLOCK_UNLOCK(f);
+    FAIL_IF_NULL(decoder_events);
 
-    if (decoder_events->events[0] != HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG) {
-        printf("HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG not set: ");
-        goto end;
-    }
+    FAIL_IF(decoder_events->events[0] != HTTP_DECODER_EVENT_REQUEST_FIELD_TOO_LONG);
 
-    result = 1;
-end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
+    AppLayerParserThreadCtxFree(alp_tctx);
     StreamTcpFreeConfig(TRUE);
     UTHFreeFlow(f);
-    if (httpbuf != NULL)
-        SCFree(httpbuf);
+    SCFree(httpbuf);
     HTPFreeConfig();
     ConfDeInit();
     ConfRestoreContextBackup();
     HtpConfigRestoreBackup();
-    return result;
+    PASS;
 }
 
 /** \test Test really long request (same as HTPParserTest14), now with config
@@ -6563,6 +6607,8 @@ void HTPParserRegisterTests(void)
 #ifdef UNITTESTS
     UtRegisterTest("HTPParserTest01", HTPParserTest01);
     UtRegisterTest("HTPParserTest01a", HTPParserTest01a);
+    UtRegisterTest("HTPParserTest01b", HTPParserTest01b);
+    UtRegisterTest("HTPParserTest01c", HTPParserTest01c);
     UtRegisterTest("HTPParserTest02", HTPParserTest02);
     UtRegisterTest("HTPParserTest03", HTPParserTest03);
     UtRegisterTest("HTPParserTest04", HTPParserTest04);
