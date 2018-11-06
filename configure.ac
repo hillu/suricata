@@ -1,4 +1,4 @@
-    AC_INIT(suricata, 4.0.5)
+    AC_INIT(suricata, 4.0.6)
     m4_ifndef([AM_SILENT_RULES], [m4_define([AM_SILENT_RULES],[])])AM_SILENT_RULES([yes])
     AC_CONFIG_HEADERS([config.h])
     AC_CONFIG_SRCDIR([src/suricata.c])
@@ -132,6 +132,7 @@
     AC_CHECK_HEADERS([dirent.h fnmatch.h])
     AC_CHECK_HEADERS([sys/resource.h sys/types.h sys/un.h])
     AC_CHECK_HEADERS([sys/random.h])
+    AC_CHECK_HEADERS([libgen.h])
 
     AC_CHECK_HEADERS([sys/socket.h net/if.h sys/mman.h linux/if_arp.h], [], [],
     [[#ifdef HAVE_SYS_SOCKET_H

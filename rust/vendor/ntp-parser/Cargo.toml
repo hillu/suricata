@@ -12,7 +12,7 @@
 
 [package]
 name = "ntp-parser"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Pierre Chifflier <chifflier@wzdftpd.net>"]
 description = "Parser for the NTP protocol"
 homepage = "https://github.com/rusticata/ntp-parser"

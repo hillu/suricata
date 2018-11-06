@@ -650,6 +650,19 @@ static inline uint64_t GetLeftEdge(TcpSession *ssn, TcpStream *stream)
                 raw_progress -= (uint64_t)chunk_size;
             }
         }
+
+        /* apply min inspect depth: if it is set we need to keep data
+         * before the raw progress. */
+        if (use_app && stream->min_inspect_depth) {
+            if (raw_progress < stream->min_inspect_depth)
+                raw_progress = 0;
+            else
+                raw_progress -= stream->min_inspect_depth;
+
+            SCLogDebug("stream->min_inspect_depth %u, raw_progress %"PRIu64,
+                    stream->min_inspect_depth, raw_progress);
+        }
+
         if (use_app) {
             left_edge = MIN(STREAM_APP_PROGRESS(stream), raw_progress);
             SCLogDebug("left_edge %"PRIu64", using both app:%"PRIu64", raw:%"PRIu64,
@@ -687,6 +700,18 @@ static inline uint64_t GetLeftEdge(TcpSession *ssn, TcpStream *stream)
             last_ack_abs += delta;
         }
         left_edge = MIN(left_edge, last_ack_abs);
+
+    /* if we're told to look for overlaps with different data we should
+     * consider data that is ack'd as well. Injected packets may have
+     * been ack'd or injected packet may be too late. */
+    } else if (check_overlap_different_data) {
+        uint32_t window = stream->window ? stream->window : 4096;
+        if (window < left_edge)
+            left_edge -= window;
+        else
+            left_edge = 0;
+
+        SCLogDebug("stream:%p left_edge %"PRIu64, stream, left_edge);
     }
 
     if (left_edge > 0) {

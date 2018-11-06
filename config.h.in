@@ -137,6 +137,9 @@
 /* Define to 1 if you have the `event_pthreads' library (-levent_pthreads). */
 #undef HAVE_LIBEVENT_PTHREADS
 
+/* Define to 1 if you have the <libgen.h> header file. */
+#undef HAVE_LIBGEN_H
+
 /* Define to 1 if you have the `GeoIP' library (-lGeoIP). */
 #undef HAVE_LIBGEOIP
 
