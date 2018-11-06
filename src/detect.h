@@ -224,6 +224,8 @@ typedef struct DetectPort_ {
 
 #define SIG_FLAG_MPM_NEG                (1<<11)
 
+#define SIG_FLAG_FLUSH                  (1<<12) /**< detection logic needs stream flush notification */
+
 #define SIG_FLAG_REQUIRE_FLOWVAR        (1<<17) /**< signature can only match if a flowbit, flowvar or flowint is available. */
 
 #define SIG_FLAG_FILESTORE              (1<<18) /**< signature has filestore keyword */
@@ -253,6 +255,7 @@ typedef struct DetectPort_ {
 #define SIG_FLAG_INIT_FLOW           (1<<2)  /**< signature has a flow setting */
 #define SIG_FLAG_INIT_BIDIREC        (1<<3)  /**< signature has bidirectional operator */
 #define SIG_FLAG_INIT_FIRST_IPPROTO_SEEN (1 << 4) /** < signature has seen the first ip_proto keyword */
+#define SIG_FLAG_INIT_NEED_FLUSH            (1<<7)
 
 /* signature mask flags */
 #define SIG_MASK_REQUIRE_PAYLOAD            (1<<0)
@@ -735,6 +738,12 @@ typedef struct DetectEngineCtx_ {
      *  \todo we only need this at init, so perhaps this
      *        can move to a DetectEngineCtx 'init' struct */
     DetectMpmAppLayerKeyword *app_mpms;
+
+    /** per keyword flag indicating if a prefilter has been
+     *  set for it. If true, the setup function will have to
+     *  run. Will be alloc'd to DETECT_TBLSIZE if used. */
+    bool *sm_types_prefilter;
+
 } DetectEngineCtx;
 
 /* Engine groups profiles (low, medium, high, custom) */
