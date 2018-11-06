@@ -3957,6 +3957,7 @@ static int StreamTcpPacketStateLastAck(ThreadVars *tv, Packet *p,
 
     } else if (p->tcph->th_flags & TH_FIN) {
         /** \todo */
+        SCLogDebug("ssn (%p): FIN pkt on LastAck", ssn);
 
     } else if (p->tcph->th_flags & TH_SYN) {
         SCLogDebug("ssn (%p): SYN pkt on LastAck", ssn);
@@ -3980,14 +3981,6 @@ static int StreamTcpPacketStateLastAck(ThreadVars *tv, Packet *p,
                 retransmission = 1;
             }
 
-            if (TCP_GET_SEQ(p) != ssn->client.next_seq && TCP_GET_SEQ(p) != ssn->client.next_seq + 1) {
-                SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
-                        " != %" PRIu32 " from stream", ssn,
-                        TCP_GET_SEQ(p), ssn->client.next_seq);
-                StreamTcpSetEvent(p, STREAM_LASTACK_ACK_WRONG_SEQ);
-                return -1;
-            }
-
             if (StreamTcpValidateAck(ssn, &ssn->server, p) == -1) {
                 SCLogDebug("ssn %p: rejecting because of invalid ack value", ssn);
                 StreamTcpSetEvent(p, STREAM_LASTACK_INVALID_ACK);
@@ -3995,9 +3988,19 @@ static int StreamTcpPacketStateLastAck(ThreadVars *tv, Packet *p,
             }
 
             if (!retransmission) {
-                StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
-                SCLogDebug("ssn %p: state changed to TCP_CLOSED", ssn);
+                if (SEQ_LT(TCP_GET_SEQ(p), ssn->client.next_seq)) {
+                    SCLogDebug("ssn %p: not updating state as packet is before next_seq", ssn);
+                } else if (TCP_GET_SEQ(p) != ssn->client.next_seq && TCP_GET_SEQ(p) != ssn->client.next_seq + 1) {
+                    SCLogDebug("ssn %p: -> SEQ mismatch, packet SEQ %" PRIu32 ""
+                            " != %" PRIu32 " from stream", ssn,
+                            TCP_GET_SEQ(p), ssn->client.next_seq);
+                    StreamTcpSetEvent(p, STREAM_LASTACK_ACK_WRONG_SEQ);
+                    return -1;
+                } else {
+                    StreamTcpPacketSetState(p, ssn, TCP_CLOSED);
+                    SCLogDebug("ssn %p: state changed to TCP_CLOSED", ssn);
 
+                }
                 ssn->server.window = TCP_GET_WINDOW(p) << ssn->server.wscale;
             }
 
@@ -4552,6 +4555,7 @@ static inline int StreamTcpStateDispatch(ThreadVars *tv, Packet *p,
         StreamTcpThread *stt, TcpSession *ssn, PacketQueue *pq,
         const uint8_t state)
 {
+    SCLogDebug("ssn: %p", ssn);
     switch (state) {
         case TCP_SYN_SENT:
             if (StreamTcpPacketStateSynSent(tv, p, stt, ssn, pq)) {
@@ -4569,31 +4573,37 @@ static inline int StreamTcpStateDispatch(ThreadVars *tv, Packet *p,
             }
             break;
         case TCP_FIN_WAIT1:
+            SCLogDebug("packet received on TCP_FIN_WAIT1 state");
             if (StreamTcpPacketStateFinWait1(tv, p, stt, ssn, pq)) {
                 return -1;
             }
             break;
         case TCP_FIN_WAIT2:
+            SCLogDebug("packet received on TCP_FIN_WAIT2 state");
             if (StreamTcpPacketStateFinWait2(tv, p, stt, ssn, pq)) {
                 return -1;
             }
             break;
         case TCP_CLOSING:
+            SCLogDebug("packet received on TCP_CLOSING state");
             if (StreamTcpPacketStateClosing(tv, p, stt, ssn, pq)) {
                 return -1;
             }
             break;
         case TCP_CLOSE_WAIT:
+            SCLogDebug("packet received on TCP_CLOSE_WAIT state");
             if (StreamTcpPacketStateCloseWait(tv, p, stt, ssn, pq)) {
                 return -1;
             }
             break;
         case TCP_LAST_ACK:
+            SCLogDebug("packet received on TCP_LAST_ACK state");
             if (StreamTcpPacketStateLastAck(tv, p, stt, ssn, pq)) {
                 return -1;
             }
             break;
         case TCP_TIME_WAIT:
+            SCLogDebug("packet received on TCP_TIME_WAIT state");
             if (StreamTcpPacketStateTimeWait(tv, p, stt, ssn, pq)) {
                 return -1;
             }

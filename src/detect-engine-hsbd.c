@@ -213,7 +213,6 @@ static const uint8_t *DetectEngineHSBDGetBufferForTX(htp_tx_t *tx, uint64_t tx_i
      * the window sizes when freeing data */
     htud->response_body.body_inspected = htud->response_body.content_len_so_far;
     SCLogDebug("htud->response_body.body_inspected now: %"PRIu64, htud->response_body.body_inspected);
-
     buffer = det_ctx->hsbd[index].buffer;
     *buffer_len = det_ctx->hsbd[index].buffer_len;
     *stream_start_offset = det_ctx->hsbd[index].offset;
