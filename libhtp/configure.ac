@@ -16,12 +16,19 @@ dnl -----------------------------------------------
 
 GENERIC_LIBRARY_NAME=htp
 
-# API version
-GENERIC_API_VERSION=1.0
-AC_SUBST(GENERIC_API_VERSION)
-
-# Shared library versioning
-GENERIC_LIBRARY_VERSION=1:0:0
+# This is _NOT_ the library release version, it's an API version.
+GENERIC_LIBRARY_VERSION=2:0:0
+#			| | |
+#		 +------+ | +---+
+#		 |        |     |
+#		current:revision:age
+#		 |        |     |
+#		 |        |     +- increment if interfaces have been added
+#		 |        |	   set to zero if interfaces have been removed
+#		 |	  |	   or changed
+#		 |	  +- increment if source code has changed
+#		 |	     set to zero if current is incremented
+#		 +- increment if interfaces have been added, removed or changed
 AC_SUBST(GENERIC_LIBRARY_VERSION)
 
 dnl --------------------------------
@@ -44,15 +51,15 @@ dnl --------------------------------
 dnl Options
 dnl --------------------------------
 
-AC_ARG_ENABLE(debug, [  --enable-debug  Enable debug mode], [ enable_debug=yes ])
-if test "$enable_debug" = "yes"; then
+AC_ARG_ENABLE(debug, [  --enable-debug  Enable debug mode],, [ enable_debug=no ])
+if test "x$enable_debug" = "xyes"; then
     CFLAGS="${CFLAGS} -DHTP_DEBUG"
     echo "Debug mode enabled"
 fi
 
 OLEVEL=2
 
-AC_ARG_ENABLE(devmode, [  --enable-devmode  Enable development mode], [ enable_devmode=yes ])
+AC_ARG_ENABLE(devmode, [  --enable-devmode  Enable development mode],, [ enable_devmode=no ])
 if test "$enable_devmode" = "yes"; then
     OLEVEL=0
     CFLAGS="${CFLAGS} -Werror -Wfatal-errors"
@@ -60,7 +67,7 @@ if test "$enable_devmode" = "yes"; then
     echo "Development mode enabled"
 fi
 
-AC_ARG_ENABLE(gcov, [  --enable-gcov  Enable gcov support], [ enable_gcov=yes ])
+AC_ARG_ENABLE(gcov, [  --enable-gcov  Enable gcov support],, [ enable_gcov=no ])
 if test "$enable_gcov" = "yes"; then
     OLEVEL=0
     CFLAGS="${CFLAGS} --coverage -fprofile-arcs -ftest-coverage"
@@ -106,6 +113,11 @@ fi
 AC_MSG_CHECKING([OS])
 OS=`uname -s`
 case "$OS" in
+        MINGW*)
+                AC_MSG_RESULT(MinGW)
+                OS_WINDOWS="true"
+                NO_STACK_PROTECTOR="true"
+        ;;
         CYGWIN*)
                 AC_MSG_RESULT(Cygwin)
                 OS_CYGWIN="true"

@@ -90,6 +90,9 @@
 /* Define to 1 if you have the <getopt.h> header file. */
 #undef HAVE_GETOPT_H
 
+/* Use getrandom */
+#undef HAVE_GETRANDOM
+
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
@@ -133,6 +136,9 @@
 
 /* Define to 1 if you have the `event_pthreads' library (-levent_pthreads). */
 #undef HAVE_LIBEVENT_PTHREADS
+
+/* Define to 1 if you have the <libgen.h> header file. */
+#undef HAVE_LIBGEN_H
 
 /* Define to 1 if you have the `GeoIP' library (-lGeoIP). */
 #undef HAVE_LIBGEOIP
@@ -191,9 +197,6 @@
 
 /* Define to 1 if you have the `nss3' library (-lnss3). */
 #undef HAVE_LIBNSS3
-
-/* Define to 1 if you have the `pcap' library (-lpcap). */
-#undef HAVE_LIBPCAP
 
 /* Define to 1 if you have the `pcre' library (-lpcre). */
 #undef HAVE_LIBPCRE
@@ -326,6 +329,9 @@
 /* Enable Rust language */
 #undef HAVE_RUST
 
+/* Enable support for experimental Rust parsers */
+#undef HAVE_RUST_EXTERNAL
+
 /* Define to 1 if you have the <sched.h> header file. */
 #undef HAVE_SCHED_H
 
@@ -395,6 +401,9 @@
 /* Define to 1 if you have the <sys/prctl.h> header file. */
 #undef HAVE_SYS_PRCTL_H
 
+/* Define to 1 if you have the <sys/random.h> header file. */
+#undef HAVE_SYS_RANDOM_H
+
 /* Define to 1 if you have the <sys/resource.h> header file. */
 #undef HAVE_SYS_RESOURCE_H
 
@@ -412,6 +421,9 @@
 
 /* Define to 1 if you have the <sys/types.h> header file. */
 #undef HAVE_SYS_TYPES_H
+
+/* Define to 1 if you have the <sys/un.h> header file. */
+#undef HAVE_SYS_UN_H
 
 /* Define to 1 if you have the <time.h> header file. */
 #undef HAVE_TIME_H

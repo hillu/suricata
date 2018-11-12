@@ -106,6 +106,7 @@ typedef struct PcapLogProfileData_ {
 } PcapLogProfileData;
 
 #define MAX_TOKS 9
+#define MAX_FILENAMELEN 513
 
 /**
  * PcapLog thread vars
@@ -617,7 +618,9 @@ static TmEcode PcapLogInitRingBuffer(PcapLogData *pl)
             goto fail;
         }
         char path[PATH_MAX];
-        snprintf(path, PATH_MAX - 1, "%s/%s", pattern, entry->d_name);
+        if (snprintf(path, PATH_MAX, "%s/%s", pattern, entry->d_name) == PATH_MAX)
+            goto fail;
+
         if ((pf->filename = SCStrdup(path)) == NULL) {
             goto fail;
         }
@@ -832,16 +835,24 @@ static TmEcode PcapLogDataDeinit(ThreadVars *t, void *thread_data)
     return TM_ECODE_OK;
 }
 
+
 static int ParseFilename(PcapLogData *pl, const char *filename)
 {
     char *toks[MAX_TOKS] = { NULL };
     int tok = 0;
-    char str[512] = "";
+    char str[MAX_FILENAMELEN] = "";
     int s = 0;
     int i, x;
     char *p = NULL;
+    size_t filename_len = 0;
 
     if (filename) {
+        filename_len = strlen(filename);
+        if (filename_len > (MAX_FILENAMELEN-1)) {
+            SCLogError(SC_ERR_INVALID_ARGUMENT, "invalid filename option. Max filename-length: %d",MAX_FILENAMELEN-1);
+            goto error;
+        }
+
         for (i = 0; i < (int)strlen(filename); i++) {
             if (tok >= MAX_TOKS) {
                 SCLogError(SC_ERR_INVALID_ARGUMENT,
@@ -1218,7 +1229,11 @@ static int PcapLogOpenFileCtx(PcapLogData *pl)
                 tms->tm_year + 1900, tms->tm_mon + 1, tms->tm_mday);
 
         /* create the filename to use */
-        snprintf(dirfull, PATH_MAX, "%s/%s", pl->dir, dirname);
+        int ret = snprintf(dirfull, sizeof(dirfull), "%s/%s", pl->dir, dirname);
+        if (ret < 0 || (size_t)ret >= sizeof(dirfull)) {
+            SCLogError(SC_ERR_SPRINTF,"failed to construct path");
+            goto error;
+        }
 
         /* if mkdir fails file open will fail, so deal with errors there */
 #ifndef OS_WIN32
@@ -1232,22 +1247,31 @@ static int PcapLogOpenFileCtx(PcapLogData *pl)
             goto error;
         }
 
+        int written;
         if (pl->timestamp_format == TS_FORMAT_SEC) {
-            snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, dirfull,
+            written = snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, dirfull,
                      pl->prefix, (uint32_t)ts.tv_sec);
         } else {
-            snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32 ".%" PRIu32,
+            written = snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32 ".%" PRIu32,
                      dirfull, pl->prefix, (uint32_t)ts.tv_sec, (uint32_t)ts.tv_usec);
         }
-
+        if (written == PATH_MAX) {
+            SCLogError(SC_ERR_SPRINTF,"log-pcap path overflow");
+            goto error;
+        }
     } else if (pl->mode == LOGMODE_NORMAL) {
+        int ret;
         /* create the filename to use */
         if (pl->timestamp_format == TS_FORMAT_SEC) {
-            snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, pl->dir,
-                     pl->prefix, (uint32_t)ts.tv_sec);
+            ret = snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32, pl->dir,
+                    pl->prefix, (uint32_t)ts.tv_sec);
         } else {
-            snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32 ".%" PRIu32, pl->dir,
-                     pl->prefix, (uint32_t)ts.tv_sec, (uint32_t)ts.tv_usec);
+            ret = snprintf(filename, PATH_MAX, "%s/%s.%" PRIu32 ".%" PRIu32, pl->dir,
+                    pl->prefix, (uint32_t)ts.tv_sec, (uint32_t)ts.tv_usec);
+        }
+        if (ret < 0 || (size_t)ret >= PATH_MAX) {
+            SCLogError(SC_ERR_SPRINTF,"failed to construct path");
+            goto error;
         }
     } else if (pl->mode == LOGMODE_MULTI) {
         if (pl->filename_part_cnt > 0) {
@@ -1294,13 +1318,18 @@ static int PcapLogOpenFileCtx(PcapLogData *pl)
                 }
             }
         } else {
+            int ret;
             /* create the filename to use */
             if (pl->timestamp_format == TS_FORMAT_SEC) {
-                snprintf(filename, PATH_MAX, "%s/%s.%u.%" PRIu32, pl->dir,
+                ret = snprintf(filename, PATH_MAX, "%s/%s.%u.%" PRIu32, pl->dir,
                         pl->prefix, pl->thread_number, (uint32_t)ts.tv_sec);
             } else {
-                snprintf(filename, PATH_MAX, "%s/%s.%u.%" PRIu32 ".%" PRIu32, pl->dir,
+                ret = snprintf(filename, PATH_MAX, "%s/%s.%u.%" PRIu32 ".%" PRIu32, pl->dir,
                         pl->prefix, pl->thread_number, (uint32_t)ts.tv_sec, (uint32_t)ts.tv_usec);
+            }
+            if (ret < 0 || (size_t)ret >= PATH_MAX) {
+                SCLogError(SC_ERR_SPRINTF,"failed to construct path");
+                goto error;
             }
         }
         SCLogDebug("multi-mode: filename %s", filename);
@@ -1405,7 +1434,8 @@ static void PcapLogProfilingDump(PcapLogData *pl)
 
     /* overall stats */
     fprintf(fp, "\nOverall: %"PRIu64" bytes written, average %d bytes per write.\n",
-        pl->profile_data_size, (int)(pl->profile_data_size / pl->profile_write.cnt));
+        pl->profile_data_size, pl->profile_write.cnt ?
+            (int)(pl->profile_data_size / pl->profile_write.cnt) : 0);
     fprintf(fp, "         PCAP data structure overhead: %"PRIuMAX" per write.\n",
         (uintmax_t)sizeof(struct pcap_pkthdr));
 

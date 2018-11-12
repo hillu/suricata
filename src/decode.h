@@ -37,6 +37,11 @@
 #include "util-cuda-vars.h"
 #endif /* __SC_CUDA_SUPPORT__ */
 
+#ifdef HAVE_NAPATECH
+#include "util-napatech.h"
+#endif /* HAVE_NAPATECH */
+
+
 typedef enum {
     CHECKSUM_VALIDATION_DISABLE,
     CHECKSUM_VALIDATION_ENABLE,
@@ -105,15 +110,17 @@ void AppLayerDecoderEventsFreeEvents(AppLayerDecoderEvents **events);
 typedef struct Address_ {
     char family;
     union {
-        uint32_t       address_un_data32[4]; /* type-specific field */
-        uint16_t       address_un_data16[8]; /* type-specific field */
-        uint8_t        address_un_data8[16]; /* type-specific field */
+        uint32_t        address_un_data32[4]; /* type-specific field */
+        uint16_t        address_un_data16[8]; /* type-specific field */
+        uint8_t         address_un_data8[16]; /* type-specific field */
+        struct in6_addr address_un_in6;
     } address;
 } Address;
 
 #define addr_data32 address.address_un_data32
 #define addr_data16 address.address_un_data16
 #define addr_data8  address.address_un_data8
+#define addr_in6addr    address.address_un_in6
 
 #define COPY_ADDRESS(a, b) do {                    \
         (b)->family = (a)->family;                 \
@@ -207,6 +214,8 @@ typedef struct Address_ {
 #define GET_IPV4_SRC_ADDR_PTR(p) ((p)->src.addr_data32)
 #define GET_IPV4_DST_ADDR_PTR(p) ((p)->dst.addr_data32)
 
+#define GET_IPV6_SRC_IN6ADDR(p) ((p)->src.addr_in6addr)
+#define GET_IPV6_DST_IN6ADDR(p) ((p)->dst.addr_in6addr)
 #define GET_IPV6_SRC_ADDR(p) ((p)->src.addr_data32)
 #define GET_IPV6_DST_ADDR(p) ((p)->dst.addr_data32)
 #define GET_TCP_SRC_PORT(p)  ((p)->sp)
@@ -586,6 +595,9 @@ typedef struct Packet_
 #ifdef __SC_CUDA_SUPPORT__
     CudaPacketVars cuda_pkt_vars;
 #endif
+#ifdef HAVE_NAPATECH
+    NapatechPacketVars ntpv;
+#endif
 }
 #ifdef HAVE_MPIPE
     /* mPIPE requires packet buffers to be aligned to 128 byte boundaries. */
@@ -647,6 +659,7 @@ typedef struct DecodeThreadVars_
     uint16_t counter_gre;
     uint16_t counter_vlan;
     uint16_t counter_vlan_qinq;
+    uint16_t counter_ieee8021ah;
     uint16_t counter_pppoe;
     uint16_t counter_teredo;
     uint16_t counter_mpls;
@@ -870,26 +883,14 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s);
      ((p)->action |= a)); \
 } while (0)
 
-#define TUNNEL_INCR_PKT_RTV(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
+#define TUNNEL_INCR_PKT_RTV_NOLOCK(p) do {                                          \
         ((p)->root ? (p)->root->tunnel_rtv_cnt++ : (p)->tunnel_rtv_cnt++);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
     } while (0)
 
 #define TUNNEL_INCR_PKT_TPR(p) do {                                                 \
         SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
         ((p)->root ? (p)->root->tunnel_tpr_cnt++ : (p)->tunnel_tpr_cnt++);          \
         SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR(p) do {                                                 \
-        SCMutexLock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);     \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
-        SCMutexUnlock((p)->root ? &(p)->root->tunnel_mutex : &(p)->tunnel_mutex);   \
-    } while (0)
-
-#define TUNNEL_DECR_PKT_TPR_NOLOCK(p) do {                                          \
-        ((p)->root ? (p)->root->tunnel_tpr_cnt-- : (p)->tunnel_tpr_cnt--);          \
     } while (0)
 
 #define TUNNEL_PKT_RTV(p) ((p)->root ? (p)->root->tunnel_rtv_cnt : (p)->tunnel_rtv_cnt)
@@ -971,6 +972,7 @@ typedef int (*DecoderFunc)(ThreadVars *tv, DecodeThreadVars *dtv, Packet *p,
 int DecoderParseDataFromFile(char *filename, DecoderFunc Decoder);
 int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
 #endif
+void DecodeGlobalConfig(void);
 
 /** \brief Set the No payload inspection Flag for the packet.
  *
@@ -1081,6 +1083,9 @@ int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
 #define LINKTYPE_LINUX_SLL  113
 #define LINKTYPE_PPP        9
 #define LINKTYPE_RAW        DLT_RAW
+/* http://www.tcpdump.org/linktypes.html defines DLT_RAW as 101, yet others don't.
+ * Libpcap on at least OpenBSD returns 101 as datalink type for RAW pcaps though. */
+#define LINKTYPE_RAW2       101
 #define PPP_OVER_GRE        11
 #define VLAN_OVER_GRE       13
 
@@ -1131,6 +1136,38 @@ int DecoderParseDataFromFileSerie(char *fileprefix, DecoderFunc Decoder);
     ((p)->flags & (PKT_PSEUDO_STREAM_END|PKT_PSEUDO_DETECTLOG_FLUSH))
 
 #define PKT_SET_SRC(p, src_val) ((p)->pkt_src = src_val)
+
+/** \brief return true if *this* packet needs to trigger a verdict.
+ *
+ *  If we have the root packet, and we have none outstanding,
+ *  we can verdict now.
+ *
+ *  If we have a upper layer packet, it's the only one and root
+ *  is already processed, we can verdict now.
+ *
+ *  Otherwise, a future packet will issue the verdict.
+ */
+static inline bool VerdictTunnelPacket(Packet *p)
+{
+    bool verdict = true;
+    SCMutex *m = p->root ? &p->root->tunnel_mutex : &p->tunnel_mutex;
+    SCMutexLock(m);
+    const uint16_t outstanding = TUNNEL_PKT_TPR(p) - TUNNEL_PKT_RTV(p);
+    SCLogDebug("tunnel: outstanding %u", outstanding);
+
+    /* if there are packets outstanding, we won't verdict this one */
+    if (IS_TUNNEL_ROOT_PKT(p) && !IS_TUNNEL_PKT_VERDICTED(p) && !outstanding) {
+        // verdict
+        SCLogDebug("root %p: verdict", p);
+    } else if (!IS_TUNNEL_ROOT_PKT(p) && outstanding == 1 && p->root && IS_TUNNEL_PKT_VERDICTED(p->root)) {
+        // verdict
+        SCLogDebug("tunnel %p: verdict", p);
+    } else {
+        verdict = false;
+    }
+    SCMutexUnlock(m);
+    return verdict;
+}
 
 #endif /* __DECODE_H__ */
 

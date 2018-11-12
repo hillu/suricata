@@ -140,6 +140,7 @@ const struct DecodeEvents_ DEvents[] = {
     { "decoder.vlan.header_too_small",VLAN_HEADER_TOO_SMALL, },
     { "decoder.vlan.unknown_type",VLAN_UNKNOWN_TYPE, },
     { "decoder.vlan.too_many_layers", VLAN_HEADER_TOO_MANY_LAYERS, },
+    { "decoder.ieee8021ah.header_too_small", IEEE8021AH_HEADER_TOO_SMALL, },
 
     /* RAW EVENTS */
     { "decoder.ipraw.invalid_ip_version",IPRAW_INVALID_IPV, },
@@ -195,6 +196,7 @@ const struct DecodeEvents_ DEvents[] = {
     { "stream.3whs_syn_resend_diff_seq_on_syn_recv", STREAM_3WHS_SYN_RESEND_DIFF_SEQ_ON_SYN_RECV, },
     { "stream.3whs_syn_toclient_on_syn_recv", STREAM_3WHS_SYN_TOCLIENT_ON_SYN_RECV, },
     { "stream.3whs_wrong_seq_wrong_ack", STREAM_3WHS_WRONG_SEQ_WRONG_ACK, },
+    { "stream.3whs_ack_data_inject", STREAM_3WHS_ACK_DATA_INJECT, },
     { "stream.4whs_synack_with_wrong_ack", STREAM_4WHS_SYNACK_WITH_WRONG_ACK, },
     { "stream.4whs_synack_with_wrong_syn", STREAM_4WHS_SYNACK_WITH_WRONG_SYN, },
     { "stream.4whs_wrong_seq", STREAM_4WHS_WRONG_SEQ, },
@@ -235,11 +237,14 @@ const struct DecodeEvents_ DEvents[] = {
     { "stream.rst_invalid_ack", STREAM_RST_INVALID_ACK, },
     { "stream.shutdown_syn_resend", STREAM_SHUTDOWN_SYN_RESEND, },
     { "stream.pkt_retransmission", STREAM_PKT_RETRANSMISSION, },
+    { "stream.pkt_bad_window_update", STREAM_PKT_BAD_WINDOW_UPDATE, },
+
+    { "stream.suspected_rst_inject", STREAM_SUSPECTED_RST_INJECT, },
+
     { "stream.reassembly_segment_before_base_seq", STREAM_REASSEMBLY_SEGMENT_BEFORE_BASE_SEQ, },
     { "stream.reassembly_no_segment", STREAM_REASSEMBLY_NO_SEGMENT, },
     { "stream.reassembly_seq_gap", STREAM_REASSEMBLY_SEQ_GAP, },
     { "stream.reassembly_overlap_different_data", STREAM_REASSEMBLY_OVERLAP_DIFFERENT_DATA, },
-    { "stream.pkt_bad_window_update", STREAM_PKT_BAD_WINDOW_UPDATE, },
 
     { NULL, 0 },
 };

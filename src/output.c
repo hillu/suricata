@@ -68,7 +68,7 @@
 #include "log-tcp-data.h"
 #include "log-stats.h"
 #include "output-json.h"
-#include "output-json-nfs3.h"
+#include "output-json-nfs.h"
 #include "output-json-template.h"
 #include "output-lua.h"
 #include "output-json-dnp3.h"
@@ -953,6 +953,9 @@ TmEcode OutputLoggerThreadInit(ThreadVars *tv, const void *initdata, void **data
 
 TmEcode OutputLoggerThreadDeinit(ThreadVars *tv, void *thread_data)
 {
+    if (thread_data == NULL)
+        return TM_ECODE_FAILED;
+
     LoggerThreadStore *thread_store = (LoggerThreadStore *)thread_data;
     RootLogger *logger = TAILQ_FIRST(&RootLoggers);
     LoggerThreadStoreNode *thread_store_node = TAILQ_FIRST(thread_store);
@@ -1082,8 +1085,8 @@ void OutputRegisterLoggers(void)
     JsonDNP3LogRegister();
     JsonVarsLogRegister();
 
-    /* NFS3 JSON logger. */
-    JsonNFS3LogRegister();
+    /* NFS JSON logger. */
+    JsonNFSLogRegister();
     /* Template JSON logger. */
     JsonTemplateLogRegister();
 }

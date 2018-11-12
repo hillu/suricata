@@ -25,7 +25,9 @@ The most common way to use this is through 'EVE', which is a firehose approach w
       #  server: 127.0.0.1
       #  port: 6379
       #  async: true ## if redis replies are read asynchronously
-      #  mode: list ## possible values: list (default), channel
+      #  mode: list ## possible values: list|lpush (default), rpush, channel|publish
+      #             ## lpush and rpush are using a Redis list. "list" is an alias for lpush
+      #             ## publish is using a Redis channel. "channel" is an alias for publish
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
       # 'batch-size' events. This should lower the latency induced by network
@@ -140,7 +142,9 @@ Output types::
       #  server: 127.0.0.1
       #  port: 6379
       #  async: true ## if redis replies are read asynchronously
-      #  mode: list ## possible values: list (default), channel
+      #  mode: list ## possible values: list|lpush (default), rpush, channel|publish
+      #             ## lpush and rpush are using a Redis list. "list" is an alias for lpush
+      #             ## publish is using a Redis channel. "channel" is an alias for publish
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
       # 'batch-size' events. This should lower the latency induced by network
@@ -163,10 +167,24 @@ Metadata::
             # payload-buffer-size: 4kb # max size of payload buffer to output in eve-log
             # payload-printable: yes   # enable dumping payload in printable (lossy) format
             # packet: yes              # enable dumping of packet (without stream segments)
+            # http-body: yes           # enable dumping of http body in Base64
+            # http-body-printable: yes # enable dumping of http body in printable format
+            metadata: yes              # add L7/applayer fields, flowbit and other vars to the alert
+
+Alternatively to the `metadata` key it is also possible to select the application
+layer metadata to output on a per application layer basis ::
+
+        - alert:
             http: yes                # enable dumping of http fields
             tls: yes                 # enable dumping of tls fields
             ssh: yes                 # enable dumping of ssh fields
             smtp: yes                # enable dumping of smtp fields
+            dnp3: yes                # enable dumping of dnp3 fields
+            flow: yes                # enable dumping of a partial flow entry
+            vars: yes                # enable dumping of flowbits and other vars
+
+The `vars` will enable dumping of a set of key/value based on flowbits and other vars
+such as named groups in regular expression.
 
 DNS
 ~~~
@@ -219,6 +237,8 @@ It is possible to use date modifiers in the eve-log filename.
 The example above adds epoch time to the filename. All the date modifiers from the
 C library should be supported. See the man page for ``strftime`` for all supported
 modifiers.
+
+.. _output_eve_rotate:
 
 Rotate log file
 ~~~~~~~~~~~~~~~

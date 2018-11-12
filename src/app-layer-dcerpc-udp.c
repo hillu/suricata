@@ -71,7 +71,6 @@ static uint32_t FragmentDataParser(Flow *f, void *dcerpcudp_state,
     DCERPCUDPState *sstate = (DCERPCUDPState *) dcerpcudp_state;
     uint8_t **stub_data_buffer = NULL;
     uint32_t *stub_data_buffer_len = NULL;
-    uint8_t *stub_data_fresh = NULL;
     uint16_t stub_len = 0;
     void *ptmp;
 
@@ -79,13 +78,11 @@ static uint32_t FragmentDataParser(Flow *f, void *dcerpcudp_state,
     if (sstate->dcerpc.dcerpchdrudp.type == REQUEST) {
         stub_data_buffer = &sstate->dcerpc.dcerpcrequest.stub_data_buffer;
         stub_data_buffer_len = &sstate->dcerpc.dcerpcrequest.stub_data_buffer_len;
-        stub_data_fresh = &sstate->dcerpc.dcerpcrequest.stub_data_fresh;
 
     /* response PDU.  Retrieve the response stub buffer */
     } else {
         stub_data_buffer = &sstate->dcerpc.dcerpcresponse.stub_data_buffer;
         stub_data_buffer_len = &sstate->dcerpc.dcerpcresponse.stub_data_buffer_len;
-        stub_data_fresh = &sstate->dcerpc.dcerpcresponse.stub_data_fresh;
     }
 
     stub_len = (sstate->dcerpc.fraglenleft < input_len) ? sstate->dcerpc.fraglenleft : input_len;
@@ -112,7 +109,6 @@ static uint32_t FragmentDataParser(Flow *f, void *dcerpcudp_state,
     *stub_data_buffer = ptmp;
     memcpy(*stub_data_buffer + *stub_data_buffer_len, input, stub_len);
 
-    *stub_data_fresh = 1;
     /* length of the buffered stub */
     *stub_data_buffer_len += stub_len;
 
@@ -819,7 +815,60 @@ static void DCERPCUDPStateFree(void *s)
         sstate->dcerpc.dcerpcresponse.stub_data_buffer = NULL;
         sstate->dcerpc.dcerpcresponse.stub_data_buffer_len = 0;
     }
+
+    if (sstate->de_state != NULL) {
+        DetectEngineStateFree(sstate->de_state);
+    }
+
     SCFree(s);
+}
+
+static int DCERPCUDPStateHasTxDetectState(void *state)
+{
+    DCERPCUDPState *dce_state = (DCERPCUDPState *)state;
+    if (dce_state->de_state)
+        return 1;
+    return 0;
+}
+
+static int DCERPCUDPSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
+{
+    DCERPCUDPState *dce_state = (DCERPCUDPState *)state;
+    dce_state->de_state = de_state;
+    return 0;
+}
+
+static DetectEngineState *DCERPCUDPGetTxDetectState(void *vtx)
+{
+    DCERPCUDPState *dce_state = (DCERPCUDPState *)vtx;
+    return dce_state->de_state;
+}
+
+static void DCERPCUDPStateTransactionFree(void *state, uint64_t tx_id)
+{
+    /* do nothing */
+}
+
+static void *DCERPCUDPGetTx(void *state, uint64_t tx_id)
+{
+    DCERPCUDPState *dce_state = (DCERPCUDPState *)state;
+    return dce_state;
+}
+
+static uint64_t DCERPCUDPGetTxCnt(void *state)
+{
+    /* single tx */
+    return 1;
+}
+
+static int DCERPCUDPGetAlstateProgressCompletionStatus(uint8_t direction)
+{
+    return 1;
+}
+
+static int DCERPCUDPGetAlstateProgress(void *tx, uint8_t direction)
+{
+    return 0;
 }
 
 static int DCERPCUDPRegisterPatternsForProtocolDetection(void)
@@ -855,6 +904,20 @@ void RegisterDCERPCUDPParsers(void)
         AppLayerParserRegisterStateFuncs(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPStateAlloc,
             DCERPCUDPStateFree);
         AppLayerParserRegisterParserAcceptableDataDirection(IPPROTO_UDP, ALPROTO_DCERPC, STREAM_TOSERVER);
+
+        AppLayerParserRegisterTxFreeFunc(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPStateTransactionFree);
+
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPStateHasTxDetectState,
+                                               DCERPCUDPGetTxDetectState, DCERPCUDPSetTxDetectState);
+
+        AppLayerParserRegisterGetTx(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPGetTx);
+
+        AppLayerParserRegisterGetTxCnt(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPGetTxCnt);
+
+        AppLayerParserRegisterGetStateProgressFunc(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPGetAlstateProgress);
+
+        AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_DCERPC,
+                                                               DCERPCUDPGetAlstateProgressCompletionStatus);
     } else {
         SCLogInfo("Parsed disabled for %s protocol. Protocol detection"
             "still on.", "dcerpc");
@@ -1072,6 +1135,7 @@ static int DCERPCUDPParserTest01(void)
     f.protoctx = (void *)&ssn;
     f.proto = IPPROTO_UDP;
     f.protomap = FlowGetProtoMapping(f.proto);
+    f.alproto = ALPROTO_DCERPC;
 
     StreamTcpInitConfig(TRUE);
 

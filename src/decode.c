@@ -51,6 +51,7 @@
 #include "suricata.h"
 #include "conf.h"
 #include "decode.h"
+#include "decode-teredo.h"
 #include "util-debug.h"
 #include "util-mem.h"
 #include "app-layer-detect-proto.h"
@@ -421,6 +422,7 @@ void DecodeRegisterPerfCounters(DecodeThreadVars *dtv, ThreadVars *tv)
     dtv->counter_gre = StatsRegisterCounter("decoder.gre", tv);
     dtv->counter_vlan = StatsRegisterCounter("decoder.vlan", tv);
     dtv->counter_vlan_qinq = StatsRegisterCounter("decoder.vlan_qinq", tv);
+    dtv->counter_ieee8021ah = StatsRegisterCounter("decoder.ieee8021ah", tv);
     dtv->counter_teredo = StatsRegisterCounter("decoder.teredo", tv);
     dtv->counter_ipv4inipv6 = StatsRegisterCounter("decoder.ipv4_in_ipv6", tv);
     dtv->counter_ipv6inipv6 = StatsRegisterCounter("decoder.ipv6_in_ipv6", tv);
@@ -606,6 +608,11 @@ void CaptureStatsSetup(ThreadVars *tv, CaptureStats *s)
     s->counter_ips_blocked = StatsRegisterCounter("ips.blocked", tv);
     s->counter_ips_rejected = StatsRegisterCounter("ips.rejected", tv);
     s->counter_ips_replaced = StatsRegisterCounter("ips.replaced", tv);
+}
+
+void DecodeGlobalConfig(void)
+{
+    DecodeTeredoConfig();
 }
 
 /**

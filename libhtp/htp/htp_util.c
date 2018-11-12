@@ -2085,18 +2085,20 @@ void fprint_raw_data_ex(FILE *stream, const char *name, const void *_data, size_
     char buf[160];
     size_t len = offset + printlen;
 
-    fprintf(stream, "\n%s: ptr %p offset %" PRIu64 " len %" PRIu64"\n", name, (void*) data, (uint64_t) offset, (uint64_t) len);
+    fprintf(stream, "\n%s: ptr %p offset %u len %u\n", name, (void*) data, (unsigned int)offset, (unsigned int)len);
 
     while (offset < len) {
         size_t i;
 
-        snprintf(buf, sizeof(buf), "%08" PRIx64, (uint64_t) offset);
+        snprintf(buf, sizeof(buf), "%x" PRIx64, (unsigned int) offset);
         strlcat(buf, "  ", sizeof(buf));
 
         i = 0;
         while (i < 8) {
             if (offset + i < len) {
-                snprintf(buf + strlen(buf), sizeof(buf), "%02x ", data[offset + i]);
+                char step[4];
+                snprintf(step, sizeof(step), "%02x ", data[offset + i]);
+                strlcat(buf, step, sizeof(buf));
             } else {
                 strlcat(buf, "   ", sizeof(buf));
             }
@@ -2109,7 +2111,9 @@ void fprint_raw_data_ex(FILE *stream, const char *name, const void *_data, size_
         i = 8;
         while (i < 16) {
             if (offset + i < len) {
-                snprintf(buf + strlen(buf), sizeof(buf), "%02x ", data[offset + i]);
+                char step[4];
+                snprintf(step, sizeof(step), "%02x ", data[offset + i]);
+                strlcat(buf, step, sizeof(buf));
             } else {
                 strlcat(buf, "   ", sizeof(buf));
             }
@@ -2353,19 +2357,18 @@ bstr *htp_unparse_uri_noencode(htp_uri_t *uri) {
  * line parsing. In most cases they will only look for the
  * words "http" at the beginning.
  *
- * @param[in] tx
+ * @param[in] data pointer to bytearray
+ * @param[in] len length in bytes of data
  * @return 1 for good enough or 0 for not good enough
  */
-int htp_treat_response_line_as_body(htp_tx_t *tx) {
+int htp_treat_response_line_as_body(const uint8_t *data, size_t len) {
     // Browser behavior:
     //      Firefox 3.5.x: (?i)^\s*http
     //      IE: (?i)^\s*http\s*/
     //      Safari: ^HTTP/\d+\.\d+\s+\d{3}
 
-    if (tx->response_protocol == NULL) return 1;
-    if (bstr_len(tx->response_protocol) < 4) return 1;
-
-    unsigned char *data = bstr_ptr(tx->response_protocol);
+    if (data == NULL) return 1;
+    if (len < 4) return 1;
 
     if ((data[0] != 'H') && (data[0] != 'h')) return 1;
     if ((data[1] != 'T') && (data[1] != 't')) return 1;
@@ -2552,7 +2555,10 @@ int htp_validate_hostname(bstr *hostname) {
             unsigned char c = data[pos];
             // According to the RFC, the underscore is not allowed in a label, but
             // we allow it here because we think it's often seen in practice.
-            if (!(((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) || ((c >= '0') && (c <= '9')) || (c == '-'))) {
+            if (!(((c >= 'a') && (c <= 'z')) || ((c >= 'A') && (c <= 'Z')) ||
+                        ((c >= '0') && (c <= '9')) ||
+                         (c == '-') || (c == '_')))
+            {
                 return 0;
             }
 

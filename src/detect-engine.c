@@ -294,6 +294,10 @@ next:
             AppendStreamInspectEngine(s, stream, 0, last_id + 1);
             AppendStreamInspectEngine(s, stream, 1, last_id + 1);
         }
+
+        if (s->init_data->init_flags & SIG_FLAG_INIT_NEED_FLUSH) {
+            s->flags |= SIG_FLAG_FLUSH;
+        }
     }
 
 #ifdef DEBUG
@@ -903,6 +907,7 @@ static int DetectEngineReloadThreads(DetectEngineCtx *new_de_ctx)
         TmSlot *slots = tv->tm_slots;
         while (slots != NULL) {
             if (suricata_ctl_flags != 0) {
+                SCMutexUnlock(&tv_root_lock);
                 return -1;
             }
 
@@ -1029,7 +1034,9 @@ static DetectEngineCtx *DetectEngineCtxInitReal(int minimal, const char *prefix)
         goto error;
     }
 
-    DetectEngineCtxLoadConf(de_ctx);
+    if (DetectEngineCtxLoadConf(de_ctx) == -1) {
+        goto error;
+    }
 
     SigGroupHeadHashInit(de_ctx);
     MpmStoreInit(de_ctx);
@@ -1181,7 +1188,7 @@ void DetectEngineCtxFree(DetectEngineCtx *de_ctx)
  */
 static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
 {
-    uint8_t profile = ENGINE_PROFILE_UNKNOWN;
+    uint8_t profile = ENGINE_PROFILE_MEDIUM;
     const char *max_uniq_toclient_groups_str = NULL;
     const char *max_uniq_toserver_groups_str = NULL;
     const char *sgh_mpm_context = NULL;
@@ -1210,14 +1217,22 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
     }
 
     if (de_ctx_profile != NULL) {
-        if (strcmp(de_ctx_profile, "low") == 0) {
+        if (strcmp(de_ctx_profile, "low") == 0 ||
+            strcmp(de_ctx_profile, "lowest") == 0) {        // legacy
             profile = ENGINE_PROFILE_LOW;
         } else if (strcmp(de_ctx_profile, "medium") == 0) {
             profile = ENGINE_PROFILE_MEDIUM;
-        } else if (strcmp(de_ctx_profile, "high") == 0) {
+        } else if (strcmp(de_ctx_profile, "high") == 0 ||
+                   strcmp(de_ctx_profile, "highest") == 0) { // legacy
             profile = ENGINE_PROFILE_HIGH;
         } else if (strcmp(de_ctx_profile, "custom") == 0) {
             profile = ENGINE_PROFILE_CUSTOM;
+        } else {
+            SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,
+                    "invalid value for detect.profile: '%s'. "
+                    "Valid options: low, medium, high and custom.",
+                    de_ctx_profile);
+            return -1;
         }
 
         SCLogDebug("Profile for detection engine groups is \"%s\"", de_ctx_profile);
@@ -1354,10 +1369,6 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
             break;
     }
 
-    if (profile == ENGINE_PROFILE_UNKNOWN) {
-        goto error;
-    }
-
     intmax_t value = 0;
     if (ConfGetInt("detect.inspection-recursion-limit", &value) == 1)
     {
@@ -1471,8 +1482,6 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
     }
 
     return 0;
-error:
-    return -1;
 }
 
 /*
@@ -1495,6 +1504,7 @@ static int DetectEngineThreadCtxInitGlobalKeywords(DetectEngineThreadCtx *det_ct
     SCMutexLock(&master->lock);
 
     if (master->keyword_id > 0) {
+        // coverity[suspicious_sizeof : FALSE]
         det_ctx->global_keyword_ctxs_array = (void **)SCCalloc(master->keyword_id, sizeof(void *));
         if (det_ctx->global_keyword_ctxs_array == NULL) {
             SCLogError(SC_ERR_DETECT_PREPARE, "setting up thread local detect ctx");
@@ -1548,6 +1558,7 @@ static void DetectEngineThreadCtxDeinitGlobalKeywords(DetectEngineThreadCtx *det
 static int DetectEngineThreadCtxInitKeywords(DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx)
 {
     if (de_ctx->keyword_id > 0) {
+        // coverity[suspicious_sizeof : FALSE]
         det_ctx->keyword_ctxs_array = SCMalloc(de_ctx->keyword_id * sizeof(void *));
         if (det_ctx->keyword_ctxs_array == NULL) {
             SCLogError(SC_ERR_DETECT_PREPARE, "setting up thread local detect ctx");
@@ -1908,14 +1919,14 @@ static DetectEngineThreadCtx *DetectEngineThreadCtxInitForReload(
 
 static void DetectEngineThreadCtxFree(DetectEngineThreadCtx *det_ctx)
 {
-#ifdef DEBUG
-    SCLogInfo("PACKET PKT_STREAM_ADD: %"PRIu64, det_ctx->pkt_stream_add_cnt);
+#if  DEBUG
+    SCLogDebug("PACKET PKT_STREAM_ADD: %"PRIu64, det_ctx->pkt_stream_add_cnt);
 
-    SCLogInfo("PAYLOAD MPM %"PRIu64"/%"PRIu64, det_ctx->payload_mpm_cnt, det_ctx->payload_mpm_size);
-    SCLogInfo("STREAM  MPM %"PRIu64"/%"PRIu64, det_ctx->stream_mpm_cnt, det_ctx->stream_mpm_size);
+    SCLogDebug("PAYLOAD MPM %"PRIu64"/%"PRIu64, det_ctx->payload_mpm_cnt, det_ctx->payload_mpm_size);
+    SCLogDebug("STREAM  MPM %"PRIu64"/%"PRIu64, det_ctx->stream_mpm_cnt, det_ctx->stream_mpm_size);
 
-    SCLogInfo("PAYLOAD SIG %"PRIu64"/%"PRIu64, det_ctx->payload_persig_cnt, det_ctx->payload_persig_size);
-    SCLogInfo("STREAM  SIG %"PRIu64"/%"PRIu64, det_ctx->stream_persig_cnt, det_ctx->stream_persig_size);
+    SCLogDebug("PAYLOAD SIG %"PRIu64"/%"PRIu64, det_ctx->payload_persig_cnt, det_ctx->payload_persig_size);
+    SCLogDebug("STREAM  SIG %"PRIu64"/%"PRIu64, det_ctx->stream_persig_cnt, det_ctx->stream_persig_size);
 #endif
 
     if (det_ctx->tenant_array != NULL) {

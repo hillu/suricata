@@ -326,7 +326,12 @@ void FlowHandlePacketUpdate(Flow *f, Packet *p)
         }
     }
 
-    if ((f->flags & (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) == (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) {
+    if (SC_ATOMIC_GET(f->flow_state) == FLOW_STATE_ESTABLISHED) {
+        SCLogDebug("pkt %p FLOW_PKT_ESTABLISHED", p);
+        p->flowflags |= FLOW_PKT_ESTABLISHED;
+
+    } else if ((f->flags & (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) ==
+            (FLOW_TO_DST_SEEN|FLOW_TO_SRC_SEEN)) {
         SCLogDebug("pkt %p FLOW_PKT_ESTABLISHED", p);
         p->flowflags |= FLOW_PKT_ESTABLISHED;
 
@@ -409,6 +414,11 @@ void FlowInitConfig(char quiet)
     /** set config values for memcap, prealloc and hash_size */
     if ((ConfGet("flow.memcap", &conf_val)) == 1)
     {
+        if (conf_val == NULL) {
+            SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,"Invalid value for flow.memcap: NULL");
+	    exit(EXIT_FAILURE);
+        }
+
         if (ParseSizeStringU64(conf_val, &flow_config.memcap) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing flow.memcap "
                        "from conf file - %s.  Killing engine",
@@ -418,6 +428,11 @@ void FlowInitConfig(char quiet)
     }
     if ((ConfGet("flow.hash-size", &conf_val)) == 1)
     {
+        if (conf_val == NULL) {
+            SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,"Invalid value for flow.hash-size: NULL");
+	    exit(EXIT_FAILURE);
+        }
+
         if (ByteExtractStringUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             flow_config.hash_size = configval;
@@ -425,6 +440,11 @@ void FlowInitConfig(char quiet)
     }
     if ((ConfGet("flow.prealloc", &conf_val)) == 1)
     {
+        if (conf_val == NULL) {
+            SCLogError(SC_ERR_INVALID_YAML_CONF_ENTRY,"Invalid value for flow.prealloc: NULL");
+	    exit(EXIT_FAILURE);
+        }
+
         if (ByteExtractStringUint32(&configval, 10, strlen(conf_val),
                                     conf_val) > 0) {
             flow_config.prealloc = configval;

@@ -80,7 +80,8 @@ static void PrefilterPktStream(DetectEngineThreadCtx *det_ctx,
         struct StreamMpmData stream_mpm_data = { det_ctx, mpm_ctx };
         StreamReassembleRaw(p->flow->protoctx, p,
                 StreamMpmFunc, &stream_mpm_data,
-                &det_ctx->raw_stream_progress);
+                &det_ctx->raw_stream_progress,
+                false /* mpm doesn't use min inspect depth */);
         SCLogDebug("det_ctx->raw_stream_progress %"PRIu64,
                 det_ctx->raw_stream_progress);
     } else {
@@ -209,6 +210,78 @@ static int StreamContentInspectFunc(void *cb_data, const uint8_t *data, const ui
 }
 
 /**
+ *  \brief Do the content inspection & validation for a sigmatch list
+ *
+ *  \param de_ctx Detection engine context
+ *  \param det_ctx Detection engine thread context
+ *  \param s Signature to inspect
+ *  \param smd array of matches to eval
+ *  \param f flow (for pcre flowvar storage)
+ *  \param p Packet
+ *
+ *  \retval 0 no match
+ *  \retval 1 match
+ */
+static int DetectEngineInspectStreamUDPPayload(DetectEngineCtx *de_ctx,
+        DetectEngineThreadCtx *det_ctx,
+        const Signature *s, const SigMatchData *smd,
+        Flow *f, Packet *p)
+{
+    SCEnter();
+
+    if (smd == NULL) {
+        SCReturnInt(0);
+    }
+#ifdef DEBUG
+    det_ctx->payload_persig_cnt++;
+    det_ctx->payload_persig_size += p->payload_len;
+#endif
+    det_ctx->buffer_offset = 0;
+    det_ctx->discontinue_matching = 0;
+    det_ctx->inspection_recursion_counter = 0;
+    det_ctx->replist = NULL;
+
+    r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
+            f, p->payload, p->payload_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD, p);
+    if (r == 1) {
+        SCReturnInt(1);
+    }
+    SCReturnInt(0);
+}
+
+struct StreamContentInspectData {
+    DetectEngineCtx *de_ctx;
+    DetectEngineThreadCtx *det_ctx;
+    const Signature *s;
+    Flow *f;
+};
+
+static int StreamContentInspectFunc(void *cb_data, const uint8_t *data, const uint32_t data_len)
+{
+    SCEnter();
+    int r = 0;
+    struct StreamContentInspectData *smd = cb_data;
+#ifdef DEBUG
+    smd->det_ctx->stream_persig_cnt++;
+    smd->det_ctx->stream_persig_size += data_len;
+#endif
+    smd->det_ctx->buffer_offset = 0;
+    smd->det_ctx->discontinue_matching = 0;
+    smd->det_ctx->inspection_recursion_counter = 0;
+
+    r = DetectEngineContentInspection(smd->de_ctx, smd->det_ctx,
+            smd->s, smd->s->sm_arrays[DETECT_SM_LIST_PMATCH],
+            smd->f, (uint8_t *)data, data_len, 0,
+            DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
+    if (r == 1) {
+        SCReturnInt(1);
+    }
+
+    SCReturnInt(0);
+}
+
+/**
  *  \brief Do the content inspection & validation for a signature
  *         on the raw stream
  *
@@ -230,7 +303,7 @@ int DetectEngineInspectStreamPayload(DetectEngineCtx *de_ctx,
     struct StreamContentInspectData inspect_data = { de_ctx, det_ctx, s, f };
     int r = StreamReassembleRaw(f->protoctx, p,
             StreamContentInspectFunc, &inspect_data,
-            &unused);
+            &unused, ((s->flags & SIG_FLAG_FLUSH) != 0));
     return r;
 }
 
@@ -281,6 +354,19 @@ int DetectEngineInspectStream(ThreadVars *tv,
 {
     Packet *p = det_ctx->p; /* TODO: get rid of this HACK */
 
+    /* in certain sigs, e.g. 'alert dns', which apply to both tcp and udp
+     * we can get called for UDP. Then we simply inspect the packet payload */
+    if (p->proto == IPPROTO_UDP) {
+        return DetectEngineInspectStreamUDPPayload(de_ctx,
+                det_ctx, s, smd, f, p);
+    /* for other non-TCP protocols we assume match */
+    } else if (p->proto != IPPROTO_TCP)
+        return DETECT_ENGINE_INSPECT_SIG_MATCH;
+
+    TcpSession *ssn = f->protoctx;
+    if (ssn == NULL)
+        return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
+
     if (det_ctx->stream_already_inspected)
         return det_ctx->stream_last_result;
 
@@ -288,10 +374,9 @@ int DetectEngineInspectStream(ThreadVars *tv,
     struct StreamContentInspectEngineData inspect_data = { de_ctx, det_ctx, s, smd, f };
     int match = StreamReassembleRaw(f->protoctx, p,
             StreamContentInspectEngineFunc, &inspect_data,
-            &unused);
+            &unused, ((s->flags & SIG_FLAG_FLUSH) != 0));
 
     bool is_last = false;
-    TcpSession *ssn = f->protoctx;
     if (flags & STREAM_TOSERVER) {
         TcpStream *stream = &ssn->client;
         if (stream->flags & STREAMTCP_STREAM_FLAG_DEPTH_REACHED)
