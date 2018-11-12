@@ -1,3 +1,9 @@
+suricata (1:4.0.6-1) unstable; urgency=medium
+
+  * New upstream version 1:4.0.6
+
+ -- Pierre Chifflier <pollux@debian.org>  Mon, 12 Nov 2018 09:19:39 +0100
+
 suricata (1:4.0.5-1) unstable; urgency=medium
 
   [ Sascha Steinbiss ]
