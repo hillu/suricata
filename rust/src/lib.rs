@@ -24,6 +24,9 @@ extern crate nom;
 
 extern crate crc;
 
+extern crate der_parser;
+extern crate kerberos_parser;
+
 #[macro_use]
 pub mod log;
 
@@ -32,15 +35,26 @@ pub mod core;
 
 pub mod conf;
 pub mod json;
+#[macro_use]
 pub mod applayer;
 pub mod filecontainer;
 pub mod filetracker;
+#[macro_use]
+pub mod parser;
+pub mod kerberos;
 
 #[cfg(feature = "lua")]
 pub mod lua;
 
 pub mod dns;
 pub mod nfs;
+pub mod ftp;
+pub mod smb;
+pub mod krb;
 
-#[cfg(feature = "experimental")]
+pub mod ikev2;
+
 pub mod ntp;
+pub mod tftp;
+pub mod dhcp;
+pub mod applayertemplate;

@@ -364,6 +364,35 @@ macro_rules! do_parse (
     $crate::IResult::Done($i, ( $($rest),* ))
   );
 
+  (__impl $i:expr, $consumed:expr, $field:ident : $submac:ident!( $($args:tt)* ) ) => (
+    do_parse!(__impl $i, $consumed, $submac!( $($args)* ))
+  );
+
+  (__impl $i:expr, $consumed:expr, $submac:ident!( $($args:tt)* ) ) => (
+    compiler_error!("do_parse is missing the return value. A do_parse call must end
+      with a return value between parenthesis, as follows:
+
+      do_parse!(
+        a: tag!(\"abcd\") >>
+        b: tag!(\"efgh\") >>
+
+        ( Value { a: a, b: b } )
+    ");
+  );
+
+  (__impl $i:expr, $consumed:expr, $field:ident : $submac:ident!( $($args:tt)* ) ~ $($rest:tt)* ) => (
+    compiler_error!("do_parse uses >> as separator, not ~");
+  );
+  (__impl $i:expr, $consumed:expr, $submac:ident!( $($args:tt)* ) ~ $($rest:tt)* ) => (
+    compiler_error!("do_parse uses >> as separator, not ~");
+  );
+  (__impl $i:expr, $consumed:expr, $field:ident : $e:ident ~ $($rest:tt)*) => (
+    do_parse!(__impl $i, $consumed, $field: call!($e) ~ $($rest)*);
+  );
+  (__impl $i:expr, $consumed:expr, $e:ident ~ $($rest:tt)*) => (
+    do_parse!(__impl $i, $consumed, call!($e) ~ $($rest)*);
+  );
+
   (__impl $i:expr, $consumed:expr, $e:ident >> $($rest:tt)*) => (
     do_parse!(__impl $i, $consumed, call!($e) >> $($rest)*);
   );
@@ -470,6 +499,19 @@ macro_rules! do_parse (
     {
       do_parse!(__impl $i, 0usize, $($rest)*)
     }
+  );
+  ($submac:ident!( $($args:tt)* ) >> $($rest:tt)* ) => (
+    compiler_error!("if you are using do_parse outside of a named! macro, you must
+        pass the input data as first argument, like this:
+
+        let res = do_parse!(input,
+          a: tag!(\"abcd\") >>
+          b: tag!(\"efgh\") >>
+          ( Value { a: a, b: b } )
+        );");
+  );
+  ($e:ident! >> $($rest:tt)* ) => (
+    do_parse!( call!($e) >> $($rest)*);
   );
 );
 
@@ -819,4 +861,29 @@ mod tests {
     let b = [5u8, 3, 4, 5];
     assert_eq!(length_value(&b[..]), Incomplete(Needed::Size(6)));
   }
+
+  /*
+  named!(does_not_compile,
+    do_parse!(
+      length: be_u8         >>
+      bytes:  take!(length)
+    )
+  );
+  named!(does_not_compile_either,
+    do_parse!(
+      length: be_u8         ~
+      bytes:  take!(length) ~
+      ( () )
+    )
+  );
+  fn still_does_not_compile() {
+    let data = b"abcd";
+
+    let res = do_parse!(
+      tag!("abcd") >>
+      tag!("efgh") >>
+      ( () )
+    );
+  }
+  */
 }

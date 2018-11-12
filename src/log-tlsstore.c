@@ -102,7 +102,7 @@ static void LogTlsLogPem(LogTlsStoreLogThread *aft, const Packet *p, SSLState *s
     uint8_t *ptmp;
     SSLCertsChain *cert;
 
-    if ((state->server_connp.cert_input == NULL) || (state->server_connp.cert_input_len == 0))
+    if (TAILQ_EMPTY(&state->server_connp.certs))
         SCReturn;
 
     CreateFileName(p, state, filename, sizeof(filename));
@@ -308,7 +308,7 @@ static TmEcode LogTlsStoreLogThreadInit(ThreadVars *t, const void *initdata, voi
     if (stat(tls_logfile_base_dir, &stat_buf) != 0) {
         int ret;
         /* coverity[toctou] */
-        ret = mkdir(tls_logfile_base_dir, S_IRWXU|S_IXGRP|S_IRGRP);
+        ret = SCMkDir(tls_logfile_base_dir, S_IRWXU|S_IXGRP|S_IRGRP);
         if (ret != 0) {
             int err = errno;
             if (err != EEXIST) {
@@ -371,12 +371,12 @@ static void LogTlsStoreLogDeInitCtx(OutputCtx *output_ctx)
  *  \param conf Pointer to ConfNode containing this loggers configuration.
  *  \return NULL if failure, LogFilestoreCtx* to the file_ctx if succesful
  * */
-static OutputCtx *LogTlsStoreLogInitCtx(ConfNode *conf)
+static OutputInitResult LogTlsStoreLogInitCtx(ConfNode *conf)
 {
-
+    OutputInitResult result = { NULL, false };
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL))
-        return NULL;
+        return result;
 
     output_ctx->data = NULL;
     output_ctx->DeInit = LogTlsStoreLogDeInitCtx;
@@ -405,7 +405,9 @@ static OutputCtx *LogTlsStoreLogInitCtx(ConfNode *conf)
     /* enable the logger for the app layer */
     AppLayerParserRegisterLogger(IPPROTO_TCP, ALPROTO_TLS);
 
-    SCReturnPtr(output_ctx, "OutputCtx");
+    result.ctx = output_ctx;
+    result.ok = true;
+    SCReturnCT(result, "OutputInitResult");
 }
 
 void LogTlsStoreRegister (void)

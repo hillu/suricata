@@ -96,6 +96,9 @@
 /* Define to 1 if you have the `gettimeofday' function. */
 #undef HAVE_GETTIMEOFDAY
 
+/* Define to 1 if you have the <glob.h> header file. */
+#undef HAVE_GLOB_H
+
 /* Define to 1 if you have the `hs_valid_platform' function. */
 #undef HAVE_HS_VALID_PLATFORM
 
@@ -122,14 +125,17 @@
 /* Define to 1 if you have the <inttypes.h> header file. */
 #undef HAVE_INTTYPES_H
 
+/* Define to 1 if you have the `bpf' library (-lbpf). */
+#undef HAVE_LIBBPF
+
 /* Libpcap-ng support */
 #undef HAVE_LIBCAP_NG
 
-/* Define to 1 if you have the `cuda' library (-lcuda). */
-#undef HAVE_LIBCUDA
-
 /* Define to 1 if you have the `dag' library (-ldag). */
 #undef HAVE_LIBDAG
+
+/* Define to 1 if you have the `elf' library (-lelf). */
+#undef HAVE_LIBELF
 
 /* libevent available */
 #undef HAVE_LIBEVENT
@@ -163,6 +169,12 @@
 
 /* Define to 1 if you have the `luajit-5.1' library (-lluajit-5.1). */
 #undef HAVE_LIBLUAJIT_5_1
+
+/* Define to 1 if you have the `lz4' library (-llz4). */
+#undef HAVE_LIBLZ4
+
+/* liblzma available */
+#undef HAVE_LIBLZMA
 
 /* Define to 1 if you have the `magic' library (-lmagic). */
 #undef HAVE_LIBMAGIC
@@ -207,8 +219,14 @@
 /* Define to 1 if you have the `pthread' library (-lpthread). */
 #undef HAVE_LIBPTHREAD
 
+/* Define to 1 if you have the `WinDivert' library (-lWinDivert). */
+#undef HAVE_LIBWINDIVERT
+
 /* Define to 1 if you have the `yaml' library (-lyaml). */
 #undef HAVE_LIBYAML
+
+/* Define to 1 if you have the `z' library (-lz). */
+#undef HAVE_LIBZ
 
 /* Define to 1 if you have the <limits.h> header file. */
 #undef HAVE_LIMITS_H
@@ -292,14 +310,23 @@
 /* Found nfq_set_verdict_batch function in netfilter_queue */
 #undef HAVE_NFQ_SET_VERDICT_BATCH
 
-/* libnss available for md5 */
+/* mkdir is not POSIX compliant: single arg */
+#undef HAVE_NON_POSIX_MKDIR
+
+/* libnss available for md5/sha1/sha256 */
 #undef HAVE_NSS
 
 /* Use workaround for old barnyard2 in unified2 output */
 #undef HAVE_OLD_BARNYARD2
 
+/* Recent ebpf fanout support is available */
+#undef HAVE_PACKET_EBPF
+
 /* Recent packet fanout support is available */
 #undef HAVE_PACKET_FANOUT
+
+/* XDP support is available */
+#undef HAVE_PACKET_XDP
 
 /* Define to 1 if you have the <pcap/bpf.h> header file. */
 #undef HAVE_PCAP_BPF_H
@@ -319,6 +346,9 @@
 /* (PF_RING support enabled) */
 #undef HAVE_PFRING
 
+/* PF_RING bypass support enabled */
+#undef HAVE_PF_RING_FLOW_OFFLOAD
+
 /* Define to 1 if you have the <poll.h> header file. */
 #undef HAVE_POLL_H
 
@@ -328,9 +358,6 @@
 
 /* Enable Rust language */
 #undef HAVE_RUST
-
-/* Enable support for experimental Rust parsers */
-#undef HAVE_RUST_EXTERNAL
 
 /* Define to 1 if you have the <sched.h> header file. */
 #undef HAVE_SCHED_H
@@ -383,6 +410,9 @@
 /* Define to 1 if you have the `strncasecmp' function. */
 #undef HAVE_STRNCASECMP
 
+/* Define to 1 if you have the `strptime' function. */
+#undef HAVE_STRPTIME
+
 /* Define to 1 if you have the `strtol' function. */
 #undef HAVE_STRTOL
 
@@ -433,6 +463,12 @@
 
 /* Define to 1 if you have the <unistd.h> header file. */
 #undef HAVE_UNISTD_H
+
+/* Define to 1 if you have the `utime' function. */
+#undef HAVE_UTIME
+
+/* Define to 1 if you have the <utime.h> header file. */
+#undef HAVE_UTIME_H
 
 /* Define to 1 if you have the <w32api/winbase.h> header file. */
 #undef HAVE_W32API_WINBASE_H
@@ -524,6 +560,9 @@
 /* Version number of package */
 #undef VERSION
 
+/* Enable Windows WinDivert support for inline IDP */
+#undef WINDIVERT
+
 /* (bsd source) */
 #undef _BSD_SOURCE
 
@@ -573,9 +612,6 @@
 
 /* Fake GCC atomic support */
 #undef __GCC_HAVE_SYNC_COMPARE_AND_SWAP_8
-
-/* (CUDA support enabled) */
-#undef __SC_CUDA_SUPPORT__
 
 /* Define to `__inline__' or `__inline' if that's what the C compiler
    calls it, or to nothing if 'inline' is not supported under any name.  */

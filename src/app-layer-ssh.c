@@ -417,7 +417,7 @@ static int SSHParseData(SshState *state, SshHeader *header,
 
 static int SSHParseRequest(Flow *f, void *state, AppLayerParserState *pstate,
                            uint8_t *input, uint32_t input_len,
-                           void *local_data)
+                           void *local_data, const uint8_t flags)
 {
     SshState *ssh_state = (SshState *)state;
     SshHeader *ssh_header = &ssh_state->cli_hdr;
@@ -442,7 +442,7 @@ static int SSHParseRequest(Flow *f, void *state, AppLayerParserState *pstate,
 
 static int SSHParseResponse(Flow *f, void *state, AppLayerParserState *pstate,
                             uint8_t *input, uint32_t input_len,
-                            void *local_data)
+                            void *local_data, const uint8_t flags)
 {
     SshState *ssh_state = (SshState *)state;
     SshHeader *ssh_header = &ssh_state->srv_hdr;
@@ -505,17 +505,9 @@ static void SSHStateFree(void *state)
     SCFree(s);
 }
 
-static int SSHStateHasTxDetectState(void *state)
+static int SSHSetTxDetectState(void *vtx, DetectEngineState *de_state)
 {
-    SshState *ssh_state = (SshState *)state;
-    if (ssh_state->de_state)
-        return 1;
-    return 0;
-}
-
-static int SSHSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
-{
-    SshState *ssh_state = (SshState *)state;
+    SshState *ssh_state = (SshState *)vtx;
     ssh_state->de_state = de_state;
     return 0;
 }
@@ -543,33 +535,40 @@ static uint64_t SSHGetTxCnt(void *state)
     return 1;
 }
 
-static void SSHSetTxLogged(void *state, void *tx, uint32_t logger)
+static void SSHSetTxLogged(void *state, void *tx, LoggerId logged)
 {
     SshState *ssh_state = (SshState *)state;
     if (ssh_state)
-        ssh_state->logged |= logger;
+        ssh_state->logged = logged;
 }
 
-static int SSHGetTxLogged(void *state, void *tx, uint32_t logger)
+static LoggerId SSHGetTxLogged(void *state, void *tx)
 {
     SshState *ssh_state = (SshState *)state;
-    if (ssh_state && (ssh_state->logged & logger)) {
-        return 1;
+    if (ssh_state) {
+        return ssh_state->logged;
     }
     return 0;
 }
 
-static uint64_t SSHGetTxMpmIDs(void *vtx)
+static uint64_t SSHGetTxDetectFlags(void *vtx, uint8_t dir)
 {
     SshState *ssh_state = (SshState *)vtx;
-    return ssh_state->mpm_ids;
+    if (dir & STREAM_TOSERVER) {
+        return ssh_state->detect_flags_ts;
+    } else {
+        return ssh_state->detect_flags_tc;
+    }
 }
 
-static int SSHSetTxMpmIDs(void *vtx, uint64_t mpm_ids)
+static void SSHSetTxDetectFlags(void *vtx, uint8_t dir, uint64_t flags)
 {
     SshState *ssh_state = (SshState *)vtx;
-    ssh_state->mpm_ids = mpm_ids;
-    return 0;
+    if (dir & STREAM_TOSERVER) {
+        ssh_state->detect_flags_ts = flags;
+    } else {
+        ssh_state->detect_flags_tc = flags;
+    }
 }
 
 static int SSHGetAlstateProgressCompletionStatus(uint8_t direction)
@@ -637,7 +636,7 @@ void RegisterSSHParsers(void)
 
         AppLayerParserRegisterTxFreeFunc(IPPROTO_TCP, ALPROTO_SSH, SSHStateTransactionFree);
 
-        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_SSH, SSHStateHasTxDetectState,
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_TCP, ALPROTO_SSH,
                                                SSHGetTxDetectState, SSHSetTxDetectState);
 
         AppLayerParserRegisterGetTx(IPPROTO_TCP, ALPROTO_SSH, SSHGetTx);
@@ -647,8 +646,8 @@ void RegisterSSHParsers(void)
         AppLayerParserRegisterGetStateProgressFunc(IPPROTO_TCP, ALPROTO_SSH, SSHGetAlstateProgress);
 
         AppLayerParserRegisterLoggerFuncs(IPPROTO_TCP, ALPROTO_SSH, SSHGetTxLogged, SSHSetTxLogged);
-        AppLayerParserRegisterMpmIDsFuncs(IPPROTO_TCP, ALPROTO_SSH,
-                SSHGetTxMpmIDs, SSHSetTxMpmIDs);
+        AppLayerParserRegisterDetectFlagsFuncs(IPPROTO_TCP, ALPROTO_SSH,
+                SSHGetTxDetectFlags, SSHSetTxDetectFlags);
 
         AppLayerParserRegisterGetStateProgressCompletionStatus(ALPROTO_SSH,
                                                                SSHGetAlstateProgressCompletionStatus);

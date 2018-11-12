@@ -4,6 +4,78 @@
 
 ### Changed
 
+## 3.2.1 - 2017-10-27
+
+### Thanks
+
+- @ordian for `alt_complete` fixes
+- @friedm for documentation fixes
+- @kali for improving error management
+
+### Fixed
+
+- there were cases where `alt_complete` could return `Incomplete`
+
+### Added
+
+- an `into_error_kind` method can be used to transform any error to a common value. This helps when the library is included multiple times as dependency with different feature sets
+
+
+## 3.2.0 - 2017-07-24
+
+### Thanks
+
+- @jedireza for documentation fixes
+- @gmorenz for the `bytes` combinator
+- @meh for character combinator fixes for UTF-8
+- @jethrogb for avoiding move issues in `separated_list`
+
+### Changed
+
+- new layout for the main page of documentation
+- `anychar` can now work on any input type
+- `length_bytes` is now an alias for `length_data`
+
+### Fixed
+
+- `one_of`, `none_of` and `char` will now index correctly UTF-8 characters
+- the `compiler_error` macro is now correctly exported
+
+
+### Added
+
+- the `bytes` combinator transforms a bit stream back to a byte slice for child parsers
+
+## 3.1.0 - 2017-06-16
+
+### Thanks
+
+- @sdroege: implementing be_i24 and le_i24
+- @Hywan: integrating faster substring search using memchr
+- @nizox: fixing type issues in bit stream parsing
+- @grissiom: documentation fixes
+- @doomrobo: implementing separated_list_complete and separated_nonempty_list_complete
+- @CWood1: fixing memchr integration in no_std
+- @lu_zero: integrating the compiler_error crate
+- @dtolnay: helping debug a type inference issue in map
+
+### Changed
+
+- memchr is used for substring search if possible
+- if building on nightly, some common syntax errors will display a specific error message. If building no stable, display the documentation to activate those messages
+- `count` no longer preallocates its vector
+
+### Fixed
+
+- better type inference in alt_complete
+- `alt` should now work with whitespace parsing
+- `map` should not make type inference errors anymore
+
+### Added
+
+- be_i24 and le_i24, parsing big endian and little endian signed 24 bit integers
+- `separated_list_complete` and `separated_nonempty_list_complete` will treat incomplete from sub parsers as error
+
 ## 3.0.0 - 2017-05-12
 
 ### Thanks
@@ -710,7 +782,10 @@ Considering the number of changes since the last release, this version can conta
 
 ## Compare code
 
-* [unreleased]: https://github.com/Geal/nom/compare/3.0.0...HEAD
+* [unreleased]: https://github.com/Geal/nom/compare/3.2.1...HEAD
+* [3.2.1]: https://github.com/Geal/nom/compare/3.2.0...3.2.1
+* [3.2.0]: https://github.com/Geal/nom/compare/3.1.0...3.2.0
+* [3.1.0]: https://github.com/Geal/nom/compare/3.0.0...3.1.0
 * [3.0.0]: https://github.com/Geal/nom/compare/2.2.1...3.0.0
 * [2.2.1]: https://github.com/Geal/nom/compare/2.2.0...2.2.1
 * [2.2.0]: https://github.com/Geal/nom/compare/2.1.0...2.2.0

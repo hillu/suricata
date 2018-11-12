@@ -96,10 +96,6 @@ static int DetectPrefilterSetup (DetectEngineCtx *de_ctx, Signature *s, const ch
         s->flags |= SIG_FLAG_PREFILTER;
 
         /* make sure setup function runs for this type. */
-        if (de_ctx->sm_types_prefilter == NULL)
-            de_ctx->sm_types_prefilter = SCCalloc(sizeof(bool), DETECT_TBLSIZE);
-        if (de_ctx->sm_types_prefilter == NULL)
-            FatalError(SC_ERR_MEM_ALLOC, "failed to allocate sm_types_prefilter memory");
         de_ctx->sm_types_prefilter[sm->type] = true;
     }
 

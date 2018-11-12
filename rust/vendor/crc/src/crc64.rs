@@ -1,12 +1,11 @@
+#[cfg(feature = "std")]
 use std::hash::Hasher;
+#[cfg(not(feature = "std"))]
+use core::hash::Hasher;
 
-pub const ECMA: u64 = 0xc96c5795d7870f42;
-pub const ISO: u64 = 0xd800000000000000;
+pub use util::make_table_crc64 as make_table;
 
-lazy_static! {
-    pub static ref ECMA_TABLE: [u64; 256] = make_table(ECMA);
-    pub static ref ISO_TABLE: [u64; 256] = make_table(ISO);
-}
+include!(concat!(env!("OUT_DIR"), "/crc64_constants.rs"));
 
 pub struct Digest {
     table: [u64; 256],
@@ -18,22 +17,6 @@ pub trait Hasher64 {
     fn reset(&mut self);
     fn write(&mut self, bytes: &[u8]);
     fn sum64(&self) -> u64;
-}
-
-pub fn make_table(poly: u64) -> [u64; 256] {
-    let mut table = [0u64; 256];
-    for i in 0..256 {
-        let mut value = i as u64;
-        for _ in 0..8 {
-            value = if (value & 1) == 1 {
-                (value >> 1) ^ poly
-            } else {
-                value >> 1
-            }
-        }
-        table[i] = value;
-    }
-    table
 }
 
 pub fn update(mut value: u64, table: &[u64; 256], bytes: &[u8]) -> u64 {

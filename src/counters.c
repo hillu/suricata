@@ -98,6 +98,11 @@ static uint32_t stats_tts = STATS_MGMTT_TTS;
 /** is the stats counter enabled? */
 static char stats_enabled = TRUE;
 
+/**< add decoder events as stats? enabled by default */
+bool stats_decoder_events = true;
+/**< add stream events as stats? disabled by default */
+bool stats_stream_events = false;
+
 static int StatsOutput(ThreadVars *tv);
 static int StatsThreadRegister(const char *thread_name, StatsPublicThreadContext *);
 void StatsReleaseCounters(StatsCounter *head);
@@ -237,6 +242,16 @@ static void StatsInitCtx(void)
         const char *interval = ConfNodeLookupChildValue(stats, "interval");
         if (interval != NULL)
             stats_tts = (uint32_t) atoi(interval);
+
+        int b;
+        int ret = ConfGetChildValueBool(stats, "decoder-events", &b);
+        if (ret) {
+            stats_decoder_events = (b == 1);
+        }
+        ret = ConfGetChildValueBool(stats, "stream-events", &b);
+        if (ret) {
+            stats_stream_events = (b == 1);
+        }
     }
 
     if (!OutputStatsLoggersRegistered()) {
@@ -323,9 +338,6 @@ static void StatsReleaseCtx(void)
  */
 static void *StatsMgmtThread(void *arg)
 {
-    /* block usr2.  usr2 to be handled by the main thread only */
-    UtilSignalBlock(SIGUSR2);
-
     ThreadVars *tv_local = (ThreadVars *)arg;
     uint8_t run = 1;
     struct timespec cond_time;
@@ -410,9 +422,6 @@ static void *StatsMgmtThread(void *arg)
  */
 static void *StatsWakeupThread(void *arg)
 {
-    /* block usr2.  usr2 to be handled by the main thread only */
-    UtilSignalBlock(SIGUSR2);
-
     ThreadVars *tv_local = (ThreadVars *)arg;
     uint8_t run = 1;
     ThreadVars *tv = NULL;

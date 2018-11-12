@@ -429,8 +429,8 @@ static int NFQSetupPkt (Packet *p, struct nfq_q_handle *qh, void *data)
 
     ph = nfq_get_msg_packet_hdr(tb);
     if (ph != NULL) {
-        p->nfq_v.id = ntohl(ph->packet_id);
-        //p->nfq_v.hw_protocol = ntohs(p->nfq_v.ph->hw_protocol);
+        p->nfq_v.id = SCNtohl(ph->packet_id);
+        //p->nfq_v.hw_protocol = SCNtohs(p->nfq_v.ph->hw_protocol);
         p->nfq_v.hw_protocol = ph->hw_protocol;
     }
     /* coverity[missing_lock] */
@@ -856,7 +856,7 @@ int NFQRegisterQueue(char *queue)
     nq->queue_num = queue_num;
     receive_queue_num++;
     SCMutexUnlock(&nfq_init_lock);
-    LiveRegisterDevice(queue);
+    LiveRegisterDeviceName(queue);
 
     SCLogDebug("Queue \"%s\" registered.", queue);
     return 0;
@@ -1183,9 +1183,15 @@ TmEcode DecodeNFQ(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
     DecodeUpdatePacketCounters(tv, dtv, p);
 
     if (IPV4_GET_RAW_VER(ip4h) == 4) {
+        if (unlikely(GET_PKT_LEN(p) > USHRT_MAX)) {
+            return TM_ECODE_FAILED;
+        }
         SCLogDebug("IPv4 packet");
         DecodeIPV4(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
     } else if(IPV6_GET_RAW_VER(ip6h) == 6) {
+        if (unlikely(GET_PKT_LEN(p) > USHRT_MAX)) {
+            return TM_ECODE_FAILED;
+        }
         SCLogDebug("IPv6 packet");
         DecodeIPV6(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
     } else {
