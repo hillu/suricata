@@ -46,7 +46,13 @@ enum AppProtoEnum {
     ALPROTO_DNP3,
     ALPROTO_NFS,
     ALPROTO_NTP,
+    ALPROTO_FTPDATA,
+    ALPROTO_TFTP,
+    ALPROTO_IKEV2,
+    ALPROTO_KRB5,
+    ALPROTO_DHCP,
     ALPROTO_TEMPLATE,
+    ALPROTO_TEMPLATE_RUST,
 
     /* used by the probing parser when alproto detection fails
      * permanently for that particular stream */
@@ -57,6 +63,7 @@ enum AppProtoEnum {
     /* keep last */
     ALPROTO_MAX,
 };
+// NOTE: if ALPROTO's get >= 256, update SignatureNonPrefilterStore
 
 /* not using the enum as that is a unsigned int, so 4 bytes */
 typedef uint16_t AppProto;
@@ -69,5 +76,14 @@ typedef uint16_t AppProto;
  * \retval String equivalent for the alproto.
  */
 const char *AppProtoToString(AppProto alproto);
+
+/**
+ * \brief Maps a string to its ALPROTO_* equivalent.
+ *
+ * \param String equivalent for the alproto.
+ *
+ * \retval alproto App layer protocol id, or ALPROTO_UNKNOWN.
+ */
+AppProto StringToAppProto(const char *proto_name);
 
 #endif /* __APP_LAYER_PROTOS_H__ */

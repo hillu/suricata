@@ -61,7 +61,7 @@
 //!     take_while!($input, call!($f));
 //!   );
 //! );
-//!
+//! ```
 #[allow(unused_variables)]
 
 /// Wraps a parser in a closure
@@ -496,27 +496,24 @@ macro_rules! try_parse (
 #[macro_export]
 macro_rules! map(
   // Internal parser, do not use directly
-  (__impl $i:expr, $submac:ident!( $($args:tt)* ), $submac2:ident!( $($args2:tt)* )) => (
+  (__impl $i:expr, $submac:ident!( $($args:tt)* ), $g:expr) => (
     {
+      pub fn _unify<T, R, F: FnOnce(T) -> R>(f: F, t: T) -> R {
+       f(t)
+      }
       match $submac!($i, $($args)*) {
         $crate::IResult::Error(e)                            => $crate::IResult::Error(e),
         $crate::IResult::Incomplete($crate::Needed::Unknown) => $crate::IResult::Incomplete($crate::Needed::Unknown),
         $crate::IResult::Incomplete($crate::Needed::Size(i)) => $crate::IResult::Incomplete($crate::Needed::Size(i)),
-        $crate::IResult::Done(i, o)                          => $crate::IResult::Done(i, $submac2!(o, $($args2)*))
+        $crate::IResult::Done(i, o)                          => $crate::IResult::Done(i, _unify($g, o))
       }
     }
   );
   ($i:expr, $submac:ident!( $($args:tt)* ), $g:expr) => (
-    map!(__impl $i, $submac!($($args)*), call!($g));
-  );
-  ($i:expr, $submac:ident!( $($args:tt)* ), $submac2:ident!( $($args2:tt)* )) => (
-    map!(__impl $i, $submac!($($args)*), $submac2!($($args2)*));
+    map!(__impl $i, $submac!($($args)*), $g);
   );
   ($i:expr, $f:expr, $g:expr) => (
-    map!(__impl $i, call!($f), call!($g));
-  );
-  ($i:expr, $f:expr, $submac:ident!( $($args:tt)* )) => (
-    map!(__impl $i, call!($f), $submac!($($args)*));
+    map!(__impl $i, call!($f), $g);
   );
 );
 
@@ -596,6 +593,7 @@ macro_rules! parse_to (
   ($i:expr, $t:ty ) => (
     {
       use $crate::ParseTo;
+      use $crate::Slice;
       use $crate::InputLength;
       match ($i).parse_to() {
         ::std::option::Option::Some(output) => $crate::IResult::Done($i.slice(..$i.input_len()), output),
@@ -606,7 +604,7 @@ macro_rules! parse_to (
 );
 
 /// `verify!(I -> IResult<I,O>, O -> bool) => I -> IResult<I, O>`
-/// returns the result of the child parser if it satisfies a verifcation function
+/// returns the result of the child parser if it satisfies a verification function
 ///
 /// ```
 /// # #[macro_use] extern crate nom;
@@ -1099,7 +1097,7 @@ macro_rules! tap (
   );
 );
 
-/// `eof!(i)` returns `i` if it is at the end of input data
+/// `eof!()` returns its input if it is at the end of input data
 ///
 /// please note that for now, eof only means there's no more
 /// data available, it does not work yet with smarter input

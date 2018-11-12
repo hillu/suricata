@@ -30,8 +30,8 @@
 #include "conf.h"
 #include "runmodes.h"
 #include "runmode-af-packet.h"
-#include "log-httplog.h"
 #include "output.h"
+#include "log-httplog.h"
 
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
@@ -423,8 +423,8 @@ int RunModeSetLiveCaptureSingle(ConfigIfaceParserFunc ConfigParser,
         aconf = ConfigParser(live_dev);
         live_dev_c = live_dev;
     } else {
-        aconf = ConfigParser(live_dev_c);
         live_dev_c = LiveGetDeviceName(0);
+        aconf = ConfigParser(live_dev_c);
     }
 
     return RunModeSetLiveCaptureWorkersForDevice(

@@ -2,12 +2,12 @@
 > Rust implementation of CRC(32, 64) with support of various standards
 
 * [Crate](https://crates.io/crates/crc)
-* [Documentation](http://mrhooray.github.io/crc-rs/crc/index.html)
+* [Documentation](https://docs.rs/crc/)
 * [Usage](#usage)
 * [Benchmark](#benchmark)
 * [License](#license)
 
-##Usage
+## Usage
 Add `crc` to `Cargo.toml`
 ```toml
 [dependencies]
@@ -62,7 +62,7 @@ digest.write(b"123456789");
 assert_eq!(digest.sum64(), 0x995dc9bbdf1939fa);
 ```
 
-##Benchmark
+## Benchmark
 > Bencher is currently not available in Rust stable releases.
 
 `cargo bench` with 2.3 GHz Intel Core i7 results ~430MB/s throughput. [Comparison](http://create.stephan-brumme.com/crc32/)
@@ -79,5 +79,17 @@ test bench_crc64_update_megabytes ... bench:   2322472 ns/iter (+/- 92870)
 test result: ok. 0 passed; 0 failed; 0 ignored; 4 measured
 ```
 
-##License
-MIT
+## License
+
+Licensed under either of
+
+ * Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+ * MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any
+additional terms or conditions.

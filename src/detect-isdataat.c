@@ -59,6 +59,8 @@ int DetectIsdataatSetup (DetectEngineCtx *, Signature *, const char *);
 void DetectIsdataatRegisterTests(void);
 void DetectIsdataatFree(void *);
 
+static int DetectEndsWithSetup (DetectEngineCtx *de_ctx, Signature *s, const char *nullstr);
+
 /**
  * \brief Registration function for isdataat: keyword
  */
@@ -72,6 +74,12 @@ void DetectIsdataatRegister(void)
     sigmatch_table[DETECT_ISDATAAT].Setup = DetectIsdataatSetup;
     sigmatch_table[DETECT_ISDATAAT].Free  = DetectIsdataatFree;
     sigmatch_table[DETECT_ISDATAAT].RegisterTests = DetectIsdataatRegisterTests;
+
+    sigmatch_table[DETECT_ENDS_WITH].name = "endswith";
+    sigmatch_table[DETECT_ENDS_WITH].desc = "make sure the previous content matches exactly at the end of the buffer";
+    sigmatch_table[DETECT_ENDS_WITH].url = DOC_URL DOC_VERSION "/rules/payload-keywords.html#endswith";
+    sigmatch_table[DETECT_ENDS_WITH].Setup = DetectEndsWithSetup;
+    sigmatch_table[DETECT_ENDS_WITH].flags = SIGMATCH_NOOPT;
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex, &parse_regex_study);
 }
@@ -209,6 +217,8 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, const char *isda
 
     int sm_list;
     if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        if (DetectBufferGetActiveList(de_ctx, s) == -1)
+            return -1;
         sm_list = s->init_data->list;
 
         if (idad->flags & ISDATAAT_RELATIVE) {
@@ -250,17 +260,6 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, const char *isda
         (idad->flags & (ISDATAAT_RELATIVE|ISDATAAT_NEGATED)) == (ISDATAAT_RELATIVE|ISDATAAT_NEGATED))
     {
         DetectIsdataatFree(idad);
-        DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
-        cd->flags |= DETECT_CONTENT_ENDS_WITH;
-        ret = 0;
-        goto end;
-    }
-
-    /* 'ends with' scenario */
-    if (prev_pm != NULL && prev_pm->type == DETECT_CONTENT &&
-        idad->dataat == 1 &&
-        (idad->flags & (ISDATAAT_RELATIVE|ISDATAAT_NEGATED)) == (ISDATAAT_RELATIVE|ISDATAAT_NEGATED))
-    {
         DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
         cd->flags |= DETECT_CONTENT_ENDS_WITH;
         ret = 0;
@@ -313,6 +312,28 @@ void DetectIsdataatFree(void *ptr)
     SCFree(idad);
 }
 
+static int DetectEndsWithSetup (DetectEngineCtx *de_ctx, Signature *s, const char *nullstr)
+{
+    SigMatch *pm = NULL;
+    int ret = -1;
+
+    /* retrieve the sm to apply the depth against */
+    pm = DetectGetLastSMFromLists(s, DETECT_CONTENT, -1);
+    if (pm == NULL) {
+        SCLogError(SC_ERR_DEPTH_MISSING_CONTENT, "endswith needs a "
+                   "preceding content option");
+        goto end;
+    }
+
+    /* verify other conditions. */
+    DetectContentData *cd = (DetectContentData *)pm->ctx;
+
+    cd->flags |= DETECT_CONTENT_ENDS_WITH;
+
+    ret = 0;
+ end:
+    return ret;
+}
 
 #ifdef UNITTESTS
 static int g_dce_stub_data_buffer_id = 0;

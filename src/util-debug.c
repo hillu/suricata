@@ -807,9 +807,11 @@ static inline SCLogOPIfaceCtx *SCLogInitConsoleOPIface(const char *log_format,
     }
     iface_ctx->log_level = tmp_log_level;
 
+#ifndef OS_WIN32
     if (isatty(fileno(stdout)) && isatty(fileno(stderr))) {
         iface_ctx->use_color = TRUE;
     }
+#endif
 
     return iface_ctx;
 }
@@ -1112,7 +1114,8 @@ SCLogInitData *SCLogAllocLogInitData(void)
     return sc_lid;
 }
 
-#if 0
+#ifdef UNITTESTS
+#ifndef OS_WIN32
 /**
  * \brief Frees a SCLogInitData
  *
@@ -1121,18 +1124,13 @@ SCLogInitData *SCLogAllocLogInitData(void)
 static void SCLogFreeLogInitData(SCLogInitData *sc_lid)
 {
     if (sc_lid != NULL) {
-        if (sc_lid->startup_message != NULL)
-            SCFree(sc_lid->startup_message);
-        if (sc_lid->global_log_format != NULL)
-            SCFree(sc_lid->global_log_format);
-        if (sc_lid->op_filter != NULL)
-            SCFree(sc_lid->op_filter);
-
         SCLogFreeLogOPIfaceCtx(sc_lid->op_ifaces);
+        SCFree(sc_lid);
     }
 
     return;
 }
+#endif
 #endif
 
 /**
@@ -1503,8 +1501,7 @@ void SCLogDeInitLogModule(void)
 
 static int SCLogTestInit01(void)
 {
-    int result = 1;
-
+#ifndef OS_WIN32
     /* unset any environment variables set for the logging module */
     unsetenv(SC_LOG_ENV_LOG_LEVEL);
     unsetenv(SC_LOG_ENV_LOG_OP_IFACE);
@@ -1512,13 +1509,12 @@ static int SCLogTestInit01(void)
 
     SCLogInitLogModule(NULL);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEF_LOG_LEVEL == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEF_LOG_LEVEL == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_DEF_LOG_OP_IFACE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp(SC_LOG_DEF_LOG_FORMAT, sc_log_config->log_format) == 0);
 
     SCLogDeInitLogModule();
@@ -1529,10 +1525,10 @@ static int SCLogTestInit01(void)
 
     SCLogInitLogModule(NULL);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                !strcmp("%n- %l", sc_log_config->log_format));
 
     unsetenv(SC_LOG_ENV_LOG_LEVEL);
@@ -1540,19 +1536,18 @@ static int SCLogTestInit01(void)
     unsetenv(SC_LOG_ENV_LOG_FORMAT);
 
     SCLogDeInitLogModule();
-
-    return result;
+#endif
+    PASS;
 }
 
 static int SCLogTestInit02(void)
 {
+#ifndef OS_WIN32
     SCLogInitData *sc_lid = NULL;
     SCLogOPIfaceCtx *sc_iface_ctx = NULL;
-    int result = 1;
     char *logfile = SCLogGetLogFilename("boo.txt");
     sc_lid = SCLogAllocLogInitData();
-    if (sc_lid == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_lid);
     sc_lid->startup_message = "Test02";
     sc_lid->global_log_level = SC_LOG_DEBUG;
     sc_lid->op_filter = "boo";
@@ -1565,29 +1560,28 @@ static int SCLogTestInit02(void)
 
     SCLogInitLogModule(sc_lid);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_FILE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->next->iface);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp(SC_LOG_DEF_LOG_FORMAT, sc_log_config->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->log_format != NULL &&
                strcmp("%m - %d", sc_log_config->op_ifaces->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next != NULL &&
                sc_log_config->op_ifaces->next->log_format == NULL);
 
+    SCLogFreeLogInitData(sc_lid);
     SCLogDeInitLogModule();
 
     sc_lid = SCLogAllocLogInitData();
-    if (sc_lid == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_lid);
     sc_lid->startup_message = "Test02";
     sc_lid->global_log_level = SC_LOG_DEBUG;
     sc_lid->op_filter = "boo";
@@ -1595,52 +1589,49 @@ static int SCLogTestInit02(void)
 
     SCLogInitLogModule(sc_lid);
 
-    if (sc_log_config == NULL)
-        return 0;
+    FAIL_IF_NULL(sc_log_config);
 
-    result &= (SC_LOG_DEBUG == sc_log_config->log_level);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(SC_LOG_DEBUG == sc_log_config->log_level);
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                SC_LOG_OP_IFACE_CONSOLE == sc_log_config->op_ifaces->iface);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next == NULL);
-    result &= (sc_log_config->log_format != NULL &&
+    FAIL_IF_NOT(sc_log_config->log_format != NULL &&
                strcmp("kaboo", sc_log_config->log_format) == 0);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->log_format == NULL);
-    result &= (sc_log_config->op_ifaces != NULL &&
+    FAIL_IF_NOT(sc_log_config->op_ifaces != NULL &&
                sc_log_config->op_ifaces->next == NULL);
 
+    SCLogFreeLogInitData(sc_lid);
     SCLogDeInitLogModule();
-
-    return result;
+    SCFree(logfile);
+#endif
+    PASS;
 }
 
 static int SCLogTestInit03(void)
 {
-    int result = 1;
-
     SCLogInitLogModule(NULL);
 
     SCLogAddFGFilterBL(NULL, "bamboo", -1);
     SCLogAddFGFilterBL(NULL, "soo", -1);
     SCLogAddFGFilterBL(NULL, "dummy", -1);
 
-    result &= (SCLogPrintFGFilters() == 3);
+    FAIL_IF_NOT(SCLogPrintFGFilters() == 3);
 
     SCLogAddFGFilterBL(NULL, "dummy1", -1);
     SCLogAddFGFilterBL(NULL, "dummy2", -1);
 
-    result &= (SCLogPrintFGFilters() == 5);
+    FAIL_IF_NOT(SCLogPrintFGFilters() == 5);
 
     SCLogDeInitLogModule();
 
-    return result;
+    PASS;
 }
 
 static int SCLogTestInit04(void)
 {
-    int result = 1;
-
     SCLogInitLogModule(NULL);
 
     SCLogAddFDFilter("bamboo");
@@ -1648,23 +1639,23 @@ static int SCLogTestInit04(void)
     SCLogAddFDFilter("foo");
     SCLogAddFDFilter("roo");
 
-    result &= (SCLogPrintFDFilters() == 4);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 4);
 
     SCLogAddFDFilter("loo");
     SCLogAddFDFilter("soo");
 
-    result &= (SCLogPrintFDFilters() == 5);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 5);
 
     SCLogRemoveFDFilter("bamboo");
     SCLogRemoveFDFilter("soo");
     SCLogRemoveFDFilter("foo");
     SCLogRemoveFDFilter("noo");
 
-    result &= (SCLogPrintFDFilters() == 2);
+    FAIL_IF_NOT(SCLogPrintFDFilters() == 2);
 
     SCLogDeInitLogModule();
 
-    return result;
+    PASS;
 }
 
 static int SCLogTestInit05(void)

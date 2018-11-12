@@ -39,6 +39,7 @@
 #include "detect-engine-mpm.h"
 #include "detect-content.h"
 #include "detect-pcre.h"
+#include "detect-urilen.h"
 
 #include "flow.h"
 #include "flow-var.h"
@@ -57,7 +58,9 @@
 
 static int DetectHttpRawUriSetup(DetectEngineCtx *, Signature *, const char *);
 static void DetectHttpRawUriRegisterTests(void);
-static void DetectHttpRawUriSetupCallback(Signature *s);
+static void DetectHttpRawUriSetupCallback(const DetectEngineCtx *de_ctx,
+                                          Signature *s);
+static bool DetectHttpRawUriValidateCallback(const Signature *s, const char **);
 static int g_http_raw_uri_buffer_id = 0;
 
 /**
@@ -87,6 +90,9 @@ void DetectHttpRawUriRegister(void)
     DetectBufferTypeRegisterSetupCallback("http_raw_uri",
             DetectHttpRawUriSetupCallback);
 
+    DetectBufferTypeRegisterValidateCallback("http_raw_uri",
+            DetectHttpRawUriValidateCallback);
+
     g_http_raw_uri_buffer_id = DetectBufferTypeGetByName("http_raw_uri");
 }
 
@@ -108,10 +114,16 @@ static int DetectHttpRawUriSetup(DetectEngineCtx *de_ctx, Signature *s, const ch
                                                   ALPROTO_HTTP);
 }
 
-static void DetectHttpRawUriSetupCallback(Signature *s)
+static bool DetectHttpRawUriValidateCallback(const Signature *s, const char **sigerror)
+{
+    return DetectUrilenValidateContent(s, g_http_raw_uri_buffer_id, sigerror);
+}
+
+static void DetectHttpRawUriSetupCallback(const DetectEngineCtx *de_ctx,
+                                          Signature *s)
 {
     SCLogDebug("callback invoked by %u", s->id);
-    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
+    DetectUrilenApplyToContent(s, g_http_raw_uri_buffer_id);
 }
 
 /******************************** UNITESTS **********************************/

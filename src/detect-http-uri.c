@@ -39,6 +39,7 @@
 #include "detect-engine-mpm.h"
 #include "detect-content.h"
 #include "detect-pcre.h"
+#include "detect-urilen.h"
 
 #include "flow.h"
 #include "flow-var.h"
@@ -57,7 +58,9 @@
 #include "stream-tcp.h"
 
 static void DetectHttpUriRegisterTests(void);
-static void DetectHttpUriSetupCallback(Signature *s);
+static void DetectHttpUriSetupCallback(const DetectEngineCtx *de_ctx,
+                                       Signature *s);
+static bool DetectHttpUriValidateCallback(const Signature *s, const char **sigerror);
 
 static int g_http_uri_buffer_id = 0;
 
@@ -89,6 +92,9 @@ void DetectHttpUriRegister (void)
     DetectBufferTypeRegisterSetupCallback("http_uri",
             DetectHttpUriSetupCallback);
 
+    DetectBufferTypeRegisterValidateCallback("http_uri",
+            DetectHttpUriValidateCallback);
+
     g_http_uri_buffer_id = DetectBufferTypeGetByName("http_uri");
 }
 
@@ -112,10 +118,16 @@ int DetectHttpUriSetup(DetectEngineCtx *de_ctx, Signature *s, const char *str)
                                                   ALPROTO_HTTP);
 }
 
-static void DetectHttpUriSetupCallback(Signature *s)
+static bool DetectHttpUriValidateCallback(const Signature *s, const char **sigerror)
+{
+    return DetectUrilenValidateContent(s, g_http_uri_buffer_id, sigerror);
+}
+
+static void DetectHttpUriSetupCallback(const DetectEngineCtx *de_ctx,
+                                       Signature *s)
 {
     SCLogDebug("callback invoked by %u", s->id);
-    s->mask |= SIG_MASK_REQUIRE_HTTP_STATE;
+    DetectUrilenApplyToContent(s, g_http_uri_buffer_id);
 }
 
 /******************************** UNITESTS **********************************/

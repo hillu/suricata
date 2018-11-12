@@ -23,7 +23,6 @@
 #define __RUST_DNS_LOG_GEN_H__
 
 json_t * rs_dns_log_json_query(RSDNSTransaction * tx, uint16_t i, uint64_t flags);
-json_t * rs_dns_log_json_answer(RSDNSTransaction * tx, uint16_t i, uint64_t flags);
-json_t * rs_dns_log_json_authority(RSDNSTransaction * tx, uint16_t i, uint64_t flags);
+json_t * rs_dns_log_json_answer(RSDNSTransaction * tx, uint64_t flags);
 
 #endif /* ! __RUST_DNS_LOG_GEN_H__ */

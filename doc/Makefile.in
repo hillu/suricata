@@ -253,6 +253,7 @@ HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
+HAVE_LLC = @HAVE_LLC@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
@@ -286,6 +287,7 @@ LIBPRELUDE_PTHREAD_CFLAGS = @LIBPRELUDE_PTHREAD_CFLAGS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
+LLC = @LLC@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
 LT_SYS_LIBRARY_PATH = @LT_SYS_LIBRARY_PATH@
@@ -298,7 +300,6 @@ MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
 NM = @NM@
 NMEDIT = @NMEDIT@
-NVCC = @NVCC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
 OPTIMIZATION_CFLAGS = @OPTIMIZATION_CFLAGS@
@@ -316,12 +317,8 @@ PCAP_CFLAGS = @PCAP_CFLAGS@
 PKG_CONFIG = @PKG_CONFIG@
 PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
 PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
-PYTHON = @PYTHON@
-PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
-PYTHON_PLATFORM = @PYTHON_PLATFORM@
-PYTHON_PREFIX = @PYTHON_PREFIX@
-PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_DEBUG = @RUST_DEBUG@
 RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
@@ -331,6 +328,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SURICATA_UPDATE_DIR = @SURICATA_UPDATE_DIR@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
@@ -355,6 +353,8 @@ datadir = @datadir@
 datarootdir = @datarootdir@
 docdir = ${datarootdir}/doc/${PACKAGE}
 dvidir = @dvidir@
+e_datarulesdir = @e_datarulesdir@
+e_defaultruledir = @e_defaultruledir@
 e_enable_evelog = @e_enable_evelog@
 e_localstatedir = @e_localstatedir@
 e_logcertsdir = @e_logcertsdir@
@@ -366,6 +366,7 @@ e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
 exec_prefix = @exec_prefix@
+has_suricata_update_comment = @has_suricata_update_comment@
 host = @host@
 host_alias = @host_alias@
 host_cpu = @host_cpu@
@@ -391,20 +392,15 @@ localedir = @localedir@
 localstatedir = @localstatedir@
 mandir = @mandir@
 mkdir_p = @mkdir_p@
+no_suricata_update_comment = @no_suricata_update_comment@
 oldincludedir = @oldincludedir@
 pdfdir = @pdfdir@
-pkgpyexecdir = @pkgpyexecdir@
-pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-pyexecdir = @pyexecdir@
-pythondir = @pythondir@
 runstatedir = @runstatedir@
 rust_config_comment = @rust_config_comment@
 rust_config_enabled = @rust_config_enabled@
-rust_config_exp_comment = @rust_config_exp_comment@
-rust_config_exp_enabled = @rust_config_exp_enabled@
 rust_vendor_comment = @rust_vendor_comment@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
@@ -427,26 +423,8 @@ INSTALL.PF_RING \
 INSTALL.WINDOWS \
 \
 Basic_Setup.txt \
-CentOS5.txt \
-CentOS_56_Installation.txt \
-Debian_Installation.txt \
-Fedora_Core.txt \
-FreeBSD_8.txt \
-HTP_library_installation.txt \
-Installation_from_GIT_with_PF_RING_on_Ubuntu_server_1104.txt \
-Installation_with_CUDA_on_Ubuntu_server_1104.txt \
-Installation_with_CUDA_and_PFRING_on_Scientific_Linux_6.txt \
-Installation_with_PF_RING.txt \
-Installation_with_CUDA_and_PF_RING_on_Ubuntu_server_1104.txt \
-Installation_from_GIT_with_PCRE-JIT.txt \
-Installation_with_CUDA_on_Scientific_Linux_6.txt \
-Mac_OS_X_106x.txt \
-OpenBSD_Installation_from_GIT.txt \
 Setting_up_IPSinline_for_Linux.txt \
-Third_Party_Installation_Guides.txt \
-Ubuntu_Installation.txt \
-Ubuntu_Installation_from_GIT.txt \
-Windows.txt
+Third_Party_Installation_Guides.txt
 
 dist_doc_DATA = ${EXTRA_DIST}
 all: all-recursive

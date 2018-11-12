@@ -1,6 +1,6 @@
 .\" Man page generated from reStructuredText.
 .
-.TH "SURICATA" "1" "Nov 06, 2018" "4.0.6" "Suricata"
+.TH "SURICATA" "1" "Nov 06, 2018" "4.1.0" "Suricata"
 .SH NAME
 suricata \- Suricata
 .
@@ -68,7 +68,24 @@ multiple times for more verbosity.
 .INDENT 0.0
 .TP
 .B \-r <path>
-Run in pcap offline mode reading files from pcap file.
+Run in pcap offline mode (replay mode) reading files from pcap file. If
+<path> specifies a directory, all files in that directory will be processed
+in order of modified time maintaining flow state between files.
+.UNINDENT
+.INDENT 0.0
+.TP
+.B \-\-pcap\-file\-continuous
+Used with the \-r option to indicate that the mode should stay alive until
+interrupted. This is useful with directories to add new files and not reset
+flow state between files.
+.UNINDENT
+.INDENT 0.0
+.TP
+.B \-\-pcap\-file\-delete
+Used with the \-r option to indicate that the mode should delete pcap files
+after they have been processed. This is useful with pcap\-file\-continuous to
+continuously feed files to a directory and have them cleaned up when done. If
+this option is not set, pcap files will not be deleted after processing.
 .UNINDENT
 .INDENT 0.0
 .TP
@@ -123,7 +140,7 @@ the \-l option, Suricata will use the directory that is set in yaml.
 .B \-D
 Normally if you run Suricata on your console, it keeps your console
 occupied. You can not use it for other purposes, and when you close
-the window, Suricata stops running.  If you run Suricata as deamon
+the window, Suricata stops running.  If you run Suricata as daemon
 (using the \-D option), it runs at the background and you will be
 able to use the console for other tasks without disturbing the
 engine running.
@@ -309,7 +326,7 @@ with \fI\-\-enable\-unittests\fP\&.
 .TP
 .B \-U, \-\-unittest\-filter=REGEX
 With the \-U option you can select which of the unit tests you want
-to run. This option uses REGEX.  Example of use: suricata \-u \-U
+to run. This option uses REGEX. Example of use: suricata \-u \-U
 http
 .UNINDENT
 .INDENT 0.0
@@ -321,7 +338,7 @@ List all unit tests.
 .TP
 .B \-\-fatal\-unittests
 Enables fatal failure on a unit test error. Suricata will exit
-instead of continuuing more tests.
+instead of continuing more tests.
 .UNINDENT
 .INDENT 0.0
 .TP

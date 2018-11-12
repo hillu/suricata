@@ -43,10 +43,13 @@
 #include "detect-engine.h"
 #include "detect-engine-mpm.h"
 #include "detect-reference.h"
+#include "detect-metadata.h"
 #include "app-layer-parser.h"
 #include "app-layer-dnp3.h"
+#include "app-layer-dns-common.h"
 #include "app-layer-htp.h"
 #include "app-layer-htp-xff.h"
+#include "app-layer-ftp.h"
 #include "util-classification-config.h"
 #include "util-syslog.h"
 #include "util-logopenfile.h"
@@ -55,12 +58,14 @@
 #include "output-json.h"
 #include "output-json-alert.h"
 #include "output-json-dnp3.h"
+#include "output-json-dns.h"
 #include "output-json-http.h"
 #include "output-json-tls.h"
 #include "output-json-ssh.h"
 #include "output-json-smtp.h"
 #include "output-json-email-common.h"
 #include "output-json-nfs.h"
+#include "output-json-smb.h"
 #include "output-json-flow.h"
 
 #include "util-byte.h"
@@ -79,19 +84,17 @@
 #define LOG_JSON_PAYLOAD           BIT_U16(0)
 #define LOG_JSON_PACKET            BIT_U16(1)
 #define LOG_JSON_PAYLOAD_BASE64    BIT_U16(2)
-#define LOG_JSON_HTTP              BIT_U16(3)
-#define LOG_JSON_TLS               BIT_U16(4)
-#define LOG_JSON_SSH               BIT_U16(5)
-#define LOG_JSON_SMTP              BIT_U16(6)
-#define LOG_JSON_TAGGED_PACKETS    BIT_U16(7)
-#define LOG_JSON_DNP3              BIT_U16(8)
-#define LOG_JSON_VARS              BIT_U16(9)
-#define LOG_JSON_APP_LAYER         BIT_U16(10)
-#define LOG_JSON_FLOW              BIT_U16(11)
-#define LOG_JSON_HTTP_BODY         BIT_U16(12)
-#define LOG_JSON_HTTP_BODY_BASE64  BIT_U16(13)
+#define LOG_JSON_TAGGED_PACKETS    BIT_U16(3)
+#define LOG_JSON_APP_LAYER         BIT_U16(4)
+#define LOG_JSON_FLOW              BIT_U16(5)
+#define LOG_JSON_HTTP_BODY         BIT_U16(6)
+#define LOG_JSON_HTTP_BODY_BASE64  BIT_U16(7)
+#define LOG_JSON_RULE_METADATA     BIT_U16(8)
+#define LOG_JSON_RULE              BIT_U16(9)
 
-#define LOG_JSON_METADATA_ALL  (LOG_JSON_APP_LAYER|LOG_JSON_HTTP|LOG_JSON_TLS|LOG_JSON_SSH|LOG_JSON_SMTP|LOG_JSON_DNP3|LOG_JSON_VARS|LOG_JSON_FLOW)
+#define METADATA_DEFAULTS ( LOG_JSON_FLOW |                        \
+            LOG_JSON_APP_LAYER  |                                  \
+            LOG_JSON_RULE_METADATA)
 
 #define JSON_STREAM_BUFFER_SIZE 4096
 
@@ -100,6 +103,8 @@ typedef struct AlertJsonOutputCtx_ {
     uint16_t flags;
     uint32_t payload_buffer_size;
     HttpXFFCfg *xff_cfg;
+    HttpXFFCfg *parent_xff_cfg;
+    OutputJsonCommonSettings cfg;
 } AlertJsonOutputCtx;
 
 typedef struct JsonAlertLogThread_ {
@@ -153,11 +158,10 @@ static void AlertJsonSsh(const Flow *f, json_t *js)
     return;
 }
 
-static void AlertJsonDnp3(const Flow *f, json_t *js)
+static void AlertJsonDnp3(const Flow *f, const uint64_t tx_id, json_t *js)
 {
     DNP3State *dnp3_state = (DNP3State *)FlowGetAppState(f);
     if (dnp3_state) {
-        uint64_t tx_id = AppLayerParserGetTransactionLogId(f->alparser);
         DNP3Transaction *tx = AppLayerParserGetTx(IPPROTO_TCP, ALPROTO_DNP3,
             dnp3_state, tx_id);
         if (tx) {
@@ -180,6 +184,34 @@ static void AlertJsonDnp3(const Flow *f, json_t *js)
         }
     }
 
+    return;
+}
+
+static void AlertJsonDns(const Flow *f, const uint64_t tx_id, json_t *js)
+{
+#ifndef HAVE_RUST
+    DNSState *dns_state = (DNSState *)FlowGetAppState(f);
+    if (dns_state) {
+        DNSTransaction *tx = AppLayerParserGetTx(f->proto, ALPROTO_DNS,
+                                                 dns_state, tx_id);
+        if (tx) {
+            json_t *dnsjs = json_object();
+            if (unlikely(dnsjs == NULL)) {
+                return;
+            }
+
+            json_t *qjs = JsonDNSLogQuery(tx, tx_id);
+            if (qjs != NULL) {
+                json_object_set_new(dnsjs, "query", qjs);
+            }
+            json_t *ajs = JsonDNSLogAnswer(tx, tx_id);
+            if (ajs != NULL) {
+                json_object_set_new(dnsjs, "answer", ajs);
+            }
+            json_object_set_new(js, "dns", dnsjs);
+        }
+    }
+#endif
     return;
 }
 
@@ -230,9 +262,42 @@ static void AlertJsonSourceTarget(const Packet *p, const PacketAlert *pa,
     json_object_set_new(ajs, "target", tjs);
 }
 
-
-void AlertJsonHeader(const Packet *p, const PacketAlert *pa, json_t *js)
+static void AlertJsonMetadata(AlertJsonOutputCtx *json_output_ctx, const PacketAlert *pa, json_t *ajs)
 {
+    if (pa->s->metadata) {
+        const DetectMetadata* kv = pa->s->metadata;
+        json_t *mjs = json_object();
+        if (unlikely(mjs == NULL)) {
+            return;
+        }
+        while (kv) {
+            json_t *jkey = json_object_get(mjs, kv->key);
+            if (jkey == NULL) {
+                jkey = json_array();
+                if (unlikely(jkey == NULL))
+                    break;
+                json_array_append_new(jkey, json_string(kv->value));
+                json_object_set_new(mjs, kv->key, jkey);
+            } else {
+                json_array_append_new(jkey, json_string(kv->value));
+            }
+
+            kv = kv->next;
+        }
+
+        if (json_object_size(mjs) == 0) {
+            json_decref(mjs);
+        } else {
+            json_object_set_new(ajs, "metadata", mjs);
+        }
+    }
+}
+
+
+void AlertJsonHeader(void *ctx, const Packet *p, const PacketAlert *pa, json_t *js,
+                     uint16_t flags)
+{
+    AlertJsonOutputCtx *json_output_ctx = (AlertJsonOutputCtx *)ctx;
     const char *action = "allowed";
     /* use packet action if rate_filter modified the action */
     if (unlikely(pa->flags & PACKET_ALERT_RATE_FILTER_MODIFIED)) {
@@ -263,9 +328,9 @@ void AlertJsonHeader(const Packet *p, const PacketAlert *pa, json_t *js)
     json_object_set_new(ajs, "signature_id", json_integer(pa->s->id));
     json_object_set_new(ajs, "rev", json_integer(pa->s->rev));
     json_object_set_new(ajs, "signature",
-            json_string((pa->s->msg) ? pa->s->msg : ""));
+            SCJsonString((pa->s->msg) ? pa->s->msg : ""));
     json_object_set_new(ajs, "category",
-            json_string((pa->s->class_msg) ? pa->s->class_msg : ""));
+            SCJsonString((pa->s->class_msg) ? pa->s->class_msg : ""));
     json_object_set_new(ajs, "severity", json_integer(pa->s->prio));
 
     if (p->tenant_id > 0)
@@ -273,6 +338,10 @@ void AlertJsonHeader(const Packet *p, const PacketAlert *pa, json_t *js)
 
     if (pa->s->flags & SIG_FLAG_HAS_TARGET) {
         AlertJsonSourceTarget(p, pa, js, ajs);
+    }
+
+    if ((json_output_ctx != NULL) && (flags & LOG_JSON_RULE_METADATA)) {
+        AlertJsonMetadata(json_output_ctx, pa, ajs);
     }
 
     /* alert */
@@ -351,9 +420,11 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
     if (p->alerts.cnt == 0 && !(p->flags & PKT_HAS_TAG))
         return TM_ECODE_OK;
 
-    json_t *js = CreateJSONHeader((Packet *)p, 0, "alert");
+    json_t *js = CreateJSONHeader(p, LOG_DIR_PACKET, "alert");
     if (unlikely(js == NULL))
         return TM_ECODE_OK;
+
+    JsonAddCommonOptions(&json_output_ctx->cfg, p, p->flow, js);
 
     for (i = 0; i < p->alerts.cnt; i++) {
         const PacketAlert *pa = &p->alerts.alerts[i];
@@ -364,94 +435,80 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
         MemBufferReset(aft->json_buffer);
 
         /* alert */
-        AlertJsonHeader(p, pa, js);
+        AlertJsonHeader(json_output_ctx, p, pa, js, json_output_ctx->flags);
 
         if (IS_TUNNEL_PKT(p)) {
             AlertJsonTunnel(p, js);
         }
 
-        if (json_output_ctx->flags & LOG_JSON_HTTP) {
-            if (p->flow != NULL) {
-                uint16_t proto = FlowGetAppProtocol(p->flow);
+        if (json_output_ctx->flags & LOG_JSON_APP_LAYER && p->flow != NULL) {
+            uint16_t proto = FlowGetAppProtocol(p->flow);
 
-                /* http alert */
-                if (proto == ALPROTO_HTTP) {
-                    hjs = JsonHttpAddMetadata(p->flow, pa->tx_id);
-                    if (hjs) {
-                        if (json_output_ctx->flags & LOG_JSON_HTTP_BODY) {
-                            JsonHttpLogJSONBodyPrintable(hjs, p->flow, pa->tx_id);
-                        }
-                        if (json_output_ctx->flags & LOG_JSON_HTTP_BODY_BASE64) {
-                            JsonHttpLogJSONBodyBase64(hjs, p->flow, pa->tx_id);
-                        }
-                        json_object_set_new(js, "http", hjs);
+            /* http alert */
+            if (proto == ALPROTO_HTTP) {
+                hjs = JsonHttpAddMetadata(p->flow, pa->tx_id);
+                if (hjs) {
+                    if (json_output_ctx->flags & LOG_JSON_HTTP_BODY) {
+                        JsonHttpLogJSONBodyPrintable(hjs, p->flow, pa->tx_id);
                     }
+                    if (json_output_ctx->flags & LOG_JSON_HTTP_BODY_BASE64) {
+                        JsonHttpLogJSONBodyBase64(hjs, p->flow, pa->tx_id);
+                    }
+                    json_object_set_new(js, "http", hjs);
                 }
             }
-        }
 
-        if (json_output_ctx->flags & LOG_JSON_TLS) {
-            if (p->flow != NULL) {
-                uint16_t proto = FlowGetAppProtocol(p->flow);
-
-                /* tls alert */
-                if (proto == ALPROTO_TLS)
-                    AlertJsonTls(p->flow, js);
+            /* tls alert */
+            if (proto == ALPROTO_TLS) {
+                AlertJsonTls(p->flow, js);
             }
-        }
 
-        if (json_output_ctx->flags & LOG_JSON_SSH) {
-            if (p->flow != NULL) {
-                uint16_t proto = FlowGetAppProtocol(p->flow);
-
-                /* ssh alert */
-                if (proto == ALPROTO_SSH)
-                    AlertJsonSsh(p->flow, js);
+            /* ssh alert */
+            if (proto == ALPROTO_SSH) {
+                AlertJsonSsh(p->flow, js);
             }
-        }
 
-        if (json_output_ctx->flags & LOG_JSON_SMTP) {
-            if (p->flow != NULL) {
-                uint16_t proto = FlowGetAppProtocol(p->flow);
+            /* smtp alert */
+            if (proto == ALPROTO_SMTP) {
+                hjs = JsonSMTPAddMetadata(p->flow, pa->tx_id);
+                if (hjs) {
+                    json_object_set_new(js, "smtp", hjs);
+                }
 
-                /* smtp alert */
-                if (proto == ALPROTO_SMTP) {
-                    hjs = JsonSMTPAddMetadata(p->flow, pa->tx_id);
-                    if (hjs)
-                        json_object_set_new(js, "smtp", hjs);
-
-                    hjs = JsonEmailAddMetadata(p->flow, pa->tx_id);
-                    if (hjs)
-                        json_object_set_new(js, "email", hjs);
+                hjs = JsonEmailAddMetadata(p->flow, pa->tx_id);
+                if (hjs) {
+                    json_object_set_new(js, "email", hjs);
                 }
             }
-        }
+
 #ifdef HAVE_RUST
-        if ((json_output_ctx->flags & LOG_JSON_APP_LAYER) && p->flow != NULL) {
-            uint16_t alproto = FlowGetAppProtocol(p->flow);
-            if (alproto == ALPROTO_NFS) {
+            if (proto == ALPROTO_NFS) {
                 hjs = JsonNFSAddMetadataRPC(p->flow, pa->tx_id);
                 if (hjs)
                     json_object_set_new(js, "rpc", hjs);
                 hjs = JsonNFSAddMetadata(p->flow, pa->tx_id);
                 if (hjs)
                     json_object_set_new(js, "nfs", hjs);
+            } else if (proto == ALPROTO_SMB) {
+                hjs = JsonSMBAddMetadata(p->flow, pa->tx_id);
+                if (hjs)
+                    json_object_set_new(js, "smb", hjs);
             }
-        }
 #endif
-        if (json_output_ctx->flags & LOG_JSON_DNP3) {
-            if (p->flow != NULL) {
-                uint16_t proto = FlowGetAppProtocol(p->flow);
-
-                /* dnp3 alert */
-                if (proto == ALPROTO_DNP3) {
-                    AlertJsonDnp3(p->flow, js);
-                }
+            if (proto == ALPROTO_FTPDATA) {
+                hjs = JsonFTPDataAddMetadata(p->flow);
+                if (hjs)
+                    json_object_set_new(js, "ftp-data", hjs);
             }
-        }
 
-        if (json_output_ctx->flags & LOG_JSON_VARS) {
-            JsonAddVars(p, p->flow, js);
+            /* dnp3 alert */
+            if (proto == ALPROTO_DNP3) {
+                AlertJsonDnp3(p->flow, pa->tx_id, js);
+            }
+
+            if (proto == ALPROTO_DNS) {
+                AlertJsonDns(p->flow, pa->tx_id, js);
+            }
         }
 
         if (p->flow) {
@@ -466,7 +523,6 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
                         json_string(AppProtoToString(p->flow->alproto)));
             }
         }
-
 
         /* payload */
         if (json_output_ctx->flags & (LOG_JSON_PAYLOAD | LOG_JSON_PAYLOAD_BASE64)) {
@@ -523,7 +579,15 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
             AlertJsonPacket(p, js);
         }
 
-        HttpXFFCfg *xff_cfg = json_output_ctx->xff_cfg;
+        /* signature text */
+        if (json_output_ctx->flags & LOG_JSON_RULE) {
+            hjs = json_object_get(js, "alert");
+            if (json_is_object(hjs))
+                json_object_set_new(hjs, "rule", json_string(pa->s->sig_str));
+        }
+
+        HttpXFFCfg *xff_cfg = json_output_ctx->xff_cfg != NULL ?
+            json_output_ctx->xff_cfg : json_output_ctx->parent_xff_cfg;;
 
         /* xff header */
         if ((xff_cfg != NULL) && !(xff_cfg->flags & XFF_DISABLED) && p->flow != NULL) {
@@ -532,9 +596,9 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
 
             if (FlowGetAppProtocol(p->flow) == ALPROTO_HTTP) {
                 if (pa->flags & PACKET_ALERT_FLAG_TX) {
-                    have_xff_ip = HttpXFFGetIPFromTx(p, pa->tx_id, xff_cfg, buffer, XFF_MAXLEN);
+                    have_xff_ip = HttpXFFGetIPFromTx(p->flow, pa->tx_id, xff_cfg, buffer, XFF_MAXLEN);
                 } else {
-                    have_xff_ip = HttpXFFGetIP(p, xff_cfg, buffer, XFF_MAXLEN);
+                    have_xff_ip = HttpXFFGetIP(p->flow, xff_cfg, buffer, XFF_MAXLEN);
                 }
             }
 
@@ -561,7 +625,7 @@ static int AlertJson(ThreadVars *tv, JsonAlertLogThread *aft, const Packet *p)
     if ((p->flags & PKT_HAS_TAG) && (json_output_ctx->flags &
             LOG_JSON_TAGGED_PACKETS)) {
         MemBufferReset(aft->json_buffer);
-        json_t *packetjs = CreateJSONHeader((Packet *)p, 0, "packet");
+        json_t *packetjs = CreateJSONHeader(p, LOG_DIR_PACKET, "packet");
         if (unlikely(packetjs != NULL)) {
             AlertJsonPacket(p, packetjs);
             OutputJSONBuffer(packetjs, aft->file_ctx, &aft->json_buffer);
@@ -742,7 +806,6 @@ static void JsonAlertLogDeInitCtxSub(OutputCtx *output_ctx)
         if (xff_cfg != NULL) {
             SCFree(xff_cfg);
         }
-
         SCFree(json_output_ctx);
     }
     SCFree(output_ctx);
@@ -763,37 +826,52 @@ static void SetFlag(const ConfNode *conf, const char *name, uint16_t flag, uint1
 
 #define DEFAULT_LOG_FILENAME "alert.json"
 
-static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
+static void JsonAlertLogSetupMetadata(AlertJsonOutputCtx *json_output_ctx,
+        ConfNode *conf)
 {
-    HttpXFFCfg *xff_cfg = NULL;
-
-    xff_cfg = SCMalloc(sizeof(HttpXFFCfg));
-    if (unlikely(xff_cfg == NULL)) {
-        return;
-    }
-    memset(xff_cfg, 0, sizeof(HttpXFFCfg));
-
-    json_output_ctx->xff_cfg = xff_cfg;
-
     uint32_t payload_buffer_size = JSON_STREAM_BUFFER_SIZE;
+    uint16_t flags = METADATA_DEFAULTS;
 
     if (conf != NULL) {
-        SetFlag(conf, "metadata", LOG_JSON_METADATA_ALL, &json_output_ctx->flags);
-        SetFlag(conf, "flow", LOG_JSON_FLOW, &json_output_ctx->flags);
-        SetFlag(conf, "vars", LOG_JSON_VARS, &json_output_ctx->flags);
+        /* Check for metadata to enable/disable. */
+        ConfNode *metadata = ConfNodeLookupChild(conf, "metadata");
+        if (metadata != NULL) {
+            if (metadata->val != NULL && ConfValIsFalse(metadata->val)) {
+                flags &= ~METADATA_DEFAULTS;
+            } else if (ConfNodeHasChildren(metadata)) {
+                ConfNode *rule_metadata = ConfNodeLookupChild(metadata, "rule");
+                if (rule_metadata) {
+                    SetFlag(rule_metadata, "raw", LOG_JSON_RULE, &flags);
+                    SetFlag(rule_metadata, "metadata", LOG_JSON_RULE_METADATA,
+                            &flags);
+                }
+                SetFlag(metadata, "flow", LOG_JSON_FLOW, &flags);
+                SetFlag(metadata, "app-layer", LOG_JSON_APP_LAYER, &flags);
+            }
+        }
 
-        SetFlag(conf, "http", LOG_JSON_HTTP, &json_output_ctx->flags);
-        SetFlag(conf, "tls",  LOG_JSON_TLS,  &json_output_ctx->flags);
-        SetFlag(conf, "ssh",  LOG_JSON_SSH,  &json_output_ctx->flags);
-        SetFlag(conf, "smtp", LOG_JSON_SMTP, &json_output_ctx->flags);
-        SetFlag(conf, "dnp3", LOG_JSON_DNP3, &json_output_ctx->flags);
+        /* Non-metadata toggles. */
+        SetFlag(conf, "payload", LOG_JSON_PAYLOAD_BASE64, &flags);
+        SetFlag(conf, "packet", LOG_JSON_PACKET, &flags);
+        SetFlag(conf, "tagged-packets", LOG_JSON_TAGGED_PACKETS, &flags);
+        SetFlag(conf, "payload-printable", LOG_JSON_PAYLOAD, &flags);
+        SetFlag(conf, "http-body-printable", LOG_JSON_HTTP_BODY, &flags);
+        SetFlag(conf, "http-body", LOG_JSON_HTTP_BODY_BASE64, &flags);
 
-        SetFlag(conf, "payload", LOG_JSON_PAYLOAD_BASE64, &json_output_ctx->flags);
-        SetFlag(conf, "packet", LOG_JSON_PACKET, &json_output_ctx->flags);
-        SetFlag(conf, "tagged-packets", LOG_JSON_TAGGED_PACKETS, &json_output_ctx->flags);
-        SetFlag(conf, "payload-printable", LOG_JSON_PAYLOAD, &json_output_ctx->flags);
-        SetFlag(conf, "http-body-printable", LOG_JSON_HTTP_BODY, &json_output_ctx->flags);
-        SetFlag(conf, "http-body", LOG_JSON_HTTP_BODY_BASE64, &json_output_ctx->flags);
+        /* Check for obsolete configuration flags to enable specific
+         * protocols. These are now just aliases for enabling
+         * app-layer logging. */
+        SetFlag(conf, "http", LOG_JSON_APP_LAYER, &flags);
+        SetFlag(conf, "tls",  LOG_JSON_APP_LAYER,  &flags);
+        SetFlag(conf, "ssh",  LOG_JSON_APP_LAYER,  &flags);
+        SetFlag(conf, "smtp", LOG_JSON_APP_LAYER, &flags);
+        SetFlag(conf, "dnp3", LOG_JSON_APP_LAYER, &flags);
+
+        /* And check for obsolete configuration flags for enabling
+         * app-layer and flow as these have been moved under the
+         * metadata key. */
+        SetFlag(conf, "app-layer", LOG_JSON_APP_LAYER, &flags);
+        SetFlag(conf, "flow", LOG_JSON_FLOW, &flags);
 
         const char *payload_buffer_value = ConfNodeLookupChildValue(conf, "payload-buffer-size");
 
@@ -810,8 +888,25 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
         }
 
         json_output_ctx->payload_buffer_size = payload_buffer_size;
-        HttpXFFGetCfg(conf, xff_cfg);
     }
+
+    if (flags & LOG_JSON_RULE_METADATA) {
+        DetectEngineSetParseMetadata();
+    }
+
+    json_output_ctx->flags |= flags;
+}
+
+static HttpXFFCfg *JsonAlertLogGetXffCfg(ConfNode *conf)
+{
+    HttpXFFCfg *xff_cfg = NULL;
+    if (conf != NULL && ConfNodeLookupChild(conf, "xff") != NULL) {
+        xff_cfg = SCCalloc(1, sizeof(HttpXFFCfg));
+        if (likely(xff_cfg != NULL)) {
+            HttpXFFGetCfg(conf, xff_cfg);
+        }
+    }
+    return xff_cfg;
 }
 
 /**
@@ -819,42 +914,46 @@ static void XffSetup(AlertJsonOutputCtx *json_output_ctx, ConfNode *conf)
  * \param conf The configuration node for this output.
  * \return A LogFileCtx pointer on success, NULL on failure.
  */
-static OutputCtx *JsonAlertLogInitCtx(ConfNode *conf)
+static OutputInitResult JsonAlertLogInitCtx(ConfNode *conf)
 {
+    OutputInitResult result = { NULL, false };
     AlertJsonOutputCtx *json_output_ctx = NULL;
     LogFileCtx *logfile_ctx = LogFileNewCtx();
     if (logfile_ctx == NULL) {
         SCLogDebug("AlertFastLogInitCtx2: Could not create new LogFileCtx");
-        return NULL;
+        return result;
     }
 
     if (SCConfLogOpenGeneric(conf, logfile_ctx, DEFAULT_LOG_FILENAME, 1) < 0) {
         LogFileFreeCtx(logfile_ctx);
-        return NULL;
+        return result;
     }
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL)) {
         LogFileFreeCtx(logfile_ctx);
-        return NULL;
+        return result;
     }
 
     json_output_ctx = SCMalloc(sizeof(AlertJsonOutputCtx));
     if (unlikely(json_output_ctx == NULL)) {
         LogFileFreeCtx(logfile_ctx);
         SCFree(output_ctx);
-        return NULL;
+        return result;
     }
     memset(json_output_ctx, 0, sizeof(AlertJsonOutputCtx));
 
     json_output_ctx->file_ctx = logfile_ctx;
 
-    XffSetup(json_output_ctx, conf);
+    JsonAlertLogSetupMetadata(json_output_ctx, conf);
+    json_output_ctx->xff_cfg = JsonAlertLogGetXffCfg(conf);
 
     output_ctx->data = json_output_ctx;
     output_ctx->DeInit = JsonAlertLogDeInitCtx;
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 }
 
 /**
@@ -862,14 +961,15 @@ static OutputCtx *JsonAlertLogInitCtx(ConfNode *conf)
  * \param conf The configuration node for this output.
  * \return A LogFileCtx pointer on success, NULL on failure.
  */
-static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
+static OutputInitResult JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
 {
+    OutputInitResult result = { NULL, false };
     OutputJsonCtx *ajt = parent_ctx->data;
     AlertJsonOutputCtx *json_output_ctx = NULL;
 
     OutputCtx *output_ctx = SCCalloc(1, sizeof(OutputCtx));
     if (unlikely(output_ctx == NULL))
-        return NULL;
+        return result;
 
     json_output_ctx = SCMalloc(sizeof(AlertJsonOutputCtx));
     if (unlikely(json_output_ctx == NULL)) {
@@ -878,13 +978,20 @@ static OutputCtx *JsonAlertLogInitCtxSub(ConfNode *conf, OutputCtx *parent_ctx)
     memset(json_output_ctx, 0, sizeof(AlertJsonOutputCtx));
 
     json_output_ctx->file_ctx = ajt->file_ctx;
+    json_output_ctx->cfg = ajt->cfg;
 
-    XffSetup(json_output_ctx, conf);
+    JsonAlertLogSetupMetadata(json_output_ctx, conf);
+    json_output_ctx->xff_cfg = JsonAlertLogGetXffCfg(conf);
+    if (json_output_ctx->xff_cfg == NULL) {
+        json_output_ctx->parent_xff_cfg = ajt->xff_cfg;
+    }
 
     output_ctx->data = json_output_ctx;
     output_ctx->DeInit = JsonAlertLogDeInitCtxSub;
 
-    return output_ctx;
+    result.ctx = output_ctx;
+    result.ok = true;
+    return result;
 
 error:
     if (json_output_ctx != NULL) {
@@ -894,7 +1001,7 @@ error:
         SCFree(output_ctx);
     }
 
-    return NULL;
+    return result;
 }
 
 void JsonAlertLogRegister (void)

@@ -179,6 +179,8 @@ pub struct DNSTransaction {
     pub id: u64,
     pub request: Option<DNSRequest>,
     pub response: Option<DNSResponse>,
+    detect_flags_ts: u64,
+    detect_flags_tc: u64,
     pub logged: LoggerFlags,
     pub de_state: Option<*mut core::DetectEngineState>,
     pub events: *mut core::AppLayerDecoderEvents,
@@ -191,6 +193,8 @@ impl DNSTransaction {
             id: 0,
             request: None,
             response: None,
+            detect_flags_ts: 0,
+            detect_flags_tc: 0,
             logged: LoggerFlags::new(),
             de_state: None,
             events: std::ptr::null_mut(),
@@ -200,6 +204,12 @@ impl DNSTransaction {
     pub fn free(&mut self) {
         if self.events != std::ptr::null_mut() {
             core::sc_app_layer_decoder_events_free_events(&mut self.events);
+        }
+        match self.de_state {
+            Some(state) => {
+                core::sc_detect_engine_state_free(state);
+            }
+            None => { },
         }
     }
 
@@ -240,9 +250,7 @@ pub struct DNSState {
     // Transactions.
     pub transactions: Vec<DNSTransaction>,
 
-    pub de_state_count: u64,
-
-    pub events: bool,
+    pub events: u16,
 
     pub request_buffer: Vec<u8>,
     pub response_buffer: Vec<u8>,
@@ -256,8 +264,7 @@ impl DNSState {
         return DNSState{
             tx_id: 0,
             transactions: Vec::new(),
-            de_state_count: 0,
-            events: false,
+            events: 0,
             request_buffer: Vec::new(),
             response_buffer: Vec::new(),
             gap: false,
@@ -270,21 +277,11 @@ impl DNSState {
         return DNSState{
             tx_id: 0,
             transactions: Vec::new(),
-            de_state_count: 0,
-            events: false,
+            events: 0,
             request_buffer: Vec::with_capacity(0xffff),
             response_buffer: Vec::with_capacity(0xffff),
             gap: false,
         };
-    }
-
-    pub fn free(&mut self) {
-        SCLogDebug!("Freeing {} transactions left in state.",
-                    self.transactions.len());
-        while self.transactions.len() > 0 {
-            self.free_tx_at_index(0);
-        }
-        assert!(self.transactions.len() == 0);
     }
 
     pub fn new_tx(&mut self) -> DNSTransaction {
@@ -308,18 +305,7 @@ impl DNSState {
             }
         }
         if found {
-            self.free_tx_at_index(index);
-        }
-    }
-
-    fn free_tx_at_index(&mut self, index: usize) {
-        let tx = self.transactions.remove(index);
-        match tx.de_state {
-            Some(state) => {
-                core::sc_detect_engine_state_free(state);
-                self.de_state_count -= 1;
-            }
-            _ => {}
+            self.transactions.remove(index);
         }
     }
 
@@ -336,7 +322,7 @@ impl DNSState {
                 return;
             }
             SCLogDebug!("Purging DNS TX with ID {}", self.transactions[0].id);
-            self.free_tx_at_index(0);
+            self.transactions.remove(0);
         }
     }
 
@@ -363,7 +349,7 @@ impl DNSState {
         let tx = &mut self.transactions[len - 1];
         core::sc_app_layer_decoder_events_set_event_raw(&mut tx.events,
                                                         event as u8);
-        self.events = true;
+        self.events += 1;
     }
 
     pub fn parse_request(&mut self, input: &[u8]) -> bool {
@@ -534,14 +520,6 @@ impl DNSState {
     }
 }
 
-/// Implement Drop for DNSState as transactions need to do some
-/// explicit cleanup.
-impl Drop for DNSState {
-    fn drop(&mut self) {
-        self.free();
-    }
-}
-
 /// Probe input to see if it looks like DNS.
 fn probe(input: &[u8]) -> bool {
     match parser::dns_parse_request(input) {
@@ -685,23 +663,43 @@ pub extern "C" fn rs_dns_tx_get_alstate_progress(_tx: &mut DNSTransaction,
 }
 
 #[no_mangle]
+pub extern "C" fn rs_dns_tx_set_detect_flags(tx: &mut DNSTransaction,
+                                             dir: libc::uint8_t,
+                                             flags: libc::uint64_t)
+{
+    if dir & core::STREAM_TOSERVER != 0 {
+        tx.detect_flags_ts = flags as u64;
+    } else {
+        tx.detect_flags_tc = flags as u64;
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rs_dns_tx_get_detect_flags(tx: &mut DNSTransaction,
+                                             dir: libc::uint8_t)
+                                       -> libc::uint64_t
+{
+    if dir & core::STREAM_TOSERVER != 0 {
+        return tx.detect_flags_ts as libc::uint64_t;
+    } else {
+        return tx.detect_flags_tc as libc::uint64_t;
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn rs_dns_tx_set_logged(_state: &mut DNSState,
                                        tx: &mut DNSTransaction,
-                                       logger: libc::uint32_t)
+                                       logged: libc::uint32_t)
 {
-    tx.logged.set_logged(logger);
+    tx.logged.set(logged);
 }
 
 #[no_mangle]
 pub extern "C" fn rs_dns_tx_get_logged(_state: &mut DNSState,
-                                       tx: &mut DNSTransaction,
-                                       logger: libc::uint32_t)
-                                       -> i8
+                                       tx: &mut DNSTransaction)
+                                       -> u32
 {
-    if tx.logged.is_logged(logger) {
-        return 1;
-    }
-    return 0;
+    return tx.logged.get();
 }
 
 #[no_mangle]
@@ -728,21 +726,10 @@ pub extern "C" fn rs_dns_state_get_tx(state: &mut DNSState,
 }
 
 #[no_mangle]
-pub extern "C" fn rs_dns_state_has_detect_state(state: &mut DNSState) -> u8
-{
-    if state.de_state_count > 0 {
-        return 1;
-    }
-    return 0;
-}
-
-#[no_mangle]
 pub extern "C" fn rs_dns_state_set_tx_detect_state(
-    state: &mut DNSState,
     tx: &mut DNSTransaction,
     de_state: &mut core::DetectEngineState)
 {
-    state.de_state_count += 1;
     tx.de_state = Some(de_state);
 }
 
@@ -759,14 +746,6 @@ pub extern "C" fn rs_dns_state_get_tx_detect_state(
             return std::ptr::null_mut();
         }
     }
-}
-
-#[no_mangle]
-pub extern "C" fn rs_dns_state_has_events(state: &mut DNSState) -> u8 {
-    if state.events {
-        return 1;
-    }
-    return 0;
 }
 
 #[no_mangle]

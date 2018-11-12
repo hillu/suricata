@@ -399,6 +399,19 @@ int ConfGetChildValue(const ConfNode *base, const char *name, const char **vptr)
     }
 }
 
+ConfNode *ConfGetChildWithDefault(const ConfNode *base, const ConfNode *dflt,
+    const char *name)
+{
+    ConfNode *node = ConfNodeLookupChild(base, name);
+    if (node != NULL)
+        return node;
+
+    /* Get 'default' value */
+    if (dflt) {
+        return ConfNodeLookupChild(dflt, name);
+    }
+    return NULL;
+}
 
 int ConfGetChildValueWithDefault(const ConfNode *base, const ConfNode *dflt,
     const char *name, const char **vptr)
@@ -770,6 +783,25 @@ void ConfDump(void)
 }
 
 /**
+ * \brief Check if a node has any children.
+ *
+ * Checks if the provided node has any children. Any node that is a
+ * YAML map or array will have children.
+ *
+ * \param node The node to check.
+ *
+ * \retval true if node has children
+ * \retval false if node does not have children
+ */
+bool ConfNodeHasChildren(const ConfNode *node)
+{
+    if (TAILQ_EMPTY(&node->head)) {
+        return false;
+    }
+    return true;
+}
+
+/**
  * \brief Lookup a child configuration node by name.
  *
  * Given a ConfNode this function will lookup an immediate child
@@ -966,10 +998,11 @@ static int ConfTestSetAndGet(void)
 {
     char name[] = "some-name";
     char value[] = "some-value";
-    const char *value0;
+    const char *value0 = NULL;
 
     FAIL_IF(ConfSet(name, value) != 1);
     FAIL_IF(ConfGet(name, &value0) != 1);
+    FAIL_IF(value0 == NULL);
     FAIL_IF(strcmp(value, value0) != 0);
 
     /* Cleanup. */
@@ -987,12 +1020,13 @@ static int ConfTestOverrideValue1(void)
     char name[] = "some-name";
     char value0[] = "some-value";
     char value1[] = "new-value";
-    const char *val;
+    const char *val = NULL;
 
     FAIL_IF(ConfSet(name, value0) != 1);
     FAIL_IF(ConfSet(name, value1) != 1);
     FAIL_IF(ConfGet(name, &val) != 1);
-    FAIL_IF(strcmp(val, value1));
+    FAIL_IF(val == NULL);
+    FAIL_IF(strcmp(val, value1) != 0);
 
     /* Cleanup. */
     ConfRemove(name);
@@ -1008,12 +1042,13 @@ static int ConfTestOverrideValue2(void)
     char name[] = "some-name";
     char value0[] = "some-value";
     char value1[] = "new-value";
-    const char *val;
+    const char *val = NULL;
 
     FAIL_IF(ConfSetFinal(name, value0) != 1);
     FAIL_IF(ConfSet(name, value1) != 0);
     FAIL_IF(ConfGet(name, &val) != 1);
-    FAIL_IF(strcmp(val, value0));
+    FAIL_IF(val == NULL);
+    FAIL_IF(strcmp(val, value0) != 0);
 
     /* Cleanup. */
     ConfRemove(name);
@@ -1406,6 +1441,29 @@ static int ConfSetFromStringTest(void)
     PASS;
 }
 
+static int ConfNodeHasChildrenTest(void)
+{
+    ConfCreateContextBackup();
+    ConfInit();
+
+    /* Set a plain key with value. */
+    ConfSet("no-children", "value");
+    ConfNode *n = ConfGetNode("no-children");
+    FAIL_IF_NULL(n);
+    FAIL_IF(ConfNodeHasChildren(n));
+
+    /* Set a key with a sub key to a value. This makes the first key a
+     * map. */
+    ConfSet("parent.child", "value");
+    n = ConfGetNode("parent");
+    FAIL_IF_NULL(n);
+    FAIL_IF(!ConfNodeHasChildren(n));
+
+    ConfDeInit();
+    ConfRestoreContextBackup();
+    PASS;
+}
+
 void ConfRegisterTests(void)
 {
     UtRegisterTest("ConfTestGetNonExistant", ConfTestGetNonExistant);
@@ -1429,6 +1487,7 @@ void ConfRegisterTests(void)
     UtRegisterTest("ConfNodePruneTest", ConfNodePruneTest);
     UtRegisterTest("ConfNodeIsSequenceTest", ConfNodeIsSequenceTest);
     UtRegisterTest("ConfSetFromStringTest", ConfSetFromStringTest);
+    UtRegisterTest("ConfNodeHasChildrenTest", ConfNodeHasChildrenTest);
 }
 
 #endif /* UNITTESTS */
