@@ -42,7 +42,7 @@ override_dh_auto_configure:
 override_dh_auto_install:
 	dh_auto_install
 	rm -rf $(SURICATA_DESTDIR)/usr/lib/python*;\
-	(cd scripts/suricatasc &&\
+	(cd python &&\
 		python -B setup.py install --install-layout=deb --prefix $(SURICATA_DESTDIR)/usr)
 	# clean upstream install documentation
 	rm -rf $(SURICATA_DESTDIR)/usr/share/doc/suricata/*
