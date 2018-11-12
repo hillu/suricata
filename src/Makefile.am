@@ -39,7 +39,9 @@ app-layer-protos.c app-layer-protos.h \
 app-layer-smb2.c app-layer-smb2.h \
 app-layer-smb.c app-layer-smb.h \
 app-layer-smtp.c app-layer-smtp.h \
-app-layer-nfs3.c app-layer-nfs3.h \
+app-layer-nfs-tcp.c app-layer-nfs-tcp.h \
+app-layer-nfs-udp.c app-layer-nfs-udp.h \
+app-layer-ntp.c app-layer-ntp.h \
 app-layer-template.c app-layer-template.h \
 app-layer-ssh.c app-layer-ssh.h \
 app-layer-ssl.c app-layer-ssl.h \
@@ -141,7 +143,6 @@ detect-engine-siggroup.c detect-engine-siggroup.h \
 detect-engine-sigorder.c detect-engine-sigorder.h \
 detect-engine-state.c detect-engine-state.h \
 detect-engine-tag.c detect-engine-tag.h \
-detect-engine-template.c detect-engine-template.h \
 detect-engine-threshold.c detect-engine-threshold.h \
 detect-engine-uri.c detect-engine-uri.h \
 detect-fast-pattern.c detect-fast-pattern.h \
@@ -208,7 +209,8 @@ detect-lua-extensions.c detect-lua-extensions.h \
 detect-mark.c detect-mark.h \
 detect-metadata.c detect-metadata.h \
 detect-msg.c detect-msg.h \
-detect-nfs3-procedure.c detect-nfs3-procedure.h \
+detect-nfs-procedure.c detect-nfs-procedure.h \
+detect-nfs-version.c detect-nfs-version.h \
 detect-noalert.c detect-noalert.h \
 detect-nocase.c detect-nocase.h \
 detect-offset.c detect-offset.h \
@@ -234,6 +236,7 @@ detect-ssl-state.c detect-ssl-state.h \
 detect-ssl-version.c detect-ssl-version.h \
 detect-stream_size.c detect-stream_size.h \
 detect-tag.c detect-tag.h \
+detect-target.c detect-target.h \
 detect-template.c detect-template.h \
 detect-template-buffer.c detect-template-buffer.h \
 detect-threshold.c detect-threshold.h \
@@ -298,7 +301,7 @@ output-json-smtp.c output-json-smtp.h \
 output-json-ssh.c output-json-ssh.h \
 output-json-stats.c output-json-stats.h \
 output-json-tls.c output-json-tls.h \
-output-json-nfs3.c output-json-nfs3.h \
+output-json-nfs.c output-json-nfs.h \
 output-json-template.c output-json-template.h \
 output-json-vars.c output-json-vars.h \
 output-lua.c output-lua.h \
@@ -423,6 +426,7 @@ util-mpm-ac-tile.c util-mpm-ac-tile.h \
 util-mpm-ac-tile-small.c \
 util-mpm-hs.c util-mpm-hs.h \
 util-mpm.c util-mpm.h \
+util-napatech.c util-napatech.h \
 util-optimize.h \
 util-pages.c util-pages.h \
 util-path.c util-path.h \

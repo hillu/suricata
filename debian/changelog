@@ -1,3 +1,126 @@
+suricata (1:4.0.6-1) unstable; urgency=medium
+
+  * New upstream version 1:4.0.6
+
+ -- Pierre Chifflier <pollux@debian.org>  Mon, 12 Nov 2018 09:19:39 +0100
+
+suricata (1:4.0.5-1) unstable; urgency=medium
+
+  [ Sascha Steinbiss ]
+  * Add patches to help with cross-compiling. Thanks to Helmut Grohne
+    for the patch.
+    Closes: #895996
+  * Add patches to fix building on ia64.
+    Thanks to Jason Duerstock and Adrian Bunk for the patches.
+    Closes: #890432
+  * Fix spelling in debian/patches/reproducible.patch.
+  * Remove obsolete X-Python-Version hint.
+  * Use updated watchfile source URL with https support.
+  * Remove obsolete --parallel dh parameter.
+  * Use canonical Salsa Vcs-Git URL.
+
+  [ Pierre Chifflier ]
+  * New upstream version 1:4.0.5
+
+ -- Pierre Chifflier <pollux@debian.org>  Wed, 18 Jul 2018 17:14:02 +0200
+
+suricata (1:4.0.4-1) unstable; urgency=medium
+
+  * [3f18cd8] d/control: refresh git URLs
+  * [17da106] New upstream version 4.0.4 (Closes: #889842) fixes CVE-2018-6794
+  * [00fcf17] d/compat: bump debhelper compat level to 11
+  * [45dc0db] d/control: bump std-version to 4.1.3
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 14 Feb 2018 11:33:33 +0100
+
+suricata (1:4.0.3-1) unstable; urgency=medium
+
+  [ Sascha Steinbiss ]
+  * [aece4d6] New upstream version 4.0.3
+  * [c23b64f] refresh patches
+
+  [ Arturo Borrero Gonzalez ]
+  * [7f077ca] d/control: bump std-version to 4.1.2
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 13 Dec 2017 11:42:18 +0100
+
+suricata (1:4.0.1-2) unstable; urgency=medium
+
+  * [d9998f8] suricata-oinkmaster.conf: update ETOPEN ruleset for suricata 4.0.0
+    (Closes: #882442)
+  * [0beae03] suricata-oinkmaster-updater.8: fix typos
+  * [6e7ae75] d/: get rid of dh --with autotools-dev
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Thu, 23 Nov 2017 13:41:09 +0100
+
+suricata (1:4.0.1-1) unstable; urgency=medium
+
+  * [72d28e5] d/control: upgrade std-version to 4.1.0
+  * [ea1e317] d/control: upgrade std-version to 4.1.1
+  * [14fea39] d/: switch to debhelper compat 10
+  * [a4715b8] New upstream version 4.0.1
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Sat, 21 Oct 2017 12:09:27 +0200
+
+suricata (1:4.0.0-5) unstable; urgency=medium
+
+  * [392c5b2] d/t/control: allow-stderr for the internal unittest test
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Wed, 20 Sep 2017 20:27:12 +0200
+
+suricata (1:4.0.0-4) unstable; urgency=medium
+
+  * [93ee9030] d/control: enable libluajit-5.1-dev build-dep on mipsel
+    (Closes: #873832)
+  * [9527fe94] d/t/control: run suricata -u from the source tree
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 08 Sep 2017 06:06:47 +0200
+
+suricata (1:4.0.0-3) unstable; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * [aa53ce82] suricata-oinkmaster-updater.8: fix typo
+  * [2d171d5a] suricata-oinkmaster-updater.8: clarify paragraph
+  * [90c76777] d/rules: disable dh_auto_test
+  * [5b311761] suricata: switch to use dbgsym package
+  * [9b12c48d] d/control: bump std-versions to 4.0.1
+
+  [ Sascha Steinbiss ]
+  * [c353985a] enable libevent support (Closes: #872908)
+  * [49ff3181] enable luajit on mipsel (Closes: #858545)
+
+  [ Arturo Borrero Gonzalez ]
+  * [50ab7eae] suricata.service: update online docs link
+  * [5098fd7b] d/control: add dh-python to build-deps
+  * [f070d160] d/watch: implement signature verification
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 29 Aug 2017 23:22:48 +0200
+
+suricata (1:4.0.0-2) unstable; urgency=medium
+
+  * [449b4202] d/t/control: running suricata unittest requires
+    geoip-database installed
+  * [0bd02487] d/building-in-ci.sh: be more robust
+  * [edd49e4a] d/watch: more robust approach for upstream tarball generation
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Tue, 15 Aug 2017 13:45:45 +0200
+
+suricata (1:4.0.0-1) unstable; urgency=medium
+
+  * [636f10f] d/rules: actually use dh-systemd (Closes: #861732)
+  * [c728ed0] d/rules: cleanup comments
+  * [f0d9adb] suricata: switch to src:libhtp instead of the bundled one
+  * [fa5f8be] New upstream version 4.0.0-rc1
+  * [fac7566] suricata: remove Build-Conflict with libhtp-dev
+  * [1bce782] suricata: explicit build-dep on new src:libhtp
+  * [f3aec1c] d/suricata.preinst: use strict mode (Closes: #866280)
+  * [c831659] suricata: support for internal unittest in autopktest
+  * [557ded7] New upstream version 4.0.0
+  * [5d41b6c] d/t/control: the internal suricata unittest is a command test
+  * [7f4feaa] d/changelog: add missing entry for 4.0.0-beta1-1~exp1
+
+ -- Arturo Borrero Gonzalez <arturo@debian.org>  Fri, 28 Jul 2017 05:29:48 +0200
+
 suricata (4.0.0-beta1-1~exp1) unstable; urgency=medium
 
   * [c21347df] New upstream version 4.0.0-beta1

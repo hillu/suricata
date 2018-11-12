@@ -239,7 +239,21 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, const char *isda
         }
         idad->dataat = ((DetectByteExtractData *)bed_sm->ctx)->local_id;
         idad->flags |= ISDATAAT_OFFSET_BE;
+        SCLogDebug("isdataat uses byte_extract with local id %u", idad->dataat);
         SCFree(offset);
+        offset = NULL;
+    }
+
+    /* 'ends with' scenario */
+    if (prev_pm != NULL && prev_pm->type == DETECT_CONTENT &&
+        idad->dataat == 1 &&
+        (idad->flags & (ISDATAAT_RELATIVE|ISDATAAT_NEGATED)) == (ISDATAAT_RELATIVE|ISDATAAT_NEGATED))
+    {
+        DetectIsdataatFree(idad);
+        DetectContentData *cd = (DetectContentData *)prev_pm->ctx;
+        cd->flags |= DETECT_CONTENT_ENDS_WITH;
+        ret = 0;
+        goto end;
     }
 
     /* 'ends with' scenario */
@@ -281,6 +295,8 @@ int DetectIsdataatSetup (DetectEngineCtx *de_ctx, Signature *s, const char *isda
     ret = 0;
 
 end:
+    if (offset)
+        SCFree(offset);
     if (ret != 0)
         DetectIsdataatFree(idad);
     return ret;

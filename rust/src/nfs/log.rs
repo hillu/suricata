@@ -19,12 +19,12 @@ extern crate libc;
 
 use std::string::String;
 use json::*;
-//use log::*;
 use nfs::types::*;
-use nfs::nfs3::*;
+use nfs::nfs::*;
+use crc::crc32;
 
 #[no_mangle]
-pub extern "C" fn rs_nfs3_tx_logging_is_filtered(tx: &mut NFS3Transaction)
+pub extern "C" fn rs_nfs_tx_logging_is_filtered(tx: &mut NFSTransaction)
                                                  -> libc::uint8_t
 {
     // TODO probably best to make this configurable
@@ -36,14 +36,14 @@ pub extern "C" fn rs_nfs3_tx_logging_is_filtered(tx: &mut NFS3Transaction)
     return 0;
 }
 
-fn nfs3_rename_object(tx: &NFS3Transaction) -> Json
+fn nfs_rename_object(tx: &NFSTransaction) -> Json
 {
     let js = Json::object();
     let from_str = String::from_utf8_lossy(&tx.file_name);
     js.set_string("from", &from_str);
 
     let to_vec = match tx.type_data {
-        Some(NFS3TransactionTypeData::RENAME(ref x)) => { x.to_vec() },
+        Some(NFSTransactionTypeData::RENAME(ref x)) => { x.to_vec() },
         _ => { Vec::new() }
     };
 
@@ -52,7 +52,7 @@ fn nfs3_rename_object(tx: &NFS3Transaction) -> Json
     return js;
 }
 
-fn nfs3_creds_object(tx: &NFS3Transaction) -> Json
+fn nfs_creds_object(tx: &NFSTransaction) -> Json
 {
     let js = Json::object();
     let mach_name = String::from_utf8_lossy(&tx.request_machine_name);
@@ -62,63 +62,94 @@ fn nfs3_creds_object(tx: &NFS3Transaction) -> Json
     return js;
 }
 
-fn nfs3_file_object(tx: &NFS3Transaction) -> Json
+fn nfs_file_object(tx: &NFSTransaction) -> Json
 {
     let js = Json::object();
     js.set_boolean("first", tx.is_first);
     js.set_boolean("last", tx.is_last);
 
     let ref tdf = match tx.type_data {
-        Some(NFS3TransactionTypeData::FILE(ref x)) => x,
+        Some(NFSTransactionTypeData::FILE(ref x)) => x,
         _ => { panic!("BUG") },
     };
 
     js.set_integer("last_xid", tdf.file_last_xid as u64);
+    js.set_integer("chunks", tdf.chunk_count as u64);
     return js;
 }
+/*
+fn nfs_handle2hex(bytes: &Vec<u8>) -> String {
+    let strings: Vec<String> = bytes.iter()
+        .map(|b| format!("{:02x}", b))
+        .collect();
+    strings.join("")
+}
+*/
+fn nfs_handle2crc(bytes: &Vec<u8>) -> u32 {
+    let c = crc32::checksum_ieee(bytes);
+    c
+}
 
-fn nfs3_common_header(tx: &NFS3Transaction) -> Json
+fn nfs_common_header(state: &NFSState, tx: &NFSTransaction) -> Json
 {
     let js = Json::object();
-    js.set_integer("xid", tx.xid as u64);
+    js.set_integer("version", state.nfs_version as u64);
     js.set_string("procedure", &nfs3_procedure_string(tx.procedure));
     let file_name = String::from_utf8_lossy(&tx.file_name);
     js.set_string("filename", &file_name);
+
+    if tx.file_handle.len() > 0 {
+        //js.set_string("handle", &nfs_handle2hex(&tx.file_handle));
+        let c = nfs_handle2crc(&tx.file_handle);
+        let s = format!("{:x}", c);
+        js.set_string("hhash", &s);
+    }
     js.set_integer("id", tx.id as u64);
     js.set_boolean("file_tx", tx.is_file_tx);
     return js;
 }
 
 #[no_mangle]
-pub extern "C" fn rs_nfs3_log_json_request(tx: &mut NFS3Transaction) -> *mut JsonT
+pub extern "C" fn rs_nfs_log_json_request(state: &mut NFSState, tx: &mut NFSTransaction) -> *mut JsonT
 {
-    let js = nfs3_common_header(tx);
+    let js = nfs_common_header(state, tx);
     js.set_string("type", "request");
     return js.unwrap();
 }
 
 #[no_mangle]
-pub extern "C" fn rs_nfs3_log_json_response(tx: &mut NFS3Transaction) -> *mut JsonT
+pub extern "C" fn rs_nfs_log_json_response(state: &mut NFSState, tx: &mut NFSTransaction) -> *mut JsonT
 {
-    let js = nfs3_common_header(tx);
+    let js = nfs_common_header(state, tx);
     js.set_string("type", "response");
 
-    js.set_string("status", &nfs3_status_string(tx.response_status));
-
-    if tx.has_creds {
-        let creds_js = nfs3_creds_object(tx);
-        js.set("creds", creds_js);
-    }
+    js.set_string("status", &nfs3_status_string(tx.nfs_response_status));
 
     if tx.procedure == NFSPROC3_READ {
-        let read_js = nfs3_file_object(tx);
+        let read_js = nfs_file_object(tx);
         js.set("read", read_js);
     } else if tx.procedure == NFSPROC3_WRITE {
-        let write_js = nfs3_file_object(tx);
+        let write_js = nfs_file_object(tx);
         js.set("write", write_js);
     } else if tx.procedure == NFSPROC3_RENAME {
-        let rename_js = nfs3_rename_object(tx);
+        let rename_js = nfs_rename_object(tx);
         js.set("rename", rename_js);
+    }
+
+    return js.unwrap();
+}
+
+
+#[no_mangle]
+pub extern "C" fn rs_rpc_log_json_response(tx: &mut NFSTransaction) -> *mut JsonT
+{
+    let js = Json::object();
+    js.set_integer("xid", tx.xid as u64);
+    js.set_string("status", &rpc_status_string(tx.rpc_response_status));
+    js.set_string("auth_type", &rpc_auth_type_string(tx.auth_type));
+    if tx.auth_type == RPCAUTH_UNIX {
+        let creds_js = nfs_creds_object(tx);
+        js.set("creds", creds_js);
     }
 
     return js.unwrap();

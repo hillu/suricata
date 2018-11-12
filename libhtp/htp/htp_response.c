@@ -81,6 +81,8 @@ if ((X)->out_current_read_offset < (X)->out_current_len) { \
     return HTP_DATA_BUFFER; \
 }
 
+#define REQUEST_URI_NOT_SEEN "/libhtp::request_uri_not_seen"
+
 /**
  * Sends outstanding connection data to the currently active data receiver hook.
  *
@@ -489,7 +491,7 @@ htp_status_t htp_connp_RES_BODY_IDENTITY_STREAM_CLOSE(htp_connp_t *connp) {
     size_t bytes_to_consume = connp->out_current_len - connp->out_current_read_offset;
 
     #ifdef HTP_DEBUG
-    fprintf(stderr, "bytes_to_consume %u", (uint)bytes_to_consume);
+    fprintf(stderr, "bytes_to_consume %"PRIuMAX, (uintmax_t)bytes_to_consume);
     #endif
     if (bytes_to_consume != 0) {
         htp_status_t rc = htp_tx_res_process_body_data_ex(connp->out_tx, connp->out_current_data + connp->out_current_read_offset, bytes_to_consume);
@@ -533,6 +535,9 @@ htp_status_t htp_connp_RES_BODY_DETERMINE(htp_connp_t *connp) {
             // we may have response headers
             htp_status_t rc = htp_tx_state_response_headers(connp->out_tx);
             return rc;
+        } else if (connp->out_tx->response_status_number == 407) {
+            // proxy telling us to auth
+            connp->in_status = HTP_STREAM_DATA;
         } else {
             // This is a failed CONNECT stream, which means that
             // we can unblock request parsing
@@ -907,16 +912,11 @@ htp_status_t htp_connp_RES_LINE(htp_connp_t *connp) {
 
             int chomp_result = htp_chomp(data, &len);
 
-            connp->out_tx->response_line = bstr_dup_mem(data, len);
-            if (connp->out_tx->response_line == NULL) return HTP_ERROR;
-
-            if (connp->cfg->parse_response_line(connp) != HTP_OK) return HTP_ERROR;
-
             // If the response line is invalid, determine if it _looks_ like
             // a response line. If it does not look like a line, process the
             // data as a response body because that is what browsers do.
            
-            if (htp_treat_response_line_as_body(connp->out_tx)) {
+            if (htp_treat_response_line_as_body(data, len)) {
                 connp->out_tx->response_content_encoding_processing = HTP_COMPRESSION_NONE;
 
                 htp_status_t rc = htp_tx_res_process_body_data_ex(connp->out_tx, data, len + chomp_result);
@@ -930,8 +930,26 @@ htp_status_t htp_connp_RES_LINE(htp_connp_t *connp) {
                 connp->out_state = htp_connp_RES_BODY_IDENTITY_STREAM_CLOSE;               
                 connp->out_body_data_left = -1;
 
+                // Clean response line allocations when processed as body
+                bstr_free(connp->out_tx->response_line);
+                connp->out_tx->response_line = NULL;
+
+                bstr_free(connp->out_tx->response_protocol);
+                connp->out_tx->response_protocol = NULL;
+
+                bstr_free(connp->out_tx->response_status);
+                connp->out_tx->response_status = NULL;
+
+                bstr_free(connp->out_tx->response_message);
+                connp->out_tx->response_message = NULL;
+
                 return HTP_OK;
             }
+
+            connp->out_tx->response_line = bstr_dup_mem(data, len);
+            if (connp->out_tx->response_line == NULL) return HTP_ERROR;
+
+            if (connp->cfg->parse_response_line(connp) != HTP_OK) return HTP_ERROR;
 
             htp_status_t rc = htp_tx_state_response_line(connp->out_tx);
             if (rc != HTP_OK) return rc;
@@ -965,6 +983,7 @@ htp_status_t htp_connp_RES_FINALIZE(htp_connp_t *connp) {
  * @returns HTP_OK on state change, HTP_ERROR on error, or HTP_DATA when more data is needed.
  */
 htp_status_t htp_connp_RES_IDLE(htp_connp_t *connp) {
+
     // We want to start parsing the next response (and change
     // the state from IDLE) only if there's at least one
     // byte of data available. Otherwise we could be creating
@@ -975,19 +994,43 @@ htp_status_t htp_connp_RES_IDLE(htp_connp_t *connp) {
     // Parsing a new response
 
     // Find the next outgoing transaction
+    // If there is none, we just create one so that responses without
+    // request can still be processed.
     connp->out_tx = htp_list_get(connp->conn->transactions, connp->out_next_tx_index);
     if (connp->out_tx == NULL) {
         htp_log(connp, HTP_LOG_MARK, HTP_LOG_ERROR, 0, "Unable to match response to request");
-        return HTP_ERROR;
+        connp->out_tx = htp_connp_tx_create(connp);
+        if (connp->out_tx == NULL) {
+            return HTP_ERROR;
+        }
+        connp->out_tx->parsed_uri = htp_uri_alloc();
+        if (connp->out_tx->parsed_uri == NULL) {
+            return HTP_ERROR;
+        }
+        connp->out_tx->parsed_uri->path = bstr_dup_c(REQUEST_URI_NOT_SEEN);
+        if (connp->out_tx->parsed_uri->path == NULL) {
+            return HTP_ERROR;
+        }
+        connp->out_tx->request_uri = bstr_dup_c(REQUEST_URI_NOT_SEEN);
+        if (connp->out_tx->request_uri == NULL) {
+            return HTP_ERROR;
+        }
+
+        connp->in_state = htp_connp_REQ_FINALIZE;
+#ifdef HTP_DEBUG
+        fprintf(stderr, "picked up response w/o request");
+#endif
+        // We've used one transaction
+        connp->out_next_tx_index++;
+    } else {
+        // We've used one transaction
+        connp->out_next_tx_index++;
+
+        // TODO Detect state mismatch
+
+        connp->out_content_length = -1;
+        connp->out_body_data_left = -1;
     }
-
-    // We've used one transaction
-    connp->out_next_tx_index++;
-
-    // TODO Detect state mismatch
-
-    connp->out_content_length = -1;
-    connp->out_body_data_left = -1;
 
     htp_status_t rc = htp_tx_state_response_start(connp->out_tx);
     if (rc != HTP_OK) return rc;
@@ -1161,9 +1204,4 @@ int htp_connp_res_data(htp_connp_t *connp, const htp_time_t *timestamp, const vo
             return HTP_STREAM_ERROR;
         }
     }
-
-    // Permanent stream error.
-    connp->out_status = HTP_STREAM_ERROR;
-
-    return HTP_STREAM_ERROR;
 }

@@ -168,6 +168,10 @@
 #include <sys/mman.h>
 #endif
 
+#if HAVE_SYS_RANDOM_H
+#include <sys/random.h>
+#endif
+
 #if HAVE_NETINET_IN_H
 #include <netinet/in.h>
 #endif
@@ -190,6 +194,10 @@
 
 #ifdef HAVE_PCAP_BPF_H
 #include <pcap/bpf.h>
+#endif
+
+#ifdef HAVE_LIBGEN_H
+#include <libgen.h>
 #endif
 
 #if __CYGWIN__
@@ -396,7 +404,7 @@ typedef enum {
     LOGGER_JSON_HTTP,
     LOGGER_JSON_SMTP,
     LOGGER_JSON_TLS,
-    LOGGER_JSON_NFS3,
+    LOGGER_JSON_NFS,
     LOGGER_JSON_TEMPLATE,
     LOGGER_TLS_STORE,
     LOGGER_TLS,

@@ -3,7 +3,7 @@ Description=Suricata IDS/IDP daemon
 After=network.target network-online.target
 Requires=network-online.target
 Documentation=man:suricata(8) man:suricatasc(8)
-Documentation=https://redmine.openinfosecfoundation.org/projects/suricata/wiki
+Documentation=https://suricata-ids.org/docs/
 
 [Service]
 Type=forking

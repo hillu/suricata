@@ -22,8 +22,9 @@
 #ifndef __RUST_NFS_LOG_GEN_H__
 #define __RUST_NFS_LOG_GEN_H__
 
-uint8_t rs_nfs3_tx_logging_is_filtered(NFS3Transaction * tx);
-json_t * rs_nfs3_log_json_request(NFS3Transaction * tx);
-json_t * rs_nfs3_log_json_response(NFS3Transaction * tx);
+uint8_t rs_nfs_tx_logging_is_filtered(NFSTransaction * tx);
+json_t * rs_nfs_log_json_request(NFSState * state, NFSTransaction * tx);
+json_t * rs_nfs_log_json_response(NFSState * state, NFSTransaction * tx);
+json_t * rs_rpc_log_json_response(NFSTransaction * tx);
 
 #endif /* ! __RUST_NFS_LOG_GEN_H__ */

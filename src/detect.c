@@ -63,7 +63,8 @@
 #include "detect-http-hh.h"
 #include "detect-http-hrh.h"
 
-#include "detect-nfs3-procedure.h"
+#include "detect-nfs-procedure.h"
+#include "detect-nfs-version.h"
 
 #include "detect-engine-event.h"
 #include "decode.h"
@@ -173,6 +174,7 @@
 #include "detect-geoip.h"
 #include "detect-app-layer-protocol.h"
 #include "detect-template.h"
+#include "detect-target.h"
 #include "detect-template-buffer.h"
 #include "detect-bypass.h"
 #include "detect-engine-content-inspection.h"
@@ -252,6 +254,11 @@ char *DetectLoadCompleteSigPath(const DetectEngineCtx *de_ctx, const char *sig_f
     const char *defaultpath = NULL;
     char *path = NULL;
     char varname[128];
+
+    if (sig_file == NULL) {
+        SCLogError(SC_ERR_INVALID_ARGUMENTS,"invalid sig_file argument - NULL");
+        return NULL;
+    }
 
     if (strlen(de_ctx->config_prefix) > 0) {
         snprintf(varname, sizeof(varname), "%s.default-rule-path",
@@ -935,6 +942,7 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
 
     /* grab the protocol state we will detect on */
     if (p->flags & PKT_HAS_FLOW) {
+        DEBUG_VALIDATE_BUG_ON(pflow == NULL);
         if (p->flowflags & FLOW_PKT_TOSERVER) {
             flow_flags = STREAM_TOSERVER;
             SCLogDebug("flag STREAM_TOSERVER set");
@@ -1009,6 +1017,7 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
                 if (p->proto == IPPROTO_TCP && pflow->protoctx &&
                     StreamReassembleRawHasDataReady(pflow->protoctx, p)) {
                     p->flags |= PKT_DETECT_HAS_STREAMDATA;
+                    flow_flags |= STREAM_FLUSH;
                 }
                 SCLogDebug("alstate %s, alproto %u", has_state ? "true" : "false", alproto);
             } else {
@@ -1080,6 +1089,8 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
     PACKET_PROFILING_DETECT_START(p, PROF_DETECT_STATEFUL_CONT);
     /* stateful app layer detection */
     if ((p->flags & PKT_HAS_FLOW) && has_state) {
+        DEBUG_VALIDATE_BUG_ON(pflow == NULL);
+
         memset(det_ctx->de_state_sig_array, 0x00, det_ctx->de_state_sig_array_len);
         int has_inspectable_state = DeStateFlowHasInspectableState(pflow, flow_flags);
         if (has_inspectable_state == 1) {
@@ -1202,6 +1213,7 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
          * and if so, if we actually have any in the flow. If not, the sig
          * can't match and we skip it. */
         if ((p->flags & PKT_HAS_FLOW) && (sflags & SIG_FLAG_REQUIRE_FLOWVAR)) {
+            DEBUG_VALIDATE_BUG_ON(pflow == NULL);
             int m  = pflow->flowvar ? 1 : 0;
 
             /* no flowvars? skip this sig */
@@ -1376,7 +1388,7 @@ void SigMatchSignatures(ThreadVars *th_v, DetectEngineCtx *de_ctx, DetectEngineT
                 PacketAlertAppend(det_ctx, s, p, 0, alert_flags);
         } else {
             /* apply actions even if not alerting */
-            DetectSignatureApplyActions(p, s);
+            DetectSignatureApplyActions(p, s, alert_flags);
         }
 next:
         DetectVarProcessList(det_ctx, pflow, p);
@@ -1419,6 +1431,8 @@ end:
      * up again for the next packet. Also return any stream chunk we processed
      * to the pool. */
     if (p->flags & PKT_HAS_FLOW) {
+        DEBUG_VALIDATE_BUG_ON(pflow == NULL);
+
         /* HACK: prevent the wrong sgh (or NULL) from being stored in the
          * flow's sgh pointers */
         if (PKT_IS_ICMPV4(p) && ICMPV4_DEST_UNREACH_IS_VALID(p)) {
@@ -1444,7 +1458,8 @@ end:
 
 /** \brief Apply action(s) and Set 'drop' sig info,
  *         if applicable */
-void DetectSignatureApplyActions(Packet *p, const Signature *s)
+void DetectSignatureApplyActions(Packet *p,
+        const Signature *s, const uint8_t alert_flags)
 {
     PACKET_UPDATE_ACTION(p, s->action);
 
@@ -1454,6 +1469,14 @@ void DetectSignatureApplyActions(Packet *p, const Signature *s)
             p->alerts.drop.action = s->action;
             p->alerts.drop.s = (Signature *)s;
         }
+    } else if (s->action & ACTION_PASS) {
+        /* if an stream/app-layer match we enforce the pass for the flow */
+        if ((p->flow != NULL) &&
+                (alert_flags & (PACKET_ALERT_FLAG_STATE_MATCH|PACKET_ALERT_FLAG_STREAM_MATCH)))
+        {
+            FlowSetNoPacketInspectionFlag(p->flow);
+        }
+
     }
 }
 
@@ -1471,10 +1494,7 @@ static void DetectFlow(ThreadVars *tv,
                        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
                        Packet *p)
 {
-    /* No need to perform any detection on this packet, if the the given flag is set.*/
-    if ((p->flags & PKT_NOPACKET_INSPECTION) ||
-        (PACKET_TEST_ACTION(p, ACTION_DROP)))
-    {
+    if (p->flags & PKT_NOPACKET_INSPECTION) {
         /* hack: if we are in pass the entire flow mode, we need to still
          * update the inspect_id forward. So test for the condition here,
          * and call the update code if necessary. */
@@ -1972,6 +1992,7 @@ PacketCreateMask(Packet *p, SignatureMask *mask, AppProto alproto,
     }
 
     if (p->flags & PKT_HAS_FLOW) {
+        DEBUG_VALIDATE_BUG_ON(p->flow == NULL);
         SCLogDebug("packet has flow");
         (*mask) |= SIG_MASK_REQUIRE_FLOW;
 
@@ -2059,6 +2080,12 @@ static int SignatureCreateMask(Signature *s)
                         "flowbit(s)");
                 break;
             }
+            case DETECT_FLOWINT:
+                /* flow is required for any flowint manipulation */
+                s->mask |= SIG_MASK_REQUIRE_FLOW;
+                SCLogDebug("sig requires flow to be able to manipulate "
+                        "flowint(s)");
+                break;
             case DETECT_FLAGS:
             {
                 DetectFlagsData *fl = (DetectFlagsData *)sm->ctx;
@@ -2201,102 +2228,6 @@ static void SigInitStandardMpmFactoryContexts(DetectEngineCtx *de_ctx)
     DetectMpmInitializeAppMpms(de_ctx);
 
     return;
-}
-
-/** \brief get max dsize "depth"
- *  \param s signature to get dsize value from
- *  \retval depth or negative value
- */
-static int SigParseGetMaxDsize(Signature *s)
-{
-    if (s->flags & SIG_FLAG_DSIZE && s->init_data->dsize_sm != NULL) {
-        DetectDsizeData *dd = (DetectDsizeData *)s->init_data->dsize_sm->ctx;
-
-        switch (dd->mode) {
-            case DETECTDSIZE_LT:
-            case DETECTDSIZE_EQ:
-                return dd->dsize;
-            case DETECTDSIZE_RA:
-                return dd->dsize2;
-            case DETECTDSIZE_GT:
-            default:
-                SCReturnInt(-2);
-        }
-    }
-    SCReturnInt(-1);
-}
-
-/** \brief set prefilter dsize pair
- *  \param s signature to get dsize value from
- */
-static void SigParseSetDsizePair(Signature *s)
-{
-    if (s->flags & SIG_FLAG_DSIZE && s->init_data->dsize_sm != NULL) {
-        DetectDsizeData *dd = (DetectDsizeData *)s->init_data->dsize_sm->ctx;
-
-        uint16_t low = 0;
-        uint16_t high = 65535;
-
-        switch (dd->mode) {
-            case DETECTDSIZE_LT:
-                low = 0;
-                high = dd->dsize;
-                break;
-            case DETECTDSIZE_EQ:
-                low = dd->dsize;
-                high = dd->dsize;
-                break;
-            case DETECTDSIZE_RA:
-                low = dd->dsize;
-                high = dd->dsize2;
-                break;
-            case DETECTDSIZE_GT:
-                low = dd->dsize;
-                high = 65535;
-                break;
-        }
-        s->dsize_low = low;
-        s->dsize_high = high;
-
-        SCLogDebug("low %u, high %u", low, high);
-    }
-}
-
-/**
- *  \brief Apply dsize as depth to content matches in the rule
- *  \param s signature to get dsize value from
- */
-static void SigParseApplyDsizeToContent(Signature *s)
-{
-    SCEnter();
-
-    if (s->flags & SIG_FLAG_DSIZE) {
-        SigParseSetDsizePair(s);
-
-        int dsize = SigParseGetMaxDsize(s);
-        if (dsize < 0) {
-            /* nothing to do */
-            return;
-        }
-
-        SigMatch *sm = s->init_data->smlists[DETECT_SM_LIST_PMATCH];
-        for ( ; sm != NULL;  sm = sm->next) {
-            if (sm->type != DETECT_CONTENT) {
-                continue;
-            }
-
-            DetectContentData *cd = (DetectContentData *)sm->ctx;
-            if (cd == NULL) {
-                continue;
-            }
-
-            if (cd->depth == 0 || cd->depth >= dsize) {
-                cd->depth = (uint16_t)dsize;
-                SCLogDebug("updated %u, content %u to have depth %u "
-                        "because of dsize.", s->id, cd->id, cd->depth);
-            }
-        }
-    }
 }
 
 /** \brief Pure-PCRE or bytetest rule */
@@ -3659,8 +3590,12 @@ int SigGroupBuild(DetectEngineCtx *de_ctx)
     }
 #endif
 
-    DetectMpmPrepareBuiltinMpms(de_ctx);
-    DetectMpmPrepareAppMpms(de_ctx);
+    int r = DetectMpmPrepareBuiltinMpms(de_ctx);
+    r |= DetectMpmPrepareAppMpms(de_ctx);
+    if (r != 0) {
+        SCLogError(SC_ERR_DETECT_PREPARE, "initializing the detection engine failed");
+        exit(EXIT_FAILURE);
+    }
 
     if (SigMatchPrepare(de_ctx) != 0) {
         SCLogError(SC_ERR_DETECT_PREPARE, "initializing the detection engine failed");
@@ -3911,7 +3846,8 @@ void SigTableSetup(void)
     DetectTlsRegister();
     DetectTlsValidityRegister();
     DetectTlsVersionRegister();
-    DetectNfs3ProcedureRegister();
+    DetectNfsProcedureRegister();
+    DetectNfsVersionRegister();
     DetectUrilenRegister();
     DetectDetectionFilterRegister();
     DetectAsn1Register();
@@ -3930,10 +3866,9 @@ void SigTableSetup(void)
     DetectBase64DecodeRegister();
     DetectBase64DataRegister();
     DetectTemplateRegister();
+    DetectTargetRegister();
     DetectTemplateBufferRegister();
     DetectBypassRegister();
-    DetectHttpRequestLineRegister();
-    DetectHttpResponseLineRegister();
 
     /* close keyword registration */
     DetectBufferTypeFinalizeRegistration();

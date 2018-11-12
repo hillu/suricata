@@ -49,21 +49,16 @@ impl FileContainer {
             None => panic!("BUG no suricata_config"),
             Some(c) => {
                 SCLogDebug!("FILE {:p} OPEN flags {:04X}", &self, flags);
-                //let ref res =
 
-                (c.FileOpenFile)(&self, cfg.files_sbcfg, *track_id,
+                let res = (c.FileOpenFile)(&self, cfg.files_sbcfg, *track_id,
                         name.as_ptr(), name.len() as u16,
                         ptr::null(), 0u32, flags);
-
-                //if !res {
-                //    panic!("c.fn_fileopenfile failed");
-                //}
-                0
+                res
             }
         }
     }
 
-    pub fn file_append(&mut self, track_id: &u32, data: &[u8]) -> i32 {
+    pub fn file_append(&mut self, track_id: &u32, data: &[u8], is_gap: bool) -> i32 {
         SCLogDebug!("FILECONTAINER: append {}", data.len());
         if data.len() == 0 {
             return 0
@@ -71,11 +66,20 @@ impl FileContainer {
         match unsafe {SC} {
             None => panic!("BUG no suricata_config"),
             Some(c) => {
-                let res = (c.FileAppendData)(&self, *track_id,
-                        data.as_ptr(), data.len() as u32);
-                if res != 0 {
-                    panic!("c.fn_fileappenddata failed");
-                }
+                let res = match is_gap {
+                    false => {
+                        SCLogDebug!("appending file data");
+                        let r = (c.FileAppendData)(&self, *track_id,
+                                data.as_ptr(), data.len() as u32);
+                        r
+                    },
+                    true => {
+                        SCLogDebug!("appending GAP");
+                        let r = (c.FileAppendGAP)(&self, *track_id,
+                                data.as_ptr(), data.len() as u32);
+                        r
+                    },
+                };
                 res
             }
         }
@@ -88,9 +92,6 @@ impl FileContainer {
             None => panic!("BUG no suricata_config"),
             Some(c) => {
                 let res = (c.FileCloseFile)(&self, *track_id, ptr::null(), 0u32, flags);
-                if res != 0 {
-                    panic!("c.fn_fileclosefile failed");
-                }
                 res
             }
         }

@@ -89,6 +89,9 @@ typedef struct TcpStream_ {
     uint32_t raw_progress_rel;      /**< raw reassembly progress relative to STREAM_BASE_OFFSET */
     uint32_t log_progress_rel;      /**< streaming logger progress relative to STREAM_BASE_OFFSET */
 
+    uint32_t min_inspect_depth;     /**< min inspect size set by the app layer, to make sure enough data
+                                     *   remains available for inspection together with app layer buffers */
+
     StreamingBuffer sb;
 
     TcpSegment *seg_list;           /**< list of TCP segments that are not yet (fully) used in reassembly */
@@ -155,6 +158,8 @@ enum
 #define STREAMTCP_FLAG_3WHS_CONFIRMED               0x1000
 /** App Layer tracking/reassembly is disabled */
 #define STREAMTCP_FLAG_APP_LAYER_DISABLED           0x2000
+/** Stream can be bypass */
+#define STREAMTCP_FLAG_BYPASS                       0x4000
 
 /*
  * Per STREAM flags
@@ -183,7 +188,8 @@ enum
 #define STREAMTCP_STREAM_FLAG_NEW_RAW_DISABLED 0x0200
 /** Raw reassembly disabled completely */
 #define STREAMTCP_STREAM_FLAG_DISABLE_RAW 0x400
-// vacancy 1x
+
+#define STREAMTCP_STREAM_FLAG_RST_RECV  0x800
 
 /** NOTE: flags field is 12 bits */
 
@@ -218,7 +224,8 @@ enum
 
 typedef struct TcpSession_ {
     PoolThreadReserved res;
-    uint8_t state;
+    uint8_t state:4;                        /**< tcp state from state enum */
+    uint8_t pstate:4;                       /**< previous state */
     uint8_t queue_len;                      /**< length of queue list below */
     int8_t data_first_seen_dir;
     /** track all the tcp flags we've seen */

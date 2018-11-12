@@ -8,4 +8,6 @@ tls-events.rules \
 modbus-events.rules \
 app-layer-events.rules \
 files.rules \
-dnp3-events.rules
+dnp3-events.rules \
+ntp-events.rules \
+nfs-events.rules

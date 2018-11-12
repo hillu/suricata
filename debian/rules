@@ -1,40 +1,40 @@
 #!/usr/bin/make -f
-# -*- makefile -*-
-# debian/rules file for Suricata
-# Written by Pierre Chifflier
-# This file was originally written by Joey Hess and Craig Small.
-# As a special exception, when this file is copied by dh-make into a
-# dh-make output file, you may use that output file without restriction.
-# This special exception was added by Craig Small in version 0.37 of dh-make.
 
-# Uncomment this to turn on verbose mode.
+# verbose mode
 export DH_VERBOSE=1
 
 SURICATA_DESTDIR = $(CURDIR)/debian/suricata
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
 
-ARCH ?= $(shell dpkg --print-architecture)
-DEB_HOST_MULTIARCH ?= $(shell dpkg-architecture -qDEB_HOST_MULTIARCH)
+include /usr/share/dpkg/architecture.mk
 
-LUAJIT_ARCHS = i386 amd64 powerpc mips armel armhf
+LUAJIT_ARCHS = i386 amd64 powerpc mips mipsel armel armhf
 HYPERSCAN_ARCHS = i386 amd64 hurd-i386 kfreebsd-amd64 x32
 
-ifneq (,$(findstring $(ARCH),$(LUAJIT_ARCHS)))
+ifneq (,$(findstring $(DEB_HOST_ARCH),$(LUAJIT_ARCHS)))
 	ENABLE_LUAJIT="--enable-luajit"
 endif
 
-ifneq (,$(findstring $(ARCH),$(HYPERSCAN_ARCHS)))
+ifneq (,$(findstring $(DEB_HOST_ARCH),$(HYPERSCAN_ARCHS)))
 	ENABLE_HYPERSCAN="--enable-libhs"
+endif
+
+CI ?= $(shell $(CURDIR)/debian/building-in-ci.sh)
+ifeq ($(CI),true)
+        ENABLE_UNITTESTS="--enable-unittests"
 endif
 
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \
 	--enable-gccprotect --disable-gccmarch-native \
 	--with-libnss-includes=/usr/include/nss --with-libnss-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--with-libnspr-includes=/usr/include/nspr --with-libnspr-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
+	--with-libevent-includes=/usr/include --with-libevent-libraries=/usr/lib/$(DEB_HOST_MULTIARCH) \
 	--disable-coccinelle \
 	--enable-geoip --enable-hiredis \
+	--enable-non-bundled-htp \
 	$(ENABLE_LUAJIT) \
-	$(ENABLE_HYPERSCAN)
+	$(ENABLE_HYPERSCAN) \
+	$(ENABLE_UNITTESTS)
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
@@ -48,7 +48,9 @@ override_dh_auto_install:
 	rm -rf $(SURICATA_DESTDIR)/usr/share/doc/suricata/*
 
 override_dh_strip:
-	dh_strip --dbg-package=suricata-dbg
+	dh_strip --dbgsym-migration='suricata-dbg (<< 1:4.0.0-2~)'
 
+override_dh_auto_test:
+	# do nothing
 %:
-	dh $@ --parallel --with autotools-dev,autoreconf,python2
+	dh $@ --with python2

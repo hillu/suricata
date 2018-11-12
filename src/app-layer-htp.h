@@ -126,6 +126,8 @@ enum {
     HTTP_DECODER_EVENT_METHOD_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_URI_DELIM_NON_COMPLIANT,
     HTTP_DECODER_EVENT_REQUEST_LINE_LEADING_WHITESPACE,
+    HTTP_DECODER_EVENT_TOO_MANY_ENCODING_LAYERS,
+    HTTP_DECODER_EVENT_ABNORMAL_CE_HEADER,
 
     /* suricata errors/warnings */
     HTTP_DECODER_EVENT_MULTIPART_GENERIC_ERROR,
@@ -245,6 +247,8 @@ typedef struct HtpState_ {
     uint16_t events;
     uint16_t htp_messages_offset; /**< offset into conn->messages list */
     uint64_t tx_with_detect_state_cnt;
+    uint64_t last_request_data_stamp;
+    uint64_t last_response_data_stamp;
 } HtpState;
 
 /** part of the engine needs the request body (e.g. http_client_body keyword) */

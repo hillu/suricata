@@ -5,5 +5,4 @@
 # Compulsory line, this is a version 3 file
 version=3
 
-http://suricata-ids.org/download/ [^"]*/download/suricata-([\d\.]*)\.tar\.gz
-
+opts=pgpsigurlmangle=s/$/.sig/ https://openinfosecfoundation.org/download/ suricata-([\d\.]*)\.tar\.gz

@@ -60,7 +60,9 @@
 #include "app-layer-modbus.h"
 #include "app-layer-enip.h"
 #include "app-layer-dnp3.h"
-#include "app-layer-nfs3.h"
+#include "app-layer-nfs-tcp.h"
+#include "app-layer-nfs-udp.h"
+#include "app-layer-ntp.h"
 #include "app-layer-template.h"
 
 #include "conf.h"
@@ -141,6 +143,7 @@ typedef struct AppLayerParserCtx_ {
 } AppLayerParserCtx;
 
 struct AppLayerParserState_ {
+    /* coccinelle: AppLayerParserState:flags:APP_LAYER_PARSER_ */
     uint8_t flags;
 
     /* Indicates the current transaction that is being inspected.
@@ -1076,6 +1079,14 @@ int AppLayerParserParse(ThreadVars *tv, AppLayerParserThreadCtx *alp_tctx, Flow 
                             flags & STREAM_TOSERVER ? 1 : 0);
                 }
             }
+            /* Set the bypass flag for both the stream in this TcpSession */
+            if (pstate->flags & APP_LAYER_PARSER_BYPASS_READY) {
+                /* Used only if it's TCP */
+                TcpSession *ssn = f->protoctx;
+                if (ssn != NULL) {
+                    StreamTcpSetSessionBypassFlag(ssn);
+                }
+            }
         }
     }
 
@@ -1262,6 +1273,97 @@ void AppLayerParserStateCleanup(const Flow *f, void *alstate,
     SCReturn;
 }
 
+static void ValidateParserProtoDump(AppProto alproto, uint8_t ipproto)
+{
+    uint8_t map = FlowGetProtoMapping(ipproto);
+    const AppLayerParserProtoCtx *ctx = &alp_ctx.ctxs[map][alproto];
+    const AppLayerParserProtoCtx *ctx_def = &alp_ctx.ctxs[FLOW_PROTO_DEFAULT][alproto];
+    printf("ERROR: incomplete app-layer registration\n");
+    printf("AppLayer protocol %s ipproto %u\n", AppProtoToString(alproto), ipproto);
+    printf("- flags %"PRIx64"\n", ctx->flags);
+    printf("- first_data_dir %"PRIx8"\n", ctx->first_data_dir);
+    printf("Mandatory:\n");
+    printf("- Parser[0] %p Parser[1] %p\n", ctx->Parser[0], ctx->Parser[1]);
+    printf("- StateAlloc %p StateFree %p\n", ctx->StateAlloc, ctx->StateFree);
+    printf("- StateGetTx %p StateGetTxCnt %p StateTransactionFree %p\n",
+            ctx->StateGetTx, ctx->StateGetTxCnt, ctx->StateTransactionFree);
+    printf("- StateGetProgress %p StateGetProgressCompletionStatus %p\n", ctx->StateGetProgress, ctx_def->StateGetProgressCompletionStatus);
+    printf("- GetTxDetectState %p SetTxDetectState %p\n", ctx->GetTxDetectState, ctx->SetTxDetectState);
+    printf("Optional:\n");
+    printf("- StateHasTxDetectState %p\n", ctx->StateHasTxDetectState);
+    printf("- LocalStorageAlloc %p LocalStorageFree %p\n", ctx->LocalStorageAlloc, ctx->LocalStorageFree);
+    printf("- StateGetTxLogged %p StateSetTxLogged %p\n", ctx->StateGetTxLogged, ctx->StateSetTxLogged);
+    printf("- SetTxMpmIDs %p GetTxMpmIDs %p\n", ctx->SetTxMpmIDs, ctx->GetTxMpmIDs);
+    printf("- StateGetEvents %p StateHasEvents %p StateGetEventInfo %p\n", ctx->StateGetEvents, ctx->StateHasEvents, ctx->StateGetEventInfo);
+}
+
+#define BOTH_SET(a, b) ((a) != NULL && (b) != NULL)
+#define BOTH_SET_OR_BOTH_UNSET(a, b) (((a) == NULL && (b) == NULL) || ((a) != NULL && (b) != NULL))
+#define THREE_SET_OR_THREE_UNSET(a, b, c) (((a) == NULL && (b) == NULL && (c) == NULL) || ((a) != NULL && (b) != NULL && (c) != NULL))
+
+static void ValidateParserProto(AppProto alproto, uint8_t ipproto)
+{
+    uint8_t map = FlowGetProtoMapping(ipproto);
+    const AppLayerParserProtoCtx *ctx = &alp_ctx.ctxs[map][alproto];
+    const AppLayerParserProtoCtx *ctx_def = &alp_ctx.ctxs[FLOW_PROTO_DEFAULT][alproto];
+
+    if (ctx->Parser[0] == NULL && ctx->Parser[1] == NULL)
+        return;
+
+    if (!(BOTH_SET(ctx->Parser[0], ctx->Parser[1]))) {
+        goto bad;
+    }
+    if (!(BOTH_SET(ctx->StateFree, ctx->StateAlloc))) {
+        goto bad;
+    }
+    if (!(THREE_SET_OR_THREE_UNSET(ctx->StateGetTx, ctx->StateGetTxCnt, ctx->StateTransactionFree))) {
+        goto bad;
+    }
+    /* special case: StateGetProgressCompletionStatus is used from 'default'. */
+    if (!(BOTH_SET(ctx->StateGetProgress, ctx_def->StateGetProgressCompletionStatus))) {
+        goto bad;
+    }
+    /* local storage is optional, but needs both set if used */
+    if (!(BOTH_SET_OR_BOTH_UNSET(ctx->LocalStorageAlloc, ctx->LocalStorageFree))) {
+        goto bad;
+    }
+    if (!(BOTH_SET_OR_BOTH_UNSET(ctx->StateGetTxLogged, ctx->StateSetTxLogged))) {
+        goto bad;
+    }
+    if (!(BOTH_SET_OR_BOTH_UNSET(ctx->SetTxMpmIDs, ctx->GetTxMpmIDs))) {
+        goto bad;
+    }
+    if (!(BOTH_SET(ctx->GetTxDetectState, ctx->SetTxDetectState))) {
+        goto bad;
+    }
+/*  TODO: not yet mandatory to use StateHasTxDetectState
+    if (!(THREE_SET_OR_THREE_UNSET(ctx->GetTxDetectState, ctx->SetTxDetectState, ctx->StateHasTxDetectState))) {
+        goto bad;
+    }
+*/
+
+    return;
+bad:
+    ValidateParserProtoDump(alproto, ipproto);
+    exit(EXIT_FAILURE);
+}
+#undef BOTH_SET
+#undef BOTH_SET_OR_BOTH_UNSET
+#undef THREE_SET_OR_THREE_UNSET
+
+static void ValidateParser(AppProto alproto)
+{
+    ValidateParserProto(alproto, IPPROTO_TCP);
+    ValidateParserProto(alproto, IPPROTO_UDP);
+}
+
+static void ValidateParsers(void)
+{
+    AppProto p = 0;
+    for ( ; p < ALPROTO_MAX; p++) {
+        ValidateParser(p);
+    }
+}
 
 void AppLayerParserRegisterProtocolParsers(void)
 {
@@ -1283,7 +1385,9 @@ void AppLayerParserRegisterProtocolParsers(void)
     RegisterENIPUDPParsers();
     RegisterENIPTCPParsers();
     RegisterDNP3Parsers();
-    RegisterNFS3Parsers();
+    RegisterNFSTCPParsers();
+    RegisterNFSUDPParsers();
+    RegisterNTPParsers();
     RegisterTemplateParsers();
 
     /** IMAP */
@@ -1314,6 +1418,7 @@ void AppLayerParserRegisterProtocolParsers(void)
                   "msn");
     }
 
+    ValidateParsers();
     return;
 }
 
@@ -1368,6 +1473,10 @@ void AppLayerParserStatePrintDetails(AppLayerParserState *pstate)
 #ifdef AFLFUZZ_APPLAYER
 int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filename)
 {
+    struct timeval ts;
+    memset(&ts, 0, sizeof(ts));
+    gettimeofday(&ts, NULL);
+
     int result = 1;
     Flow *f = NULL;
     TcpSession ssn;
@@ -1390,7 +1499,8 @@ int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filen
     f->protomap = FlowGetProtoMapping(f->proto);
     f->alproto = alproto;
 
-    uint8_t buffer[64];
+    uint8_t buffer[65536];
+    uint32_t cnt = 0;
 
 #ifdef AFLFUZZ_PERSISTANT_MODE
     while (__AFL_LOOP(1000)) {
@@ -1408,10 +1518,16 @@ int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filen
             if (size < sizeof(buffer))
                 done = 1;
 
+            char outfilename[256];
+            snprintf(outfilename, sizeof(outfilename), "dump/%u-%u.%u",
+                    (unsigned int)ts.tv_sec, (unsigned int)ts.tv_usec, cnt);
+            FILE *out_fp = fopen(outfilename, "w");
+            BUG_ON(out_fp == NULL);
+            (void)fwrite(buffer, size, 1, out_fp);
+            fclose(out_fp);
             //SCLogInfo("result %u done %d start %d", (uint)result, done, start);
 
             uint8_t flags = STREAM_TOSERVER;
-
             if (start--) {
                 flags |= STREAM_START;
             }
@@ -1422,6 +1538,8 @@ int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filen
 
             (void)AppLayerParserParse(NULL, alp_tctx, f, alproto, flags,
                                       buffer, size);
+            cnt++;
+
             if (done)
                 break;
         }
@@ -1431,6 +1549,15 @@ int AppLayerParserRequestFromFile(uint8_t ipproto, AppProto alproto, char *filen
 #ifdef AFLFUZZ_PERSISTANT_MODE
     }
 #endif /* AFLFUZZ_PERSISTANT_MODE */
+
+    /* if we get here there was no crash, so we can remove our files */
+    uint32_t x = 0;
+    for (x = 0; x < cnt; x++) {
+        char rmfilename[256];
+        snprintf(rmfilename, sizeof(rmfilename), "dump/%u-%u.%u",
+            (unsigned int)ts.tv_sec, (unsigned int)ts.tv_usec, x);
+        unlink(rmfilename);
+    }
 
     result = 0;
 
@@ -1443,8 +1570,12 @@ end:
     return result;
 }
 
-int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
+/* load a serie of files generated by DecoderParseDataFromFile() in
+ * the same order as it was produced. */
+int AppLayerParserRequestFromFileSerie(uint8_t ipproto, AppProto alproto, char *fileprefix)
 {
+    uint32_t cnt = 0;
+    int start = 1;
     int result = 1;
     Flow *f = NULL;
     TcpSession ssn;
@@ -1467,7 +1598,72 @@ int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
     f->protomap = FlowGetProtoMapping(f->proto);
     f->alproto = alproto;
 
-    uint8_t buffer[64];
+    uint8_t buffer[65536];
+
+    char filename[256];
+    snprintf(filename, sizeof(filename), "dump/%s.%u", fileprefix, cnt);
+    FILE *fp;
+    while ((fp = fopen(filename, "r")) != NULL)
+    {
+        memset(buffer, 0, sizeof(buffer));
+
+        size_t size = fread(&buffer, 1, sizeof(buffer), fp);
+
+        uint8_t flags = STREAM_TOSERVER;
+        if (start--) {
+            flags |= STREAM_START;
+        }
+
+        (void)AppLayerParserParse(NULL, alp_tctx, f, alproto, flags,
+                buffer, size);
+
+        fclose(fp);
+        cnt++;
+
+        snprintf(filename, sizeof(filename), "dump/%s.%u", fileprefix, cnt);
+    }
+
+    result = 0;
+
+end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
+    if (f != NULL) {
+        FlowFree(f);
+    }
+    return result;
+}
+
+int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
+{
+    struct timeval ts;
+    memset(&ts, 0, sizeof(ts));
+    gettimeofday(&ts, NULL);
+
+    int result = 1;
+    Flow *f = NULL;
+    TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = SCCalloc(1, sizeof(Flow));
+    if (f == NULL)
+        goto end;
+    FLOW_INITIALIZE(f);
+
+    f->flags |= FLOW_IPV4;
+    f->src.addr_data32[0] = 0x01020304;
+    f->dst.addr_data32[0] = 0x05060708;
+    f->sp = 10000;
+    f->dp = 80;
+    f->protoctx = &ssn;
+    f->proto = ipproto;
+    f->protomap = FlowGetProtoMapping(f->proto);
+    f->alproto = alproto;
+
+    uint8_t buffer[65536];
+    uint32_t cnt = 0;
 
 #ifdef AFLFUZZ_PERSISTANT_MODE
     while (__AFL_LOOP(1000)) {
@@ -1486,6 +1682,13 @@ int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
             if (size < sizeof(buffer))
                 done = 1;
 
+            char outfilename[256];
+            snprintf(outfilename, sizeof(outfilename), "dump/%u-%u.%u",
+                    (unsigned int)ts.tv_sec, (unsigned int)ts.tv_usec, cnt);
+            FILE *out_fp = fopen(outfilename, "w");
+            BUG_ON(out_fp == NULL);
+            (void)fwrite(buffer, size, 1, out_fp);
+            fclose(out_fp);
             //SCLogInfo("result %u done %d start %d", (uint)result, done, start);
 
             uint8_t flags = 0;
@@ -1507,6 +1710,9 @@ int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
 
             (void)AppLayerParserParse(NULL, alp_tctx, f, alproto, flags,
                                       buffer, size);
+
+            cnt++;
+
             if (done)
                 break;
         }
@@ -1517,6 +1723,15 @@ int AppLayerParserFromFile(uint8_t ipproto, AppProto alproto, char *filename)
     }
 #endif /* AFLFUZZ_PERSISTANT_MODE */
 
+    /* if we get here there was no crash, so we can remove our files */
+    uint32_t x = 0;
+    for (x = 0; x < cnt; x++) {
+        char rmfilename[256];
+        snprintf(rmfilename, sizeof(rmfilename), "dump/%u-%u.%u",
+            (unsigned int)ts.tv_sec, (unsigned int)ts.tv_usec, x);
+        unlink(rmfilename);
+    }
+
     result = 0;
 end:
     if (alp_tctx != NULL)
@@ -1526,6 +1741,79 @@ end:
     }
     return result;
 }
+
+/* load a serie of files generated by DecoderParseDataFromFile() in
+ * the same order as it was produced. */
+int AppLayerParserFromFileSerie(uint8_t ipproto, AppProto alproto, char *fileprefix)
+{
+    uint32_t cnt = 0;
+    int start = 1;
+    int result = 1;
+    Flow *f = NULL;
+    TcpSession ssn;
+    AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+
+    memset(&ssn, 0, sizeof(ssn));
+
+    f = SCCalloc(1, sizeof(Flow));
+    if (f == NULL)
+        goto end;
+    FLOW_INITIALIZE(f);
+
+    f->flags |= FLOW_IPV4;
+    f->src.addr_data32[0] = 0x01020304;
+    f->dst.addr_data32[0] = 0x05060708;
+    f->sp = 10000;
+    f->dp = 80;
+    f->protoctx = &ssn;
+    f->proto = ipproto;
+    f->protomap = FlowGetProtoMapping(f->proto);
+    f->alproto = alproto;
+
+    uint8_t buffer[65536];
+    int flip = 0;
+    char filename[256];
+    snprintf(filename, sizeof(filename), "dump/%s.%u", fileprefix, cnt);
+    FILE *fp;
+    while ((fp = fopen(filename, "r")) != NULL)
+    {
+        memset(buffer, 0, sizeof(buffer));
+
+        size_t size = fread(&buffer, 1, sizeof(buffer), fp);
+
+        uint8_t flags = 0;
+        if (flip) {
+            flags = STREAM_TOCLIENT;
+            flip = 0;
+        } else {
+            flags = STREAM_TOSERVER;
+            flip = 1;
+        }
+
+        if (start--) {
+            flags |= STREAM_START;
+        }
+
+        (void)AppLayerParserParse(NULL, alp_tctx, f, alproto, flags,
+                buffer, size);
+
+        fclose(fp);
+        cnt++;
+
+        snprintf(filename, sizeof(filename), "dump/%s.%u", fileprefix, cnt);
+    }
+
+    result = 0;
+
+end:
+    if (alp_tctx != NULL)
+        AppLayerParserThreadCtxFree(alp_tctx);
+    if (f != NULL) {
+        FlowFree(f);
+    }
+    return result;
+}
+
 #endif /* AFLFUZZ_APPLAYER */
 
 /***** Unittests *****/

@@ -223,19 +223,23 @@ int DetectPcrePayloadMatch(DetectEngineThreadCtx *det_ctx, const Signature *s,
                 uint8_t x;
                 for (x = 0; x < pe->idx; x++) {
                     SCLogDebug("capturing %u", x);
-                    const char *str_ptr;
+                    const char *str_ptr = NULL;
                     ret = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+1, &str_ptr);
-                    if (unlikely(ret == 0))
+                    if (unlikely(ret == 0)) {
+                        pcre_free_substring(str_ptr);
                         continue;
+                    }
 
                     SCLogDebug("data %p/%u, type %u id %u p %p",
                             str_ptr, ret, pe->captypes[x], pe->capids[x], p);
 
                     if (pe->captypes[x] == VAR_TYPE_PKT_VAR_KV) {
                         /* get the value, as first capture is the key */
-                        const char *str_ptr2;
+                        const char *str_ptr2 = NULL;
                         int ret2 = pcre_get_substring((char *)ptr, ov, MAX_SUBSTRINGS, x+2, &str_ptr2);
                         if (unlikely(ret2 == 0)) {
+                            pcre_free_substring(str_ptr);
+                            pcre_free_substring(str_ptr2);
                             break;
                         }
                         /* key length is limited to 256 chars */
@@ -290,14 +294,27 @@ static int DetectPcreSetList(int list, int set)
 static int DetectPcreHasUpperCase(const char *re)
 {
     size_t len = strlen(re);
-    int is_meta = 0;
+    bool is_meta = false;
+    bool is_meta_hex = false;
+    int meta_hex_cnt = 0;
 
     for (size_t i = 0; i < len; i++) {
-        if (is_meta) {
-            is_meta = 0;
+        if (is_meta_hex) {
+            meta_hex_cnt++;
+
+            if (meta_hex_cnt == 2) {
+                is_meta_hex = false;
+                meta_hex_cnt = 0;
+            }
+        } else if (is_meta) {
+            if (re[i] == 'x') {
+                is_meta_hex = true;
+            } else {
+                is_meta = false;
+            }
         }
         else if (re[i] == '\\') {
-            is_meta = 1;
+            is_meta = true;
         }
         else if (isupper((unsigned char)re[i])) {
             return 1;
@@ -1541,6 +1558,23 @@ static int DetectPcreParseTest27(void)
         SigCleanSignatures(de_ctx);
     if (de_ctx != NULL)
         DetectEngineCtxFree(de_ctx);
+    PASS;
+}
+
+/** \test Bug 1957 */
+static int DetectPcreParseTest28(void)
+{
+    DetectEngineCtx *de_ctx = NULL;
+
+    FAIL_IF( (de_ctx = DetectEngineCtxInit()) == NULL);
+
+    de_ctx->flags |= DE_QUIET;
+    de_ctx->sig_list = SigInit(de_ctx, "alert tcp any any -> any 80 "
+            "(content:\"|2E|suricata\"; http_host; pcre:\"/\\x2Esuricata$/W\"; "
+            "sid:2; rev:2;)");
+    FAIL_IF_NULL(de_ctx->sig_list);
+
+    DetectEngineCtxFree(de_ctx);
     PASS;
 }
 
@@ -3483,6 +3517,7 @@ static void DetectPcreRegisterTests(void)
     UtRegisterTest("DetectPcreParseTest25", DetectPcreParseTest25);
     UtRegisterTest("DetectPcreParseTest26", DetectPcreParseTest26);
     UtRegisterTest("DetectPcreParseTest27", DetectPcreParseTest27);
+    UtRegisterTest("DetectPcreParseTest28", DetectPcreParseTest28);
 
     UtRegisterTest("DetectPcreTestSig01 -- pcre test", DetectPcreTestSig01);
     UtRegisterTest("DetectPcreTestSig02 -- pcre test", DetectPcreTestSig02);

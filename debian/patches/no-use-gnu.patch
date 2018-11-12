@@ -1,0 +1,28 @@
+Description: Don't use __USE_GNU
+ __USE_GNU is a glibc-internal symbol.
+ AC_USE_SYSTEM_EXTENSIONS is the proper autoconf
+ way to enable extensions.
+Author: Adrian Bunk <bunk@debian.org>
+
+--- suricata-4.0.4.orig/configure.ac
++++ suricata-4.0.4/configure.ac
+@@ -8,6 +8,7 @@
+ 
+     AC_LANG_C
+     AC_PROG_CC_C99
++    AC_USE_SYSTEM_EXTENSIONS
+     AC_PROG_LIBTOOL
+     PKG_PROG_PKG_CONFIG
+ 
+--- suricata-4.0.4.orig/src/suricata-common.h
++++ suricata-4.0.4/src/suricata-common.h
+@@ -33,9 +33,6 @@
+ #define TRUE   1
+ #define FALSE  0
+ 
+-#define _GNU_SOURCE
+-#define __USE_GNU
+-
+ #if HAVE_CONFIG_H
+ #include <config.h>
+ #endif

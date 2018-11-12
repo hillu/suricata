@@ -41,6 +41,8 @@ vars:
     SSH_PORTS: 22
     DNP3_PORTS: 20000
     MODBUS_PORTS: 502
+    FILE_DATA_PORTS: "[$HTTP_PORTS,110,143]"
+    FTP_PORTS: 21
 
 
 ##
@@ -103,6 +105,7 @@ rule-files:
 # - modbus-events.rules  # available in suricata sources under rules dir
 # - app-layer-events.rules  # available in suricata sources under rules dir
 # - dnp3-events.rules       # available in suricata sources under rules dir
+# - ntp-events.rules       # available in suricata sources under rules dir
 
 classification-file: @e_sysconfdir@classification.config
 reference-config-file: @e_sysconfdir@reference.config
@@ -149,7 +152,9 @@ outputs:
       #  server: 127.0.0.1
       #  port: 6379
       #  async: true ## if redis replies are read asynchronously
-      #  mode: list ## possible values: list (default), channel
+      #  mode: list ## possible values: list|lpush (default), rpush, channel|publish
+      #             ## lpush and rpush are using a Redis list. "list" is an alias for lpush
+      #             ## publish is using a Redis channel. "channel" is an alias for publish
       #  key: suricata ## key or channel to use (default to suricata)
       # Redis pipelining set up. This will enable to only do a query every
       # 'batch-size' events. This should lower the latency induced by network
@@ -164,12 +169,9 @@ outputs:
             # payload-buffer-size: 4kb # max size of payload buffer to output in eve-log
             # payload-printable: yes   # enable dumping payload in printable (lossy) format
             # packet: yes              # enable dumping of packet (without stream segments)
-            http: yes                # enable dumping of http fields
-            tls: yes                 # enable dumping of tls fields
-            ssh: yes                 # enable dumping of ssh fields
-            smtp: yes                # enable dumping of smtp fields
-            dnp3: yes                # enable dumping of DNP3 fields
-            vars: yes                # enable dumping of flowbits and other vars
+            # http-body: yes           # enable dumping of http body in Base64
+            # http-body-printable: yes # enable dumping of http body in printable format
+            metadata: yes              # add L7/applayer fields, flowbit and other vars to the alert
 
             # Enable the logging of tagged packets for rules using the
             # "tag" keyword.
@@ -236,7 +238,7 @@ outputs:
             #md5: [body, subject]
 
         #- dnp3
-        #- nfs3
+        @rust_config_comment@- nfs
         - ssh
         - stats:
             totals: yes       # stats for all threads merged together
@@ -397,6 +399,7 @@ outputs:
   - stats:
       enabled: yes
       filename: stats.log
+      append: yes       # append to file (yes) or overwrite it (no)
       totals: yes       # stats for all threads merged together
       threads: no       # per thread stats
       #null-values: yes  # print counters that have value 0
@@ -740,6 +743,10 @@ app-layer:
     # smb2 detection is disabled internally inside the engine.
     #smb2:
     #  enabled: yes
+    # Note: NFS parser depends on Rust support: pass --enable-rust
+    # to configure.
+    nfs:
+      enabled: @rust_config_enabled@
     dns:
       # memcaps. Globally and per flow/state.
       #global-memcap: 16mb
@@ -896,6 +903,11 @@ app-layer:
         dp: 44818
         sp: 44818
 
+    # Note: parser depends on experimental Rust support
+    # with --enable-rust-experimental passed to configure
+    ntp:
+      enabled: @rust_config_exp_enabled@
+
 # Limit for the maximum number of asn1 frames to decode (default 256)
 asn1-max-frames: 256
 
@@ -919,8 +931,9 @@ asn1-max-frames: 256
 # value is the hostname
 #sensor-name: suricata
 
-# Default pid file.
-# Will use this file if no --pidfile in command options.
+# Default location of the pid file. The pid file is only used in
+# daemon mode (start Suricata with -D). If not running in daemon mode
+# the --pidfile command line option must be used to create a pid file.
 #pid-file: @e_rundir@suricata.pid
 
 # Daemon working directory
@@ -1253,6 +1266,14 @@ host:
 #  hash-size: 4096
 #  prealloc: 1000
 #  memcap: 32mb
+
+# Decoder settings
+
+decoder:
+  # Teredo decoder is known to not be completely accurate
+  # it will sometimes detect non-teredo as teredo.
+  teredo:
+    enabled: true
 
 
 ##
@@ -1651,6 +1672,8 @@ ipfw:
 napatech:
     # The Host Buffer Allowance for all streams
     # (-1 = OFF, 1 - 100 = percentage of the host buffer that can be held back)
+    # This may be enabled when sharing streams with another application.
+    # Otherwise, it should be turned off.
     hba: -1
 
     # use_all_streams set to "yes" will query the Napatech service for all configured
@@ -1658,8 +1681,11 @@ napatech:
     # will be used.
     use-all-streams: yes
 
-    # The streams to listen on
-    streams: [1, 2, 3]
+    # The streams to listen on.  This can be either:
+    #   a list of individual streams (e.g. streams: [0,1,2,3])
+    # or
+    #   a range of streams (e.g. streams: ["0-3"])
+    streams: ["0-3"]
 
 # Tilera mpipe configuration. for use on Tilera TILE-Gx.
 mpipe:

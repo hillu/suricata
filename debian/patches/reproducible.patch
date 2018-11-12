@@ -1,15 +1,17 @@
 From: Arturo Borrero Gonzalez <arturo@debian.org>
 Subject: Patch to make the suricata build reproducible
- This patch makes some changes to the suricata buid to make it reproducible
+ This patch makes some changes to the suricata build to make it reproducible
  .
  Currently, it only filters out the -fdebug-prefix-map CFLAG which embeds
  the build path.
 Forwarded: not-needed
 Last-Update: 2016-09-05
 
---- a/configure.ac
-+++ b/configure.ac
-@@ -2043,7 +2043,8 @@
+Index: suricata/configure.ac
+===================================================================
+--- suricata.orig/configure.ac
++++ suricata/configure.ac
+@@ -2234,7 +2234,8 @@ Generic build parameters:
  echo
  echo "$SURICATA_BUILD_CONF"
  echo "printf(" >src/build-info.h

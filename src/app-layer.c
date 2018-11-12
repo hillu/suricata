@@ -95,17 +95,23 @@ static inline int ProtoDetectDone(const Flow *f, const TcpSession *ssn, uint8_t 
             (FLOW_IS_PM_DONE(f, direction) && FLOW_IS_PP_DONE(f, direction)));
 }
 
+/**
+ * \note id can be 0 if protocol parser is disabled but detection
+ *       is enabled.
+ */
 static void AppLayerIncFlowCounter(ThreadVars *tv, Flow *f)
 {
-    if (likely(tv)) {
-        StatsIncr(tv, applayer_counters[f->protomap][f->alproto].counter_id);
+    const uint16_t id = applayer_counters[f->protomap][f->alproto].counter_id;
+    if (likely(tv && id > 0)) {
+        StatsIncr(tv, id);
     }
 }
 
 void AppLayerIncTxCounter(ThreadVars *tv, Flow *f, uint64_t step)
 {
-    if (likely(tv)) {
-        StatsAddUI64(tv, applayer_counters[f->protomap][f->alproto].counter_tx_id, step);
+    const uint16_t id = applayer_counters[f->protomap][f->alproto].counter_tx_id;
+    if (likely(tv && id > 0)) {
+        StatsAddUI64(tv, id, step);
     }
 }
 
@@ -486,24 +492,29 @@ static int TCPProtoDetect(ThreadVars *tv,
                 if (data_len > 0)
                     ssn->data_first_seen_dir = APP_LAYER_DATA_ALREADY_SENT_TO_APP_LAYER;
 
-                PACKET_PROFILING_APP_START(app_tctx, f->alproto);
-                int r = AppLayerParserParse(tv, app_tctx->alp_tctx, f,
-                        f->alproto, flags,
-                        data, data_len);
-                PACKET_PROFILING_APP_END(app_tctx, f->alproto);
+                if (*alproto_otherdir != ALPROTO_FAILED) {
+                    PACKET_PROFILING_APP_START(app_tctx, f->alproto);
+                    int r = AppLayerParserParse(tv, app_tctx->alp_tctx, f,
+                            f->alproto, flags,
+                            data, data_len);
+                    PACKET_PROFILING_APP_END(app_tctx, f->alproto);
 
-                AppLayerDecoderEventsSetEventRaw(&p->app_layer_events,
-                        APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION);
-                StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
-                TcpSessionSetReassemblyDepth(ssn,
-                        AppLayerParserGetStreamDepth(f));
+                    AppLayerDecoderEventsSetEventRaw(&p->app_layer_events,
+                            APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION);
+                    TcpSessionSetReassemblyDepth(ssn,
+                            AppLayerParserGetStreamDepth(f));
+
+                    *alproto = *alproto_otherdir;
+                    SCLogDebug("packet %"PRIu64": pd done(us %u them %u), parser called (r==%d), APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION set",
+                            p->pcap_cnt, *alproto, *alproto_otherdir, r);
+                    if (r < 0)
+                        goto failure;
+                }
                 *alproto = ALPROTO_FAILED;
+                StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
+                AppLayerIncFlowCounter(tv, f);
                 FlagPacketFlow(p, f, flags);
 
-                SCLogDebug("packet %u: pd done(us %u them %u), parser called (r==%d), APPLAYER_DETECT_PROTOCOL_ONLY_ONE_DIRECTION set",
-                        (uint)p->pcap_cnt, *alproto, *alproto_otherdir, r);
-                if (r < 0)
-                    goto failure;
             }
         } else {
             /* both sides unknown, let's see if we need to give up */
@@ -548,15 +559,29 @@ int AppLayerHandleTCPData(ThreadVars *tv, TcpReassemblyThreadCtx *ra_ctx,
         alproto = f->alproto_tc;
     }
 
+    /* If a gap notification, relay the notification on to the
+     * app-layer if known. */
+    if (flags & STREAM_GAP) {
+        if (alproto == ALPROTO_UNKNOWN) {
+            StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
+            SCLogDebug("ALPROTO_UNKNOWN flow %p, due to GAP in stream start", f);
+            /* if the other side didn't already find the proto, we're done */
+            if (f->alproto == ALPROTO_UNKNOWN)
+                goto end;
+
+        }
+        PACKET_PROFILING_APP_START(app_tctx, f->alproto);
+        r = AppLayerParserParse(tv, app_tctx->alp_tctx, f, f->alproto,
+                flags, data, data_len);
+        PACKET_PROFILING_APP_END(app_tctx, f->alproto);
+        goto end;
+    }
+
     /* if we don't know the proto yet and we have received a stream
      * initializer message, we run proto detection.
      * We receive 2 stream init msgs (one for each direction) but we
      * only run the proto detection once. */
-    if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_GAP)) {
-        StreamTcpSetStreamFlagAppProtoDetectionCompleted(stream);
-        SCLogDebug("ALPROTO_UNKNOWN flow %p, due to GAP in stream start", f);
-
-    } else if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_START)) {
+    if (alproto == ALPROTO_UNKNOWN && (flags & STREAM_START)) {
         /* run protocol detection */
         if (TCPProtoDetect(tv, ra_ctx, app_tctx, p, f, ssn, stream,
                            data, data_len, flags) != 0) {

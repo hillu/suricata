@@ -45,7 +45,7 @@ uint8_t rs_dns_tx_get_query_name(RSDNSTransaction * tx, uint16_t i, uint8_t ** b
 uint16_t rs_dns_tx_get_tx_id(RSDNSTransaction * tx);
 uint16_t rs_dns_tx_get_response_flags(RSDNSTransaction * tx);
 uint8_t rs_dns_tx_get_query_rrtype(RSDNSTransaction * tx, uint16_t i, uint16_t * rrtype);
-uint8_t rs_dns_probe(uint8_t * input, uint32_t len);
-uint8_t rs_dns_probe_tcp(uint8_t * input, uint32_t len);
+uint8_t rs_dns_probe(const uint8_t * input, uint32_t len);
+uint8_t rs_dns_probe_tcp(const uint8_t * input, uint32_t len);
 
 #endif /* ! __RUST_DNS_DNS_GEN_H__ */

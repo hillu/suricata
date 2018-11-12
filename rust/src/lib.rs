@@ -15,10 +15,14 @@
  * 02110-1301, USA.
  */
 
+#![cfg_attr(feature = "strict", deny(warnings))]
+
 extern crate libc;
 
 #[macro_use]
 extern crate nom;
+
+extern crate crc;
 
 #[macro_use]
 pub mod log;
@@ -37,3 +41,6 @@ pub mod lua;
 
 pub mod dns;
 pub mod nfs;
+
+#[cfg(feature = "experimental")]
+pub mod ntp;

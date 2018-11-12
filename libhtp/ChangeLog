@@ -1,3 +1,41 @@
+0.5.28 (5 November 2018)
+------------------------
+
+- Fix potential memory leaks
+
+- Fix string truncation compile warning
+
+0.5.27 (18 July 2018)
+---------------------
+
+- Folded header field can be parsed as separate if there are no data available to peek into [#159]
+
+- libhtp crash at deal multiple decompression [#158]
+
+- Fix configure flag handling
+
+- Fix auth/digist header parsing out of bounds read
+
+0.5.26 (13 February 2018)
+-------------------------
+
+- allow missing requests [#128, #163]
+
+- fix memory leak when response line is body [#161]
+
+- fix build on MinGW [#162]
+
+- fix gcc7 compiler warnings [#157]
+
+0.5.25 (28 June 2017)
+---------------------
+
+- underscore in htp_validate_hostname [#149]
+
+- fix SONAME issue [#151]
+
+- remove unrelated docbook code from tree [#153]
+
 0.5.24 (07 June 2017)
 ---------------------
 

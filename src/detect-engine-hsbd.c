@@ -66,17 +66,19 @@
 
 #include "util-validate.h"
 
-#define BUFFER_STEP 50
+#define BUFFER_GROW_STEP 50
 
 static inline int HSBDCreateSpace(DetectEngineThreadCtx *det_ctx, uint64_t size)
 {
-    if (size >= (USHRT_MAX - BUFFER_STEP))
+    if (size >= (USHRT_MAX - BUFFER_GROW_STEP))
         return -1;
 
-    void *ptmp;
     if (size > det_ctx->hsbd_buffers_size) {
-        ptmp = SCRealloc(det_ctx->hsbd,
-                         (det_ctx->hsbd_buffers_size + BUFFER_STEP) * sizeof(HttpReassembledBody));
+        uint16_t grow_by = size - det_ctx->hsbd_buffers_size;
+        grow_by = MAX(grow_by, BUFFER_GROW_STEP);
+
+        void *ptmp = SCRealloc(det_ctx->hsbd,
+                         (det_ctx->hsbd_buffers_size + grow_by) * sizeof(HttpReassembledBody));
         if (ptmp == NULL) {
             SCFree(det_ctx->hsbd);
             det_ctx->hsbd = NULL;
@@ -86,11 +88,11 @@ static inline int HSBDCreateSpace(DetectEngineThreadCtx *det_ctx, uint64_t size)
         }
         det_ctx->hsbd = ptmp;
 
-        memset(det_ctx->hsbd + det_ctx->hsbd_buffers_size, 0, BUFFER_STEP * sizeof(HttpReassembledBody));
-        det_ctx->hsbd_buffers_size += BUFFER_STEP;
+        memset(det_ctx->hsbd + det_ctx->hsbd_buffers_size, 0, grow_by * sizeof(HttpReassembledBody));
+        det_ctx->hsbd_buffers_size += grow_by;
     }
     uint16_t i;
-    for (i = det_ctx->hsbd_buffers_list_len; i < ((uint16_t)size); i++) {
+    for (i = det_ctx->hsbd_buffers_list_len; i < det_ctx->hsbd_buffers_size; i++) {
         det_ctx->hsbd[i].buffer_len = 0;
         det_ctx->hsbd[i].offset = 0;
     }
@@ -190,7 +192,7 @@ static const uint8_t *DetectEngineHSBDGetBufferForTX(htp_tx_t *tx, uint64_t tx_i
     if (htud->response_body.body_inspected > htp_state->cfg->response.inspect_min_size) {
         BUG_ON(htud->response_body.content_len_so_far < htud->response_body.body_inspected);
         uint64_t inspect_win = htud->response_body.content_len_so_far - htud->response_body.body_inspected;
-        SCLogDebug("inspect_win %u", (uint)inspect_win);
+        SCLogDebug("inspect_win %"PRIu64, inspect_win);
         if (inspect_win < htp_state->cfg->response.inspect_window) {
             uint64_t inspect_short = htp_state->cfg->response.inspect_window - inspect_win;
             if (htud->response_body.body_inspected < inspect_short)
@@ -211,7 +213,6 @@ static const uint8_t *DetectEngineHSBDGetBufferForTX(htp_tx_t *tx, uint64_t tx_i
      * the window sizes when freeing data */
     htud->response_body.body_inspected = htud->response_body.content_len_so_far;
     SCLogDebug("htud->response_body.body_inspected now: %"PRIu64, htud->response_body.body_inspected);
-
     buffer = det_ctx->hsbd[index].buffer;
     *buffer_len = det_ctx->hsbd[index].buffer_len;
     *stream_start_offset = det_ctx->hsbd[index].offset;

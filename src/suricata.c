@@ -288,11 +288,8 @@ static void SignalHandlerSigterm(/*@unused@*/ int sig)
  */
 static void SignalHandlerSigusr2(int sig)
 {
-    if (sigusr2_count < 16) {
+    if (sigusr2_count < 2)
         sigusr2_count++;
-    } else {
-        SCLogWarning(SC_ERR_LIVE_RULE_SWAP, "Too many USR2 signals pending, ignoring new ones!");
-    }
 }
 
 /**
@@ -535,6 +532,7 @@ static void SetBpfStringFromFile(char *filename)
     }
     bpf_len = st.st_size + 1;
 
+    // coverity[toctou : FALSE]
     fp = fopen(filename,"r");
     if (fp == NULL) {
         SCLogError(SC_ERR_FOPEN, "Failed to open file %s", filename);
@@ -1341,7 +1339,28 @@ static void ParseCommandLineAFL(const char *opt_name, char *opt_arg)
         AppLayerParserSetup();
         RegisterSMBParsers();
         exit(AppLayerParserFromFile(IPPROTO_TCP, ALPROTO_SMB, opt_arg));
-
+    } else if(strstr(opt_name, "afl-dcerpc-request") != NULL) {
+        //printf("arg: //%s\n", opt_arg);
+        MpmTableSetup();
+        SpmTableSetup();
+        AppLayerProtoDetectSetup();
+        AppLayerParserSetup();
+        RegisterDCERPCParsers();
+        if (strcmp(opt_name, "afl-dcerpc-request") == 0)
+            exit(AppLayerParserRequestFromFile(IPPROTO_TCP, ALPROTO_DCERPC, opt_arg));
+        else
+            exit(AppLayerParserRequestFromFileSerie(IPPROTO_TCP, ALPROTO_DCERPC, opt_arg));
+    } else if(strstr(opt_name, "afl-dcerpc") != NULL) {
+        //printf("arg: //%s\n", opt_arg);
+        MpmTableSetup();
+        SpmTableSetup();
+        AppLayerProtoDetectSetup();
+        AppLayerParserSetup();
+        RegisterDCERPCParsers();
+        if (strcmp(opt_name, "afl-dcerpc") == 0)
+            exit(AppLayerParserFromFile(IPPROTO_TCP, ALPROTO_DCERPC, opt_arg));
+        else
+            exit(AppLayerParserFromFileSerie(IPPROTO_TCP, ALPROTO_DCERPC, opt_arg));
     } else if(strcmp(opt_name, "afl-modbus-request") == 0) {
         //printf("arg: //%s\n", opt_arg);
         AppLayerParserSetup();
@@ -1496,6 +1515,10 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
         {"afl-mime", required_argument, 0 , 0},
         {"afl-dnp3-request", required_argument, 0, 0},
         {"afl-dnp3", required_argument, 0, 0},
+        {"afl-dcerpc", required_argument, 0, 0},
+        {"afl-dcerpc-serie", required_argument, 0, 0},
+        {"afl-dcerpc-request", required_argument, 0, 0},
+        {"afl-dcerpc-request-serie", required_argument, 0, 0},
 
         /* Other AFL options. */
         {"afl-rules", required_argument, 0 , 0},
@@ -2083,6 +2106,8 @@ static TmEcode ParseCommandLine(int argc, char** argv, SCInstance *suri)
     if (engine_analysis)
         suri->run_mode = RUNMODE_ENGINE_ANALYSIS;
 
+    suri->offline = IsRunModeOffline(suri->run_mode);
+
     ret = SetBpfString(optind, argv);
     if (ret != TM_ECODE_OK)
         return ret;
@@ -2348,11 +2373,6 @@ static int StartInternalRunMode(SCInstance *suri, int argc, char **argv)
 static int FinalizeRunMode(SCInstance *suri, char **argv)
 {
     switch (suri->run_mode) {
-        case RUNMODE_PCAP_FILE:
-        case RUNMODE_ERF_FILE:
-        case RUNMODE_ENGINE_ANALYSIS:
-            suri->offline = 1;
-            break;
         case RUNMODE_UNKNOWN:
             PrintUsage(argv[0]);
             return TM_ECODE_FAILED;
@@ -2577,7 +2597,7 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
     if (suri->checksum_validation == -1) {
         const char *cv = NULL;
-        if (ConfGet("capture.checksum-validation", &cv) == 1) {
+        if (ConfGetValue("capture.checksum-validation", &cv) == 1) {
             if (strcmp(cv, "none") == 0) {
                 suri->checksum_validation = 0;
             } else if (strcmp(cv, "all") == 0) {
@@ -2615,7 +2635,7 @@ static int PostConfLoadedSetup(SCInstance *suri)
         SCReturnInt(TM_ECODE_FAILED);
     }
 
-    if (ConfGet("host-mode", &hostmode) == 1) {
+    if (ConfGetValue("host-mode", &hostmode) == 1) {
         if (!strcmp(hostmode, "router")) {
             host_mode = SURI_HOST_IS_ROUTER;
         } else if (!strcmp(hostmode, "sniffer-only")) {
@@ -2726,6 +2746,8 @@ static int PostConfLoadedSetup(SCInstance *suri)
 
     CoredumpLoadConfig();
 
+    DecodeGlobalConfig();
+
     PreRunInit(suri->run_mode);
 
     SCReturnInt(TM_ECODE_OK);
@@ -2795,6 +2817,7 @@ int main(int argc, char **argv)
     context.FileOpenFileWithId = FileOpenFileWithId;
     context.FileCloseFileById = FileCloseFileById;
     context.FileAppendDataById = FileAppendDataById;
+    context.FileAppendGAPById = FileAppendGAPById;
     context.FileContainerRecycle = FileContainerRecycle;
     context.FilePrune = FilePrune;
     context.FileSetTx = FileContainerSetTx;

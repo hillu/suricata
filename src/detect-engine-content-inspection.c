@@ -362,10 +362,25 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
     } else if (smd->type == DETECT_ISDATAAT) {
         SCLogDebug("inspecting isdataat");
 
-        DetectIsdataatData *id = (DetectIsdataatData *)smd->ctx;
+        const DetectIsdataatData *id = (DetectIsdataatData *)smd->ctx;
+        uint32_t dataat = id->dataat;
+        if (id->flags & ISDATAAT_OFFSET_BE) {
+            uint64_t be_value = det_ctx->bj_values[dataat];
+            if (be_value >= 100000000) {
+                if ((id->flags & ISDATAAT_NEGATED) == 0) {
+                    SCLogDebug("extracted value %"PRIu64" very big: no match", be_value);
+                    goto no_match;
+                }
+                SCLogDebug("extracted value way %"PRIu64" very big: match", be_value);
+                goto match;
+            }
+            dataat = (uint32_t)be_value;
+            SCLogDebug("isdataat: using value %u from byte_extract local_id %u", dataat, id->dataat);
+        }
+
         if (id->flags & ISDATAAT_RELATIVE) {
-            if (det_ctx->buffer_offset + id->dataat > buffer_len) {
-                SCLogDebug("det_ctx->buffer_offset + id->dataat %"PRIu32" > %"PRIu32, det_ctx->buffer_offset + id->dataat, buffer_len);
+            if (det_ctx->buffer_offset + dataat > buffer_len) {
+                SCLogDebug("det_ctx->buffer_offset + dataat %"PRIu32" > %"PRIu32, det_ctx->buffer_offset + dataat, buffer_len);
                 if (id->flags & ISDATAAT_NEGATED)
                     goto match;
                 goto no_match;
@@ -376,13 +391,13 @@ int DetectEngineContentInspection(DetectEngineCtx *de_ctx, DetectEngineThreadCtx
                 goto match;
             }
         } else {
-            if (id->dataat < buffer_len) {
+            if (dataat < buffer_len) {
                 SCLogDebug("absolute isdataat match");
                 if (id->flags & ISDATAAT_NEGATED)
                     goto no_match;
                 goto match;
             } else {
-                SCLogDebug("absolute isdataat mismatch, id->isdataat %"PRIu32", buffer_len %"PRIu32"", id->dataat, buffer_len);
+                SCLogDebug("absolute isdataat mismatch, id->isdataat %"PRIu32", buffer_len %"PRIu32"", dataat, buffer_len);
                 if (id->flags & ISDATAAT_NEGATED)
                     goto match;
                 goto no_match;

@@ -1833,6 +1833,10 @@ static void TmThreadFree(ThreadVars *tv)
         SCFree(tv->thread_group_name);
     }
 
+    if (tv->printable_name) {
+        SCFree(tv->printable_name);
+    }
+
     s = (TmSlot *)tv->tm_slots;
     while (s) {
         ps = s;
@@ -2391,7 +2395,7 @@ void TmreadsGetMinimalTimestamp(struct timeval *ts)
     }
     SCMutexUnlock(&thread_store_lock);
     COPY_TIMESTAMP(&local, ts);
-    SCLogDebug("ts->tv_sec %u", (uint)ts->tv_sec);
+    SCLogDebug("ts->tv_sec %"PRIuMAX, (uintmax_t)ts->tv_sec);
 }
 #undef COPY_TIMESTAMP
 

@@ -696,8 +696,10 @@ static void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingPar
                         printf("            alproto: ALPROTO_MODBUS\n");
                     else if (pp_pe->alproto == ALPROTO_ENIP)
                         printf("            alproto: ALPROTO_ENIP\n");
-                    else if (pp_pe->alproto == ALPROTO_NFS3)
-                        printf("            alproto: ALPROTO_NFS3\n");
+                    else if (pp_pe->alproto == ALPROTO_NFS)
+                        printf("            alproto: ALPROTO_NFS\n");
+                    else if (pp_pe->alproto == ALPROTO_NTP)
+                        printf("            alproto: ALPROTO_NTP\n");
                     else if (pp_pe->alproto == ALPROTO_TEMPLATE)
                         printf("            alproto: ALPROTO_TEMPLATE\n");
                     else if (pp_pe->alproto == ALPROTO_DNP3)
@@ -755,8 +757,10 @@ static void AppLayerProtoDetectPrintProbingParsers(AppLayerProtoDetectProbingPar
                     printf("            alproto: ALPROTO_MODBUS\n");
                 else if (pp_pe->alproto == ALPROTO_ENIP)
                     printf("            alproto: ALPROTO_ENIP\n");
-                else if (pp_pe->alproto == ALPROTO_NFS3)
-                    printf("            alproto: ALPROTO_NFS3\n");
+                else if (pp_pe->alproto == ALPROTO_NFS)
+                    printf("            alproto: ALPROTO_NFS\n");
+                else if (pp_pe->alproto == ALPROTO_NTP)
+                    printf("            alproto: ALPROTO_NTP\n");
                 else if (pp_pe->alproto == ALPROTO_TEMPLATE)
                     printf("            alproto: ALPROTO_TEMPLATE\n");
                 else if (pp_pe->alproto == ALPROTO_DNP3)
@@ -1868,6 +1872,8 @@ void AppLayerProtoDetectSupportedAppProtocols(AppProto *alprotos)
 /***** Unittests *****/
 
 #ifdef UNITTESTS
+
+#include "app-layer-htp.h"
 
 static AppLayerProtoDetectCtx alpd_ctx_ut;
 
