@@ -1,10 +1,10 @@
-Index: suricata-4.0.4/configure.ac
+Index: suricata/configure.ac
 ===================================================================
---- suricata-4.0.4.orig/configure.ac
-+++ suricata-4.0.4/configure.ac
-@@ -75,8 +75,8 @@
-     AC_PROG_LN_S
+--- suricata.orig/configure.ac
++++ suricata/configure.ac
+@@ -76,8 +76,8 @@
      AC_PROG_MAKE_SET
+     AC_PROG_GREP
  
 -    AC_PATH_PROG(HAVE_PKG_CONFIG, pkg-config, "no")
 -    if test "$HAVE_PKG_CONFIG" = "no"; then

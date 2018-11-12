@@ -10,7 +10,7 @@ Index: suricata/suricata.yaml.in
 ===================================================================
 --- suricata.orig/suricata.yaml.in
 +++ suricata/suricata.yaml.in
-@@ -996,8 +996,8 @@ host-mode: auto
+@@ -1115,8 +1115,8 @@ host-mode: auto
  # activated in live capture mode. You can use the filename variable to set
  # the file name of the socket.
  unix-command:
@@ -25,7 +25,7 @@ Index: suricata/src/unix-manager.c
 ===================================================================
 --- suricata.orig/src/unix-manager.c
 +++ suricata/src/unix-manager.c
-@@ -51,7 +51,7 @@
+@@ -55,7 +55,7 @@
  # endif
  #endif
  
@@ -38,12 +38,12 @@ Index: suricata/configure.ac
 ===================================================================
 --- suricata.orig/configure.ac
 +++ suricata/configure.ac
-@@ -2143,7 +2143,7 @@ else
-   EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
-   EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
-   EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
--  EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/suricata")
-+  EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/")
+@@ -2365,7 +2365,7 @@ else
+     EXPAND_VARIABLE(localstatedir, e_logcertsdir, "/log/suricata/certs")
+     EXPAND_VARIABLE(sysconfdir, e_sysconfdir, "/suricata/")
+     EXPAND_VARIABLE(sysconfdir, e_sysconfrulesdir, "/suricata/rules")
+-    EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/suricata")
++    EXPAND_VARIABLE(localstatedir, e_localstatedir, "/run/")
+     EXPAND_VARIABLE(datadir, e_datarulesdir, "/suricata/rules")
+     EXPAND_VARIABLE(ruledirprefix, e_defaultruledir, "/suricata/rules")
  fi
- AC_SUBST(e_logdir)
- AC_SUBST(e_rundir)

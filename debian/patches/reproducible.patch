@@ -11,7 +11,7 @@ Index: suricata/configure.ac
 ===================================================================
 --- suricata.orig/configure.ac
 +++ suricata/configure.ac
-@@ -2234,7 +2234,8 @@ Generic build parameters:
+@@ -2468,7 +2468,8 @@ Generic build parameters:
  echo
  echo "$SURICATA_BUILD_CONF"
  echo "printf(" >src/build-info.h
