@@ -1,3 +1,0 @@
-debian/oinkmaster/suricata-oinkmaster.conf	etc/suricata
-debian/oinkmaster/suricata-oinkmaster		etc/cron.daily
-debian/oinkmaster/suricata-oinkmaster-updater	usr/sbin
