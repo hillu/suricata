@@ -1,3 +1,17 @@
+suricata (1:4.1.0-1) experimental; urgency=medium
+
+  [ Arturo Borrero Gonzalez ]
+  * libhtp: bump soname to libhtp-0.5.24-1
+
+  [ Pierre Chifflier ]
+  * New upstream version 1:4.1.0
+  * Refreshed quilt patches
+  * Update python code directory
+  * Enable rust support (i386 and amd64 only for now)
+  * Also enable Rust on ARM architectures
+
+ -- Pierre Chifflier <pollux@debian.org>  Thu, 15 Nov 2018 13:29:23 -0800
+
 suricata (1:4.0.6-1) unstable; urgency=medium
 
   * New upstream version 1:4.0.6
