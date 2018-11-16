@@ -25,7 +25,7 @@ Build-Depends: debhelper (>= 11),
                libpcre3-dev,
                libprelude-dev,
                libyaml-dev,
-               python,
+               python:any,
                zlib1g-dev | libz-dev,
                libhtp-dev (>= 1:0.5.25),
                procps
