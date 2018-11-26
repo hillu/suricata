@@ -1,3 +1,11 @@
+suricata (1:4.1.0-2) experimental; urgency=medium
+
+  * Disable Rust on armel for now (FTBFS)
+  * Add liblz4-dev to build-deps to enable pcap compression
+  * Update build-dependency on python:any to fix FTCBFS (Closes: #909606)
+
+ -- Pierre Chifflier <pollux@debian.org>  Mon, 26 Nov 2018 11:07:08 +0100
+
 suricata (1:4.1.0-1) experimental; urgency=medium
 
   [ Arturo Borrero Gonzalez ]
