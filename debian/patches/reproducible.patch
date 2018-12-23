@@ -7,11 +7,9 @@ Subject: Patch to make the suricata build reproducible
 Forwarded: not-needed
 Last-Update: 2016-09-05
 
-Index: suricata/configure.ac
-===================================================================
---- suricata.orig/configure.ac
-+++ suricata/configure.ac
-@@ -2468,7 +2468,8 @@ Generic build parameters:
+--- a/configure.ac
++++ b/configure.ac
+@@ -2522,7 +2522,8 @@
  echo
  echo "$SURICATA_BUILD_CONF"
  echo "printf(" >src/build-info.h
