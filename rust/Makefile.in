@@ -143,6 +143,7 @@ CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_DATAROOTDIR = @CONFIGURE_DATAROOTDIR@
 CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
 CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
 CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
@@ -442,8 +443,8 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
-@HAVE_RUST_FALSE@clean-local:
 @HAVE_RUST_FALSE@distclean-local:
+@HAVE_RUST_FALSE@clean-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am

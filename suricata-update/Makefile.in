@@ -136,6 +136,7 @@ CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_DATAROOTDIR = @CONFIGURE_DATAROOTDIR@
 CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
 CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
 CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
@@ -428,10 +429,14 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
-@HAVE_PYTHON_FALSE@clean-local:
-@HAVE_PYTHON_FALSE@uninstall-local:
-@HAVE_PYTHON_FALSE@install-exec-local:
 @HAVE_PYTHON_FALSE@distclean-local:
+@HAVE_PYTHON_YAML_FALSE@distclean-local:
+@HAVE_PYTHON_FALSE@install-exec-local:
+@HAVE_PYTHON_YAML_FALSE@install-exec-local:
+@HAVE_PYTHON_FALSE@clean-local:
+@HAVE_PYTHON_YAML_FALSE@clean-local:
+@HAVE_PYTHON_FALSE@uninstall-local:
+@HAVE_PYTHON_YAML_FALSE@uninstall-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am
@@ -516,24 +521,24 @@ uninstall-am: uninstall-local
 .PRECIOUS: Makefile
 
 
-@HAVE_PYTHON_TRUE@install-exec-local:
-@HAVE_PYTHON_TRUE@	cd $(srcdir) && \
-@HAVE_PYTHON_TRUE@		$(HAVE_PYTHON) setup.py build --build-base $(abs_builddir) \
-@HAVE_PYTHON_TRUE@		install --prefix $(DESTDIR)$(prefix)
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@install-exec-local:
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	cd $(srcdir) && \
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@		$(HAVE_PYTHON) setup.py build --build-base $(abs_builddir) \
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@		install --prefix $(DESTDIR)$(prefix)
 
-@HAVE_PYTHON_TRUE@uninstall-local:
-@HAVE_PYTHON_TRUE@	rm -f $(DESTDIR)$(bindir)/suricata-update
-@HAVE_PYTHON_TRUE@	rm -rf $(DESTDIR)$(prefix)/lib*/python*/site-packages/suricata-update
-@HAVE_PYTHON_TRUE@	rm -rf $(DESTDIR)$(prefix)/lib*/python*/site-packages/suricata_update-[0-9]*.egg-info
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@uninstall-local:
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	rm -f $(DESTDIR)$(bindir)/suricata-update
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	rm -rf $(DESTDIR)$(prefix)/lib*/python*/site-packages/suricata-update
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	rm -rf $(DESTDIR)$(prefix)/lib*/python*/site-packages/suricata_update-[0-9]*.egg-info
 
-@HAVE_PYTHON_TRUE@clean-local:
-@HAVE_PYTHON_TRUE@	cd $(srcdir) && \
-@HAVE_PYTHON_TRUE@		$(HAVE_PYTHON) setup.py clean \
-@HAVE_PYTHON_TRUE@		--build-base $(abs_builddir)
-@HAVE_PYTHON_TRUE@	rm -rf scripts-* lib* build
-@HAVE_PYTHON_TRUE@	find . -name \*.pyc -print0 | xargs -0 rm -f
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@clean-local:
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	cd $(srcdir) && \
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@		$(HAVE_PYTHON) setup.py clean \
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@		--build-base $(abs_builddir)
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	rm -rf scripts-* lib* build
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@	find . -name \*.pyc -print0 | xargs -0 rm -f
 
-@HAVE_PYTHON_TRUE@distclean-local:
+@HAVE_PYTHON_TRUE@@HAVE_PYTHON_YAML_TRUE@distclean-local:
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

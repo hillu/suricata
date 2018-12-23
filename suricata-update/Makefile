@@ -122,13 +122,13 @@ am__can_run_installinfo = \
 am__tagged_files = $(HEADERS) $(SOURCES) $(TAGS_FILES) $(LISP)
 am__DIST_COMMON = $(srcdir)/Makefile.in
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
-ACLOCAL = ${SHELL} /tmp/suricata-1541494933/missing aclocal-1.15
+ACLOCAL = ${SHELL} /tmp/suricata-1545403413/missing aclocal-1.15
 AMTAR = $${TAR-tar}
 AM_DEFAULT_VERBOSITY = 0
 AR = ar
-AUTOCONF = ${SHELL} /tmp/suricata-1541494933/missing autoconf
-AUTOHEADER = ${SHELL} /tmp/suricata-1541494933/missing autoheader
-AUTOMAKE = ${SHELL} /tmp/suricata-1541494933/missing automake-1.15
+AUTOCONF = ${SHELL} /tmp/suricata-1545403413/missing autoconf
+AUTOHEADER = ${SHELL} /tmp/suricata-1545403413/missing autoheader
+AUTOMAKE = ${SHELL} /tmp/suricata-1545403413/missing automake-1.15
 AWK = gawk
 CARGO = /home/victor/.cargo/bin//cargo
 CARGO_HOME = /home/victor/.cargo
@@ -136,6 +136,7 @@ CC = gcc
 CCDEPMODE = depmode=gcc3
 CFLAGS = -g -O2 -march=native -I${srcdir}/../rust/gen/c-headers
 CLANG_CFLAGS = 
+CONFIGURE_DATAROOTDIR = /usr/local/share
 CONFIGURE_LOCALSTATEDIR = /usr/local/var
 CONFIGURE_PREFIX = /usr/local
 CONFIGURE_SYSCONDIR = /usr/local/etc
@@ -203,7 +204,7 @@ LUAJIT_CFLAGS =
 LUAJIT_LIBS = 
 LUA_CFLAGS = 
 LUA_LIBS = 
-MAKEINFO = ${SHELL} /tmp/suricata-1541494933/missing makeinfo
+MAKEINFO = ${SHELL} /tmp/suricata-1545403413/missing makeinfo
 MANIFEST_TOOL = :
 MKDIR_P = /bin/mkdir -p
 NM = /usr/bin/nm -B
@@ -216,10 +217,10 @@ OTOOL64 =
 PACKAGE = suricata
 PACKAGE_BUGREPORT = 
 PACKAGE_NAME = suricata
-PACKAGE_STRING = suricata 4.1.0
+PACKAGE_STRING = suricata 4.1.2
 PACKAGE_TARNAME = suricata
 PACKAGE_URL = 
-PACKAGE_VERSION = 4.1.0
+PACKAGE_VERSION = 4.1.2
 PATH_SEPARATOR = :
 PCAP_CFLAGS =  -I/usr/include
 PKG_CONFIG = /usr/bin/pkg-config
@@ -237,11 +238,11 @@ SET_MAKE =
 SHELL = /bin/bash
 STRIP = strip
 SURICATA_UPDATE_DIR = suricata-update
-VERSION = 4.1.0
-abs_builddir = /tmp/suricata-1541494933/suricata-update
-abs_srcdir = /tmp/suricata-1541494933/suricata-update
-abs_top_builddir = /tmp/suricata-1541494933
-abs_top_srcdir = /tmp/suricata-1541494933
+VERSION = 4.1.2
+abs_builddir = /tmp/suricata-1545403413/suricata-update
+abs_srcdir = /tmp/suricata-1545403413/suricata-update
+abs_top_builddir = /tmp/suricata-1545403413
+abs_top_srcdir = /tmp/suricata-1545403413
 ac_ct_AR = ar
 ac_ct_CC = gcc
 ac_ct_DUMPBIN = 
@@ -283,7 +284,7 @@ host_vendor = pc
 htmldir = ${docdir}
 includedir = ${prefix}/include
 infodir = ${datarootdir}/info
-install_sh = ${SHELL} /tmp/suricata-1541494933/install-sh
+install_sh = ${SHELL} /tmp/suricata-1545403413/install-sh
 libdir = ${exec_prefix}/lib
 libexecdir = ${exec_prefix}/libexec
 libhs_CFLAGS = 
@@ -428,10 +429,14 @@ distclean-generic:
 maintainer-clean-generic:
 	@echo "This command is intended for maintainers to use"
 	@echo "it deletes files that may require special tools to rebuild."
+#distclean-local:
+#distclean-local:
+#install-exec-local:
+#install-exec-local:
+#clean-local:
 #clean-local:
 #uninstall-local:
-#install-exec-local:
-#distclean-local:
+#uninstall-local:
 clean: clean-am
 
 clean-am: clean-generic clean-libtool clean-local mostlyclean-am

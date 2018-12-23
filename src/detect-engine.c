@@ -844,6 +844,81 @@ int DetectBufferGetActiveList(DetectEngineCtx *de_ctx, Signature *s)
     return 0;
 }
 
+void InspectionBufferClean(DetectEngineThreadCtx *det_ctx)
+{
+    /* single buffers */
+    for (uint32_t i = 0; i < det_ctx->inspect.to_clear_idx; i++)
+    {
+        const uint32_t idx = det_ctx->inspect.to_clear_queue[i];
+        InspectionBuffer *buffer = &det_ctx->inspect.buffers[idx];
+        buffer->inspect = NULL;
+    }
+    det_ctx->inspect.to_clear_idx = 0;
+
+    /* multi buffers */
+    for (uint32_t i = 0; i < det_ctx->multi_inspect.to_clear_idx; i++)
+    {
+        const uint32_t idx = det_ctx->multi_inspect.to_clear_queue[i];
+        InspectionBufferMultipleForList *mbuffer = &det_ctx->multi_inspect.buffers[idx];
+        for (uint32_t x = 0; x <= mbuffer->max; x++) {
+            InspectionBuffer *buffer = &mbuffer->inspection_buffers[x];
+            buffer->inspect = NULL;
+        }
+        mbuffer->init = 0;
+        mbuffer->max = 0;
+    }
+    det_ctx->multi_inspect.to_clear_idx = 0;
+}
+
+InspectionBuffer *InspectionBufferGet(DetectEngineThreadCtx *det_ctx, const int list_id)
+{
+    InspectionBuffer *buffer = &det_ctx->inspect.buffers[list_id];
+    if (buffer->inspect == NULL) {
+        det_ctx->inspect.to_clear_queue[det_ctx->inspect.to_clear_idx++] = list_id;
+    }
+    return buffer;
+}
+
+/** \brief for a InspectionBufferMultipleForList get a InspectionBuffer
+ *  \param fb the multiple buffer array
+ *  \param local_id the index to get a buffer
+ *  \param buffer the inspect buffer or NULL in case of error */
+InspectionBuffer *InspectionBufferMultipleForListGet(InspectionBufferMultipleForList *fb, uint32_t local_id)
+{
+    if (local_id >= fb->size) {
+        uint32_t old_size = fb->size;
+        uint32_t new_size = local_id + 1;
+        uint32_t grow_by = new_size - old_size;
+        SCLogDebug("size is %u, need %u, so growing by %u", old_size, new_size, grow_by);
+
+        SCLogDebug("fb->inspection_buffers %p", fb->inspection_buffers);
+        void *ptr = SCRealloc(fb->inspection_buffers, (local_id + 1) * sizeof(InspectionBuffer));
+        if (ptr == NULL)
+            return NULL;
+
+        InspectionBuffer *to_zero = (InspectionBuffer *)ptr + old_size;
+        SCLogDebug("ptr %p to_zero %p", ptr, to_zero);
+        memset((uint8_t *)to_zero, 0, (grow_by * sizeof(InspectionBuffer)));
+        fb->inspection_buffers = ptr;
+        fb->size = new_size;
+    }
+
+    fb->max = MAX(fb->max, local_id);
+    InspectionBuffer *buffer = &fb->inspection_buffers[local_id];
+    SCLogDebug("using file_data buffer %p", buffer);
+    return buffer;
+}
+
+InspectionBufferMultipleForList *InspectionBufferGetMulti(DetectEngineThreadCtx *det_ctx, const int list_id)
+{
+    InspectionBufferMultipleForList *buffer = &det_ctx->multi_inspect.buffers[list_id];
+    if (!buffer->init) {
+        det_ctx->multi_inspect.to_clear_queue[det_ctx->multi_inspect.to_clear_idx++] = list_id;
+        buffer->init = 1;
+    }
+    return buffer;
+}
+
 void InspectionBufferInit(InspectionBuffer *buffer, uint32_t initial_size)
 {
     memset(buffer, 0, sizeof(*buffer));
@@ -1175,6 +1250,8 @@ int DetectEngineInspectBufferGeneric(
     const int list_id = engine->sm_list;
     SCLogDebug("running inspect on %d", list_id);
 
+    const bool eof = (AppLayerParserGetStateProgress(f->proto, f->alproto, txv, flags) > engine->progress);
+
     SCLogDebug("list %d mpm? %s transforms %p",
             engine->sm_list, engine->mpm ? "true" : "false", engine->v2.transforms);
 
@@ -1186,16 +1263,17 @@ int DetectEngineInspectBufferGeneric(
 
     const InspectionBuffer *buffer = engine->v2.GetData(det_ctx, transforms,
             f, flags, txv, list_id);
-    if (buffer == NULL) {
-        if (AppLayerParserGetStateProgress(f->proto, f->alproto, txv, flags) > engine->progress)
-            return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
-        else
-            return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
+    if (unlikely(buffer == NULL)) {
+        return eof ? DETECT_ENGINE_INSPECT_SIG_CANT_MATCH :
+                     DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
     }
 
     const uint32_t data_len = buffer->inspect_len;
     const uint8_t *data = buffer->inspect;
     const uint64_t offset = buffer->inspect_offset;
+
+    uint8_t ci_flags = eof ? DETECT_CI_FLAGS_END : 0;
+    ci_flags |= (offset == 0 ? DETECT_CI_FLAGS_START : 0);
 
     det_ctx->discontinue_matching = 0;
     det_ctx->buffer_offset = 0;
@@ -1206,15 +1284,13 @@ int DetectEngineInspectBufferGeneric(
     int r = DetectEngineContentInspection(de_ctx, det_ctx,
                                           s, engine->smd,
                                           f,
-                                          (uint8_t *)data, data_len, offset, DETECT_CI_FLAGS_SINGLE,
+                                          (uint8_t *)data, data_len, offset, ci_flags,
                                           DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
     if (r == 1) {
         return DETECT_ENGINE_INSPECT_SIG_MATCH;
     } else {
-        if (AppLayerParserGetStateProgress(f->proto, f->alproto, txv, flags) > engine->progress)
-            return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
-        else
-            return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
+        return eof ? DETECT_ENGINE_INSPECT_SIG_CANT_MATCH :
+                     DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
     }
 }
 
@@ -1706,13 +1782,13 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
     if (de_ctx_custom != NULL) {
         TAILQ_FOREACH(opt, &de_ctx_custom->head, next) {
             if (de_ctx_profile == NULL) {
-                if (strcmp(opt->val, "profile") == 0) {
+                if (opt->val && strcmp(opt->val, "profile") == 0) {
                     de_ctx_profile = opt->head.tqh_first->val;
                 }
             }
 
             if (sgh_mpm_context == NULL) {
-                if (strcmp(opt->val, "sgh-mpm-context") == 0) {
+                if (opt->val && strcmp(opt->val, "sgh-mpm-context") == 0) {
                     sgh_mpm_context = opt->head.tqh_first->val;
                 }
             }
@@ -1795,7 +1871,7 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
 
             if (de_ctx_custom != NULL) {
                 TAILQ_FOREACH(opt, &de_ctx_custom->head, next) {
-                    if (strcmp(opt->val, "custom-values") == 0) {
+                    if (opt->val && strcmp(opt->val, "custom-values") == 0) {
                         if (max_uniq_toclient_groups_str == NULL) {
                             max_uniq_toclient_groups_str = (char *)ConfNodeLookupChildValue
                                 (opt->head.tqh_first, "toclient-sp-groups");
@@ -1874,7 +1950,7 @@ static int DetectEngineCtxLoadConf(DetectEngineCtx *de_ctx)
         if (de_ctx_custom != NULL) {
             opt = NULL;
             TAILQ_FOREACH(opt, &de_ctx_custom->head, next) {
-                if (strcmp(opt->val, "inspection-recursion-limit") != 0)
+                if (opt->val && strcmp(opt->val, "inspection-recursion-limit") != 0)
                     continue;
 
                 insp_recursion_limit_node = ConfNodeLookupChild(opt, opt->val);
@@ -2253,16 +2329,28 @@ static TmEcode ThreadCtxDoInit (DetectEngineCtx *de_ctx, DetectEngineThreadCtx *
         det_ctx->base64_decoded_len = 0;
     }
 
-    det_ctx->inspect_buffers_size = de_ctx->buffer_type_id;
-    det_ctx->inspect_buffers = SCCalloc(det_ctx->inspect_buffers_size, sizeof(InspectionBuffer));
-    if (det_ctx->inspect_buffers == NULL) {
+    det_ctx->inspect.buffers_size = de_ctx->buffer_type_id;
+    det_ctx->inspect.buffers = SCCalloc(det_ctx->inspect.buffers_size, sizeof(InspectionBuffer));
+    if (det_ctx->inspect.buffers == NULL) {
         return TM_ECODE_FAILED;
     }
-    det_ctx->multi_inspect_buffers_size = de_ctx->buffer_type_id;
-    det_ctx->multi_inspect_buffers = SCCalloc(det_ctx->multi_inspect_buffers_size, sizeof(InspectionBufferMultipleForList));
-    if (det_ctx->multi_inspect_buffers == NULL) {
+    det_ctx->inspect.to_clear_queue = SCCalloc(det_ctx->inspect.buffers_size, sizeof(uint32_t));
+    if (det_ctx->inspect.to_clear_queue == NULL) {
         return TM_ECODE_FAILED;
     }
+    det_ctx->inspect.to_clear_idx = 0;
+
+    det_ctx->multi_inspect.buffers_size = de_ctx->buffer_type_id;
+    det_ctx->multi_inspect.buffers = SCCalloc(det_ctx->multi_inspect.buffers_size, sizeof(InspectionBufferMultipleForList));
+    if (det_ctx->multi_inspect.buffers == NULL) {
+        return TM_ECODE_FAILED;
+    }
+    det_ctx->multi_inspect.to_clear_queue = SCCalloc(det_ctx->multi_inspect.buffers_size, sizeof(uint32_t));
+    if (det_ctx->multi_inspect.to_clear_queue == NULL) {
+        return TM_ECODE_FAILED;
+    }
+    det_ctx->multi_inspect.to_clear_idx = 0;
+
 
     DetectEngineThreadCtxInitKeywords(de_ctx, det_ctx);
     DetectEngineThreadCtxInitGlobalKeywords(det_ctx);
@@ -2469,23 +2557,28 @@ static void DetectEngineThreadCtxFree(DetectEngineThreadCtx *det_ctx)
         SCFree(det_ctx->base64_decoded);
     }
 
-    if (det_ctx->inspect_buffers) {
-        for (uint32_t i = 0; i < det_ctx->inspect_buffers_size; i++) {
-            InspectionBufferFree(&det_ctx->inspect_buffers[i]);
+    if (det_ctx->inspect.buffers) {
+        for (uint32_t i = 0; i < det_ctx->inspect.buffers_size; i++) {
+            InspectionBufferFree(&det_ctx->inspect.buffers[i]);
         }
-        SCFree(det_ctx->inspect_buffers);
+        SCFree(det_ctx->inspect.buffers);
     }
-    if (det_ctx->multi_inspect_buffers) {
-        for (uint32_t i = 0; i < det_ctx->multi_inspect_buffers_size; i++) {
-            InspectionBufferMultipleForList *fb = &det_ctx->multi_inspect_buffers[i];
+    if (det_ctx->inspect.to_clear_queue) {
+        SCFree(det_ctx->inspect.to_clear_queue);
+    }
+    if (det_ctx->multi_inspect.buffers) {
+        for (uint32_t i = 0; i < det_ctx->multi_inspect.buffers_size; i++) {
+            InspectionBufferMultipleForList *fb = &det_ctx->multi_inspect.buffers[i];
             for (uint32_t x = 0; x < fb->size; x++) {
                 InspectionBufferFree(&fb->inspection_buffers[x]);
             }
             SCFree(fb->inspection_buffers);
         }
-        SCFree(det_ctx->multi_inspect_buffers);
+        SCFree(det_ctx->multi_inspect.buffers);
     }
-
+    if (det_ctx->multi_inspect.to_clear_queue) {
+        SCFree(det_ctx->multi_inspect.to_clear_queue);
+    }
 
     DetectEngineThreadCtxDeinitGlobalKeywords(det_ctx);
     if (det_ctx->de_ctx != NULL) {

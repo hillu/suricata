@@ -20,6 +20,7 @@
 import platform
 import logging
 import ssl
+import re
 
 try:
     # Python 3.3...
@@ -53,10 +54,13 @@ def set_user_agent_suricata_version(version):
 
 def build_user_agent():
     params = []
-
-    if custom_user_agent is not None:
-        return custom_user_agent
-
+    has_custom_user_agent = config.has("user-agent")
+    if has_custom_user_agent:
+        user_agent = config.get("user-agent")
+        if user_agent is None or len(user_agent.strip()) == 0:
+            logger.debug("Suppressing HTTP User-Agent header")
+            return None
+        return user_agent
     uname_system = platform.uname()[0]
 
     params.append("OS: %s" % (uname_system))
@@ -72,6 +76,16 @@ def build_user_agent():
 
     return "Suricata-Update/%s (%s)" % (
         version, "; ".join(params))
+
+
+def is_header_clean(header):
+    if len(header) != 2:
+        return False
+    name, val = header[0].strip(), header[1].strip()
+    if re.match( r"^[\w-]+$", name) and re.match(r"^[\w-]+$", val):
+        return True
+    return False
+
 
 def get(url, fileobj, progress_hook=None):
     """ Perform a GET request against a URL writing the contents into
@@ -89,7 +103,6 @@ def get(url, fileobj, progress_hook=None):
     """
 
     user_agent = build_user_agent()
-    logger.debug("Setting HTTP user-agent to %s", user_agent)
 
     try:
         # Wrap in a try as Python versions prior to 2.7.9 don't have
@@ -103,29 +116,45 @@ def get(url, fileobj, progress_hook=None):
     except:
         opener = build_opener()
 
-    opener.addheaders = [
-        ("User-Agent", build_user_agent()),
-    ]
+    if user_agent:
+        logger.debug("Setting HTTP User-Agent to %s", user_agent)
+        http_headers = [("User-Agent", user_agent)]
+    else:
+        http_headers = [(header, value) for header,
+                        value in opener.addheaders if header.lower() != "user-agent"]
+    if isinstance(url, tuple):
+        header = url[1].split(":") if url[1] is not None else None
+        if header and is_header_clean(header=header):
+            name, val = header[0].strip(), header[1].strip()
+            logger.debug("Setting HTTP header %s to %s", name, val)
+            http_headers.append((name, val))
+        elif header:
+            logger.error("Header not set as it does not meet the criteria")
+        url = url[0]
+    opener.addheaders = http_headers
 
-    remote = opener.open(url)
-    info = remote.info()
     try:
-        content_length = int(info["content-length"])
-    except:
-        content_length = 0
-    bytes_read = 0
-    while True:
-        buf = remote.read(GET_BLOCK_SIZE)
-        if not buf:
-            # EOF
-            break
-        bytes_read += len(buf)
-        fileobj.write(buf)
-        if progress_hook:
-            progress_hook(content_length, bytes_read)
-    remote.close()
-    fileobj.flush()
-    return bytes_read, info
+        remote = opener.open(url)
+    except ValueError as ve:
+        logger.error(ve)
+    else:
+        info = remote.info()
+        content_length = info.get("content-length")
+        content_length = int(content_length) if content_length else 0
+        bytes_read = 0
+        while True:
+            buf = remote.read(GET_BLOCK_SIZE)
+            if not buf:
+                # EOF
+                break
+            bytes_read += len(buf)
+            fileobj.write(buf)
+            if progress_hook:
+                progress_hook(content_length, bytes_read)
+        remote.close()
+        fileobj.flush()
+        return bytes_read, info
+
 
 if __name__ == "__main__":
 

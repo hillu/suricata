@@ -861,8 +861,8 @@ static json_t *BuildAnswer(DNSTransaction *tx, uint64_t tx_id, uint64_t flags,
     DNSCreateRcodeString(tx->rcode, rcode, sizeof(rcode));
     json_object_set_new(js, "rcode", json_string(rcode));
 
-    /* Log the query rrname. Mostly useful on error, but still
-     * useful. */
+    /* Log the query rrname and rrtype. Mostly useful on error, but
+     * still useful. */
     DNSQueryEntry *query = TAILQ_FIRST(&tx->query_list);
     if (query != NULL) {
         char *c;
@@ -872,6 +872,9 @@ static json_t *BuildAnswer(DNSTransaction *tx, uint64_t tx_id, uint64_t flags,
             json_object_set_new(js, "rrname", json_string(c));
             SCFree(c);
         }
+        char rrtype[16] = "";
+        DNSCreateTypeString(query->type, rrtype, sizeof(rrtype));
+        json_object_set_new(js, "rrtype", json_string(rrtype));
     }
 
     if (flags & LOG_FORMAT_DETAILED) {
@@ -1087,6 +1090,31 @@ static int JsonDnsLoggerToClient(ThreadVars *tv, void *thread_data,
             MemBufferReset(td->buffer);
             OutputJSONBuffer(js, td->dnslog_ctx->file_ctx, &td->buffer);
         }
+    } else {
+        /* Log answers. */
+        for (uint16_t i = 0; i < UINT16_MAX; i++) {
+            json_t *answer = rs_dns_log_json_answer_v1(txptr, i,
+                    td->dnslog_ctx->flags);
+            if (answer == NULL) {
+                break;
+            }
+            json_object_set_new(js, "dns", answer);
+            MemBufferReset(td->buffer);
+            OutputJSONBuffer(js, td->dnslog_ctx->file_ctx, &td->buffer);
+            json_object_del(js, "dns");
+        }
+        /* Log authorities. */
+        for (uint16_t i = 0; i < UINT16_MAX; i++) {
+            json_t *answer = rs_dns_log_json_authority_v1(txptr, i,
+                    td->dnslog_ctx->flags);
+            if (answer == NULL) {
+                break;
+            }
+            json_object_set_new(js, "dns", answer);
+            MemBufferReset(td->buffer);
+            OutputJSONBuffer(js, td->dnslog_ctx->file_ctx, &td->buffer);
+            json_object_del(js, "dns");
+        }
     }
 #else
     DNSTransaction *tx = txptr;
@@ -1241,16 +1269,10 @@ static DnsVersion JsonDnsParseVersion(ConfNode *conf)
         }
     } else {
         SCLogWarning(SC_ERR_INVALID_ARGUMENT,
-                "version not found, forcing it to version %u",
+                "eve-log dns version not found, forcing it to version %u",
                 DNS_VERSION_DEFAULT);
         version = DNS_VERSION_DEFAULT;
     }
-#ifdef HAVE_RUST
-    if (version != DNS_VERSION_2) {
-        FatalError(SC_ERR_NOT_SUPPORTED, "EVE/DNS version %d not support with "
-                "by Rust builds.", version);
-    }
-#endif
     return version;
 }
 
@@ -1342,13 +1364,6 @@ static OutputInitResult JsonDnsLogInitCtx(ConfNode *conf)
     }
 
     DnsVersion version = JsonDnsParseVersion(conf);
-#ifdef HAVE_RUST
-    if (version != 2) {
-        SCLogError(SC_ERR_NOT_SUPPORTED, "EVE/DNS version %d not support with "
-                "by Rust builds.", version);
-        exit(1);
-    }
-#endif
 
     LogFileCtx *file_ctx = LogFileNewCtx();
 

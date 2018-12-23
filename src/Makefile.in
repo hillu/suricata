@@ -319,11 +319,12 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	tm-threads.$(OBJEXT) unix-manager.$(OBJEXT) \
 	util-action.$(OBJEXT) util-atomic.$(OBJEXT) \
 	util-base64.$(OBJEXT) util-bloomfilter-counting.$(OBJEXT) \
-	util-bloomfilter.$(OBJEXT) util-buffer.$(OBJEXT) \
-	util-byte.$(OBJEXT) util-checksum.$(OBJEXT) \
-	util-cidr.$(OBJEXT) util-classification-config.$(OBJEXT) \
-	util-conf.$(OBJEXT) util-coredump-config.$(OBJEXT) \
-	util-cpu.$(OBJEXT) util-crypt.$(OBJEXT) util-daemon.$(OBJEXT) \
+	util-bloomfilter.$(OBJEXT) util-bpf.$(OBJEXT) \
+	util-buffer.$(OBJEXT) util-byte.$(OBJEXT) \
+	util-checksum.$(OBJEXT) util-cidr.$(OBJEXT) \
+	util-classification-config.$(OBJEXT) util-conf.$(OBJEXT) \
+	util-coredump-config.$(OBJEXT) util-cpu.$(OBJEXT) \
+	util-crypt.$(OBJEXT) util-daemon.$(OBJEXT) \
 	util-debug.$(OBJEXT) util-debug-filters.$(OBJEXT) \
 	util-decode-asn1.$(OBJEXT) util-decode-der.$(OBJEXT) \
 	util-decode-der-get.$(OBJEXT) util-decode-mime.$(OBJEXT) \
@@ -457,6 +458,7 @@ CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_DATAROOTDIR = @CONFIGURE_DATAROOTDIR@
 CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
 CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
 CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
@@ -1046,6 +1048,7 @@ util-atomic.c util-atomic.h \
 util-base64.c util-base64.h \
 util-bloomfilter-counting.c util-bloomfilter-counting.h \
 util-bloomfilter.c util-bloomfilter.h \
+util-bpf.c util-bpf.h \
 util-buffer.c util-buffer.h \
 util-byte.c util-byte.h \
 util-checksum.c util-checksum.h \
@@ -1664,6 +1667,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-base64.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-bloomfilter-counting.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-bloomfilter.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-bpf.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-buffer.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-byte.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-checksum.Po@am__quote@
