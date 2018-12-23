@@ -1,5 +1,36 @@
 # Change Log
 
+## 1.0.3 - 2018-12-21
+- Fix enable-source command.
+  https://redmine.openinfosecfoundation.org/issues/2753
+
+## 1.0.2 - 2018-12-18
+- Fix installs on older versions of Python 2.7.
+  https://redmine.openinfosecfoundation.org/issues/2747
+
+## 1.0.1 - 2018-12-16
+- Add --free argument to list-sources command to show only those
+  that are freely
+  available. https://redmine.openinfosecfoundation.org/issues/2641
+- If user-agent is configured to be empty, don't send the header at
+  all. This also fixes an issue where trying to set the user agent to
+  an empty string reset it back to the
+  default. https://redmine.openinfosecfoundation.org/issues/2665
+- Fix --dump-sample-configs. The data files were being
+  installed. https://redmine.openinfosecfoundation.org/issues/2683
+- When installing with pip, make pyyaml and a required dependency so
+  it will be installed automatically if needed. This does not apply
+  when installed bundled with
+  Suricata. https://redmine.openinfosecfoundation.org/issues/2667
+- Fix missing check for None, from
+  Coverity. https://redmine.openinfosecfoundation.org/issues/2676
+- Suppress download progress meter when not on a
+  tty. https://redmine.openinfosecfoundation.org/issues/2743
+- Hide git revision if not available in --version.
+- Update list of engine provided rules to include.
+- Allow a custom HTTP header to be set on a source when added with
+  add-source. https://redmine.openinfosecfoundation.org/issues/2577
+
 ## 1.0.0 - 2018-11-05
 - Fix failure to run custom test
   command. https://redmine.openinfosecfoundation.org/issues/2652

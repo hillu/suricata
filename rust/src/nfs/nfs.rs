@@ -316,6 +316,8 @@ pub struct NFSState {
     /// size of the current chunk that we still need to receive
     pub ts_chunk_left: u32,
     pub tc_chunk_left: u32,
+    /// file handle of in progress toserver WRITE file chunk
+    ts_chunk_fh: Vec<u8>,
 
     ts_ssn_gap: bool,
     tc_ssn_gap: bool,
@@ -347,6 +349,7 @@ impl NFSState {
             tc_chunk_xid:0,
             ts_chunk_left:0,
             tc_chunk_left:0,
+            ts_chunk_fh:Vec::new(),
             ts_ssn_gap:false,
             tc_ssn_gap:false,
             ts_gap:false,
@@ -403,11 +406,11 @@ impl NFSState {
         SCLogDebug!("get_tx_by_xid: tx_xid={}", tx_xid);
         for tx in &mut self.transactions {
             if !tx.is_file_tx && tx.xid == tx_xid {
-                SCLogDebug!("Found NFS TX with ID {} XID {}", tx.id, tx.xid);
+                SCLogDebug!("Found NFS TX with ID {} XID {:04X}", tx.id, tx.xid);
                 return Some(tx);
             }
         }
-        SCLogDebug!("Failed to find NFS TX with XID {}", tx_xid);
+        SCLogDebug!("Failed to find NFS TX with XID {:04X}", tx_xid);
         return None;
     }
 
@@ -425,7 +428,10 @@ impl NFSState {
                 index += 1;
                 continue;
             }
-            *state = index as u64 + 1;
+            // store current index in the state and not the next
+            // as transactions might be freed between now and the
+            // next time we are called.
+            *state = index as u64;
             SCLogDebug!("returning tx_id {} has_next? {} (len {} index {}), tx {:?}",
                     tx.id - 1, (len - index) > 1, len, index, tx);
             return Some((tx, tx.id - 1, (len - index) > 1));
@@ -457,7 +463,7 @@ impl NFSState {
                     mytx.file_handle = resp_handle.to_vec();
                 }
 
-                SCLogDebug!("process_reply_record: tx ID {} XID {} REQUEST {} RESPONSE {}",
+                SCLogDebug!("process_reply_record: tx ID {} XID {:04X} REQUEST {} RESPONSE {}",
                         mytx.id, mytx.xid, mytx.request_done, mytx.response_done);
             },
             None => {
@@ -540,7 +546,7 @@ impl NFSState {
                 direction == tx.file_tx_direction &&
                 tx.file_handle == fh
             {
-                SCLogDebug!("Found NFS file TX with ID {} XID {}", tx.id, tx.xid);
+                SCLogDebug!("Found NFS file TX with ID {} XID {:04X}", tx.id, tx.xid);
                 let (files, flags) = self.files.get(direction);
                 return Some((tx, files, flags));
             }
@@ -611,6 +617,8 @@ impl NFSState {
             self.ts_chunk_xid = r.hdr.xid;
             let file_data_len = w.file_data.len() as u32 - fill_bytes as u32;
             self.ts_chunk_left = w.file_len as u32 - file_data_len as u32;
+            self.ts_chunk_fh = file_handle;
+            SCLogDebug!("REQUEST chunk_xid {:04X} chunk_left {}", self.ts_chunk_xid, self.ts_chunk_left);
         }
         0
     }
@@ -630,7 +638,7 @@ impl NFSState {
         match self.requestmap.remove(&r.hdr.xid) {
             Some(p) => { xidmap = p; },
             _ => {
-                SCLogDebug!("REPLY: xid {} NOT FOUND. GAPS? TS:{} TC:{}",
+                SCLogDebug!("REPLY: xid {:04X} NOT FOUND. GAPS? TS:{} TC:{}",
                         r.hdr.xid, self.ts_ssn_gap, self.tc_ssn_gap);
 
                 // TODO we might be able to try to infer from the size + data
@@ -638,6 +646,8 @@ impl NFSState {
                 return 0;
             },
         }
+        SCLogDebug!("process_reply_record: removed xid {:04X} from requestmap",
+            r.hdr.xid);
 
         if self.nfs_version == 0 {
             self.nfs_version = xidmap.progver as u16;
@@ -680,7 +690,7 @@ impl NFSState {
         } else {
             self.tc_chunk_xid
         };
-        SCLogDebug!("chunk left {}, input {}", chunk_left, data.len());
+        SCLogDebug!("filetracker_update: chunk left {}, input {} chunk_xid {:04X}", chunk_left, data.len(), xid);
 
         let file_handle;
         // we have the data that we expect
@@ -689,17 +699,8 @@ impl NFSState {
 
             if direction == STREAM_TOSERVER {
                 self.ts_chunk_xid = 0;
-
-                // see if we have a file handle to work on
-                match self.requestmap.get(&xid) {
-                    None => {
-                        SCLogDebug!("no file handle found for XID {:04X}", xid);
-                        return 0
-                    },
-                    Some(ref xidmap) => {
-                        file_handle = xidmap.file_handle.to_vec();
-                    },
-                }
+                file_handle = self.ts_chunk_fh.to_vec();
+                self.ts_chunk_fh.clear();
             } else {
                 self.tc_chunk_xid = 0;
 
@@ -717,14 +718,19 @@ impl NFSState {
         } else {
             chunk_left -= data.len() as u32;
 
-            // see if we have a file handle to work on
-            match self.requestmap.get(&xid) {
-                None => {
-                    SCLogDebug!("no file handle found for XID {:04X}", xid);
-                    return 0 },
-                Some(xidmap) => {
-                    file_handle = xidmap.file_handle.to_vec();
-                },
+            if direction == STREAM_TOSERVER {
+                file_handle = self.ts_chunk_fh.to_vec();
+            } else {
+                // see if we have a file handle to work on
+                match self.requestmap.get(&xid) {
+                    None => {
+                        SCLogDebug!("no file handle found for XID {:04X}", xid);
+                        return 0
+                    },
+                    Some(xidmap) => {
+                        file_handle = xidmap.file_handle.to_vec();
+                    },
+                }
             }
         }
 
@@ -887,8 +893,9 @@ impl NFSState {
             self.tc_chunk_left = (reply.count as u32 + fill_bytes) - reply.data.len() as u32;
         }
 
-        SCLogDebug!("REPLY {} to procedure {} blob size {} / {}: chunk_left {}",
-                r.hdr.xid, NFSPROC3_READ, r.prog_data.len(), reply.count, self.tc_chunk_left);
+        SCLogDebug!("REPLY {} to procedure {} blob size {} / {}: chunk_left {} chunk_xid {:04X}",
+                r.hdr.xid, NFSPROC3_READ, r.prog_data.len(), reply.count, self.tc_chunk_left,
+                self.tc_chunk_xid);
         0
     }
 
@@ -910,6 +917,7 @@ impl NFSState {
     }
 
     pub fn parse_tcp_data_ts_gap<'b>(&mut self, gap_size: u32) -> u32 {
+        SCLogDebug!("parse_tcp_data_ts_gap ({})", gap_size);
         if self.tcp_buffer_ts.len() > 0 {
             self.tcp_buffer_ts.clear();
         }
@@ -921,10 +929,12 @@ impl NFSState {
         }
         self.ts_ssn_gap = true;
         self.ts_gap = true;
+        SCLogDebug!("parse_tcp_data_ts_gap ({}) done", gap_size);
         return 0
     }
 
     pub fn parse_tcp_data_tc_gap<'b>(&mut self, gap_size: u32) -> u32 {
+        SCLogDebug!("parse_tcp_data_tc_gap ({})", gap_size);
         if self.tcp_buffer_tc.len() > 0 {
             self.tcp_buffer_tc.clear();
         }
@@ -936,6 +946,7 @@ impl NFSState {
         }
         self.tc_ssn_gap = true;
         self.tc_gap = true;
+        SCLogDebug!("parse_tcp_data_tc_gap ({}) done", gap_size);
         return 0
     }
 

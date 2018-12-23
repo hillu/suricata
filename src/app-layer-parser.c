@@ -164,6 +164,17 @@ struct AppLayerParserState_ {
     AppLayerDecoderEvents *decoder_events;
 };
 
+#ifdef UNITTESTS
+void UTHAppLayerParserStateGetIds(void *ptr, uint64_t *i1, uint64_t *i2, uint64_t *log, uint64_t *min)
+{
+    struct AppLayerParserState_ *s = ptr;
+    *i1 = s->inspect_id[0];
+    *i2 = s->inspect_id[1];
+    *log = s->log_id;
+    *min = s->min_id;
+}
+#endif
+
 /* Static global version of the parser context.
  * Post 2.0 let's look at changing this to move it out to app-layer.c. */
 static AppLayerParserCtx alp_ctx;
@@ -757,6 +768,7 @@ void AppLayerParserSetTransactionInspectId(const Flow *f, AppLayerParserState *p
         }
         if (!ires.has_next)
             break;
+        idx++;
     }
     pstate->inspect_id[direction] = idx;
     SCLogDebug("inspect_id now %"PRIu64, pstate->inspect_id[direction]);
@@ -797,6 +809,7 @@ void AppLayerParserSetTransactionInspectId(const Flow *f, AppLayerParserState *p
             }
             if (!ires.has_next)
                 break;
+            idx++;
         }
     }
 
@@ -855,11 +868,12 @@ FileContainer *AppLayerParserGetFiles(uint8_t ipproto, AppProto alproto,
  */
 void AppLayerParserTransactionsCleanup(Flow *f)
 {
+    SCEnter();
     DEBUG_ASSERT_FLOW_LOCKED(f);
 
     AppLayerParserProtoCtx *p = &alp_ctx.ctxs[f->protomap][f->alproto];
     if (unlikely(p->StateTransactionFree == NULL))
-        return;
+        SCReturn;
 
     const uint8_t ipproto = f->proto;
     const AppProto alproto = f->alproto;
@@ -867,7 +881,7 @@ void AppLayerParserTransactionsCleanup(Flow *f)
     AppLayerParserState * const alparser = f->alparser;
 
     if (alstate == NULL || alparser == NULL)
-        return;
+        SCReturn;
 
     const uint64_t min = alparser->min_id;
     const uint64_t total_txs = AppLayerParserGetTxCnt(f, alstate);
@@ -880,6 +894,8 @@ void AppLayerParserTransactionsCleanup(Flow *f)
     memset(&state, 0, sizeof(state));
     uint64_t i = min;
     uint64_t new_min = min;
+    SCLogDebug("start min %"PRIu64, min);
+    bool skipped = false;
 
     while (1) {
         AppLayerGetTxIterTuple ires = IterFunc(ipproto, alproto, alstate, i, total_txs, &state);
@@ -887,18 +903,20 @@ void AppLayerParserTransactionsCleanup(Flow *f)
             break;
 
         void *tx = ires.tx_ptr;
-        i = ires.tx_id;
+        i = ires.tx_id; // actual tx id for the tx the IterFunc returned
 
         SCLogDebug("%p/%"PRIu64" checking", tx, i);
 
         const int tx_progress_tc = AppLayerParserGetStateProgress(ipproto, alproto, tx, STREAM_TOCLIENT);
         if (tx_progress_tc < tx_end_state_tc) {
             SCLogDebug("%p/%"PRIu64" skipping: tc parser not done", tx, i);
+            skipped = true;
             goto next;
         }
         const int tx_progress_ts = AppLayerParserGetStateProgress(ipproto, alproto, tx, STREAM_TOSERVER);
         if (tx_progress_ts < tx_end_state_ts) {
             SCLogDebug("%p/%"PRIu64" skipping: ts parser not done", tx, i);
+            skipped = true;
             goto next;
         }
         if (f->sgh_toserver != NULL) {
@@ -906,6 +924,7 @@ void AppLayerParserTransactionsCleanup(Flow *f)
             if (!(detect_flags_ts & APP_LAYER_TX_INSPECTED_FLAG)) {
                 SCLogDebug("%p/%"PRIu64" skipping: TS inspect not done: ts:%"PRIx64,
                         tx, i, detect_flags_ts);
+                skipped = true;
                 goto next;
             }
         }
@@ -914,6 +933,7 @@ void AppLayerParserTransactionsCleanup(Flow *f)
             if (!(detect_flags_tc & APP_LAYER_TX_INSPECTED_FLAG)) {
                 SCLogDebug("%p/%"PRIu64" skipping: TC inspect not done: tc:%"PRIx64,
                         tx, i, detect_flags_tc);
+                skipped = true;
                 goto next;
             }
         }
@@ -922,6 +942,7 @@ void AppLayerParserTransactionsCleanup(Flow *f)
             if (tx_logged != logger_expectation) {
                 SCLogDebug("%p/%"PRIu64" skipping: logging not done: want:%"PRIx32", have:%"PRIx32,
                         tx, i, logger_expectation, tx_logged);
+                skipped = true;
                 goto next;
             }
         }
@@ -930,17 +951,30 @@ void AppLayerParserTransactionsCleanup(Flow *f)
         p->StateTransactionFree(alstate, i);
         SCLogDebug("%p/%"PRIu64" freed", tx, i);
 
-        /* if this tx was the minimum, up the minimum */
-        if (i == new_min)
+        /* if we didn't skip any tx so far, up the minimum */
+        SCLogDebug("skipped? %s i %"PRIu64", new_min %"PRIu64, skipped ? "true" : "false", i, new_min);
+        if (!skipped)
             new_min = i + 1;
+        SCLogDebug("final i %"PRIu64", new_min %"PRIu64, i, new_min);
 
 next:
-        if (!ires.has_next)
+        if (!ires.has_next) {
+            /* this was the last tx. See if we skipped any. If not
+             * we removed all and can update the minimum to the max
+             * id. */
+            SCLogDebug("no next: cur tx i %"PRIu64", total %"PRIu64, i, total_txs);
+            if (!skipped) {
+                new_min = total_txs;
+                SCLogDebug("no next: cur tx i %"PRIu64", total %"PRIu64": "
+                        "new_min updated to %"PRIu64, i, total_txs, new_min);
+            }
             break;
+        }
+        i++;
     }
 
     /* see if we need to bring all trackers up to date. */
-    SCLogDebug("update f->alparser->min_id? %"PRIu64, alparser->min_id);
+    SCLogDebug("update f->alparser->min_id? %"PRIu64" vs %"PRIu64, new_min, alparser->min_id);
     if (new_min > alparser->min_id) {
         const uint64_t next_id = new_min;
         alparser->min_id = next_id;
@@ -949,6 +983,7 @@ next:
         alparser->log_id = MAX(alparser->log_id, next_id);
         SCLogDebug("updated f->alparser->min_id %"PRIu64, alparser->min_id);
     }
+    SCReturn;
 }
 
 #define IS_DISRUPTED(flags) \
