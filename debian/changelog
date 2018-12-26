@@ -1,4 +1,4 @@
-suricata (1:4.1.2-1) unstable; urgency=medium
+suricata (1:4.1.2-1) experimental; urgency=medium
 
   * New upstream release.
   * Add myself to uploaders.
