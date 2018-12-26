@@ -1,0 +1,16 @@
+Description: do not clean vendor directory on distclean 
+ dh_auto_clean calls make distclean, which in the case of Suricata also
+ removes the vendor directory. This breaks repeated builds.
+Author: Sascha Steinbiss <satta@debian.org>
+Last-Update: 2018-12-26
+--- a/rust/Makefile.am
++++ b/rust/Makefile.am
+@@ -43,7 +43,7 @@
+ 	-rm -rf target
+ 
+ distclean-local: clean-local
+-	rm -rf vendor gen Cargo.lock
++	rm -rf gen Cargo.lock
+ 
+ check:
+ 	CARGO_HOME=$(CARGO_HOME) $(CARGO) test

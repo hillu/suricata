@@ -3,3 +3,4 @@ debian-default-cfg.patch
 cross.patch
 no-use-gnu.patch
 suricata-common-last.patch
+fix-repeated-builds.patch

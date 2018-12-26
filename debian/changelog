@@ -2,6 +2,7 @@ suricata (1:4.1.2-1) experimental; urgency=medium
 
   * New upstream release.
   * Add myself to uploaders.
+  * Do not remove Rust vendor directory on distclean (Closes: #915154)
 
  -- Sascha Steinbiss <satta@debian.org>  Sun, 23 Dec 2018 10:48:27 +0000
 
