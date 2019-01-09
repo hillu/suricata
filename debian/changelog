@@ -1,3 +1,9 @@
+suricata (1:4.1.2-2) unstable; urgency=medium
+
+  * Upload to unstable.
+
+ -- Sascha Steinbiss <satta@debian.org>  Wed, 09 Jan 2019 12:53:47 +0100
+
 suricata (1:4.1.2-1) experimental; urgency=medium
 
   * New upstream release.
