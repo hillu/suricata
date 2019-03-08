@@ -139,7 +139,7 @@ static SigGroupHead *SigGroupHeadAlloc(const DetectEngineCtx *de_ctx, uint32_t s
     return sgh;
 
 error:
-    SigGroupHeadFree(sgh);
+    SigGroupHeadFree(de_ctx, sgh);
     return NULL;
 }
 
@@ -148,7 +148,7 @@ error:
  *
  * \param sgh Pointer to the SigGroupHead that has to be freed.
  */
-void SigGroupHeadFree(SigGroupHead *sgh)
+void SigGroupHeadFree(const DetectEngineCtx *de_ctx, SigGroupHead *sgh)
 {
     if (sgh == NULL)
         return;
@@ -179,7 +179,7 @@ void SigGroupHeadFree(SigGroupHead *sgh)
         sgh->init = NULL;
     }
 
-    PrefilterCleanupRuleGroup(sgh);
+    PrefilterCleanupRuleGroup(de_ctx, sgh);
     SCFree(sgh);
 
     return;
@@ -696,6 +696,7 @@ int SigGroupHeadBuildNonPrefilterArray(DetectEngineCtx *de_ctx, SigGroupHead *sg
                 BUG_ON(sgh->non_pf_other_store_array == NULL);
                 sgh->non_pf_other_store_array[sgh->non_pf_other_store_cnt].id = s->num;
                 sgh->non_pf_other_store_array[sgh->non_pf_other_store_cnt].mask = s->mask;
+                sgh->non_pf_other_store_array[sgh->non_pf_other_store_cnt].alproto = s->alproto;
                 sgh->non_pf_other_store_cnt++;
             }
 
@@ -703,6 +704,7 @@ int SigGroupHeadBuildNonPrefilterArray(DetectEngineCtx *de_ctx, SigGroupHead *sg
             BUG_ON(sgh->non_pf_syn_store_array == NULL);
             sgh->non_pf_syn_store_array[sgh->non_pf_syn_store_cnt].id = s->num;
             sgh->non_pf_syn_store_array[sgh->non_pf_syn_store_cnt].mask = s->mask;
+            sgh->non_pf_syn_store_array[sgh->non_pf_syn_store_cnt].alproto = s->alproto;
             sgh->non_pf_syn_store_cnt++;
         }
     }
@@ -867,7 +869,7 @@ static int SigGroupHeadTest06(void)
     result &= (SigGroupHeadContainsSigId(de_ctx, sh, 4) == 0);
     result &= (SigGroupHeadContainsSigId(de_ctx, sh, 5) == 1);
 
-    SigGroupHeadFree(sh);
+    SigGroupHeadFree(de_ctx, sh);
 
  end:
     SigCleanSignatures(de_ctx);
@@ -960,7 +962,7 @@ static int SigGroupHeadTest07(void)
     result &= (SigGroupHeadContainsSigId(de_ctx, sh, 4) == 0);
     result &= (SigGroupHeadContainsSigId(de_ctx, sh, 5) == 0);
 
-    SigGroupHeadFree(sh);
+    SigGroupHeadFree(de_ctx, sh);
 
  end:
     SigCleanSignatures(de_ctx);
@@ -1054,8 +1056,8 @@ static int SigGroupHeadTest08(void)
     result &= (SigGroupHeadContainsSigId(de_ctx, dst_sh, 4) == 0);
     result &= (SigGroupHeadContainsSigId(de_ctx, dst_sh, 5) == 1);
 
-    SigGroupHeadFree(src_sh);
-    SigGroupHeadFree(dst_sh);
+    SigGroupHeadFree(de_ctx, src_sh);
+    SigGroupHeadFree(de_ctx, dst_sh);
 
  end:
     SigCleanSignatures(de_ctx);
@@ -1135,7 +1137,7 @@ static int SigGroupHeadTest09(void)
     result &= (sh->match_array[1] == de_ctx->sig_list->next->next);
     result &= (sh->match_array[2] == de_ctx->sig_list->next->next->next->next);
 
-    SigGroupHeadFree(sh);
+    SigGroupHeadFree(de_ctx, sh);
 
  end:
     SigCleanSignatures(de_ctx);
@@ -1183,7 +1185,7 @@ static int SigGroupHeadTest10(void)
 
     AddressDebugPrint(&p->dst);
 
-    SigGroupHead *sgh = SigMatchSignaturesGetSgh(de_ctx, det_ctx, p);
+    const SigGroupHead *sgh = SigMatchSignaturesGetSgh(de_ctx, p);
     if (sgh == NULL) {
         goto end;
     }

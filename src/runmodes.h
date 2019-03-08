@@ -40,10 +40,10 @@ enum RunModes {
     RUNMODE_UNITTEST,
     RUNMODE_NAPATECH,
     RUNMODE_UNIX_SOCKET,
+    RUNMODE_WINDIVERT,
     RUNMODE_USER_MAX, /* Last standard running mode */
     RUNMODE_LIST_KEYWORDS,
     RUNMODE_LIST_APP_LAYERS,
-    RUNMODE_LIST_CUDA_CARDS,
     RUNMODE_LIST_RUNMODES,
     RUNMODE_PRINT_VERSION,
     RUNMODE_PRINT_BUILDINFO,
@@ -91,6 +91,9 @@ int RunModeOutputFiledataEnabled(void);
 /** bool indicating if run mode is offline */
 bool IsRunModeOffline(int run_mode_to_check);
 
+void RunModeEnablesBypassManager(void);
+int RunModeNeedsBypassManager(void);
+
 #include "runmode-pcap.h"
 #include "runmode-pcap-file.h"
 #include "runmode-pfring.h"
@@ -104,6 +107,7 @@ bool IsRunModeOffline(int run_mode_to_check);
 #include "runmode-nflog.h"
 #include "runmode-unix-socket.h"
 #include "runmode-netmap.h"
+#include "runmode-windivert.h"
 
 int threading_set_cpu_affinity;
 extern float threading_detect_ratio;

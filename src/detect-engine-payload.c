@@ -77,12 +77,14 @@ static void PrefilterPktStream(DetectEngineThreadCtx *det_ctx,
 
     /* for established packets inspect any stream we may have queued up */
     if (p->flags & PKT_DETECT_HAS_STREAMDATA) {
+        SCLogDebug("PRE det_ctx->raw_stream_progress %"PRIu64,
+                det_ctx->raw_stream_progress);
         struct StreamMpmData stream_mpm_data = { det_ctx, mpm_ctx };
         StreamReassembleRaw(p->flow->protoctx, p,
                 StreamMpmFunc, &stream_mpm_data,
                 &det_ctx->raw_stream_progress,
                 false /* mpm doesn't use min inspect depth */);
-        SCLogDebug("det_ctx->raw_stream_progress %"PRIu64,
+        SCLogDebug("POST det_ctx->raw_stream_progress %"PRIu64,
                 det_ctx->raw_stream_progress);
     } else {
         SCLogDebug("NOT p->flags & PKT_DETECT_HAS_STREAMDATA");
@@ -104,9 +106,11 @@ static void PrefilterPktStream(DetectEngineThreadCtx *det_ctx,
     }
 }
 
-int PrefilterPktStreamRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
+int PrefilterPktStreamRegister(DetectEngineCtx *de_ctx,
+        SigGroupHead *sgh, MpmCtx *mpm_ctx)
 {
-    return PrefilterAppendPayloadEngine(sgh, PrefilterPktStream, mpm_ctx, NULL, "stream");
+    return PrefilterAppendPayloadEngine(de_ctx, sgh,
+            PrefilterPktStream, mpm_ctx, NULL, "stream");
 }
 
 static void PrefilterPktPayload(DetectEngineThreadCtx *det_ctx,
@@ -118,24 +122,16 @@ static void PrefilterPktPayload(DetectEngineThreadCtx *det_ctx,
     if (p->payload_len < mpm_ctx->minlen)
         SCReturn;
 
-#ifdef __SC_CUDA_SUPPORT__
-    if (p->cuda_pkt_vars.cuda_mpm_enabled && p->pkt_src == PKT_SRC_WIRE) {
-        (void)SCACCudaPacketResultsProcessing(p, mpm_ctx, &det_ctx->pmq);
-    } else {
-        (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
-                &det_ctx->mtc, &det_ctx->pmq,
-                p->payload, p->payload_len);
-    }
-#else
     (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
             &det_ctx->mtc, &det_ctx->pmq,
             p->payload, p->payload_len);
-#endif
 }
 
-int PrefilterPktPayloadRegister(SigGroupHead *sgh, MpmCtx *mpm_ctx)
+int PrefilterPktPayloadRegister(DetectEngineCtx *de_ctx,
+        SigGroupHead *sgh, MpmCtx *mpm_ctx)
 {
-    return PrefilterAppendPayloadEngine(sgh, PrefilterPktPayload, mpm_ctx, NULL, "payload");
+    return PrefilterAppendPayloadEngine(de_ctx, sgh,
+            PrefilterPktPayload, mpm_ctx, NULL, "payload");
 }
 
 
@@ -170,7 +166,7 @@ int DetectEngineInspectPacketPayload(DetectEngineCtx *de_ctx,
     det_ctx->replist = NULL;
 
     r = DetectEngineContentInspection(de_ctx, det_ctx, s, s->sm_arrays[DETECT_SM_LIST_PMATCH],
-                                      f, p->payload, p->payload_len, 0,
+                                      f, p->payload, p->payload_len, 0, DETECT_CI_FLAGS_SINGLE,
                                       DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD, p);
     if (r == 1) {
         SCReturnInt(1);
@@ -212,7 +208,7 @@ static int DetectEngineInspectStreamUDPPayload(DetectEngineCtx *de_ctx,
     det_ctx->replist = NULL;
 
     r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
-            f, p->payload, p->payload_len, 0,
+            f, p->payload, p->payload_len, 0, DETECT_CI_FLAGS_SINGLE,
             DETECT_ENGINE_CONTENT_INSPECTION_MODE_PAYLOAD, p);
     if (r == 1) {
         SCReturnInt(1);
@@ -242,7 +238,7 @@ static int StreamContentInspectFunc(void *cb_data, const uint8_t *data, const ui
 
     r = DetectEngineContentInspection(smd->de_ctx, smd->det_ctx,
             smd->s, smd->s->sm_arrays[DETECT_SM_LIST_PMATCH],
-            smd->f, (uint8_t *)data, data_len, 0,
+            smd->f, (uint8_t *)data, data_len, 0, 0, //TODO
             DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
     if (r == 1) {
         SCReturnInt(1);
@@ -300,7 +296,7 @@ static int StreamContentInspectEngineFunc(void *cb_data, const uint8_t *data, co
 
     r = DetectEngineContentInspection(smd->de_ctx, smd->det_ctx,
             smd->s, smd->smd,
-            smd->f, (uint8_t *)data, data_len, 0,
+            smd->f, (uint8_t *)data, data_len, 0, 0, // TODO
             DETECT_ENGINE_CONTENT_INSPECTION_MODE_STREAM, NULL);
     if (r == 1) {
         SCReturnInt(1);
@@ -337,9 +333,8 @@ int DetectEngineInspectStream(ThreadVars *tv,
     if (ssn == NULL)
         return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
 
-    if (det_ctx->stream_already_inspected)
-        return det_ctx->stream_last_result;
-
+    SCLogDebug("pre-inspect det_ctx->raw_stream_progress %"PRIu64,
+            det_ctx->raw_stream_progress);
     uint64_t unused;
     struct StreamContentInspectEngineData inspect_data = { de_ctx, det_ctx, s, smd, f };
     int match = StreamReassembleRaw(f->protoctx, p,
@@ -360,19 +355,15 @@ int DetectEngineInspectStream(ThreadVars *tv,
     SCLogDebug("%s ran stream for sid %u on packet %"PRIu64" and we %s",
             is_last? "LAST:" : "normal:", s->id, p->pcap_cnt,
             match ? "matched" : "didn't match");
-    det_ctx->stream_already_inspected = true;
 
     if (match) {
-        det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_MATCH;
         return DETECT_ENGINE_INSPECT_SIG_MATCH;
     } else {
         if (is_last) {
-            det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
             //SCLogNotice("last, so DETECT_ENGINE_INSPECT_SIG_CANT_MATCH");
             return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
         }
         /* TODO maybe we can set 'CANT_MATCH' for EOF too? */
-        det_ctx->stream_last_result = DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
         return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
     }
 }

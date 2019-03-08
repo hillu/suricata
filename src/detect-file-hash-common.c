@@ -186,7 +186,7 @@ int DetectFileHashMatch (ThreadVars *t, DetectEngineThreadCtx *det_ctx,
 }
 
 static const char *hexcodes = "ABCDEFabcdef0123456789";
-#include "libgen.h"
+
 /**
  * \brief Parse the filemd5, filesha1 or filesha256 keyword
  *

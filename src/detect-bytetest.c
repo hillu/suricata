@@ -157,7 +157,7 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx,
                 SCLogDebug("No Numeric value");
                 SCReturnInt(0);
             } else {
-                SCLogError(SC_ERR_INVALID_NUM_BYTES, "Error extracting %d "
+                SCLogDebug("error extracting %d "
                         "bytes of string data: %d", data->nbytes, extbytes);
                 SCReturnInt(-1);
             }
@@ -171,8 +171,8 @@ int DetectBytetestDoMatch(DetectEngineThreadCtx *det_ctx,
                           BYTE_LITTLE_ENDIAN : BYTE_BIG_ENDIAN;
         extbytes = ByteExtractUint64(&val, endianness, data->nbytes, ptr);
         if (extbytes != data->nbytes) {
-            SCLogError(SC_ERR_INVALID_NUM_BYTES, "Error extracting %d bytes "
-                   "of numeric data: %d\n", data->nbytes, extbytes);
+            SCLogDebug("error extracting %d bytes "
+                   "of numeric data: %d", data->nbytes, extbytes);
             SCReturnInt(-1);
         }
 
@@ -443,6 +443,9 @@ static int DetectBytetestSetup(DetectEngineCtx *de_ctx, Signature *s, const char
 
     int sm_list;
     if (s->init_data->list != DETECT_SM_LIST_NOTSET) {
+        if (DetectBufferGetActiveList(de_ctx, s) == -1)
+            goto error;
+
         sm_list = s->init_data->list;
 
         if (data->flags & DETECT_BYTETEST_RELATIVE) {

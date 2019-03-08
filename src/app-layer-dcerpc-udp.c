@@ -242,8 +242,8 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
                         sstate->dcerpc.dcerpchdrudp.seqnum |= (uint32_t) *(p + 65) << 16;
                         sstate->dcerpc.dcerpchdrudp.seqnum |= (uint32_t) *(p + 66) << 8;
                         sstate->dcerpc.dcerpchdrudp.seqnum |= (uint32_t) *(p + 67);
-                        sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 24;
-                        sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69) << 16;
+                        sstate->dcerpc.dcerpchdrudp.opnum = *(p + 68) << 8;
+                        sstate->dcerpc.dcerpchdrudp.opnum |= *(p + 69);
                         sstate->dcerpc.dcerpchdrudp.ihint = *(p + 70) << 8;
                         sstate->dcerpc.dcerpchdrudp.ihint |= *(p + 71);
                         sstate->dcerpc.dcerpchdrudp.ahint = *(p + 72) << 8;
@@ -717,7 +717,7 @@ static int DCERPCUDPParseHeader(Flow *f, void *dcerpcudp_state,
 
 static int DCERPCUDPParse(Flow *f, void *dcerpc_state,
     AppLayerParserState *pstate, uint8_t *input, uint32_t input_len,
-    void *local_data)
+    void *local_data, const uint8_t flags)
 {
     uint32_t retval = 0;
     uint32_t parsed = 0;
@@ -823,17 +823,9 @@ static void DCERPCUDPStateFree(void *s)
     SCFree(s);
 }
 
-static int DCERPCUDPStateHasTxDetectState(void *state)
+static int DCERPCUDPSetTxDetectState(void *vtx, DetectEngineState *de_state)
 {
-    DCERPCUDPState *dce_state = (DCERPCUDPState *)state;
-    if (dce_state->de_state)
-        return 1;
-    return 0;
-}
-
-static int DCERPCUDPSetTxDetectState(void *state, void *vtx, DetectEngineState *de_state)
-{
-    DCERPCUDPState *dce_state = (DCERPCUDPState *)state;
+    DCERPCUDPState *dce_state = (DCERPCUDPState *)vtx;
     dce_state->de_state = de_state;
     return 0;
 }
@@ -907,7 +899,7 @@ void RegisterDCERPCUDPParsers(void)
 
         AppLayerParserRegisterTxFreeFunc(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPStateTransactionFree);
 
-        AppLayerParserRegisterDetectStateFuncs(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPStateHasTxDetectState,
+        AppLayerParserRegisterDetectStateFuncs(IPPROTO_UDP, ALPROTO_DCERPC,
                                                DCERPCUDPGetTxDetectState, DCERPCUDPSetTxDetectState);
 
         AppLayerParserRegisterGetTx(IPPROTO_UDP, ALPROTO_DCERPC, DCERPCUDPGetTx);

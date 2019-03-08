@@ -168,6 +168,19 @@
 ///
 #[macro_export]
 macro_rules! alt (
+  (__impl $i:expr, $submac:ident!( $($args:tt)* ), $($rest:tt)* ) => (
+    compiler_error!("alt uses '|' as separator, not ',':
+
+      alt!(
+        tag!(\"abcd\") |
+        tag!(\"efgh\") |
+        tag!(\"ijkl\")
+      )
+    ");
+  );
+  (__impl $i:expr, $e:ident, $($rest:tt)* ) => (
+    alt!(__impl $i, call!($e) , $($rest)*);
+  );
   (__impl $i:expr, $e:ident | $($rest:tt)*) => (
     alt!(__impl $i, call!($e) | $($rest)*);
   );
@@ -269,11 +282,11 @@ macro_rules! alt_complete (
         e => {
           let out = alt_complete!($i, $($rest)*);
 
-          // Compile-time hack to ensure that res's E type is not under-specified.
-          // This all has no effect at runtime.
-          fn unify_types<T>(_: &T, _: &T) {}
-          if out.is_err() {
-            unify_types(&e, &out);
+          if let (&$crate::IResult::Error(ref e1), &$crate::IResult::Error(ref e2)) = (&e, &out) {
+            // Compile-time hack to ensure that res's E type is not under-specified.
+            // This all has no effect at runtime.
+            fn unify_types<T>(_: &T, _: &T) {}
+            unify_types(e1, e2);
           }
 
           out
@@ -290,11 +303,11 @@ macro_rules! alt_complete (
         e => {
           let out = alt_complete!($i, $($rest)*);
 
-          // Compile-time hack to ensure that res's E type is not under-specified.
-          // This all has no effect at runtime.
-          fn unify_types<T>(_: &T, _: &T) {}
-          if out.is_err() {
-            unify_types(&e, &out);
+          if let (&$crate::IResult::Error(ref e1), &$crate::IResult::Error(ref e2)) = (&e, &out) {
+            // Compile-time hack to ensure that res's E type is not under-specified.
+            // This all has no effect at runtime.
+            fn unify_types<T>(_: &T, _: &T) {}
+            unify_types(e1, e2);
           }
 
           out
@@ -314,7 +327,7 @@ macro_rules! alt_complete (
   );
 
   ($i:expr, $subrule:ident!( $($args:tt)* ) => { $gen:expr }) => (
-    alt!(__impl $i, $subrule!($($args)*) => { $gen } | __end)
+    alt!(__impl $i, complete!($subrule!($($args)*)) => { $gen } | __end)
   );
 
   ($i:expr, $e:ident) => (
@@ -322,7 +335,7 @@ macro_rules! alt_complete (
   );
 
   ($i:expr, $subrule:ident!( $($args:tt)*)) => (
-    alt!(__impl $i, $subrule!($($args)*) | __end)
+    alt!(__impl $i, complete!($subrule!($($args)*)) | __end)
   );
 );
 
@@ -800,7 +813,7 @@ mod tests {
     );
 
     let a = &b""[..];
-    assert_eq!(ac(a), Incomplete(Needed::Size(2)));
+    assert_eq!(ac(a), Error(error_position!(ErrorKind::Alt, a)));
     let a = &b"ef"[..];
     assert_eq!(ac(a), Done(&b""[..], &b"ef"[..]));
     let a = &b"cde"[..];
@@ -849,4 +862,10 @@ mod tests {
     let e = &b"efgabc"[..];
     assert_eq!(perm(e), Incomplete(Needed::Size(7)));
   }
+
+  /*
+  named!(does_not_compile,
+    alt!(tag!("abcd"), tag!("efgh"))
+  );
+  */
 }

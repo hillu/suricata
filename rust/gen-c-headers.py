@@ -58,11 +58,13 @@ type_map = {
     "u64" :"uint64_t",
 
     "libc::c_void": "void",
+    "c_void": "void",
 
     "libc::c_char": "char",
     "libc::c_int": "int",
     "c_int": "int",
     "libc::int8_t": "int8_t",
+    "libc::int32_t": "int32_t",
 
     "libc::uint8_t": "uint8_t",
     "libc::uint16_t": "uint16_t",
@@ -80,15 +82,26 @@ type_map = {
     "NFSTransaction": "NFSTransaction",
     "NTPState": "NTPState",
     "NTPTransaction": "NTPTransaction",
+    "TFTPTransaction": "TFTPTransaction",
+    "TFTPState": "TFTPState",
+    "SMBState": "SMBState",
+    "SMBTransaction": "SMBTransaction",
+    "IKEV2State": "IKEV2State",
+    "IKEV2Transaction": "IKEV2Transaction",
+    "KRB5State": "KRB5State",
+    "KRB5Transaction": "KRB5Transaction",
     "JsonT": "json_t",
     "DetectEngineState": "DetectEngineState",
     "core::DetectEngineState": "DetectEngineState",
     "core::AppLayerDecoderEvents": "AppLayerDecoderEvents",
     "AppLayerDecoderEvents": "AppLayerDecoderEvents",
     "core::AppLayerEventType": "AppLayerEventType",
+    "applayer::AppLayerGetTxIterTuple": "AppLayerGetTxIterTuple",
+    "AppLayerGetTxIterTuple": "AppLayerGetTxIterTuple",
     "AppLayerEventType": "AppLayerEventType",
     "CLuaState": "lua_State",
     "Store": "Store",
+    "AppProto": "AppProto",
 }
 
 def convert_type(rs_type):
@@ -156,21 +169,21 @@ def gen_headers(filename):
     if not should_regen(filename, output_filename):
         return
 
-    buf = open(filename).read()
+    buf = open(filename, "rb").read().decode("utf-8")
     writer = StringIO()
 
     for fn in re.findall(
-            r"^pub extern \"C\" fn ([A_Za-z0-9_]+)\(([^{]+)?\)"
+            r"^pub (unsafe )?extern \"C\" fn ([A_Za-z0-9_]+)\(([^{]+)?\)"
             r"(\s+-> ([^{]+))?",
             buf,
             re.M | re.DOTALL):
 
         args = []
 
-        fnName = fn[0]
+        fnName = fn[1]
 
-        for arg in fn[1].split(","):
-            if not arg:
+        for arg in fn[2].split(","):
+            if not arg.strip():
                 continue
             arg_name, rs_type = arg.split(":", 1)
             arg_name = arg_name.strip()
@@ -185,7 +198,7 @@ def gen_headers(filename):
         if not args:
             args.append("void")
 
-        retType = fn[3].strip()
+        retType = fn[4].strip()
         if retType == "":
             returns = "void"
         else:

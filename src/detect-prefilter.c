@@ -38,6 +38,7 @@ void DetectPrefilterRegister(void)
 {
     sigmatch_table[DETECT_PREFILTER].name = "prefilter";
     sigmatch_table[DETECT_PREFILTER].desc = "force a condition to be used as prefilter";
+    sigmatch_table[DETECT_PREFILTER].url = "/rules/prefilter-keywords.html#prefilter";
     sigmatch_table[DETECT_PREFILTER].Match = NULL;
     sigmatch_table[DETECT_PREFILTER].Setup = DetectPrefilterSetup;
     sigmatch_table[DETECT_PREFILTER].Free  = NULL;
@@ -96,10 +97,6 @@ static int DetectPrefilterSetup (DetectEngineCtx *de_ctx, Signature *s, const ch
         s->flags |= SIG_FLAG_PREFILTER;
 
         /* make sure setup function runs for this type. */
-        if (de_ctx->sm_types_prefilter == NULL)
-            de_ctx->sm_types_prefilter = SCCalloc(sizeof(bool), DETECT_TBLSIZE);
-        if (de_ctx->sm_types_prefilter == NULL)
-            FatalError(SC_ERR_MEM_ALLOC, "failed to allocate sm_types_prefilter memory");
         de_ctx->sm_types_prefilter[sm->type] = true;
     }
 

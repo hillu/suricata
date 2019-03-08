@@ -101,7 +101,8 @@ am__CONFIG_DISTCLEAN_FILES = config.status config.cache config.log \
  configure.lineno config.status.lineno
 mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = config.h
-CONFIG_CLEAN_FILES = rust/.cargo/config suricata.yaml
+CONFIG_CLEAN_FILES = rust/.cargo/config suricata.yaml \
+	python/suricata/config/defaults.py
 CONFIG_CLEAN_VPATH_FILES =
 AM_V_P = $(am__v_P_@AM_V@)
 am__v_P_ = $(am__v_P_@AM_DEFAULT_V@)
@@ -161,9 +162,11 @@ CTAGS = ctags
 CSCOPE = cscope
 DIST_SUBDIRS = $(SUBDIRS)
 am__DIST_COMMON = $(srcdir)/Makefile.in $(srcdir)/config.h.in \
-	$(srcdir)/suricata.yaml.in $(top_srcdir)/rust/.cargo/config.in \
-	COPYING ChangeLog compile config.guess config.rpath config.sub \
-	install-sh ltmain.sh missing
+	$(srcdir)/suricata.yaml.in \
+	$(top_srcdir)/python/suricata/config/defaults.py.in \
+	$(top_srcdir)/rust/.cargo/config.in COPYING ChangeLog compile \
+	config.guess config.rpath config.sub install-sh ltmain.sh \
+	missing
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
 distdir = $(PACKAGE)-$(VERSION)
 top_distdir = $(distdir)
@@ -220,6 +223,7 @@ CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_DATAROOTDIR = @CONFIGURE_DATAROOTDIR@
 CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
 CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
 CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
@@ -245,6 +249,7 @@ HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
+HAVE_LLC = @HAVE_LLC@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
@@ -278,6 +283,7 @@ LIBPRELUDE_PTHREAD_CFLAGS = @LIBPRELUDE_PTHREAD_CFLAGS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
+LLC = @LLC@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
 LT_SYS_LIBRARY_PATH = @LT_SYS_LIBRARY_PATH@
@@ -290,7 +296,6 @@ MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
 NM = @NM@
 NMEDIT = @NMEDIT@
-NVCC = @NVCC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
 OPTIMIZATION_CFLAGS = @OPTIMIZATION_CFLAGS@
@@ -308,12 +313,8 @@ PCAP_CFLAGS = @PCAP_CFLAGS@
 PKG_CONFIG = @PKG_CONFIG@
 PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
 PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
-PYTHON = @PYTHON@
-PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
-PYTHON_PLATFORM = @PYTHON_PLATFORM@
-PYTHON_PREFIX = @PYTHON_PREFIX@
-PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_DEBUG = @RUST_DEBUG@
 RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
@@ -323,6 +324,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SURICATA_UPDATE_DIR = @SURICATA_UPDATE_DIR@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
@@ -347,6 +349,8 @@ datadir = @datadir@
 datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
+e_datarulesdir = @e_datarulesdir@
+e_defaultruledir = @e_defaultruledir@
 e_enable_evelog = @e_enable_evelog@
 e_localstatedir = @e_localstatedir@
 e_logcertsdir = @e_logcertsdir@
@@ -358,6 +362,7 @@ e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
 exec_prefix = @exec_prefix@
+has_suricata_update_comment = @has_suricata_update_comment@
 host = @host@
 host_alias = @host_alias@
 host_cpu = @host_cpu@
@@ -383,20 +388,15 @@ localedir = @localedir@
 localstatedir = @localstatedir@
 mandir = @mandir@
 mkdir_p = @mkdir_p@
+no_suricata_update_comment = @no_suricata_update_comment@
 oldincludedir = @oldincludedir@
 pdfdir = @pdfdir@
-pkgpyexecdir = @pkgpyexecdir@
-pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-pyexecdir = @pyexecdir@
-pythondir = @pythondir@
 runstatedir = @runstatedir@
 rust_config_comment = @rust_config_comment@
 rust_config_enabled = @rust_config_enabled@
-rust_config_exp_comment = @rust_config_exp_comment@
-rust_config_exp_enabled = @rust_config_exp_enabled@
 rust_vendor_comment = @rust_vendor_comment@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
@@ -414,9 +414,12 @@ AUTOMAKE_OPTIONS = foreign 1.4
 ACLOCAL_AMFLAGS = -I m4
 EXTRA_DIST = ChangeLog COPYING LICENSE suricata.yaml.in \
              classification.config threshold.config \
-             reference.config
+             reference.config $(SURICATA_UPDATE_DIR) \
+	     lua
 
-SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib scripts etc
+SUBDIRS = $(HTP_DIR) rust src qa rules doc contrib etc python ebpf \
+          $(SURICATA_UPDATE_DIR)
+
 CLEANFILES = stamp-h[0-9]*
 all: config.h
 	$(MAKE) $(AM_MAKEFLAGS) all-recursive
@@ -473,6 +476,8 @@ distclean-hdr:
 rust/.cargo/config: $(top_builddir)/config.status $(top_srcdir)/rust/.cargo/config.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
 suricata.yaml: $(top_builddir)/config.status $(srcdir)/suricata.yaml.in
+	cd $(top_builddir) && $(SHELL) ./config.status $@
+python/suricata/config/defaults.py: $(top_builddir)/config.status $(top_srcdir)/python/suricata/config/defaults.py.in
 	cd $(top_builddir) && $(SHELL) ./config.status $@
 
 mostlyclean-libtool:
@@ -924,28 +929,32 @@ install-conf:
 	install -m 770 -d "$(DESTDIR)$(e_localstatedir)"
 
 install-rules:
-	install -d "$(DESTDIR)$(e_sysconfrulesdir)"
-@HAVE_FETCH_COMMAND_TRUE@@HAVE_WGET_COMMAND_TRUE@	$(HAVE_WGET) -qO - https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
-@HAVE_FETCH_COMMAND_TRUE@@HAVE_WGET_COMMAND_FALSE@	$(HAVE_CURL) -s https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
-@HAVE_FETCH_COMMAND_FALSE@	@echo "UNABLE to load ruleset wget or curl are not installed on system."
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)decoder-events.rules" || install -m 600 "$(top_srcdir)/rules/decoder-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)stream-events.rules" || install -m 600 "$(top_srcdir)/rules/stream-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)smtp-events.rules" || install -m 600 "$(top_srcdir)/rules/smtp-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)http-events.rules" || install -m 600 "$(top_srcdir)/rules/http-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dns-events.rules" || install -m 600 "$(top_srcdir)/rules/dns-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)tls-events.rules" || install -m 600 "$(top_srcdir)/rules/tls-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)modbus-events.rules" || install -m 600 "$(top_srcdir)/rules/modbus-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)app-layer-events.rules" || install -m 600 "$(top_srcdir)/rules/app-layer-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dnp3-events.rules" || install -m 600 "$(top_srcdir)/rules/dnp3-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
-	@echo ""
-	@echo "You can now start suricata by running as root something like '$(DESTDIR)$(bindir)/suricata -c $(DESTDIR)$(e_sysconfdir)/suricata.yaml -i eth0'."
-	@echo ""
-	@echo "If a library like libhtp.so is not found, you can run suricata with:"
-	@echo "'LD_LIBRARY_PATH="$(DESTDIR)$(prefix)/lib" "$(DESTDIR)$(bindir)/suricata" -c "$(DESTDIR)$(e_sysconfdir)/suricata.yaml" -i eth0'."
-	@echo ""
-	@echo "While rules are installed now, it's highly recommended to use a rule manager for maintaining rules."
-	@echo "The two most common are Oinkmaster and Pulledpork. For a guide see:"
-	@echo "https://redmine.openinfosecfoundation.org/projects/suricata/wiki/Rule_Management_with_Oinkmaster"
+@HAVE_SURICATA_UPDATE_TRUE@	$(DESTDIR)$(bindir)/suricata-update \
+@HAVE_SURICATA_UPDATE_TRUE@		--suricata $(DESTDIR)$(bindir)/suricata \
+@HAVE_SURICATA_UPDATE_TRUE@		--suricata-conf $(DESTDIR)$(sysconfdir)/suricata/suricata.yaml \
+@HAVE_SURICATA_UPDATE_TRUE@		--no-test --no-reload
+@HAVE_SURICATA_UPDATE_FALSE@	install -d "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_FETCH_COMMAND_TRUE@@HAVE_SURICATA_UPDATE_FALSE@@HAVE_WGET_COMMAND_TRUE@	$(HAVE_WGET) -qO - https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
+@HAVE_FETCH_COMMAND_TRUE@@HAVE_SURICATA_UPDATE_FALSE@@HAVE_WGET_COMMAND_FALSE@	$(HAVE_CURL) -s https://rules.emergingthreats.net/open/suricata-4.0/emerging.rules.tar.gz | tar -x -z -C "$(DESTDIR)$(e_sysconfdir)" -f -
+@HAVE_FETCH_COMMAND_FALSE@@HAVE_SURICATA_UPDATE_FALSE@	@echo "UNABLE to load ruleset wget or curl are not installed on system."
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)decoder-events.rules" || install -m 600 "$(top_srcdir)/rules/decoder-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)stream-events.rules" || install -m 600 "$(top_srcdir)/rules/stream-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)smtp-events.rules" || install -m 600 "$(top_srcdir)/rules/smtp-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)http-events.rules" || install -m 600 "$(top_srcdir)/rules/http-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dns-events.rules" || install -m 600 "$(top_srcdir)/rules/dns-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)tls-events.rules" || install -m 600 "$(top_srcdir)/rules/tls-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)modbus-events.rules" || install -m 600 "$(top_srcdir)/rules/modbus-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)app-layer-events.rules" || install -m 600 "$(top_srcdir)/rules/app-layer-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@test -e "$(DESTDIR)$(e_sysconfrulesdir)dnp3-events.rules" || install -m 600 "$(top_srcdir)/rules/dnp3-events.rules" "$(DESTDIR)$(e_sysconfrulesdir)"
+@HAVE_SURICATA_UPDATE_FALSE@	@echo ""
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "You can now start suricata by running as root something like '$(DESTDIR)$(bindir)/suricata -c $(DESTDIR)$(e_sysconfdir)/suricata.yaml -i eth0'."
+@HAVE_SURICATA_UPDATE_FALSE@	@echo ""
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "If a library like libhtp.so is not found, you can run suricata with:"
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "'LD_LIBRARY_PATH="$(DESTDIR)$(prefix)/lib" "$(DESTDIR)$(bindir)/suricata" -c "$(DESTDIR)$(e_sysconfdir)/suricata.yaml" -i eth0'."
+@HAVE_SURICATA_UPDATE_FALSE@	@echo ""
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "While rules are installed now, it's highly recommended to use a rule manager for maintaining rules."
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "The three most common are Suricata-Update, Oinkmaster and Pulledpork. For a guide see:"
+@HAVE_SURICATA_UPDATE_FALSE@	@echo "https://suricata.readthedocs.io/en/latest/rule-management/index.html"
 
 # Tell versions [3.59,3.63) of GNU make to not export all variables.
 # Otherwise a system limit (for SysV at least) may be exceeded.

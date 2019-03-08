@@ -22,22 +22,22 @@
 #ifndef __RUST_NTP_NTP_GEN_H__
 #define __RUST_NTP_NTP_GEN_H__
 
-int8_t rs_ntp_probe(const uint8_t * input, uint32_t len);
 void * rs_ntp_state_new(void);
 void rs_ntp_state_free(void * state);
-int8_t rs_ntp_parse_request(const Flow * _flow, NTPState * state, const void * _pstate, const uint8_t * input, uint32_t input_len, const void * _data);
-int8_t rs_ntp_parse_response(const Flow * _flow, NTPState * state, const void * _pstate, const uint8_t * input, uint32_t input_len, const void * _data);
-NTPTransaction * rs_ntp_state_get_tx(NTPState * state, uint64_t tx_id);
-uint64_t rs_ntp_state_get_tx_count(NTPState * state);
-void rs_ntp_state_tx_free(NTPState * state, uint64_t tx_id);
+int32_t rs_ntp_parse_request(const Flow * _flow, void * state, void * _pstate, const uint8_t * input, uint32_t input_len, const void * _data, uint8_t _flags);
+int32_t rs_ntp_parse_response(const Flow * _flow, void * state, void * _pstate, const uint8_t * input, uint32_t input_len, const void * _data, uint8_t _flags);
+void * rs_ntp_state_get_tx(void * state, uint64_t tx_id);
+uint64_t rs_ntp_state_get_tx_count(void * state);
+void rs_ntp_state_tx_free(void * state, uint64_t tx_id);
 int rs_ntp_state_progress_completion_status(uint8_t _direction);
-uint8_t rs_ntp_tx_get_alstate_progress(NTPTransaction * _tx, uint8_t _direction);
-void rs_ntp_tx_set_logged(NTPState * _state, NTPTransaction * tx, uint32_t logger);
-int8_t rs_ntp_tx_get_logged(NTPState * _state, NTPTransaction * tx, uint32_t logger);
-void rs_ntp_state_set_tx_detect_state(NTPState * state, NTPTransaction * tx, DetectEngineState * de_state);
-DetectEngineState * rs_ntp_state_get_tx_detect_state(NTPTransaction * tx);
-uint8_t rs_ntp_state_has_events(NTPState * state);
-AppLayerDecoderEvents * rs_ntp_state_get_events(NTPState * state, uint64_t tx_id);
-int8_t rs_ntp_state_get_event_info(const char * event_name, int * event_id, AppLayerEventType * event_type);
+int rs_ntp_tx_get_alstate_progress(void * _tx, uint8_t _direction);
+void rs_ntp_tx_set_logged(NTPState * _state, NTPTransaction * tx, uint32_t logged);
+uint32_t rs_ntp_tx_get_logged(NTPState * _state, NTPTransaction * tx);
+int rs_ntp_state_set_tx_detect_state(void * tx, DetectEngineState * de_state);
+DetectEngineState * rs_ntp_state_get_tx_detect_state(void * tx);
+AppLayerDecoderEvents * rs_ntp_state_get_events(void * state, uint64_t tx_id);
+int rs_ntp_state_get_event_info(const char * event_name, int * event_id, AppLayerEventType * event_type);
+AppProto ntp_probing_parser(const Flow * _flow, const uint8_t * input, uint32_t input_len);
+void rs_register_ntp_parser(void);
 
 #endif /* ! __RUST_NTP_NTP_GEN_H__ */

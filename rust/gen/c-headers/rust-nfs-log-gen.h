@@ -22,7 +22,7 @@
 #ifndef __RUST_NFS_LOG_GEN_H__
 #define __RUST_NFS_LOG_GEN_H__
 
-uint8_t rs_nfs_tx_logging_is_filtered(NFSTransaction * tx);
+uint8_t rs_nfs_tx_logging_is_filtered(NFSState * state, NFSTransaction * tx);
 json_t * rs_nfs_log_json_request(NFSState * state, NFSTransaction * tx);
 json_t * rs_nfs_log_json_response(NFSState * state, NFSTransaction * tx);
 json_t * rs_rpc_log_json_response(NFSTransaction * tx);

@@ -1,4 +1,4 @@
-/* Copyright (C) 2011-2017 Open Information Security Foundation
+/* Copyright (C) 2011-2018 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -28,10 +28,10 @@
  *
  * AF_PACKET socket acquisition support
  *
- * \todo watch other interface event to detect suppression of the monitored
- *       interface
  */
 
+#define PCAP_DONT_INCLUDE_PCAP_BPF_H 1
+#define SC_PCAP_DONT_INCLUDE_PCAP_H 1
 #include "suricata-common.h"
 #include "config.h"
 #include "suricata.h"
@@ -44,8 +44,10 @@
 #include "tm-threads.h"
 #include "tm-threads-common.h"
 #include "conf.h"
+#include "util-cpu.h"
 #include "util-debug.h"
 #include "util-device.h"
+#include "util-ebpf.h"
 #include "util-error.h"
 #include "util-privs.h"
 #include "util-optimize.h"
@@ -56,23 +58,32 @@
 #include "source-af-packet.h"
 #include "runmodes.h"
 
-#ifdef __SC_CUDA_SUPPORT__
-
-#include "util-cuda.h"
-#include "util-cuda-buffer.h"
-#include "util-mpm-ac.h"
-#include "util-cuda-handlers.h"
-#include "detect-engine.h"
-#include "detect-engine-mpm.h"
-#include "util-cuda-vars.h"
-
-#endif /* __SC_CUDA_SUPPORT__ */
-
 #ifdef HAVE_AF_PACKET
 
 #if HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
+
+#ifdef HAVE_PACKET_EBPF
+#include "util-ebpf.h"
+#include <bpf/libbpf.h>
+#include <bpf/bpf.h>
+#endif
+
+struct bpf_program {
+    unsigned int bf_len;
+    struct bpf_insn *bf_insns;
+};
+
+#ifdef HAVE_PCAP_H
+#include <pcap.h>
+#endif
+
+#ifdef HAVE_PCAP_PCAP_H
+#include <pcap/pcap.h>
+#endif
+
+#include "util-bpf.h"
 
 #if HAVE_LINUX_IF_ETHER_H
 #include <linux/if_ether.h>
@@ -120,7 +131,6 @@ void TmModuleReceiveAFPRegister (void)
 
 /**
  * \brief Registration Function for DecodeAFP.
- * \todo Unit tests are needed for this module.
  */
 void TmModuleDecodeAFPRegister (void)
 {
@@ -166,9 +176,6 @@ TmEcode NoAFPSupportExit(ThreadVars *tv, const void *initdata, void **data)
 #define TP_STATUS_VLAN_VALID (1 << 4)
 #endif
 
-/** protect pfring_set_bpf_filter, as it is not thread safe */
-static SCMutex afpacket_bpf_set_filter_lock = SCMUTEX_INITIALIZER;
-
 enum {
     AFP_READ_OK,
     AFP_READ_FAILURE,
@@ -190,6 +197,10 @@ union thdr {
     void *raw;
 };
 
+static int AFPBypassCallback(Packet *p);
+static int AFPXDPBypassCallback(Packet *p);
+
+#define MAX_MAPS 32
 /**
  * \brief Structure to hold thread specific variables.
  */
@@ -209,6 +220,13 @@ typedef struct AFPThreadVars_
     /* data link type for the thread */
     uint32_t datalink;
 
+#ifdef HAVE_PACKET_EBPF
+    /* File descriptor of the IPv4 flow bypass table maps */
+    int v4_map_fd;
+    /* File descriptor of the IPv6 flow bypass table maps */
+    int v6_map_fd;
+#endif
+
     unsigned int frame_offset;
 
     ChecksumValidationMode checksum_mode;
@@ -221,7 +239,7 @@ typedef struct AFPThreadVars_
     /* handle state */
     uint8_t afp_state;
     uint8_t copy_mode;
-    uint8_t flags;
+    unsigned int flags;
 
     /* IPS peer */
     AFPPeer *mpeer;
@@ -245,6 +263,8 @@ typedef struct AFPThreadVars_
     int buffer_size;
     /* Filter */
     const char *bpf_filter;
+    int ebpf_lb_fd;
+    int ebpf_filter_fd;
 
     int promisc;
 
@@ -269,6 +289,9 @@ typedef struct AFPThreadVars_
     /* mmap'ed ring buffer */
     unsigned int ring_buflen;
     uint8_t *ring_buf;
+
+    uint8_t xdp_mode;
+
 } AFPThreadVars;
 
 TmEcode ReceiveAFP(ThreadVars *, Packet *, void *, PacketQueue *, PacketQueue *);
@@ -287,6 +310,9 @@ static int AFPGetDevFlags(int fd, const char *ifname);
 static int AFPDerefSocket(AFPPeer* peer);
 static int AFPRefSocket(AFPPeer* peer);
 
+
+static unsigned int nr_cpus;
+
 /**
  * \brief Registration Function for RecieveAFP.
  * \todo Unit tests are needed for this module.
@@ -303,6 +329,8 @@ void TmModuleReceiveAFPRegister (void)
     tmm_modules[TMM_RECEIVEAFP].RegisterTests = NULL;
     tmm_modules[TMM_RECEIVEAFP].cap_flags = SC_CAP_NET_RAW;
     tmm_modules[TMM_RECEIVEAFP].flags = TM_FLAG_RECEIVE_TM;
+
+    nr_cpus = UtilCpuGetNumProcessorsConfigured();
 }
 
 
@@ -599,6 +627,20 @@ static int AFPRead(AFPThreadVars *ptv)
         SCReturnInt(AFP_SURI_FAILURE);
     }
     PKT_SET_SRC(p, PKT_SRC_WIRE);
+    if (ptv->flags & AFP_BYPASS) {
+        p->BypassPacketsFlow = AFPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+        p->afp_v.v4_map_fd = ptv->v4_map_fd;
+        p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+    }
+    if (ptv->flags & AFP_XDPBYPASS) {
+        p->BypassPacketsFlow = AFPXDPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+        p->afp_v.v4_map_fd = ptv->v4_map_fd;
+        p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+    }
 
     /* get timestamp of packet via ioctl */
     if (ioctl(ptv->socket, SIOCGSTAMP, &p->ts) == -1) {
@@ -870,6 +912,20 @@ static int AFPReadFromRing(AFPThreadVars *ptv)
             SCReturnInt(AFP_SURI_FAILURE);
         }
         PKT_SET_SRC(p, PKT_SRC_WIRE);
+        if (ptv->flags & AFP_BYPASS) {
+            p->BypassPacketsFlow = AFPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+            p->afp_v.v4_map_fd = ptv->v4_map_fd;
+            p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+        }
+        if (ptv->flags & AFP_XDPBYPASS) {
+            p->BypassPacketsFlow = AFPXDPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+            p->afp_v.v4_map_fd = ptv->v4_map_fd;
+            p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+        }
 
         /* Suricata will treat packet so telling it is busy, this
          * status will be reset to 0 (ie TP_STATUS_KERNEL) in the release
@@ -923,6 +979,7 @@ static int AFPReadFromRing(AFPThreadVars *ptv)
                 SCReturnInt(AFP_SURI_FAILURE);
             }
         }
+
         /* Timestamp */
         p->ts.tv_sec = h.h2->tp_sec;
         p->ts.tv_usec = h.h2->tp_nsec/1000;
@@ -989,6 +1046,19 @@ static inline int AFPParsePacketV3(AFPThreadVars *ptv, struct tpacket_block_desc
         SCReturnInt(AFP_SURI_FAILURE);
     }
     PKT_SET_SRC(p, PKT_SRC_WIRE);
+    if (ptv->flags & AFP_BYPASS) {
+        p->BypassPacketsFlow = AFPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+        p->afp_v.v4_map_fd = ptv->v4_map_fd;
+        p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+    } else if (ptv->flags & AFP_XDPBYPASS) {
+        p->BypassPacketsFlow = AFPXDPBypassCallback;
+#ifdef HAVE_PACKET_EBPF
+        p->afp_v.v4_map_fd = ptv->v4_map_fd;
+        p->afp_v.v6_map_fd = ptv->v6_map_fd;
+#endif
+    }
 
     ptv->pkts++;
     p->livedev = ptv->livedev;
@@ -1193,7 +1263,7 @@ static void AFPSwitchState(AFPThreadVars *ptv, int state)
         if (ptv->socket != -1) {
             /* we need to wait for all packets to return data */
             if (SC_ATOMIC_SUB(ptv->mpeer->sock_usage, 1) == 0) {
-                SCLogInfo("Cleaning socket connected to '%s'", ptv->iface);
+                SCLogDebug("Cleaning socket connected to '%s'", ptv->iface);
                 munmap(ptv->ring_buf, ptv->ring_buflen);
                 close(ptv->socket);
                 ptv->socket = -1;
@@ -1259,12 +1329,20 @@ static int AFPReadAndDiscardFromRing(AFPThreadVars *ptv, struct timeval *synctv,
 
 #ifdef HAVE_TPACKET_V3
     if (ptv->flags & AFP_TPACKET_V3) {
+        int ret = 0;
         struct tpacket_block_desc *pbd;
         pbd = (struct tpacket_block_desc *) ptv->ring_v3[ptv->frame_offset].iov_base;
         *discarded_pkts += pbd->hdr.bh1.num_pkts;
+        struct tpacket3_hdr *ppd =
+            (struct tpacket3_hdr *)((uint8_t *)pbd + pbd->hdr.bh1.offset_to_first_pkt);
+        if (((time_t)ppd->tp_sec > synctv->tv_sec) ||
+                ((time_t)ppd->tp_sec == synctv->tv_sec &&
+                 (suseconds_t) (ppd->tp_nsec / 1000) > (suseconds_t)synctv->tv_usec)) {
+            ret = 1;
+        }
         AFPFlushBlock(pbd);
         ptv->frame_offset = (ptv->frame_offset + 1) % ptv->req3.tp_block_nr;
-        return 1;
+        return ret;
 
     } else
 #endif
@@ -1302,7 +1380,6 @@ static int AFPReadAndDiscardFromRing(AFPThreadVars *ptv, struct timeval *synctv,
  */
 static int AFPSynchronizeStart(AFPThreadVars *ptv, uint64_t *discarded_pkts)
 {
-    int r;
     struct timeval synctv;
     struct pollfd fds;
 
@@ -1314,7 +1391,7 @@ static int AFPSynchronizeStart(AFPThreadVars *ptv, uint64_t *discarded_pkts)
     synctv.tv_usec = 0xffffffff;
 
     while (1) {
-        r = poll(&fds, 1, POLL_TIMEOUT);
+        int r = poll(&fds, 1, POLL_TIMEOUT);
         if (r > 0 &&
                 (fds.revents & (POLLHUP|POLLRDHUP|POLLERR|POLLNVAL))) {
             SCLogWarning(SC_ERR_AFP_READ, "poll failed %02x",
@@ -1357,8 +1434,6 @@ static int AFPSynchronizeStart(AFPThreadVars *ptv, uint64_t *discarded_pkts)
  */
 static int AFPTryReopen(AFPThreadVars *ptv)
 {
-    int afp_activate_r;
-
     ptv->down_count++;
 
     /* Don't reconnect till we have packet that did not release data */
@@ -1366,7 +1441,7 @@ static int AFPTryReopen(AFPThreadVars *ptv)
         return -1;
     }
 
-    afp_activate_r = AFPCreateSocket(ptv, ptv->iface, 0);
+    int afp_activate_r = AFPCreateSocket(ptv, ptv->iface, 0);
     if (afp_activate_r != 0) {
         if (ptv->down_count % AFP_DOWN_COUNTER_INTERVAL == 0) {
             SCLogWarning(SC_ERR_AFP_CREATE, "Can not open iface '%s'",
@@ -1429,9 +1504,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
     }
     if (ptv->afp_state == AFP_STATE_UP) {
         SCLogDebug("Thread %s using socket %d", tv->name, ptv->socket);
-        if ((ptv->flags & AFP_TPACKET_V3) != 0) {
-            AFPSynchronizeStart(ptv, &discarded_pkts);
-        }
+        AFPSynchronizeStart(ptv, &discarded_pkts);
         /* let's reset counter as we will start the capture at the
          * next function call */
 #ifdef PACKET_STATISTICS
@@ -1493,7 +1566,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
                 if (recv(ptv->socket, &c, sizeof c, MSG_PEEK) != -1)
                     continue; /* what, no error? */
                 SCLogError(SC_ERR_AFP_READ,
-                           "Error reading data from iface '%s': (%d" PRIu32 ") %s",
+                           "Error reading data from iface '%s': (%d) %s",
                            ptv->iface, errno, strerror(errno));
                 AFPSwitchState(ptv, AFP_STATE_DOWN);
                 continue;
@@ -1516,7 +1589,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
                 case AFP_READ_FAILURE:
                     /* AFPRead in error: best to reset the socket */
                     SCLogError(SC_ERR_AFP_READ,
-                           "AFPRead error reading data from iface '%s': (%d" PRIu32 ") %s",
+                           "AFPRead error reading data from iface '%s': (%d) %s",
                            ptv->iface, errno, strerror(errno));
                     AFPSwitchState(ptv, AFP_STATE_DOWN);
                     continue;
@@ -1538,7 +1611,7 @@ TmEcode ReceiveAFPLoop(ThreadVars *tv, void *data, void *slot)
             TmThreadsCaptureInjectPacket(tv, ptv->slot, NULL);
 
         } else if ((r < 0) && (errno != EINTR)) {
-            SCLogError(SC_ERR_AFP_READ, "Error reading data from iface '%s': (%d" PRIu32 ") %s",
+            SCLogError(SC_ERR_AFP_READ, "Error reading data from iface '%s': (%d) %s",
                        ptv->iface,
                        errno, strerror(errno));
             AFPSwitchState(ptv, AFP_STATE_DOWN);
@@ -1698,7 +1771,7 @@ static int AFPComputeRingParamsV3(AFPThreadVars *ptv)
         }
     }
 
-    ptv->req.tp_frame_size = TPACKET_ALIGN(snaplen +TPACKET_ALIGN(TPACKET_ALIGN(tp_hdrlen) + sizeof(struct sockaddr_ll) + ETH_HLEN) - ETH_HLEN);
+    ptv->req3.tp_frame_size = TPACKET_ALIGN(snaplen +TPACKET_ALIGN(TPACKET_ALIGN(tp_hdrlen) + sizeof(struct sockaddr_ll) + ETH_HLEN) - ETH_HLEN);
     frames_per_block = ptv->req3.tp_block_size / ptv->req3.tp_frame_size;
 
     if (frames_per_block == 0) {
@@ -1935,6 +2008,45 @@ int AFPIsFanoutSupported(void)
 #endif
 }
 
+#ifdef HAVE_PACKET_EBPF
+
+static int SockFanoutSeteBPF(AFPThreadVars *ptv)
+{
+    int pfd = ptv->ebpf_lb_fd;
+    if (pfd == -1) {
+        SCLogError(SC_ERR_INVALID_VALUE,
+                   "Fanout file descriptor is invalid");
+        return -1;
+    }
+
+    if (setsockopt(ptv->socket, SOL_PACKET, PACKET_FANOUT_DATA, &pfd, sizeof(pfd))) {
+        SCLogError(SC_ERR_INVALID_VALUE, "Error setting ebpf");
+        return -1;
+    }
+    SCLogInfo("Activated eBPF on socket");
+
+    return 0;
+}
+
+static int SetEbpfFilter(AFPThreadVars *ptv)
+{
+    int pfd = ptv->ebpf_filter_fd;
+    if (pfd == -1) {
+        SCLogError(SC_ERR_INVALID_VALUE,
+                   "Filter file descriptor is invalid");
+        return -1;
+    }
+
+    if (setsockopt(ptv->socket, SOL_SOCKET, SO_ATTACH_BPF, &pfd, sizeof(pfd))) {
+        SCLogError(SC_ERR_INVALID_VALUE, "Error setting ebpf: %s", strerror(errno));
+        return -1;
+    }
+    SCLogInfo("Activated eBPF filter on socket");
+
+    return 0;
+}
+#endif
+
 static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
 {
     int r;
@@ -2044,6 +2156,7 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
         goto socket_err;
     }
 
+
 #ifdef HAVE_PACKET_FANOUT
     /* add binded socket to fanout group */
     if (ptv->threads > 1) {
@@ -2054,6 +2167,18 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
         if (r < 0) {
             SCLogError(SC_ERR_AFP_CREATE,
                        "Couldn't set fanout mode, error %s",
+                       strerror(errno));
+            goto socket_err;
+        }
+    }
+#endif
+
+#ifdef HAVE_PACKET_EBPF
+    if (ptv->cluster_type == PACKET_FANOUT_EBPF) {
+        r = SockFanoutSeteBPF(ptv);
+        if (r < 0) {
+            SCLogError(SC_ERR_AFP_CREATE,
+                       "Coudn't set EBPF, error %s",
                        strerror(errno));
             goto socket_err;
         }
@@ -2078,7 +2203,6 @@ static int AFPCreateSocket(AFPThreadVars *ptv, char *devname, int verbose)
 
     TmEcode rc = AFPSetBPFFilter(ptv);
     if (rc == TM_ECODE_FAILED) {
-        SCLogError(SC_ERR_AFP_CREATE, "Set AF_PACKET bpf filter \"%s\" failed.", ptv->bpf_filter);
         ret = AFP_FATAL_ERROR;
         goto socket_err;
     }
@@ -2112,30 +2236,31 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
     struct sock_fprog  fcode;
     int rc;
 
+#ifdef HAVE_PACKET_EBPF
+    if (ptv->ebpf_filter_fd != -1) {
+        return SetEbpfFilter(ptv);
+    }
+#endif
+
     if (!ptv->bpf_filter)
         return TM_ECODE_OK;
-
-    SCMutexLock(&afpacket_bpf_set_filter_lock);
 
     SCLogInfo("Using BPF '%s' on iface '%s'",
               ptv->bpf_filter,
               ptv->iface);
-    if (pcap_compile_nopcap(default_packet_size,  /* snaplen_arg */
+
+    char errbuf[PCAP_ERRBUF_SIZE];
+    if (SCBPFCompile(default_packet_size,  /* snaplen_arg */
                 ptv->datalink,    /* linktype_arg */
                 &filter,       /* program */
                 ptv->bpf_filter, /* const char *buf */
                 1,             /* optimize */
-                0              /* mask */
-                ) == -1) {
-        SCLogError(SC_ERR_AFP_CREATE, "Filter compilation failed.");
-        SCMutexUnlock(&afpacket_bpf_set_filter_lock);
-        return TM_ECODE_FAILED;
-    }
-    SCMutexUnlock(&afpacket_bpf_set_filter_lock);
-
-    if (filter.bf_insns == NULL) {
-        SCLogError(SC_ERR_AFP_CREATE, "Filter badly setup.");
-        pcap_freecode(&filter);
+                0,              /* mask */
+                errbuf,
+                sizeof(errbuf)) == -1) {
+        SCLogError(SC_ERR_AFP_CREATE, "Failed to compile BPF \"%s\": %s",
+                   ptv->bpf_filter,
+                   errbuf);
         return TM_ECODE_FAILED;
     }
 
@@ -2144,13 +2269,248 @@ TmEcode AFPSetBPFFilter(AFPThreadVars *ptv)
 
     rc = setsockopt(ptv->socket, SOL_SOCKET, SO_ATTACH_FILTER, &fcode, sizeof(fcode));
 
-    pcap_freecode(&filter);
+    SCBPFFree(&filter);
     if(rc == -1) {
         SCLogError(SC_ERR_AFP_CREATE, "Failed to attach filter: %s", strerror(errno));
         return TM_ECODE_FAILED;
     }
 
     return TM_ECODE_OK;
+}
+
+#ifdef HAVE_PACKET_EBPF
+/**
+ * Insert a half flow in the kernel bypass table
+ *
+ * \param mapfd file descriptor of the protocol bypass table
+ * \param key data to use as key in the table
+ * \param inittime time of creation of the entry (in monotonic clock)
+ * \return 0 in case of error, 1 if success
+ */
+static int AFPInsertHalfFlow(int mapd, void *key, uint64_t inittime)
+{
+    struct pair value[nr_cpus];
+    unsigned int i;
+
+    if (mapd == -1) {
+        return 0;
+    }
+
+    /* We use a per CPU structure so we have to set an array of values as the kernel
+     * is not duplicating the data on each CPU by itself. */
+    for (i = 0; i < nr_cpus; i++) {
+        value[i].time = inittime;
+        value[i].packets = 0;
+        value[i].bytes = 0;
+    }
+    SCLogDebug("Inserting element in eBPF mapping: %lu", inittime);
+    if (bpf_map_update_elem(mapd, key, value, BPF_NOEXIST) != 0) {
+        switch (errno) {
+            /* no more place in the hash */
+            case E2BIG:
+                return 0;
+            /* if we already have the key then bypass is a success */
+            case EEXIST:
+                return 1;
+            /* Not supposed to be there so issue a error */
+            default:
+                SCLogError(SC_ERR_BPF, "Can't update eBPF map: %s (%d)",
+                        strerror(errno),
+                        errno);
+                return 0;
+        }
+    }
+    return 1;
+}
+#endif
+
+/**
+ * Bypass function for AF_PACKET capture in eBPF mode
+ *
+ * This function creates two half flows in the map shared with the kernel
+ * to trigger bypass.
+ *
+ * The implementation of bypass is done via an IPv4 and an IPv6 flow table.
+ * This table contains the list of half flows to bypass. The in-kernel filter
+ * will skip/drop the packet if they belong to a flow in one of the flows
+ * table.
+ *
+ * \param p the packet belonging to the flow to bypass
+ * \return 0 if unable to bypass, 1 if success
+ */
+static int AFPBypassCallback(Packet *p)
+{
+#ifdef HAVE_PACKET_EBPF
+    SCLogDebug("Calling af_packet callback function");
+    /* Only bypass TCP and UDP */
+    if (!(PKT_IS_TCP(p) || PKT_IS_UDP(p))) {
+        return 0;
+    }
+
+    /* Bypassing tunneled packets is currently not supported
+     * because we can't discard the inner packet only due to
+     * primitive parsing in eBPF */
+    if (IS_TUNNEL_PKT(p)) {
+        return 0;
+    }
+    struct timespec curtime;
+    uint64_t inittime = 0;
+    /* In eBPF, the function that we have use to get time return the
+     * monotonic clock (the time since start of the computer). So we
+     * can't use the timestamp of the packet. */
+    if (clock_gettime(CLOCK_MONOTONIC, &curtime) == 0) {
+        inittime = curtime.tv_sec * 1000000000;
+    }
+    if (PKT_IS_IPV4(p)) {
+        SCLogDebug("add an IPv4");
+        if (p->afp_v.v4_map_fd == -1) {
+            return 0;
+        }
+        struct flowv4_keys key = {};
+        key.src = htonl(GET_IPV4_SRC_ADDR_U32(p));
+        key.dst = htonl(GET_IPV4_DST_ADDR_U32(p));
+        key.port16[0] = GET_TCP_SRC_PORT(p);
+        key.port16[1] = GET_TCP_DST_PORT(p);
+
+        key.ip_proto = IPV4_GET_IPPROTO(p);
+        if (AFPInsertHalfFlow(p->afp_v.v4_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        key.src = htonl(GET_IPV4_DST_ADDR_U32(p));
+        key.dst = htonl(GET_IPV4_SRC_ADDR_U32(p));
+        key.port16[0] = GET_TCP_DST_PORT(p);
+        key.port16[1] = GET_TCP_SRC_PORT(p);
+        if (AFPInsertHalfFlow(p->afp_v.v4_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        EBPFUpdateFlow(p->flow, p);
+        return 1;
+    }
+    /* For IPv6 case we don't handle extended header in eBPF */
+    if (PKT_IS_IPV6(p) &&
+        ((IPV6_GET_NH(p) == IPPROTO_TCP) || (IPV6_GET_NH(p) == IPPROTO_UDP))) {
+        int i;
+        if (p->afp_v.v6_map_fd == -1) {
+            return 0;
+        }
+        SCLogDebug("add an IPv6");
+        struct flowv6_keys key = {};
+        for (i = 0; i < 4; i++) {
+            key.src[i] = ntohl(GET_IPV6_SRC_ADDR(p)[i]);
+            key.dst[i] = ntohl(GET_IPV6_DST_ADDR(p)[i]);
+        }
+        key.port16[0] = GET_TCP_SRC_PORT(p);
+        key.port16[1] = GET_TCP_DST_PORT(p);
+        key.ip_proto = IPV6_GET_NH(p);
+        if (AFPInsertHalfFlow(p->afp_v.v6_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        for (i = 0; i < 4; i++) {
+            key.src[i] = ntohl(GET_IPV6_DST_ADDR(p)[i]);
+            key.dst[i] = ntohl(GET_IPV6_SRC_ADDR(p)[i]);
+        }
+        key.port16[0] = GET_TCP_DST_PORT(p);
+        key.port16[1] = GET_TCP_SRC_PORT(p);
+        if (AFPInsertHalfFlow(p->afp_v.v6_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        EBPFUpdateFlow(p->flow, p);
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+/**
+ * Bypass function for AF_PACKET capture in XDP mode
+ *
+ * This function creates two half flows in the map shared with the kernel
+ * to trigger bypass. This function is similar to AFPBypassCallback() but
+ * the bytes order is changed for some data due to the way we get the data
+ * in the XDP case.
+ *
+ * \param p the packet belonging to the flow to bypass
+ * \return 0 if unable to bypass, 1 if success
+ */
+static int AFPXDPBypassCallback(Packet *p)
+{
+#ifdef HAVE_PACKET_XDP
+    SCLogDebug("Calling af_packet callback function");
+    /* Only bypass TCP and UDP */
+    if (!(PKT_IS_TCP(p) || PKT_IS_UDP(p))) {
+        return 0;
+    }
+
+    /* Bypassing tunneled packets is currently not supported
+     * because we can't discard the inner packet only due to
+     * primitive parsing in eBPF */
+    if (IS_TUNNEL_PKT(p)) {
+        return 0;
+    }
+    struct timespec curtime;
+    uint64_t inittime = 0;
+    /* In eBPF, the function that we have use to get time return the
+     * monotonic clock (the time since start of the computer). So we
+     * can't use the timestamp of the packet. */
+    if (clock_gettime(CLOCK_MONOTONIC, &curtime) == 0) {
+        inittime = curtime.tv_sec * 1000000000;
+    }
+    if (PKT_IS_IPV4(p)) {
+        struct flowv4_keys key = {};
+        if (p->afp_v.v4_map_fd == -1) {
+            return 0;
+        }
+        key.src = GET_IPV4_SRC_ADDR_U32(p);
+        key.dst = GET_IPV4_DST_ADDR_U32(p);
+        /* In the XDP filter we get port from parsing of packet and not from skb
+         * (as in eBPF filter) so we need to pass from host to network order */
+        key.port16[0] = htons(GET_TCP_SRC_PORT(p));
+        key.port16[1] = htons(GET_TCP_DST_PORT(p));
+        key.ip_proto = IPV4_GET_IPPROTO(p);
+        if (AFPInsertHalfFlow(p->afp_v.v4_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        key.src = GET_IPV4_DST_ADDR_U32(p);
+        key.dst = GET_IPV4_SRC_ADDR_U32(p);
+        key.port16[0] = htons(GET_TCP_DST_PORT(p));
+        key.port16[1] = htons(GET_TCP_SRC_PORT(p));
+        if (AFPInsertHalfFlow(p->afp_v.v4_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        return 1;
+    }
+    /* For IPv6 case we don't handle extended header in eBPF */
+    if (PKT_IS_IPV6(p) &&
+        ((IPV6_GET_NH(p) == IPPROTO_TCP) || (IPV6_GET_NH(p) == IPPROTO_UDP))) {
+        SCLogDebug("add an IPv6");
+        if (p->afp_v.v6_map_fd == -1) {
+            return 0;
+        }
+        int i;
+        struct flowv6_keys key = {};
+        for (i = 0; i < 4; i++) {
+            key.src[i] = GET_IPV6_SRC_ADDR(p)[i];
+            key.dst[i] = GET_IPV6_DST_ADDR(p)[i];
+        }
+        key.port16[0] = htons(GET_TCP_SRC_PORT(p));
+        key.port16[1] = htons(GET_TCP_DST_PORT(p));
+        key.ip_proto = IPV6_GET_NH(p);
+        if (AFPInsertHalfFlow(p->afp_v.v6_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        for (i = 0; i < 4; i++) {
+            key.src[i] = GET_IPV6_DST_ADDR(p)[i];
+            key.dst[i] = GET_IPV6_SRC_ADDR(p)[i];
+        }
+        key.port16[0] = htons(GET_TCP_DST_PORT(p));
+        key.port16[1] = htons(GET_TCP_SRC_PORT(p));
+        if (AFPInsertHalfFlow(p->afp_v.v6_map_fd, &key, inittime) == 0) {
+            return 0;
+        }
+        return 1;
+    }
+#endif
+    return 0;
 }
 
 /**
@@ -2216,6 +2576,22 @@ TmEcode ReceiveAFPThreadInit(ThreadVars *tv, const void *initdata, void **data)
     if (afpconfig->bpf_filter) {
         ptv->bpf_filter = afpconfig->bpf_filter;
     }
+    ptv->ebpf_lb_fd = afpconfig->ebpf_lb_fd;
+    ptv->ebpf_filter_fd = afpconfig->ebpf_filter_fd;
+    ptv->xdp_mode = afpconfig->xdp_mode;
+
+#ifdef HAVE_PACKET_EBPF
+    if (ptv->flags & (AFP_BYPASS|AFP_XDPBYPASS)) {
+        ptv->v4_map_fd = EBPFGetMapFDByName(ptv->iface, "flow_table_v4");
+        if (ptv->v4_map_fd == -1) {
+            SCLogError(SC_ERR_INVALID_VALUE, "Can't find eBPF map fd for '%s'", "flow_table_v4");
+        }
+        ptv->v6_map_fd = EBPFGetMapFDByName(ptv->iface, "flow_table_v6");
+        if (ptv->v6_map_fd  == -1) {
+            SCLogError(SC_ERR_INVALID_VALUE, "Can't find eBPF map fd for '%s'", "flow_table_v6");
+        }
+    }
+#endif
 
 #ifdef PACKET_STATISTICS
     ptv->capture_kernel_packets = StatsRegisterCounter("capture.kernel_packets",
@@ -2306,6 +2682,9 @@ TmEcode ReceiveAFPThreadDeinit(ThreadVars *tv, void *data)
 
     AFPSwitchState(ptv, AFP_STATE_DOWN);
 
+#ifdef HAVE_PACKET_XDP
+    EBPFSetupXDP(ptv->iface, -1, ptv->xdp_mode);
+#endif
     if (ptv->data != NULL) {
         SCFree(ptv->data);
         ptv->data = NULL;
@@ -2365,6 +2744,7 @@ TmEcode DecodeAFP(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packet
             DecodePPP(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_RAW:
+        case LINKTYPE_GRE_OVER_IP:
             DecodeRaw(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_NULL:
@@ -2393,11 +2773,6 @@ TmEcode DecodeAFPThreadInit(ThreadVars *tv, const void *initdata, void **data)
     DecodeRegisterPerfCounters(dtv, tv);
 
     *data = (void *)dtv;
-
-#ifdef __SC_CUDA_SUPPORT__
-    if (CudaThreadVarsInit(&dtv->cuda_vars) < 0)
-        SCReturnInt(TM_ECODE_FAILED);
-#endif
 
     SCReturnInt(TM_ECODE_OK);
 }

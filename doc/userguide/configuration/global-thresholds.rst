@@ -3,7 +3,7 @@ Global-Thresholds
 
 Thresholds can be configured in the rules themselves, see
 :doc:`../rules/thresholding`. They are often set by rule writers based on
-their intel for creating a rule combined with a judgement on how often
+their intelligence for creating a rule combined with a judgement on how often
 a rule will alert.
 
 Threshold Config
@@ -53,6 +53,8 @@ track
 Where to track the rule matches. When using by_src/by_dst the tracking is
 done per IP-address. The Host table is used for storage. When using by_rule
 it's done globally for the rule.
+Option by_both used to track per IP pair of source and destination. Packets
+going to opposite directions between same addresses tracked as the same pair.
 
 count
 ^^^^^
@@ -188,7 +190,7 @@ Threshold/event_filter
 When applied to a specific signature, thresholds and event_filters
 (threshold from now on) will override the signature setting. This can
 be useful for when the default in a signature doesn't suit your
-evironment.
+environment.
 
 ::
 
@@ -200,9 +202,9 @@ Each of these will replace the threshold setting for 2002087 by the
 new threshold setting.
 
 **Note:** overriding all gids or sids (by using gen_id 0 or sig_id 0)
-is not supported. Bug #425.
+is not supported. Bug https://redmine.openinfosecfoundation.org/issues/425.
 
 Rate_filter
 ~~~~~~~~~~~
 
-TODO
+see https://redmine.openinfosecfoundation.org/issues/425.

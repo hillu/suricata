@@ -419,6 +419,8 @@ int DetectHostbitSetup (DetectEngineCtx *de_ctx, Signature *s, const char *rawst
             SigMatchAppendSMToList(s, sm, DETECT_SM_LIST_POSTMATCH);
             break;
 
+        // suppress coverity warning as scan-build-7 warns w/o this.
+        // coverity[deadcode : FALSE]
         default:
             goto error;
     }
@@ -1075,6 +1077,7 @@ static int HostBitsTestSig07(void)
 
     FLOW_INITIALIZE(&f);
     p->flow = &f;
+    p->flowflags = FLOW_PKT_TOSERVER;
 
     p->src.family = AF_INET;
     p->dst.family = AF_INET;

@@ -40,11 +40,11 @@
 //! assert_eq!(digest.sum64(), 0x995dc9bbdf1939fa);
 //! ```
 
-#[macro_use]
-extern crate lazy_static;
+#![cfg_attr(not(feature = "std"), no_std)]
 
 pub mod crc32;
 pub mod crc64;
+mod util;
 
 pub use self::crc32::Hasher32;
 pub use self::crc64::Hasher64;

@@ -1,14 +1,11 @@
+#[cfg(feature = "std")]
 use std::hash::Hasher;
+#[cfg(not(feature = "std"))]
+use core::hash::Hasher;
 
-pub const CASTAGNOLI: u32 = 0x82f63b78;
-pub const IEEE: u32 = 0xedb88320;
-pub const KOOPMAN: u32 = 0xeb31d82e;
+pub use util::make_table_crc32 as make_table;
 
-lazy_static! {
-    pub static ref IEEE_TABLE: [u32; 256] = make_table(IEEE);
-    pub static ref CASTAGNOLI_TABLE: [u32; 256] = make_table(CASTAGNOLI);
-    pub static ref KOOPMAN_TABLE: [u32; 256] = make_table(KOOPMAN);
-}
+include!(concat!(env!("OUT_DIR"), "/crc32_constants.rs"));
 
 pub struct Digest {
     table: [u32; 256],
@@ -20,22 +17,6 @@ pub trait Hasher32 {
     fn reset(&mut self);
     fn write(&mut self, bytes: &[u8]);
     fn sum32(&self) -> u32;
-}
-
-pub fn make_table(poly: u32) -> [u32; 256] {
-    let mut table = [0u32; 256];
-    for i in 0..256 {
-        let mut value = i as u32;
-        for _ in 0..8 {
-            value = if (value & 1) == 1 {
-                (value >> 1) ^ poly
-            } else {
-                value >> 1
-            }
-        }
-        table[i] = value;
-    }
-    table
 }
 
 pub fn update(mut value: u32, table: &[u32; 256], bytes: &[u8]) -> u32 {

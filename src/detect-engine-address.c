@@ -446,6 +446,38 @@ int DetectAddressJoin(DetectEngineCtx *de_ctx, DetectAddress *target,
 }
 
 /**
+ * \brief Checks if two address group lists are equal.
+ *
+ * \param list1 Pointer to the first address group list.
+ * \param list2 Pointer to the second address group list.
+ *
+ * \retval true On success.
+ * \retval false On failure.
+ */
+bool DetectAddressListsAreEqual(DetectAddress *list1, DetectAddress *list2)
+{
+    DetectAddress *item = list1;
+    DetectAddress *it = list2;
+
+    // First, compare items one by one.
+    while (item != NULL && it != NULL) {
+        if (DetectAddressCmp(item, it) != ADDRESS_EQ) {
+            return false;
+        }
+
+        item = item->next;
+        it = it->next;
+    }
+
+    // Are the lists of the same size?
+    if (!(item == NULL && it == NULL)) {
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * \internal
  * \brief Creates a cidr ipv6 netblock, based on the cidr netblock value.
  *
@@ -587,7 +619,7 @@ int DetectAddressParseString(DetectAddress *dd, const char *str)
             dd->ip2.addr_data32[0] = in.s_addr;
 
             /* a > b is illegal, a = b is ok */
-            if (ntohl(dd->ip.addr_data32[0]) > ntohl(dd->ip2.addr_data32[0]))
+            if (SCNtohl(dd->ip.addr_data32[0]) > SCNtohl(dd->ip2.addr_data32[0]))
                 goto error;
         } else {
             /* 1.2.3.4 format */
@@ -1693,7 +1725,8 @@ int DetectAddressCmp(DetectAddress *a, DetectAddress *b)
  *
  *  \todo array should be ordered, so we can break out of the loop
  */
-int DetectAddressMatchIPv4(DetectMatchAddressIPv4 *addrs, uint16_t addrs_cnt, Address *a)
+int DetectAddressMatchIPv4(const DetectMatchAddressIPv4 *addrs,
+        uint16_t addrs_cnt, const Address *a)
 {
     SCEnter();
 
@@ -1703,8 +1736,8 @@ int DetectAddressMatchIPv4(DetectMatchAddressIPv4 *addrs, uint16_t addrs_cnt, Ad
 
     uint16_t idx;
     for (idx = 0; idx < addrs_cnt; idx++) {
-        if (ntohl(a->addr_data32[0]) >= addrs[idx].ip &&
-            ntohl(a->addr_data32[0]) <= addrs[idx].ip2)
+        if (SCNtohl(a->addr_data32[0]) >= addrs[idx].ip &&
+            SCNtohl(a->addr_data32[0]) <= addrs[idx].ip2)
         {
             SCReturnInt(1);
         }
@@ -1727,7 +1760,8 @@ int DetectAddressMatchIPv4(DetectMatchAddressIPv4 *addrs, uint16_t addrs_cnt, Ad
  *
  *  \todo array should be ordered, so we can break out of the loop
  */
-int DetectAddressMatchIPv6(DetectMatchAddressIPv6 *addrs, uint16_t addrs_cnt, Address *a)
+int DetectAddressMatchIPv6(const DetectMatchAddressIPv6 *addrs,
+        uint16_t addrs_cnt, const Address *a)
 {
     SCEnter();
 
@@ -1746,17 +1780,17 @@ int DetectAddressMatchIPv6(DetectMatchAddressIPv6 *addrs, uint16_t addrs_cnt, Ad
         result1 = result2 = 0;
 
         /* See if packet address equals either limit. Return 1 if true. */
-        if (ntohl(a->addr_data32[0]) == addrs[idx].ip[0] &&
-            ntohl(a->addr_data32[1]) == addrs[idx].ip[1] &&
-            ntohl(a->addr_data32[2]) == addrs[idx].ip[2] &&
-            ntohl(a->addr_data32[3]) == addrs[idx].ip[3])
+        if (SCNtohl(a->addr_data32[0]) == addrs[idx].ip[0] &&
+            SCNtohl(a->addr_data32[1]) == addrs[idx].ip[1] &&
+            SCNtohl(a->addr_data32[2]) == addrs[idx].ip[2] &&
+            SCNtohl(a->addr_data32[3]) == addrs[idx].ip[3])
         {
             SCReturnInt(1);
         }
-        if (ntohl(a->addr_data32[0]) == addrs[idx].ip2[0] &&
-            ntohl(a->addr_data32[1]) == addrs[idx].ip2[1] &&
-            ntohl(a->addr_data32[2]) == addrs[idx].ip2[2] &&
-            ntohl(a->addr_data32[3]) == addrs[idx].ip2[3])
+        if (SCNtohl(a->addr_data32[0]) == addrs[idx].ip2[0] &&
+            SCNtohl(a->addr_data32[1]) == addrs[idx].ip2[1] &&
+            SCNtohl(a->addr_data32[2]) == addrs[idx].ip2[2] &&
+            SCNtohl(a->addr_data32[3]) == addrs[idx].ip2[3])
         {
             SCReturnInt(1);
         }
@@ -1765,11 +1799,11 @@ int DetectAddressMatchIPv6(DetectMatchAddressIPv6 *addrs, uint16_t addrs_cnt, Ad
          * of the current signature address match pair.
          */
         for (i = 0; i < 4; i++) {
-            if (ntohl(a->addr_data32[i]) > addrs[idx].ip[i]) {
+            if (SCNtohl(a->addr_data32[i]) > addrs[idx].ip[i]) {
                 result1 = 1;
                 break;
             }
-            if (ntohl(a->addr_data32[i]) < addrs[idx].ip[i]) {
+            if (SCNtohl(a->addr_data32[i]) < addrs[idx].ip[i]) {
                 result1 = 0;
                 break;
             }
@@ -1783,11 +1817,11 @@ int DetectAddressMatchIPv6(DetectMatchAddressIPv6 *addrs, uint16_t addrs_cnt, Ad
          * of the current signature address match pair.
          */
         for (i = 0; i < 4; i++) {
-            if (ntohl(a->addr_data32[i]) < addrs[idx].ip2[i]) {
+            if (SCNtohl(a->addr_data32[i]) < addrs[idx].ip2[i]) {
                 result2 = 1;
                 break;
             }
-            if (ntohl(a->addr_data32[i]) > addrs[idx].ip2[i]) {
+            if (SCNtohl(a->addr_data32[i]) > addrs[idx].ip2[i]) {
                 result2 = 0;
                 break;
             }
@@ -1830,10 +1864,10 @@ int DetectAddressMatch(DetectAddress *dd, Address *a)
     switch (a->family) {
         case AF_INET:
 
-            /* XXX figure out a way to not need to do this ntohl if we switch to
+            /* XXX figure out a way to not need to do this SCNtohl if we switch to
              * Address inside DetectAddressData we can do uint8_t checks */
-            if (ntohl(a->addr_data32[0]) >= ntohl(dd->ip.addr_data32[0]) &&
-                ntohl(a->addr_data32[0]) <= ntohl(dd->ip2.addr_data32[0]))
+            if (SCNtohl(a->addr_data32[0]) >= SCNtohl(dd->ip.addr_data32[0]) &&
+                SCNtohl(a->addr_data32[0]) <= SCNtohl(dd->ip2.addr_data32[0]))
             {
                 SCReturnInt(1);
             } else {
@@ -2046,8 +2080,8 @@ static int AddressTestParse02(void)
     DetectAddress *dd = DetectAddressParseSingle("1.2.3.4");
 
     if (dd) {
-        if (dd->ip2.addr_data32[0] != ntohl(16909060) ||
-            dd->ip.addr_data32[0] != ntohl(16909060)) {
+        if (dd->ip2.addr_data32[0] != SCNtohl(16909060) ||
+            dd->ip.addr_data32[0] != SCNtohl(16909060)) {
             result = 0;
         }
 
@@ -2077,8 +2111,8 @@ static int AddressTestParse04(void)
     DetectAddress *dd = DetectAddressParseSingle("1.2.3.4/255.255.255.0");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(16909056)||
-            dd->ip2.addr_data32[0] != ntohl(16909311)) {
+        if (dd->ip.addr_data32[0] != SCNtohl(16909056)||
+            dd->ip2.addr_data32[0] != SCNtohl(16909311)) {
             result = 0;
         }
 
@@ -2107,8 +2141,8 @@ static int AddressTestParse06(void)
     DetectAddress *dd = DetectAddressParseSingle("1.2.3.4/24");
 
     if (dd) {
-        if (dd->ip2.addr_data32[0] != ntohl(16909311) ||
-            dd->ip.addr_data32[0] != ntohl(16909056)) {
+        if (dd->ip2.addr_data32[0] != SCNtohl(16909311) ||
+            dd->ip.addr_data32[0] != SCNtohl(16909056)) {
             result = 0;
         }
 
@@ -2137,10 +2171,10 @@ static int AddressTestParse08(void)
     DetectAddress *dd = DetectAddressParseSingle("2001::/3");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(536870912) || dd->ip.addr_data32[1] != 0x00000000 ||
+        if (dd->ip.addr_data32[0] != SCNtohl(536870912) || dd->ip.addr_data32[1] != 0x00000000 ||
             dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != 0x00000000 ||
 
-            dd->ip2.addr_data32[0] != ntohl(1073741823) || dd->ip2.addr_data32[1] != 0xFFFFFFFF ||
+            dd->ip2.addr_data32[0] != SCNtohl(1073741823) || dd->ip2.addr_data32[1] != 0xFFFFFFFF ||
             dd->ip2.addr_data32[2] != 0xFFFFFFFF || dd->ip2.addr_data32[3] != 0xFFFFFFFF) {
             DetectAddressPrint(dd);
             result = 0;
@@ -2171,10 +2205,10 @@ static int AddressTestParse10(void)
     DetectAddress *dd = DetectAddressParseSingle("2001::/128");
 
    if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
+        if (dd->ip.addr_data32[0] != SCNtohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
             dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != 0x00000000 ||
 
-            dd->ip2.addr_data32[0] != ntohl(536936448) || dd->ip2.addr_data32[1] != 0x00000000 ||
+            dd->ip2.addr_data32[0] != SCNtohl(536936448) || dd->ip2.addr_data32[1] != 0x00000000 ||
             dd->ip2.addr_data32[2] != 0x00000000 || dd->ip2.addr_data32[3] != 0x00000000) {
             DetectAddressPrint(dd);
             result = 0;
@@ -2205,10 +2239,10 @@ static int AddressTestParse12(void)
     DetectAddress *dd = DetectAddressParseSingle("2001::/48");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
+        if (dd->ip.addr_data32[0] != SCNtohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
             dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != 0x00000000 ||
 
-            dd->ip2.addr_data32[0] != ntohl(536936448) || dd->ip2.addr_data32[1] != ntohl(65535) ||
+            dd->ip2.addr_data32[0] != SCNtohl(536936448) || dd->ip2.addr_data32[1] != SCNtohl(65535) ||
             dd->ip2.addr_data32[2] != 0xFFFFFFFF || dd->ip2.addr_data32[3] != 0xFFFFFFFF) {
             DetectAddressPrint(dd);
             result = 0;
@@ -2238,10 +2272,10 @@ static int AddressTestParse14(void)
     DetectAddress *dd = DetectAddressParseSingle("2001::/16");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
+        if (dd->ip.addr_data32[0] != SCNtohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
             dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != 0x00000000 ||
 
-            dd->ip2.addr_data32[0] != ntohl(537001983) || dd->ip2.addr_data32[1] != 0xFFFFFFFF ||
+            dd->ip2.addr_data32[0] != SCNtohl(537001983) || dd->ip2.addr_data32[1] != 0xFFFFFFFF ||
             dd->ip2.addr_data32[2] != 0xFFFFFFFF || dd->ip2.addr_data32[3] != 0xFFFFFFFF) {
             result = 0;
         }
@@ -2304,8 +2338,8 @@ static int AddressTestParse18(void)
     DetectAddress *dd = DetectAddressParseSingle("1.2.3.4-1.2.3.6");
 
     if (dd) {
-        if (dd->ip2.addr_data32[0] != ntohl(16909062) ||
-            dd->ip.addr_data32[0] != ntohl(16909060)) {
+        if (dd->ip2.addr_data32[0] != SCNtohl(16909062) ||
+            dd->ip.addr_data32[0] != SCNtohl(16909060)) {
             result = 0;
         }
 
@@ -2346,11 +2380,11 @@ static int AddressTestParse21(void)
     DetectAddress *dd = DetectAddressParseSingle("2001::1-2001::4");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
-            dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != ntohl(1) ||
+        if (dd->ip.addr_data32[0] != SCNtohl(536936448) || dd->ip.addr_data32[1] != 0x00000000 ||
+            dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != SCNtohl(1) ||
 
-            dd->ip2.addr_data32[0] != ntohl(536936448) || dd->ip2.addr_data32[1] != 0x00000000 ||
-            dd->ip2.addr_data32[2] != 0x00000000 || dd->ip2.addr_data32[3] != ntohl(4)) {
+            dd->ip2.addr_data32[0] != SCNtohl(536936448) || dd->ip2.addr_data32[1] != 0x00000000 ||
+            dd->ip2.addr_data32[2] != 0x00000000 || dd->ip2.addr_data32[3] != SCNtohl(4)) {
             result = 0;
         }
 
@@ -2444,7 +2478,7 @@ static int AddressTestParse28(void)
 
     if (dd) {
         if (dd->flags & ADDRESS_FLAG_NOT &&
-            dd->ip.addr_data32[0] == ntohl(16909060)) {
+            dd->ip.addr_data32[0] == SCNtohl(16909060)) {
             result = 1;
         }
 
@@ -2474,8 +2508,8 @@ static int AddressTestParse30(void)
 
     if (dd) {
         if (dd->flags & ADDRESS_FLAG_NOT &&
-            dd->ip.addr_data32[0] == ntohl(16909056) &&
-            dd->ip2.addr_data32[0] == ntohl(16909311)) {
+            dd->ip.addr_data32[0] == SCNtohl(16909056) &&
+            dd->ip2.addr_data32[0] == SCNtohl(16909311)) {
             result = 1;
         }
 
@@ -2520,8 +2554,8 @@ static int AddressTestParse33(void)
 
     if (dd) {
         if (dd->flags & ADDRESS_FLAG_NOT &&
-            dd->ip.addr_data32[0] == ntohl(536936448) && dd->ip.addr_data32[1] == 0x00000000 &&
-            dd->ip.addr_data32[2] == 0x00000000 && dd->ip.addr_data32[3] == ntohl(1)) {
+            dd->ip.addr_data32[0] == SCNtohl(536936448) && dd->ip.addr_data32[1] == 0x00000000 &&
+            dd->ip.addr_data32[2] == 0x00000000 && dd->ip.addr_data32[3] == SCNtohl(1)) {
             result = 1;
         }
 
@@ -2551,10 +2585,10 @@ static int AddressTestParse35(void)
 
     if (dd) {
         if (dd->flags & ADDRESS_FLAG_NOT &&
-            dd->ip.addr_data32[0] == ntohl(536936448) && dd->ip.addr_data32[1] == 0x00000000 &&
+            dd->ip.addr_data32[0] == SCNtohl(536936448) && dd->ip.addr_data32[1] == 0x00000000 &&
             dd->ip.addr_data32[2] == 0x00000000 && dd->ip.addr_data32[3] == 0x00000000 &&
 
-            dd->ip2.addr_data32[0] == ntohl(537001983) && dd->ip2.addr_data32[1] == 0xFFFFFFFF &&
+            dd->ip2.addr_data32[0] == SCNtohl(537001983) && dd->ip2.addr_data32[1] == 0xFFFFFFFF &&
             dd->ip2.addr_data32[2] == 0xFFFFFFFF && dd->ip2.addr_data32[3] == 0xFFFFFFFF) {
             result = 1;
         }
@@ -2572,7 +2606,7 @@ static int AddressTestParse36(void)
     DetectAddress *dd = DetectAddressParseSingle("ffff::/16");
 
     if (dd) {
-        if (dd->ip.addr_data32[0] != ntohl(0xFFFF0000) || dd->ip.addr_data32[1] != 0x00000000 ||
+        if (dd->ip.addr_data32[0] != SCNtohl(0xFFFF0000) || dd->ip.addr_data32[1] != 0x00000000 ||
             dd->ip.addr_data32[2] != 0x00000000 || dd->ip.addr_data32[3] != 0x00000000 ||
 
             dd->ip2.addr_data32[0] != 0xFFFFFFFF || dd->ip2.addr_data32[1] != 0xFFFFFFFF ||
@@ -3447,11 +3481,11 @@ static int AddressTestAddressGroupSetup11(void)
                      * 10.10.11.0/10.10.11.1
                      * 10.10.11.2/255.255.255.255
                      */
-                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == ntohl(168430079) &&
-                        two->ip.addr_data32[0] == ntohl(168430080) && two->ip2.addr_data32[0] == ntohl(168430089) &&
-                        three->ip.addr_data32[0] == ntohl(168430090) && three->ip2.addr_data32[0] == ntohl(168430335) &&
-                        four->ip.addr_data32[0] == ntohl(168430336) && four->ip2.addr_data32[0] == ntohl(168430337) &&
-                        five->ip.addr_data32[0] == ntohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
+                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == SCNtohl(168430079) &&
+                        two->ip.addr_data32[0] == SCNtohl(168430080) && two->ip2.addr_data32[0] == SCNtohl(168430089) &&
+                        three->ip.addr_data32[0] == SCNtohl(168430090) && three->ip2.addr_data32[0] == SCNtohl(168430335) &&
+                        four->ip.addr_data32[0] == SCNtohl(168430336) && four->ip2.addr_data32[0] == SCNtohl(168430337) &&
+                        five->ip.addr_data32[0] == SCNtohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
                         result = 1;
                     }
                 }
@@ -3486,11 +3520,11 @@ static int AddressTestAddressGroupSetup12 (void)
                      * 10.10.11.0/10.10.11.1
                      * 10.10.11.2/255.255.255.255
                      */
-                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == ntohl(168430079) &&
-                        two->ip.addr_data32[0] == ntohl(168430080) && two->ip2.addr_data32[0] == ntohl(168430089) &&
-                        three->ip.addr_data32[0] == ntohl(168430090) && three->ip2.addr_data32[0] == ntohl(168430335) &&
-                        four->ip.addr_data32[0] == ntohl(168430336) && four->ip2.addr_data32[0] == ntohl(168430337) &&
-                        five->ip.addr_data32[0] == ntohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
+                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == SCNtohl(168430079) &&
+                        two->ip.addr_data32[0] == SCNtohl(168430080) && two->ip2.addr_data32[0] == SCNtohl(168430089) &&
+                        three->ip.addr_data32[0] == SCNtohl(168430090) && three->ip2.addr_data32[0] == SCNtohl(168430335) &&
+                        four->ip.addr_data32[0] == SCNtohl(168430336) && four->ip2.addr_data32[0] == SCNtohl(168430337) &&
+                        five->ip.addr_data32[0] == SCNtohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
                         result = 1;
                     }
                 }
@@ -3525,11 +3559,11 @@ static int AddressTestAddressGroupSetup13(void)
                      * 10.10.11.0/10.10.11.1
                      * 10.10.11.2/255.255.255.255
                      */
-                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == ntohl(168430079) &&
-                        two->ip.addr_data32[0] == ntohl(168430080) && two->ip2.addr_data32[0] == ntohl(168430089) &&
-                        three->ip.addr_data32[0] == ntohl(168430090) && three->ip2.addr_data32[0] == ntohl(168430335) &&
-                        four->ip.addr_data32[0] == ntohl(168430336) && four->ip2.addr_data32[0] == ntohl(168430337) &&
-                        five->ip.addr_data32[0] == ntohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
+                    if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == SCNtohl(168430079) &&
+                        two->ip.addr_data32[0] == SCNtohl(168430080) && two->ip2.addr_data32[0] == SCNtohl(168430089) &&
+                        three->ip.addr_data32[0] == SCNtohl(168430090) && three->ip2.addr_data32[0] == SCNtohl(168430335) &&
+                        four->ip.addr_data32[0] == SCNtohl(168430336) && four->ip2.addr_data32[0] == SCNtohl(168430337) &&
+                        five->ip.addr_data32[0] == SCNtohl(168430338) && five->ip2.addr_data32[0]  == 0xFFFFFFFF) {
                         result = 1;
                     }
                 }
@@ -3557,8 +3591,8 @@ static int AddressTestAddressGroupSetupIPv414(void)
                  * 0.0.0.0/1.2.3.3
                  * 1.2.3.5/255.255.255.255
                  */
-                if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == ntohl(16909059) &&
-                    two->ip.addr_data32[0] == ntohl(16909061) && two->ip2.addr_data32[0] == 0xFFFFFFFF) {
+                if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == SCNtohl(16909059) &&
+                    two->ip.addr_data32[0] == SCNtohl(16909061) && two->ip2.addr_data32[0] == 0xFFFFFFFF) {
                     result = 1;
                 } else {
                     printf("unexpected addresses: ");
@@ -3589,7 +3623,7 @@ static int AddressTestAddressGroupSetupIPv415(void)
                 /* result should be:
                  * 0.0.0.1/255.255.255.255
                  */
-                if (one->ip.addr_data32[0] == ntohl(1) && one->ip2.addr_data32[0] == 0xFFFFFFFF)
+                if (one->ip.addr_data32[0] == SCNtohl(1) && one->ip2.addr_data32[0] == 0xFFFFFFFF)
                     result = 1;
             }
         }
@@ -3613,7 +3647,7 @@ static int AddressTestAddressGroupSetupIPv416(void)
                 /* result should be:
                  * 0.0.0.0/255.255.255.254
                  */
-                if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == ntohl(4294967294))
+                if (one->ip.addr_data32[0] == 0x00000000 && one->ip2.addr_data32[0] == SCNtohl(4294967294))
                     result = 1;
             }
         }
@@ -3856,39 +3890,39 @@ static int AddressTestAddressGroupSetup24(void)
                         one->ip.addr_data32[1] == 0x00000000 &&
                         one->ip.addr_data32[2] == 0x00000000 &&
                         one->ip.addr_data32[3] == 0x00000000 &&
-                        one->ip2.addr_data32[0] == ntohl(536870911) &&
+                        one->ip2.addr_data32[0] == SCNtohl(536870911) &&
                         one->ip2.addr_data32[1] == 0xFFFFFFFF &&
                         one->ip2.addr_data32[2] == 0xFFFFFFFF &&
                         one->ip2.addr_data32[3] == 0xFFFFFFFF &&
 
-                        two->ip.addr_data32[0] == ntohl(536870912) &&
+                        two->ip.addr_data32[0] == SCNtohl(536870912) &&
                         two->ip.addr_data32[1] == 0x00000000 &&
                         two->ip.addr_data32[2] == 0x00000000 &&
                         two->ip.addr_data32[3] == 0x00000000 &&
-                        two->ip2.addr_data32[0] == ntohl(536936448) &&
+                        two->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         two->ip2.addr_data32[1] == 0x00000000 &&
                         two->ip2.addr_data32[2] == 0x00000000 &&
-                        two->ip2.addr_data32[3] == ntohl(3) &&
+                        two->ip2.addr_data32[3] == SCNtohl(3) &&
 
-                        three->ip.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip.addr_data32[1] == 0x00000000 &&
                         three->ip.addr_data32[2] == 0x00000000 &&
-                        three->ip.addr_data32[3] == ntohl(4) &&
-                        three->ip2.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[3] == SCNtohl(4) &&
+                        three->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip2.addr_data32[1] == 0x00000000 &&
                         three->ip2.addr_data32[2] == 0x00000000 &&
-                        three->ip2.addr_data32[3] == ntohl(6) &&
+                        three->ip2.addr_data32[3] == SCNtohl(6) &&
 
-                        four->ip.addr_data32[0] == ntohl(536936448) &&
+                        four->ip.addr_data32[0] == SCNtohl(536936448) &&
                         four->ip.addr_data32[1] == 0x00000000 &&
                         four->ip.addr_data32[2] == 0x00000000 &&
-                        four->ip.addr_data32[3] == ntohl(7) &&
-                        four->ip2.addr_data32[0] == ntohl(1073741823) &&
+                        four->ip.addr_data32[3] == SCNtohl(7) &&
+                        four->ip2.addr_data32[0] == SCNtohl(1073741823) &&
                         four->ip2.addr_data32[1] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[2] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[3] == 0xFFFFFFFF &&
 
-                        five->ip.addr_data32[0] == ntohl(1073741824) &&
+                        five->ip.addr_data32[0] == SCNtohl(1073741824) &&
                         five->ip.addr_data32[1] == 0x00000000 &&
                         five->ip.addr_data32[2] == 0x00000000 &&
                         five->ip.addr_data32[3] == 0x00000000 &&
@@ -3926,39 +3960,39 @@ static int AddressTestAddressGroupSetup25(void)
                         one->ip.addr_data32[1] == 0x00000000 &&
                         one->ip.addr_data32[2] == 0x00000000 &&
                         one->ip.addr_data32[3] == 0x00000000 &&
-                        one->ip2.addr_data32[0]  == ntohl(536870911) &&
+                        one->ip2.addr_data32[0]  == SCNtohl(536870911) &&
                         one->ip2.addr_data32[1]  == 0xFFFFFFFF &&
                         one->ip2.addr_data32[2]  == 0xFFFFFFFF &&
                         one->ip2.addr_data32[3]  == 0xFFFFFFFF &&
 
-                        two->ip.addr_data32[0] == ntohl(536870912) &&
+                        two->ip.addr_data32[0] == SCNtohl(536870912) &&
                         two->ip.addr_data32[1] == 0x00000000 &&
                         two->ip.addr_data32[2] == 0x00000000 &&
                         two->ip.addr_data32[3] == 0x00000000 &&
-                        two->ip2.addr_data32[0] == ntohl(536936448) &&
+                        two->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         two->ip2.addr_data32[1] == 0x00000000 &&
                         two->ip2.addr_data32[2] == 0x00000000 &&
-                        two->ip2.addr_data32[3] == ntohl(3) &&
+                        two->ip2.addr_data32[3] == SCNtohl(3) &&
 
-                        three->ip.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip.addr_data32[1] == 0x00000000 &&
                         three->ip.addr_data32[2] == 0x00000000 &&
-                        three->ip.addr_data32[3] == ntohl(4) &&
-                        three->ip2.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[3] == SCNtohl(4) &&
+                        three->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip2.addr_data32[1] == 0x00000000 &&
                         three->ip2.addr_data32[2] == 0x00000000 &&
-                        three->ip2.addr_data32[3] == ntohl(6) &&
+                        three->ip2.addr_data32[3] == SCNtohl(6) &&
 
-                        four->ip.addr_data32[0] == ntohl(536936448) &&
+                        four->ip.addr_data32[0] == SCNtohl(536936448) &&
                         four->ip.addr_data32[1] == 0x00000000 &&
                         four->ip.addr_data32[2] == 0x00000000 &&
-                        four->ip.addr_data32[3] == ntohl(7) &&
-                        four->ip2.addr_data32[0] == ntohl(1073741823) &&
+                        four->ip.addr_data32[3] == SCNtohl(7) &&
+                        four->ip2.addr_data32[0] == SCNtohl(1073741823) &&
                         four->ip2.addr_data32[1] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[2] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[3] == 0xFFFFFFFF &&
 
-                        five->ip.addr_data32[0] == ntohl(1073741824) &&
+                        five->ip.addr_data32[0] == SCNtohl(1073741824) &&
                         five->ip.addr_data32[1] == 0x00000000 &&
                         five->ip.addr_data32[2] == 0x00000000 &&
                         five->ip.addr_data32[3] == 0x00000000 &&
@@ -3996,39 +4030,39 @@ static int AddressTestAddressGroupSetup26(void)
                         one->ip.addr_data32[1] == 0x00000000 &&
                         one->ip.addr_data32[2] == 0x00000000 &&
                         one->ip.addr_data32[3] == 0x00000000 &&
-                        one->ip2.addr_data32[0] == ntohl(536870911) &&
+                        one->ip2.addr_data32[0] == SCNtohl(536870911) &&
                         one->ip2.addr_data32[1] == 0xFFFFFFFF &&
                         one->ip2.addr_data32[2] == 0xFFFFFFFF &&
                         one->ip2.addr_data32[3] == 0xFFFFFFFF &&
 
-                        two->ip.addr_data32[0] == ntohl(536870912) &&
+                        two->ip.addr_data32[0] == SCNtohl(536870912) &&
                         two->ip.addr_data32[1] == 0x00000000 &&
                         two->ip.addr_data32[2] == 0x00000000 &&
                         two->ip.addr_data32[3] == 0x00000000 &&
-                        two->ip2.addr_data32[0] == ntohl(536936448) &&
+                        two->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         two->ip2.addr_data32[1] == 0x00000000 &&
                         two->ip2.addr_data32[2] == 0x00000000 &&
-                        two->ip2.addr_data32[3] == ntohl(3) &&
+                        two->ip2.addr_data32[3] == SCNtohl(3) &&
 
-                        three->ip.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip.addr_data32[1] == 0x00000000 &&
                         three->ip.addr_data32[2] == 0x00000000 &&
-                        three->ip.addr_data32[3] == ntohl(4) &&
-                        three->ip2.addr_data32[0] == ntohl(536936448) &&
+                        three->ip.addr_data32[3] == SCNtohl(4) &&
+                        three->ip2.addr_data32[0] == SCNtohl(536936448) &&
                         three->ip2.addr_data32[1] == 0x00000000 &&
                         three->ip2.addr_data32[2] == 0x00000000 &&
-                        three->ip2.addr_data32[3] == ntohl(6) &&
+                        three->ip2.addr_data32[3] == SCNtohl(6) &&
 
-                        four->ip.addr_data32[0] == ntohl(536936448) &&
+                        four->ip.addr_data32[0] == SCNtohl(536936448) &&
                         four->ip.addr_data32[1] == 0x00000000 &&
                         four->ip.addr_data32[2] == 0x00000000 &&
-                        four->ip.addr_data32[3] == ntohl(7) &&
-                        four->ip2.addr_data32[0] == ntohl(1073741823) &&
+                        four->ip.addr_data32[3] == SCNtohl(7) &&
+                        four->ip2.addr_data32[0] == SCNtohl(1073741823) &&
                         four->ip2.addr_data32[1] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[2] == 0xFFFFFFFF &&
                         four->ip2.addr_data32[3] == 0xFFFFFFFF &&
 
-                        five->ip.addr_data32[0] == ntohl(1073741824) &&
+                        five->ip.addr_data32[0] == SCNtohl(1073741824) &&
                         five->ip.addr_data32[1] == 0x00000000 &&
                         five->ip.addr_data32[2] == 0x00000000 &&
                         five->ip.addr_data32[3] == 0x00000000 &&
@@ -4487,11 +4521,11 @@ static int AddressTestCutIPv403(void)
     if (c == NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16908800) || a->ip2.addr_data32[0] != ntohl(16909055))
+    if (a->ip.addr_data32[0] != SCNtohl(16908800) || a->ip2.addr_data32[0] != SCNtohl(16909055))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909056) || b->ip2.addr_data32[0] != ntohl(16909060))
+    if (b->ip.addr_data32[0] != SCNtohl(16909056) || b->ip2.addr_data32[0] != SCNtohl(16909060))
         goto error;
-    if (c->ip.addr_data32[0] != ntohl(16909061) || c->ip2.addr_data32[0] != ntohl(16909311))
+    if (c->ip.addr_data32[0] != SCNtohl(16909061) || c->ip2.addr_data32[0] != SCNtohl(16909311))
         goto error;
 
     DetectAddressFree(a);
@@ -4518,11 +4552,11 @@ static int AddressTestCutIPv404(void)
     if (c == NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909058))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909058))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909059) || b->ip2.addr_data32[0] != ntohl(16909061))
+    if (b->ip.addr_data32[0] != SCNtohl(16909059) || b->ip2.addr_data32[0] != SCNtohl(16909061))
         goto error;
-    if (c->ip.addr_data32[0] != ntohl(16909062) || c->ip2.addr_data32[0] != ntohl(16909062))
+    if (c->ip.addr_data32[0] != SCNtohl(16909062) || c->ip2.addr_data32[0] != SCNtohl(16909062))
         goto error;
 
 
@@ -4550,11 +4584,11 @@ static int AddressTestCutIPv405(void)
     if (c == NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909058))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909058))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909059) || b->ip2.addr_data32[0] != ntohl(16909062))
+    if (b->ip.addr_data32[0] != SCNtohl(16909059) || b->ip2.addr_data32[0] != SCNtohl(16909062))
         goto error;
-    if (c->ip.addr_data32[0] != ntohl(16909063) || c->ip2.addr_data32[0] != ntohl(16909065))
+    if (c->ip.addr_data32[0] != SCNtohl(16909063) || c->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
     DetectAddressFree(a);
@@ -4581,11 +4615,11 @@ static int AddressTestCutIPv406(void)
     if (c == NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909058))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909058))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909059) || b->ip2.addr_data32[0] != ntohl(16909062))
+    if (b->ip.addr_data32[0] != SCNtohl(16909059) || b->ip2.addr_data32[0] != SCNtohl(16909062))
         goto error;
-    if (c->ip.addr_data32[0] != ntohl(16909063) || c->ip2.addr_data32[0] != ntohl(16909065))
+    if (c->ip.addr_data32[0] != SCNtohl(16909063) || c->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
     DetectAddressFree(a);
@@ -4612,9 +4646,9 @@ static int AddressTestCutIPv407(void)
     if (c != NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909062))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909062))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909063) || b->ip2.addr_data32[0] != ntohl(16909065))
+    if (b->ip.addr_data32[0] != SCNtohl(16909063) || b->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
     DetectAddressFree(a);
@@ -4641,9 +4675,9 @@ static int AddressTestCutIPv408(void)
     if (c != NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909058))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909058))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909059) || b->ip2.addr_data32[0] != ntohl(16909065))
+    if (b->ip.addr_data32[0] != SCNtohl(16909059) || b->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
     DetectAddressFree(a);
@@ -4670,9 +4704,9 @@ static int AddressTestCutIPv409(void)
     if (c != NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909062))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909062))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909063) || b->ip2.addr_data32[0] != ntohl(16909065))
+    if (b->ip.addr_data32[0] != SCNtohl(16909063) || b->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
     DetectAddressFree(a);
@@ -4699,12 +4733,12 @@ static int AddressTestCutIPv410(void)
     if (c != NULL)
         goto error;
 
-    if (a->ip.addr_data32[0] != ntohl(16909056) || a->ip2.addr_data32[0] != ntohl(16909058))
+    if (a->ip.addr_data32[0] != SCNtohl(16909056) || a->ip2.addr_data32[0] != SCNtohl(16909058))
         goto error;
-    if (b->ip.addr_data32[0] != ntohl(16909059) || b->ip2.addr_data32[0] != ntohl(16909065))
+    if (b->ip.addr_data32[0] != SCNtohl(16909059) || b->ip2.addr_data32[0] != SCNtohl(16909065))
         goto error;
 
-    printf("ip %u ip2 %u ", htonl(a->ip.addr_data32[0]), htonl(a->ip2.addr_data32[0]));
+    printf("ip %u ip2 %u ", (uint32_t)htonl(a->ip.addr_data32[0]), (uint32_t)htonl(a->ip2.addr_data32[0]));
 
     DetectAddressFree(a);
     DetectAddressFree(b);

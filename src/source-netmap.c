@@ -30,6 +30,7 @@
 *
 */
 
+
 #include "suricata-common.h"
 #include "config.h"
 #include "suricata.h"
@@ -42,6 +43,7 @@
 #include "tm-threads.h"
 #include "tm-threads-common.h"
 #include "conf.h"
+#include "util-bpf.h"
 #include "util-debug.h"
 #include "util-device.h"
 #include "util-error.h"
@@ -53,18 +55,6 @@
 #include "tmqh-packetpool.h"
 #include "source-netmap.h"
 #include "runmodes.h"
-
-#ifdef __SC_CUDA_SUPPORT__
-
-#include "util-cuda.h"
-#include "util-cuda-buffer.h"
-#include "util-mpm-ac.h"
-#include "util-cuda-handlers.h"
-#include "detect-engine.h"
-#include "detect-engine-mpm.h"
-#include "util-cuda-vars.h"
-
-#endif /* __SC_CUDA_SUPPORT__ */
 
 #ifdef HAVE_NETMAP
 
@@ -175,7 +165,6 @@ typedef struct NetmapDevice_
     char ifname[IFNAMSIZ];
     void *mem;
     size_t memsize;
-    struct netmap_if *nif;
     int rings_cnt;
     int rx_rings_cnt;
     int tx_rings_cnt;
@@ -278,6 +267,7 @@ static int NetmapOpen(char *ifname, int promisc, NetmapDevice **pdevice, int ver
 {
     NetmapDevice *pdev = NULL;
     struct nmreq nm_req;
+    struct netmap_if *nifp = NULL;
 
     *pdevice = NULL;
 
@@ -395,14 +385,14 @@ static int NetmapOpen(char *ifname, int promisc, NetmapDevice **pdevice, int ver
                            strerror(errno));
                 break;
             }
-            pdev->nif = NETMAP_IF(pdev->mem, nm_req.nr_offset);
         }
+        nifp = NETMAP_IF(pdev->mem, nm_req.nr_offset);
 
         if ((i < pdev->rx_rings_cnt) || (i == pdev->rings_cnt)) {
-            pring->rx = NETMAP_RXRING(pdev->nif, i);
+            pring->rx = NETMAP_RXRING(nifp, i);
         }
         if ((i < pdev->tx_rings_cnt) || (i == pdev->rings_cnt)) {
-            pring->tx = NETMAP_TXRING(pdev->nif, i);
+            pring->tx = NETMAP_TXRING(nifp, i);
         }
         SCSpinInit(&pring->tx_lock, 0);
         success_cnt++;
@@ -628,15 +618,19 @@ static TmEcode ReceiveNetmapThreadInit(ThreadVars *tv, const void *initdata, voi
     if (aconf->in.bpf_filter) {
         SCLogConfig("Using BPF '%s' on iface '%s'",
                   aconf->in.bpf_filter, ntv->ifsrc->ifname);
-        if (pcap_compile_nopcap(default_packet_size,  /* snaplen_arg */
+        char errbuf[PCAP_ERRBUF_SIZE];
+        if (SCBPFCompile(default_packet_size,  /* snaplen_arg */
                     LINKTYPE_ETHERNET,    /* linktype_arg */
                     &ntv->bpf_prog,       /* program */
                     aconf->in.bpf_filter, /* const char *buf */
                     1,                    /* optimize */
-                    PCAP_NETMASK_UNKNOWN  /* mask */
-                    ) == -1)
+                    PCAP_NETMASK_UNKNOWN,  /* mask */
+                    errbuf,
+                    sizeof(errbuf)) == -1)
         {
-            SCLogError(SC_ERR_NETMAP_CREATE, "Filter compilation failed.");
+            SCLogError(SC_ERR_NETMAP_CREATE, "Failed to compile BPF \"%s\": %s",
+                   aconf->in.bpf_filter,
+                   errbuf);
             goto error_dst;
         }
     }
@@ -781,11 +775,13 @@ static int NetmapRingRead(NetmapThreadVars *ntv, int ring_id)
         } else if (ntv->checksum_mode == CHECKSUM_VALIDATION_AUTO) {
             if (ntv->livedev->ignore_checksum) {
                 p->flags |= PKT_IGNORE_CHECKSUM;
-            } else if (ChecksumAutoModeCheck(ntv->pkts,
-                        SC_ATOMIC_GET(ntv->livedev->pkts),
-                        SC_ATOMIC_GET(ntv->livedev->invalid_checksums))) {
-                ntv->livedev->ignore_checksum = 1;
-                p->flags |= PKT_IGNORE_CHECKSUM;
+            } else {
+                uint64_t pkts = SC_ATOMIC_GET(ntv->livedev->pkts);
+                if (ChecksumAutoModeCheck(pkts, pkts,
+                            SC_ATOMIC_GET(ntv->livedev->invalid_checksums))) {
+                    ntv->livedev->ignore_checksum = 1;
+                    p->flags |= PKT_IGNORE_CHECKSUM;
+                }
             }
         }
 
@@ -964,7 +960,7 @@ static TmEcode ReceiveNetmapThreadDeinit(ThreadVars *tv, void *data)
         ntv->ifdst = NULL;
     }
     if (ntv->bpf_prog.bf_insns) {
-        pcap_freecode(&ntv->bpf_prog);
+        SCBPFFree(&ntv->bpf_prog);
     }
 
     SCReturnInt(TM_ECODE_OK);
@@ -989,11 +985,6 @@ static TmEcode DecodeNetmapThreadInit(ThreadVars *tv, const void *initdata, void
     DecodeRegisterPerfCounters(dtv, tv);
 
     *data = (void *)dtv;
-
-#ifdef __SC_CUDA_SUPPORT__
-    if (CudaThreadVarsInit(&dtv->cuda_vars) < 0)
-        SCReturnInt(TM_ECODE_FAILED);
-#endif
 
     SCReturnInt(TM_ECODE_OK);
 }

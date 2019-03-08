@@ -42,18 +42,6 @@
 #include "util-ioctl.h"
 #include "tmqh-packetpool.h"
 
-#ifdef __SC_CUDA_SUPPORT__
-
-#include "util-cuda.h"
-#include "util-cuda-buffer.h"
-#include "util-mpm-ac.h"
-#include "util-cuda-handlers.h"
-#include "detect-engine.h"
-#include "detect-engine-mpm.h"
-#include "util-cuda-vars.h"
-
-#endif /* __SC_CUDA_SUPPORT__ */
-
 #define PCAP_STATE_DOWN 0
 #define PCAP_STATE_UP 1
 
@@ -106,6 +94,7 @@ TmEcode ReceivePcapThreadInit(ThreadVars *, const void *, void **);
 void ReceivePcapThreadExitStats(ThreadVars *, void *);
 TmEcode ReceivePcapThreadDeinit(ThreadVars *, void *);
 TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot);
+TmEcode ReceivePcapBreakLoop(ThreadVars *tv, void *data);
 
 TmEcode DecodePcapThreadInit(ThreadVars *, const void *, void **);
 TmEcode DecodePcapThreadDeinit(ThreadVars *tv, void *data);
@@ -125,7 +114,7 @@ void TmModuleReceivePcapRegister (void)
     tmm_modules[TMM_RECEIVEPCAP].ThreadInit = ReceivePcapThreadInit;
     tmm_modules[TMM_RECEIVEPCAP].Func = NULL;
     tmm_modules[TMM_RECEIVEPCAP].PktAcqLoop = ReceivePcapLoop;
-    tmm_modules[TMM_RECEIVEPCAP].PktAcqBreakLoop = NULL;
+    tmm_modules[TMM_RECEIVEPCAP].PktAcqBreakLoop = ReceivePcapBreakLoop;
     tmm_modules[TMM_RECEIVEPCAP].ThreadExitPrintStats = ReceivePcapThreadExitStats;
     tmm_modules[TMM_RECEIVEPCAP].ThreadDeinit = NULL;
     tmm_modules[TMM_RECEIVEPCAP].RegisterTests = NULL;
@@ -307,6 +296,20 @@ TmEcode ReceivePcapLoop(ThreadVars *tv, void *data, void *slot)
 
     PcapDumpCounters(ptv);
     StatsSyncCountersIfSignalled(tv);
+    SCReturnInt(TM_ECODE_OK);
+}
+
+/**
+ * \brief PCAP Break Loop function.
+ */
+TmEcode ReceivePcapBreakLoop(ThreadVars *tv, void *data)
+{
+    SCEnter();
+    PcapThreadVars *ptv = (PcapThreadVars *)data;
+    if (ptv->pcap_handle == NULL) {
+        SCReturnInt(TM_ECODE_FAILED);
+    }
+    pcap_breakloop(ptv->pcap_handle);
     SCReturnInt(TM_ECODE_OK);
 }
 
@@ -574,6 +577,7 @@ TmEcode DecodePcap(ThreadVars *tv, Packet *p, void *data, PacketQueue *pq, Packe
             DecodePPP(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_RAW:
+        case LINKTYPE_GRE_OVER_IP:
             DecodeRaw(tv, dtv, p, GET_PKT_DATA(p), GET_PKT_LEN(p), pq);
             break;
         case LINKTYPE_NULL:
@@ -600,11 +604,6 @@ TmEcode DecodePcapThreadInit(ThreadVars *tv, const void *initdata, void **data)
         SCReturnInt(TM_ECODE_FAILED);
 
     DecodeRegisterPerfCounters(dtv, tv);
-
-#ifdef __SC_CUDA_SUPPORT__
-    if (CudaThreadVarsInit(&dtv->cuda_vars) < 0)
-        SCReturnInt(TM_ECODE_FAILED);
-#endif
 
     *data = (void *)dtv;
 

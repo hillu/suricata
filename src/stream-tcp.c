@@ -167,9 +167,36 @@ uint64_t StreamTcpMemuseCounter(void)
  */
 int StreamTcpCheckMemcap(uint64_t size)
 {
-    if (stream_config.memcap == 0 || size + SC_ATOMIC_GET(st_memuse) <= stream_config.memcap)
+    uint64_t memcapcopy = SC_ATOMIC_GET(stream_config.memcap);
+    if (memcapcopy == 0 || size + SC_ATOMIC_GET(st_memuse) <= memcapcopy)
         return 1;
     return 0;
+}
+
+/**
+ *  \brief Update memcap value
+ *
+ *  \param size new memcap value
+ */
+int StreamTcpSetMemcap(uint64_t size)
+{
+    if (size == 0 || (uint64_t)SC_ATOMIC_GET(st_memuse) < size) {
+        SC_ATOMIC_SET(stream_config.memcap, size);
+        return 1;
+    }
+
+    return 0;
+}
+
+/**
+ *  \brief Return memcap value
+ *
+ *  \param memcap memcap value
+ */
+uint64_t StreamTcpGetMemcap(void)
+{
+    uint64_t memcapcopy = SC_ATOMIC_GET(stream_config.memcap);
+    return memcapcopy;
 }
 
 void StreamTcpStreamCleanup(TcpStream *stream)
@@ -344,6 +371,9 @@ void StreamTcpInitConfig(char quiet)
 
     memset(&stream_config,  0, sizeof(stream_config));
 
+    SC_ATOMIC_INIT(stream_config.memcap);
+    SC_ATOMIC_INIT(stream_config.reassembly_memcap);
+
     if ((ConfGetInt("stream.max-sessions", &value)) == 1) {
         SCLogWarning(SC_WARN_OPTION_OBSOLETE, "max-sessions is obsolete. "
             "Number of concurrent sessions is now only limited by Flow and "
@@ -371,18 +401,21 @@ void StreamTcpInitConfig(char quiet)
 
     const char *temp_stream_memcap_str;
     if (ConfGetValue("stream.memcap", &temp_stream_memcap_str) == 1) {
-        if (ParseSizeStringU64(temp_stream_memcap_str, &stream_config.memcap) < 0) {
+        uint64_t stream_memcap_copy;
+        if (ParseSizeStringU64(temp_stream_memcap_str, &stream_memcap_copy) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing stream.memcap "
                        "from conf file - %s.  Killing engine",
                        temp_stream_memcap_str);
             exit(EXIT_FAILURE);
+        } else {
+            SC_ATOMIC_SET(stream_config.memcap, stream_memcap_copy);
         }
     } else {
-        stream_config.memcap = STREAMTCP_DEFAULT_MEMCAP;
+        SC_ATOMIC_SET(stream_config.memcap, STREAMTCP_DEFAULT_MEMCAP);
     }
 
     if (!quiet) {
-        SCLogConfig("stream \"memcap\": %"PRIu64, stream_config.memcap);
+        SCLogConfig("stream \"memcap\": %"PRIu64, SC_ATOMIC_GET(stream_config.memcap));
     }
 
     ConfGetBool("stream.midstream", &stream_config.midstream);
@@ -479,20 +512,24 @@ void StreamTcpInitConfig(char quiet)
 
     const char *temp_stream_reassembly_memcap_str;
     if (ConfGetValue("stream.reassembly.memcap", &temp_stream_reassembly_memcap_str) == 1) {
+        uint64_t stream_reassembly_memcap_copy;
         if (ParseSizeStringU64(temp_stream_reassembly_memcap_str,
-                               &stream_config.reassembly_memcap) < 0) {
+                               &stream_reassembly_memcap_copy) < 0) {
             SCLogError(SC_ERR_SIZE_PARSE, "Error parsing "
                        "stream.reassembly.memcap "
                        "from conf file - %s.  Killing engine",
                        temp_stream_reassembly_memcap_str);
             exit(EXIT_FAILURE);
+        } else {
+            SC_ATOMIC_SET(stream_config.reassembly_memcap, stream_reassembly_memcap_copy);
         }
     } else {
-        stream_config.reassembly_memcap = STREAMTCP_DEFAULT_REASSEMBLY_MEMCAP;
+        SC_ATOMIC_SET(stream_config.reassembly_memcap , STREAMTCP_DEFAULT_REASSEMBLY_MEMCAP);
     }
 
     if (!quiet) {
-        SCLogConfig("stream.reassembly \"memcap\": %"PRIu64"", stream_config.reassembly_memcap);
+        SCLogConfig("stream.reassembly \"memcap\": %"PRIu64"",
+                    SC_ATOMIC_GET(stream_config.reassembly_memcap));
     }
 
     const char *temp_stream_reassembly_depth_str;
@@ -631,6 +668,9 @@ void StreamTcpInitConfig(char quiet)
 
 void StreamTcpFreeConfig(char quiet)
 {
+    SC_ATOMIC_DESTROY(stream_config.memcap);
+    SC_ATOMIC_DESTROY(stream_config.reassembly_memcap);
+
     StreamTcpReassembleFree(quiet);
 
     SCMutexLock(&ssn_pool_mutex);
@@ -885,6 +925,7 @@ static int StreamTcpPacketStateNone(ThreadVars *tv, Packet *p,
                 return -1;
             }
             StatsIncr(tv, stt->counter_tcp_sessions);
+            StatsIncr(tv, stt->counter_tcp_midstream_pickups);
         }
         /* set the state */
         StreamTcpPacketSetState(p, ssn, TCP_SYN_RECV);
@@ -1029,6 +1070,7 @@ static int StreamTcpPacketStateNone(ThreadVars *tv, Packet *p,
                 return -1;
             }
             StatsIncr(tv, stt->counter_tcp_sessions);
+            StatsIncr(tv, stt->counter_tcp_midstream_pickups);
         }
         /* set the state */
         StreamTcpPacketSetState(p, ssn, TCP_ESTABLISHED);
@@ -2357,10 +2399,10 @@ static inline uint32_t StreamTcpResetGetMaxAck(TcpStream *stream, uint32_t seq)
 {
     uint32_t ack = seq;
 
-    if (stream->seg_list_tail != NULL) {
-        if (SEQ_GT((stream->seg_list_tail->seq + TCP_SEG_LEN(stream->seg_list_tail)), ack))
-        {
-            ack = stream->seg_list_tail->seq + TCP_SEG_LEN(stream->seg_list_tail);
+    if (STREAM_HAS_SEEN_DATA(stream)) {
+        const uint32_t tail_seq = STREAM_SEQ_RIGHT_EDGE(stream);
+        if (SEQ_GT(tail_seq, ack)) {
+            ack = tail_seq;
         }
     }
 
@@ -2513,7 +2555,7 @@ static int StreamTcpPacketStateEstablished(ThreadVars *tv, Packet *p,
         return 0;
 
     } else if (p->tcph->th_flags & TH_SYN) {
-        SCLogDebug("ssn %p: SYN packet on state ESTABLISED... resent", ssn);
+        SCLogDebug("ssn %p: SYN packet on state ESTABLISHED... resent", ssn);
         if (PKT_IS_TOCLIENT(p)) {
             SCLogDebug("ssn %p: SYN-pkt to client in EST state", ssn);
 
@@ -4637,10 +4679,15 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
     /* assign the thread id to the flow */
     if (unlikely(p->flow->thread_id == 0)) {
         p->flow->thread_id = (FlowThreadId)tv->id;
-#ifdef DEBUG
     } else if (unlikely((FlowThreadId)tv->id != p->flow->thread_id)) {
         SCLogDebug("wrong thread: flow has %u, we are %d", p->flow->thread_id, tv->id);
-#endif
+        if (p->pkt_src == PKT_SRC_WIRE) {
+            StatsIncr(tv, stt->counter_tcp_wrong_thread);
+            if ((p->flow->flags & FLOW_WRONG_THREAD) == 0) {
+                p->flow->flags |= FLOW_WRONG_THREAD;
+                StreamTcpSetEvent(p, STREAM_WRONG_THREAD);
+            }
+        }
     }
 
     TcpSession *ssn = (TcpSession *)p->flow->protoctx;
@@ -4782,7 +4829,6 @@ int StreamTcpPacket (ThreadVars *tv, Packet *p, StreamTcpThread *stt,
         if (p->flags & PKT_STREAM_MODIFIED) {
             ReCalculateChecksum(p);
         }
-
         /* check for conditions that may make us not want to log this packet */
 
         /* streams that hit depth */
@@ -5102,6 +5148,8 @@ TmEcode StreamTcpThreadInit(ThreadVars *tv, void *initdata, void **data)
     stt->counter_tcp_syn = StatsRegisterCounter("tcp.syn", tv);
     stt->counter_tcp_synack = StatsRegisterCounter("tcp.synack", tv);
     stt->counter_tcp_rst = StatsRegisterCounter("tcp.rst", tv);
+    stt->counter_tcp_midstream_pickups = StatsRegisterCounter("tcp.midstream_pickups", tv);
+    stt->counter_tcp_wrong_thread = StatsRegisterCounter("tcp.pkt_on_wrong_thread", tv);
 
     /* init reassembly ctx */
     stt->ra_ctx = StreamTcpReassembleInitThreadCtx(tv);
@@ -5899,7 +5947,7 @@ void StreamTcpPseudoPacketCreateStreamEndPacket(ThreadVars *tv, StreamTcpThread 
     }
 
     /* no need for a pseudo packet if there is nothing left to reassemble */
-    if (ssn->server.seg_list == NULL && ssn->client.seg_list == NULL) {
+    if (RB_EMPTY(&ssn->server.seg_tree) && RB_EMPTY(&ssn->client.seg_tree)) {
         SCReturn;
     }
 
@@ -6191,11 +6239,12 @@ int StreamTcpSegmentForEach(const Packet *p, uint8_t flag, StreamSegmentCallback
     }
 
     /* for IDS, return ack'd segments. For IPS all. */
-    TcpSegment *seg = stream->seg_list;
-    for (; seg != NULL &&
-            ((stream_config.flags & STREAMTCP_INIT_FLAG_INLINE)
-             || SEQ_LT(seg->seq, stream->last_ack));)
-    {
+    TcpSegment *seg;
+    RB_FOREACH(seg, TCPSEG, &stream->seg_tree) {
+        if (!((stream_config.flags & STREAMTCP_INIT_FLAG_INLINE)
+                    || SEQ_LT(seg->seq, stream->last_ack)))
+            break;
+
         const uint8_t *seg_data;
         uint32_t seg_datalen;
         StreamingBufferSegmentGetData(&stream->sb, &seg->sbseg, &seg_data, &seg_datalen);
@@ -6205,7 +6254,7 @@ int StreamTcpSegmentForEach(const Packet *p, uint8_t flag, StreamSegmentCallback
             SCLogDebug("Callback function has failed");
             return -1;
         }
-        seg = seg->next;
+
         cnt++;
     }
     return cnt;
@@ -6871,7 +6920,11 @@ static int StreamTcpTest09 (void)
 
     FAIL_IF(StreamTcpPacket(&tv, p, &stt, &pq) == -1);
 
-    FAIL_IF(((TcpSession *) (p->flow->protoctx))->client.seg_list->next != NULL);
+    TcpSession *ssn = p->flow->protoctx;
+    FAIL_IF_NULL(ssn);
+    TcpSegment *seg = RB_MIN(TCPSEG, &ssn->client.seg_tree);
+    FAIL_IF_NULL(seg);
+    FAIL_IF(TCPSEG_RB_NEXT(seg) != NULL);
 
     StreamTcpSessionClear(p->flow->protoctx);
     SCFree(p);
@@ -8553,8 +8606,9 @@ static int StreamTcpTest23(void)
 
     FAIL_IF(StreamTcpReassembleHandleSegment(&tv, stt.ra_ctx, &ssn, &ssn.client, p, &pq) == -1);
 
-    FAIL_IF(ssn.client.seg_list_tail == NULL);
-    FAIL_IF(TCP_SEG_LEN(ssn.client.seg_list_tail) != 2);
+    TcpSegment *seg = RB_MAX(TCPSEG, &ssn.client.seg_tree);
+    FAIL_IF_NULL(seg);
+    FAIL_IF(TCP_SEG_LEN(seg) != 2);
 
     StreamTcpUTClearSession(&ssn);
     SCFree(p);
@@ -8618,8 +8672,9 @@ static int StreamTcpTest24(void)
 
     FAIL_IF(StreamTcpReassembleHandleSegment(&tv, stt.ra_ctx, &ssn, &ssn.client, p, &pq) == -1);
 
-    FAIL_IF(ssn.client.seg_list_tail == NULL);
-    FAIL_IF(TCP_SEG_LEN(ssn.client.seg_list_tail) != 4);
+    TcpSegment *seg = RB_MAX(TCPSEG, &ssn.client.seg_tree);
+    FAIL_IF_NULL(seg);
+    FAIL_IF(TCP_SEG_LEN(seg) != 4);
 
     StreamTcpUTClearSession(&ssn);
     SCFree(p);
@@ -8926,7 +8981,7 @@ static int StreamTcpTest28(void)
 
     FAIL_IF(StreamTcpCheckMemcap(500) != 1);
 
-    FAIL_IF(StreamTcpCheckMemcap((memuse + stream_config.memcap)) != 0);
+    FAIL_IF(StreamTcpCheckMemcap((memuse + SC_ATOMIC_GET(stream_config.memcap))) != 0);
 
     StreamTcpUTDeinit(stt.ra_ctx);
 

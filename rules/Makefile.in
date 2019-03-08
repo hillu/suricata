@@ -13,6 +13,7 @@
 # PARTICULAR PURPOSE.
 
 @SET_MAKE@
+
 VPATH = @srcdir@
 am__is_gnu_make = { \
   if test -z '$(MAKELEVEL)'; then \
@@ -95,7 +96,8 @@ am__aclocal_m4_deps = $(top_srcdir)/m4/libprelude.m4 \
 	$(top_srcdir)/m4/lt~obsolete.m4 $(top_srcdir)/configure.ac
 am__configure_deps = $(am__aclocal_m4_deps) $(CONFIGURE_DEPENDENCIES) \
 	$(ACLOCAL_M4)
-DIST_COMMON = $(srcdir)/Makefile.am $(am__DIST_COMMON)
+DIST_COMMON = $(srcdir)/Makefile.am $(dist_rule_DATA) \
+	$(am__DIST_COMMON)
 mkinstalldirs = $(install_sh) -d
 CONFIG_HEADER = $(top_builddir)/config.h
 CONFIG_CLEAN_FILES =
@@ -119,6 +121,35 @@ am__can_run_installinfo = \
     n|no|NO) false;; \
     *) (install-info --version) >/dev/null 2>&1;; \
   esac
+am__vpath_adj_setup = srcdirstrip=`echo "$(srcdir)" | sed 's|.|.|g'`;
+am__vpath_adj = case $$p in \
+    $(srcdir)/*) f=`echo "$$p" | sed "s|^$$srcdirstrip/||"`;; \
+    *) f=$$p;; \
+  esac;
+am__strip_dir = f=`echo $$p | sed -e 's|^.*/||'`;
+am__install_max = 40
+am__nobase_strip_setup = \
+  srcdirstrip=`echo "$(srcdir)" | sed 's/[].[^$$\\*|]/\\\\&/g'`
+am__nobase_strip = \
+  for p in $$list; do echo "$$p"; done | sed -e "s|$$srcdirstrip/||"
+am__nobase_list = $(am__nobase_strip_setup); \
+  for p in $$list; do echo "$$p $$p"; done | \
+  sed "s| $$srcdirstrip/| |;"' / .*\//!s/ .*/ ./; s,\( .*\)/[^/]*$$,\1,' | \
+  $(AWK) 'BEGIN { files["."] = "" } { files[$$2] = files[$$2] " " $$1; \
+    if (++n[$$2] == $(am__install_max)) \
+      { print $$2, files[$$2]; n[$$2] = 0; files[$$2] = "" } } \
+    END { for (dir in files) print dir, files[dir] }'
+am__base_list = \
+  sed '$$!N;$$!N;$$!N;$$!N;$$!N;$$!N;$$!N;s/\n/ /g' | \
+  sed '$$!N;$$!N;$$!N;$$!N;s/\n/ /g'
+am__uninstall_files_from_dir = { \
+  test -z "$$files" \
+    || { test ! -d "$$dir" && test ! -f "$$dir" && test ! -r "$$dir"; } \
+    || { echo " ( cd '$$dir' && rm -f" $$files ")"; \
+         $(am__cd) "$$dir" && rm -f $$files; }; \
+  }
+am__installdirs = "$(DESTDIR)$(ruledir)"
+DATA = $(dist_rule_DATA)
 am__tagged_files = $(HEADERS) $(SOURCES) $(TAGS_FILES) $(LISP)
 am__DIST_COMMON = $(srcdir)/Makefile.in
 DISTFILES = $(DIST_COMMON) $(DIST_SOURCES) $(TEXINFOS) $(EXTRA_DIST)
@@ -136,6 +167,7 @@ CC = @CC@
 CCDEPMODE = @CCDEPMODE@
 CFLAGS = @CFLAGS@
 CLANG_CFLAGS = @CLANG_CFLAGS@
+CONFIGURE_DATAROOTDIR = @CONFIGURE_DATAROOTDIR@
 CONFIGURE_LOCALSTATEDIR = @CONFIGURE_LOCALSTATEDIR@
 CONFIGURE_PREFIX = @CONFIGURE_PREFIX@
 CONFIGURE_SYSCONDIR = @CONFIGURE_SYSCONDIR@
@@ -161,6 +193,7 @@ HAVE_COCCINELLE_CONFIG = @HAVE_COCCINELLE_CONFIG@
 HAVE_CURL = @HAVE_CURL@
 HAVE_GETCONF_CMD = @HAVE_GETCONF_CMD@
 HAVE_GIT_CMD = @HAVE_GIT_CMD@
+HAVE_LLC = @HAVE_LLC@
 HAVE_PCAP_CONFIG = @HAVE_PCAP_CONFIG@
 HAVE_PDFLATEX = @HAVE_PDFLATEX@
 HAVE_PKG_CONFIG = @HAVE_PKG_CONFIG@
@@ -194,6 +227,7 @@ LIBPRELUDE_PTHREAD_CFLAGS = @LIBPRELUDE_PTHREAD_CFLAGS@
 LIBS = @LIBS@
 LIBTOOL = @LIBTOOL@
 LIPO = @LIPO@
+LLC = @LLC@
 LN_S = @LN_S@
 LTLIBOBJS = @LTLIBOBJS@
 LT_SYS_LIBRARY_PATH = @LT_SYS_LIBRARY_PATH@
@@ -206,7 +240,6 @@ MANIFEST_TOOL = @MANIFEST_TOOL@
 MKDIR_P = @MKDIR_P@
 NM = @NM@
 NMEDIT = @NMEDIT@
-NVCC = @NVCC@
 OBJDUMP = @OBJDUMP@
 OBJEXT = @OBJEXT@
 OPTIMIZATION_CFLAGS = @OPTIMIZATION_CFLAGS@
@@ -224,12 +257,8 @@ PCAP_CFLAGS = @PCAP_CFLAGS@
 PKG_CONFIG = @PKG_CONFIG@
 PKG_CONFIG_LIBDIR = @PKG_CONFIG_LIBDIR@
 PKG_CONFIG_PATH = @PKG_CONFIG_PATH@
-PYTHON = @PYTHON@
-PYTHON_EXEC_PREFIX = @PYTHON_EXEC_PREFIX@
-PYTHON_PLATFORM = @PYTHON_PLATFORM@
-PYTHON_PREFIX = @PYTHON_PREFIX@
-PYTHON_VERSION = @PYTHON_VERSION@
 RANLIB = @RANLIB@
+RUST_DEBUG = @RUST_DEBUG@
 RUST_FEATURES = @RUST_FEATURES@
 RUST_LDADD = @RUST_LDADD@
 RUST_SURICATA_LIB = @RUST_SURICATA_LIB@
@@ -239,6 +268,7 @@ SED = @SED@
 SET_MAKE = @SET_MAKE@
 SHELL = @SHELL@
 STRIP = @STRIP@
+SURICATA_UPDATE_DIR = @SURICATA_UPDATE_DIR@
 VERSION = @VERSION@
 abs_builddir = @abs_builddir@
 abs_srcdir = @abs_srcdir@
@@ -263,6 +293,8 @@ datadir = @datadir@
 datarootdir = @datarootdir@
 docdir = @docdir@
 dvidir = @dvidir@
+e_datarulesdir = @e_datarulesdir@
+e_defaultruledir = @e_defaultruledir@
 e_enable_evelog = @e_enable_evelog@
 e_localstatedir = @e_localstatedir@
 e_logcertsdir = @e_logcertsdir@
@@ -274,6 +306,7 @@ e_rundir = @e_rundir@
 e_sysconfdir = @e_sysconfdir@
 e_sysconfrulesdir = @e_sysconfrulesdir@
 exec_prefix = @exec_prefix@
+has_suricata_update_comment = @has_suricata_update_comment@
 host = @host@
 host_alias = @host_alias@
 host_cpu = @host_cpu@
@@ -299,20 +332,15 @@ localedir = @localedir@
 localstatedir = @localstatedir@
 mandir = @mandir@
 mkdir_p = @mkdir_p@
+no_suricata_update_comment = @no_suricata_update_comment@
 oldincludedir = @oldincludedir@
 pdfdir = @pdfdir@
-pkgpyexecdir = @pkgpyexecdir@
-pkgpythondir = @pkgpythondir@
 prefix = @prefix@
 program_transform_name = @program_transform_name@
 psdir = @psdir@
-pyexecdir = @pyexecdir@
-pythondir = @pythondir@
 runstatedir = @runstatedir@
 rust_config_comment = @rust_config_comment@
 rust_config_enabled = @rust_config_enabled@
-rust_config_exp_comment = @rust_config_exp_comment@
-rust_config_exp_enabled = @rust_config_exp_enabled@
 rust_vendor_comment = @rust_vendor_comment@
 sbindir = @sbindir@
 sharedstatedir = @sharedstatedir@
@@ -323,7 +351,8 @@ target_alias = @target_alias@
 top_build_prefix = @top_build_prefix@
 top_builddir = @top_builddir@
 top_srcdir = @top_srcdir@
-EXTRA_DIST = \
+ruledir = $(datadir)/suricata/rules
+dist_rule_DATA = \
 decoder-events.rules \
 stream-events.rules \
 smtp-events.rules \
@@ -335,7 +364,10 @@ app-layer-events.rules \
 files.rules \
 dnp3-events.rules \
 ntp-events.rules \
-nfs-events.rules
+nfs-events.rules \
+smb-events.rules \
+ipsec-events.rules \
+kerberos-events.rules
 
 all: all-am
 
@@ -375,6 +407,27 @@ mostlyclean-libtool:
 
 clean-libtool:
 	-rm -rf .libs _libs
+install-dist_ruleDATA: $(dist_rule_DATA)
+	@$(NORMAL_INSTALL)
+	@list='$(dist_rule_DATA)'; test -n "$(ruledir)" || list=; \
+	if test -n "$$list"; then \
+	  echo " $(MKDIR_P) '$(DESTDIR)$(ruledir)'"; \
+	  $(MKDIR_P) "$(DESTDIR)$(ruledir)" || exit 1; \
+	fi; \
+	for p in $$list; do \
+	  if test -f "$$p"; then d=; else d="$(srcdir)/"; fi; \
+	  echo "$$d$$p"; \
+	done | $(am__base_list) | \
+	while read files; do \
+	  echo " $(INSTALL_DATA) $$files '$(DESTDIR)$(ruledir)'"; \
+	  $(INSTALL_DATA) $$files "$(DESTDIR)$(ruledir)" || exit $$?; \
+	done
+
+uninstall-dist_ruleDATA:
+	@$(NORMAL_UNINSTALL)
+	@list='$(dist_rule_DATA)'; test -n "$(ruledir)" || list=; \
+	files=`for p in $$list; do echo $$p; done | sed -e 's|^.*/||'`; \
+	dir='$(DESTDIR)$(ruledir)'; $(am__uninstall_files_from_dir)
 tags TAGS:
 
 ctags CTAGS:
@@ -414,8 +467,11 @@ distdir: $(DISTFILES)
 	done
 check-am: all-am
 check: check-am
-all-am: Makefile
+all-am: Makefile $(DATA)
 installdirs:
+	for dir in "$(DESTDIR)$(ruledir)"; do \
+	  test -z "$$dir" || $(MKDIR_P) "$$dir"; \
+	done
 install: install-am
 install-exec: install-exec-am
 install-data: install-data-am
@@ -466,7 +522,7 @@ info: info-am
 
 info-am:
 
-install-data-am:
+install-data-am: install-dist_ruleDATA
 
 install-dvi: install-dvi-am
 
@@ -510,21 +566,22 @@ ps: ps-am
 
 ps-am:
 
-uninstall-am:
+uninstall-am: uninstall-dist_ruleDATA
 
 .MAKE: install-am install-strip
 
 .PHONY: all all-am check check-am clean clean-generic clean-libtool \
 	cscopelist-am ctags-am distclean distclean-generic \
 	distclean-libtool distdir dvi dvi-am html html-am info info-am \
-	install install-am install-data install-data-am install-dvi \
-	install-dvi-am install-exec install-exec-am install-html \
-	install-html-am install-info install-info-am install-man \
-	install-pdf install-pdf-am install-ps install-ps-am \
-	install-strip installcheck installcheck-am installdirs \
-	maintainer-clean maintainer-clean-generic mostlyclean \
-	mostlyclean-generic mostlyclean-libtool pdf pdf-am ps ps-am \
-	tags-am uninstall uninstall-am
+	install install-am install-data install-data-am \
+	install-dist_ruleDATA install-dvi install-dvi-am install-exec \
+	install-exec-am install-html install-html-am install-info \
+	install-info-am install-man install-pdf install-pdf-am \
+	install-ps install-ps-am install-strip installcheck \
+	installcheck-am installdirs maintainer-clean \
+	maintainer-clean-generic mostlyclean mostlyclean-generic \
+	mostlyclean-libtool pdf pdf-am ps ps-am tags-am uninstall \
+	uninstall-am uninstall-dist_ruleDATA
 
 .PRECIOUS: Makefile
 
