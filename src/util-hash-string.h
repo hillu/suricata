@@ -1,4 +1,4 @@
-/* Copyright (C) 2007-2010 Open Information Security Foundation
+/* Copyright (C) 2007-2017 Open Information Security Foundation
  *
  * You can copy, redistribute or modify this Program under the terms of
  * the GNU General Public License version 2 as published by the Free
@@ -15,18 +15,12 @@
  * 02110-1301, USA.
  */
 
-/**
- * \file
- *
- * \author Victor Julien <victor@inliniac.net>
- */
+#ifndef __UTIL_HASH_STRING_H__
+#define __UTIL_HASH_STRING_H__
 
-#ifndef __UTIL_BINSEARCH_H__
-#define __UTIL_BINSEARCH_H__
+uint32_t StringHashFunc(HashTable *ht, void *data, uint16_t datalen);
+char StringHashCompareFunc(void *data1, uint16_t datalen1,
+                           void *data2, uint16_t datalen2);
+void StringHashFreeFunc(void *data);
 
-void BinSearchInit (void);
-uint8_t *BinSearch(const uint8_t *, size_t, const uint8_t *, size_t);
-uint8_t *BinSearchNocase(const uint8_t *, size_t, const uint8_t *, size_t);
-
-#endif /* __UTIL_BINSEARCH_H__ */
-
+#endif /* __UTIL_HASH_STRING_H__ */

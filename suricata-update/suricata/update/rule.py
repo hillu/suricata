@@ -75,6 +75,7 @@ class Rule(dict):
     - **references**: References as a list
     - **classtype**: The classification type
     - **priority**: The rule priority, 0 if not provided
+    - **noalert**: Is the rule a noalert rule
     - **raw**: The raw rule as read from the file or buffer
 
     :param enabled: Optional parameter to set the enabled state of the rule
@@ -96,15 +97,14 @@ class Rule(dict):
         self["group"] = group
         self["gid"] = 1
         self["sid"] = None
-        self["rev"] = None
+        self["rev"] = 0
         self["msg"] = None
         self["flowbits"] = []
         self["metadata"] = []
         self["references"] = []
         self["classtype"] = None
         self["priority"] = 0
-
-        self["options"] = []
+        self["noalert"] = False
 
         self["raw"] = None
 
@@ -147,40 +147,6 @@ class Rule(dict):
 
     def format(self):
         return u"%s%s" % (u"" if self.enabled else u"# ", self.raw)
-
-    def rebuild_options(self):
-        """ Rebuild the rule options from the list of options."""
-        options = []
-        for option in self.options:
-            if option["value"] is None:
-                options.append(option["name"])
-            else:
-                options.append("%s:%s" % (option["name"], option["value"]))
-        return "%s;" % "; ".join(options)
-
-def remove_option(rule, name):
-    rule["options"] = [
-        option for option in rule["options"] if option["name"] != name]
-    new_rule_string = "%s%s (%s)" % (
-        "" if rule.enabled else "# ",
-        rule["header"].strip(),
-        rule.rebuild_options());
-    return parse(new_rule_string, rule["group"])
-
-def add_option(rule, name, value, index=None):
-    option = {
-        "name": name,
-        "value": value,
-    }
-    if index is None:
-        rule["options"].append(option)
-    else:
-        rule["options"].insert(index, option)
-    new_rule_string = "%s%s (%s)" % (
-        "" if rule.enabled else "# ",
-        rule["header"].strip(),
-        rule.rebuild_options())
-    return parse(new_rule_string, rule["group"])
 
 def find_opt_end(options):
     """ Find the end of an option (;) handling escapes. """
@@ -294,11 +260,6 @@ def parse(buf, group=None):
             name = option
             val = None
 
-        rule["options"].append({
-            "name": name,
-            "value": val,
-        })
-
         if name in ["gid", "sid", "rev"]:
             rule[name] = int(val)
         elif name == "metadata":
@@ -307,6 +268,8 @@ def parse(buf, group=None):
             rule[name] += [v.strip() for v in val.split(",")]
         elif name == "flowbits":
             rule.flowbits.append(val)
+            if val.find("noalert") > -1:
+                rule["noalert"] = True
         elif name == "reference":
             rule.references.append(val)
         elif name == "msg":

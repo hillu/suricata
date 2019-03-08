@@ -326,6 +326,7 @@ top_srcdir = @top_srcdir@
 @BUILD_EBPF_TRUE@CLANG = ${CC}
 @BUILD_EBPF_TRUE@BPF_TARGETS = lb.bpf filter.bpf bypass_filter.bpf \
 @BUILD_EBPF_TRUE@	xdp_filter.bpf vlan_filter.bpf
+@BUILD_EBPF_TRUE@EXTRA_DIST = include bypass_filter.c filter.c lb.c vlan_filter.c xdp_filter.c
 @BUILD_EBPF_TRUE@CLEANFILES = *.bpf *.ll
 all: all-am
 

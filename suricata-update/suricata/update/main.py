@@ -286,14 +286,8 @@ class DropRuleFilter(object):
     def __init__(self, matcher):
         self.matcher = matcher
 
-    def is_noalert(self, rule):
-        for option in rule.options:
-            if option["name"] == "flowbits" and option["value"] == "noalert":
-                return True
-        return False
-
     def match(self, rule):
-        if self.is_noalert(rule):
+        if rule["noalert"]:
             return False
         return self.matcher.match(rule)
 
@@ -526,6 +520,7 @@ def load_dist_rules(files):
     filenames = [
         "app-layer-events.rules",
         "decoder-events.rules",
+        "dhcp-events.rules",
         "dnp3-events.rules",
         "dns-events.rules",
         "files.rules",
@@ -572,75 +567,76 @@ def load_dist_rules(files):
                 logger.error("Failed to open %s: %s" % (path, err))
                 sys.exit(1)
 
-def build_report(prev_rulemap, rulemap):
-    """Build a report of changes between 2 rulemaps.
-
-    Returns a dict with the following keys that each contain a list of
-    rules.
-    - added
-    - removed
-    - modified
-    """
-    report = {
-        "added": [],
-        "removed": [],
-        "modified": []
-    }
-
-    for key in rulemap:
-        rule = rulemap[key]
-        if not rule.id in prev_rulemap:
-            report["added"].append(rule)
-        elif rule.format() != prev_rulemap[rule.id].format():
-            report["modified"].append(rule)
-    for key in prev_rulemap:
-        rule = prev_rulemap[key]
-        if not rule.id in rulemap:
-            report["removed"].append(rule)
-
-    return report
-
 def write_merged(filename, rulemap):
 
     if not args.quiet:
-        prev_rulemap = {}
+        # List of rule IDs that have been added.
+        added = []
+        # List of rule objects that have been removed.
+        removed = []
+        # List of rule IDs that have been modified.
+        modified = []
+
+        oldset = {}
         if os.path.exists(filename):
-            prev_rulemap = build_rule_map(
-                suricata.update.rule.parse_file(filename))
-        report = build_report(prev_rulemap, rulemap)
+            for rule in suricata.update.rule.parse_file(filename):
+                oldset[rule.id] = True
+                if not rule.id in rulemap:
+                    removed.append(rule)
+                elif rule.format() != rulemap[rule.id].format():
+                    modified.append(rulemap[rule.id])
+        for key in rulemap:
+            if not key in oldset:
+                added.append(key)
+
         enabled = len([rule for rule in rulemap.values() if rule.enabled])
         logger.info("Writing rules to %s: total: %d; enabled: %d; "
                     "added: %d; removed %d; modified: %d" % (
                         filename,
                         len(rulemap),
                         enabled,
-                        len(report["added"]),
-                        len(report["removed"]),
-                        len(report["modified"])))
+                        len(added),
+                        len(removed),
+                        len(modified)))
     
     with io.open(filename, encoding="utf-8", mode="w") as fileobj:
         for rule in rulemap:
             print(rulemap[rule].format(), file=fileobj)
 
 def write_to_directory(directory, files, rulemap):
+    # List of rule IDs that have been added.
+    added = []
+    # List of rule objects that have been removed.
+    removed = []
+    # List of rule IDs that have been modified.
+    modified = []
+
+    oldset = {}
     if not args.quiet:
-        previous_rulemap = {}
         for filename in files:
             outpath = os.path.join(
                 directory, os.path.basename(filename))
+
             if os.path.exists(outpath):
-                previous_rulemap.update(build_rule_map(
-                    suricata.update.rule.parse_file(outpath)))
-        report = build_report(previous_rulemap, rulemap)
+                for rule in suricata.update.rule.parse_file(outpath):
+                    oldset[rule.id] = True
+                    if not rule.id in rulemap:
+                        removed.append(rule)
+                    elif rule.format() != rulemap[rule.id].format():
+                        modified.append(rule.id)
+        for key in rulemap:
+            if not key in oldset:
+                added.append(rule.id)
+
         enabled = len([rule for rule in rulemap.values() if rule.enabled])
         logger.info("Writing rule files to directory %s: total: %d; "
                     "enabled: %d; added: %d; removed %d; modified: %d" % (
                         directory,
                         len(rulemap),
                         enabled,
-                        len(report["added"]),
-                        len(report["removed"]),
-                        len(report["modified"])))
+                        len(added),
+                        len(removed),
+                        len(modified)))
 
     for filename in sorted(files):
         outpath = os.path.join(
@@ -1429,6 +1425,14 @@ def _main():
         logger.info("No changes detected, exiting.")
         notes.dump_notes()
         return 0
+
+    # Set these containers to None to fee the memory before testing Suricata which
+    # may consume a lot of memory by itself. Ideally we should refactor this large
+    # function into multiple methods so these go out of scope and get removed
+    # automatically.
+    rulemap = None
+    rules = None
+    files = None
 
     if not test_suricata(suricata_path):
         logger.error("Suricata test failed, aborting.")

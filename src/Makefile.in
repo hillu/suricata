@@ -334,9 +334,10 @@ am_suricata_OBJECTS = alert-debuglog.$(OBJEXT) alert-fastlog.$(OBJEXT) \
 	util-file-swf-decompression.$(OBJEXT) \
 	util-fix_checksum.$(OBJEXT) util-fmemopen.$(OBJEXT) \
 	util-hash.$(OBJEXT) util-hashlist.$(OBJEXT) \
-	util-hash-lookup3.$(OBJEXT) util-host-os-info.$(OBJEXT) \
-	util-host-info.$(OBJEXT) util-hyperscan.$(OBJEXT) \
-	util-ioctl.$(OBJEXT) util-ip.$(OBJEXT) util-ja3.$(OBJEXT) \
+	util-hash-lookup3.$(OBJEXT) util-hash-string.$(OBJEXT) \
+	util-host-os-info.$(OBJEXT) util-host-info.$(OBJEXT) \
+	util-hyperscan.$(OBJEXT) util-ioctl.$(OBJEXT) \
+	util-ip.$(OBJEXT) util-ja3.$(OBJEXT) \
 	util-logopenfile.$(OBJEXT) util-logopenfile-tile.$(OBJEXT) \
 	util-log-redis.$(OBJEXT) util-lua.$(OBJEXT) \
 	util-luajit.$(OBJEXT) util-lua-common.$(OBJEXT) \
@@ -648,7 +649,7 @@ noinst_HEADERS = action-globals.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
 	source-windivert-prototypes.h \
 	suricata-common.h threadvars.h tree.h \
-    util-binsearch.h util-validate.h
+    util-validate.h
 
 suricata_SOURCES = \
 alert-debuglog.c alert-debuglog.h \
@@ -1078,6 +1079,7 @@ util-fmemopen.c util-fmemopen.h \
 util-hash.c util-hash.h \
 util-hashlist.c util-hashlist.h \
 util-hash-lookup3.c util-hash-lookup3.h \
+util-hash-string.c util-hash-string.h \
 util-host-os-info.c util-host-os-info.h \
 util-host-info.c util-host-info.h \
 util-hyperscan.c util-hyperscan.h \
@@ -1695,6 +1697,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-fix_checksum.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-fmemopen.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-hash-lookup3.Po@am__quote@
+@AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-hash-string.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-hash.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-hashlist.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@./$(DEPDIR)/util-host-info.Po@am__quote@

@@ -1,4 +1,4 @@
-use pthread_mutex_t;
+use ::pthread_mutex_t;
 
 pub type blkcnt_t = i64;
 pub type blksize_t = i64;
@@ -92,7 +92,7 @@ s! {
         pub sa_sigaction: ::sighandler_t,
         __glibc_reserved0: ::c_int,
         pub sa_flags: ::c_int,
-        pub sa_restorer: ::dox::Option<extern fn()>,
+        pub sa_restorer: ::Option<extern fn()>,
         pub sa_mask: sigset_t,
     }
 
@@ -246,26 +246,9 @@ s! {
         pub l_pid: ::pid_t,
     }
 
-    // FIXME this is actually a union
-    #[cfg_attr(all(feature = "align", target_pointer_width = "32"),
-               repr(align(4)))]
-    #[cfg_attr(all(feature = "align", target_pointer_width = "64"),
-               repr(align(8)))]
-    pub struct sem_t {
-        __size: [::c_char; 32],
-        #[cfg(not(feature = "align"))]
-        __align: [::c_long; 0],
-    }
-
     pub struct __psw_t {
         pub mask: u64,
         pub addr: u64,
-    }
-
-    // FIXME: This is actually a union.
-    pub struct fpreg_t {
-        pub d: ::c_double,
-        // f: ::c_float,
     }
 
     pub struct fpregset_t {
@@ -331,6 +314,41 @@ s! {
         pub f_flag: ::c_ulong,
         pub f_namemax: ::c_ulong,
         __f_spare: [::c_int; 6],
+    }
+}
+
+s_no_extra_traits!{
+    // FIXME: This is actually a union.
+    pub struct fpreg_t {
+        pub d: ::c_double,
+        // f: ::c_float,
+    }
+}
+
+cfg_if! {
+    if #[cfg(feature = "extra_traits")] {
+        impl PartialEq for fpreg_t {
+            fn eq(&self, other: &fpreg_t) -> bool {
+                self.d == other.d
+            }
+        }
+
+        impl Eq for fpreg_t {}
+
+        impl ::fmt::Debug for fpreg_t {
+            fn fmt(&self, f: &mut ::fmt::Formatter) -> ::fmt::Result {
+                f.debug_struct("fpreg_t")
+                    .field("d", &self.d)
+                    .finish()
+            }
+        }
+
+        impl ::hash::Hash for fpreg_t {
+            fn hash<H: ::hash::Hasher>(&self, state: &mut H) {
+                let d: u64 = unsafe { ::mem::transmute(self.d) };
+                d.hash(state);
+            }
+        }
     }
 }
 
@@ -791,6 +809,9 @@ pub const MAP_HUGETLB: ::c_int = 0x040000;
 
 pub const EFD_NONBLOCK: ::c_int = 0x800;
 
+pub const F_RDLCK: ::c_int = 0;
+pub const F_WRLCK: ::c_int = 1;
+pub const F_UNLCK: ::c_int = 2;
 pub const F_GETLK: ::c_int = 5;
 pub const F_GETOWN: ::c_int = 9;
 pub const F_SETOWN: ::c_int = 8;
@@ -1301,7 +1322,7 @@ extern {
                      sz: ::c_int) -> ::c_int;
     pub fn glob64(pattern: *const ::c_char,
                   flags: ::c_int,
-                  errfunc: ::dox::Option<extern fn(epath: *const ::c_char,
+                  errfunc: ::Option<extern fn(epath: *const ::c_char,
                                                    errno: ::c_int)
                                                    -> ::c_int>,
                   pglob: *mut glob64_t) -> ::c_int;
@@ -1330,4 +1351,14 @@ extern {
                        argc: ::c_int, ...);
     pub fn swapcontext(uocp: *mut ucontext_t,
                        ucp: *const ucontext_t) -> ::c_int;
+}
+
+cfg_if! {
+    if #[cfg(libc_align)] {
+        mod align;
+        pub use self::align::*;
+    } else {
+        mod no_align;
+        pub use self::no_align::*;
+    }
 }

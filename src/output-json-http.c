@@ -86,7 +86,7 @@ typedef enum {
     HTTP_FIELD_ACCEPT_DATETIME,
     HTTP_FIELD_AUTHORIZATION,
     HTTP_FIELD_CACHE_CONTROL,
-    HTTP_FIELD_CONNECTION,
+    HTTP_FIELD_COOKIE,
     HTTP_FIELD_FROM,
     HTTP_FIELD_MAX_FORWARDS,
     HTTP_FIELD_ORIGIN,
@@ -103,6 +103,7 @@ typedef enum {
     HTTP_FIELD_ACCEPT_RANGES,
     HTTP_FIELD_AGE,
     HTTP_FIELD_ALLOW,
+    HTTP_FIELD_CONNECTION,
     HTTP_FIELD_CONTENT_ENCODING,
     HTTP_FIELD_CONTENT_LANGUAGE,
     HTTP_FIELD_CONTENT_LENGTH,
@@ -128,6 +129,9 @@ typedef enum {
     HTTP_FIELD_VARY,
     HTTP_FIELD_WARNING,
     HTTP_FIELD_WWW_AUTHENTICATE,
+    HTTP_FIELD_TRUE_CLIENT_IP,
+    HTTP_FIELD_ORG_SRC_IP,
+    HTTP_FIELD_X_BLUECOAT_VIA,
     HTTP_FIELD_SIZE
 } HttpField;
 
@@ -186,6 +190,9 @@ struct {
     { "vary", "vary", 0 },
     { "warning", "warning", 0 },
     { "www_authenticate", "www-authenticate", 0 },
+    { "true_client_ip", "true-client-ip", LOG_HTTP_REQUEST },
+    { "org_src_ip", "org-src-ip", LOG_HTTP_REQUEST },
+    { "x_bluecoat_via", "x-bluecoat-via", LOG_HTTP_REQUEST },
 };
 
 static void JsonHttpLogJSONBasic(json_t *js, htp_tx_t *tx)

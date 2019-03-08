@@ -1,5 +1,10 @@
 # Change Log
 
+## 1.0.4 - 2019-03-07
+- Enable integration tests on
+  Travis-CI. https://redmine.openinfosecfoundation.org/issues/2760
+- Reduce memory usage. https://redmine.openinfosecfoundation.org/issues/2791
+
 ## 1.0.3 - 2018-12-21
 - Fix enable-source command.
   https://redmine.openinfosecfoundation.org/issues/2753

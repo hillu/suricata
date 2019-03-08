@@ -4,7 +4,7 @@ noinst_HEADERS = action-globals.h \
 	flow-private.h queue.h source-nfq-prototypes.h \
 	source-windivert-prototypes.h \
 	suricata-common.h threadvars.h tree.h \
-    util-binsearch.h util-validate.h
+    util-validate.h
 bin_PROGRAMS = suricata
 
 suricata_SOURCES = \
@@ -435,6 +435,7 @@ util-fmemopen.c util-fmemopen.h \
 util-hash.c util-hash.h \
 util-hashlist.c util-hashlist.h \
 util-hash-lookup3.c util-hash-lookup3.h \
+util-hash-string.c util-hash-string.h \
 util-host-os-info.c util-host-os-info.h \
 util-host-info.c util-host-info.h \
 util-hyperscan.c util-hyperscan.h \
