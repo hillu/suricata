@@ -1,3 +1,10 @@
+suricata (1:4.1.3-1) unstable; urgency=medium
+
+  * New upstream version 4.1.3
+  * Refreshed quilt patches
+
+ -- Pierre Chifflier <pollux@debian.org>  Fri, 08 Mar 2019 10:24:43 +0100
+
 suricata (1:4.1.2-2) unstable; urgency=medium
 
   * Upload to unstable.
