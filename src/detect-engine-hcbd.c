@@ -65,257 +65,6 @@
 
 #include "util-validate.h"
 
-#define BUFFER_STEP 50
-
-static inline int HCBDCreateSpace(DetectEngineThreadCtx *det_ctx, uint64_t size)
-{
-    if (size >= (USHRT_MAX - BUFFER_STEP))
-        return -1;
-
-    void *ptmp;
-    if (size > det_ctx->hcbd_buffers_size) {
-        uint16_t grow_by = size - det_ctx->hcbd_buffers_size;
-        grow_by = MAX(grow_by, BUFFER_STEP);
-
-        ptmp = SCRealloc(det_ctx->hcbd,
-                         (det_ctx->hcbd_buffers_size + grow_by) * sizeof(HttpReassembledBody));
-        if (ptmp == NULL) {
-            SCFree(det_ctx->hcbd);
-            det_ctx->hcbd = NULL;
-            det_ctx->hcbd_buffers_size = 0;
-            det_ctx->hcbd_buffers_list_len = 0;
-            return -1;
-        }
-        det_ctx->hcbd = ptmp;
-
-        memset(det_ctx->hcbd + det_ctx->hcbd_buffers_size, 0, grow_by * sizeof(HttpReassembledBody));
-        det_ctx->hcbd_buffers_size += grow_by;
-
-        uint16_t i;
-        for (i = det_ctx->hcbd_buffers_list_len; i < det_ctx->hcbd_buffers_size; i++) {
-            det_ctx->hcbd[i].buffer_len = 0;
-            det_ctx->hcbd[i].offset = 0;
-        }
-    }
-
-    return 0;
-}
-
-/**
- */
-static const uint8_t *DetectEngineHCBDGetBufferForTX(htp_tx_t *tx, uint64_t tx_id,
-                                               DetectEngineCtx *de_ctx,
-                                               DetectEngineThreadCtx *det_ctx,
-                                               Flow *f, HtpState *htp_state,
-                                               const uint8_t flags,
-                                               uint32_t *buffer_len,
-                                               uint32_t *stream_start_offset)
-{
-    int index = 0;
-    const uint8_t *buffer = NULL;
-    *buffer_len = 0;
-    *stream_start_offset = 0;
-
-    if (det_ctx->hcbd_buffers_list_len == 0) {
-        /* get the inspect id to use as a 'base id' */
-        uint64_t base_inspect_id = AppLayerParserGetTransactionInspectId(f->alparser, flags);
-        BUG_ON(base_inspect_id > tx_id);
-        /* see how many space we need for the current tx_id */
-        uint64_t txs = (tx_id - base_inspect_id) + 1;
-        if (HCBDCreateSpace(det_ctx, txs) < 0)
-            goto end;
-
-        index = (tx_id - base_inspect_id);
-        det_ctx->hcbd_start_tx_id = base_inspect_id;
-        det_ctx->hcbd_buffers_list_len = txs;
-    } else {
-        if ((tx_id - det_ctx->hcbd_start_tx_id) < det_ctx->hcbd_buffers_list_len) {
-            if (det_ctx->hcbd[(tx_id - det_ctx->hcbd_start_tx_id)].buffer_len != 0) {
-                *buffer_len = det_ctx->hcbd[(tx_id - det_ctx->hcbd_start_tx_id)].buffer_len;
-                *stream_start_offset = det_ctx->hcbd[(tx_id - det_ctx->hcbd_start_tx_id)].offset;
-                return det_ctx->hcbd[(tx_id - det_ctx->hcbd_start_tx_id)].buffer;
-            }
-        } else {
-            uint64_t txs = (tx_id - det_ctx->hcbd_start_tx_id) + 1;
-            if (HCBDCreateSpace(det_ctx, txs) < 0)
-                goto end; /* let's consider it as stage not done for now */
-
-            det_ctx->hcbd_buffers_list_len = txs;
-        }
-        index = (tx_id - det_ctx->hcbd_start_tx_id);
-    }
-
-    HtpTxUserData *htud = (HtpTxUserData *)htp_tx_get_user_data(tx);
-    if (htud == NULL) {
-        SCLogDebug("no htud");
-        goto end;
-    }
-
-    /* no new data */
-    if (htud->request_body.body_inspected == htud->request_body.content_len_so_far) {
-        SCLogDebug("no new data");
-        goto end;
-    }
-
-    HtpBodyChunk *cur = htud->request_body.first;
-    if (cur == NULL) {
-        SCLogDebug("No http chunks to inspect for this transacation");
-        goto end;
-    }
-
-    if (!htp_state->cfg->http_body_inline) {
-        /* inspect the body if the transfer is complete or we have hit
-        * our body size limit */
-        if ((htp_state->cfg->request.body_limit == 0 ||
-             htud->request_body.content_len_so_far < htp_state->cfg->request.body_limit) &&
-            htud->request_body.content_len_so_far < htp_state->cfg->request.inspect_min_size &&
-            !(AppLayerParserGetStateProgress(IPPROTO_TCP, ALPROTO_HTTP, tx, flags) > HTP_REQUEST_BODY) &&
-            !(flags & STREAM_EOF)) {
-            SCLogDebug("we still haven't seen the entire request body.  "
-                       "Let's defer body inspection till we see the "
-                       "entire body.");
-            goto end;
-        }
-    }
-
-    /* get the inspect buffer
-     *
-     * make sure that we have at least the configured inspect_win size.
-     * If we have more, take at least 1/4 of the inspect win size before
-     * the new data.
-     */
-    uint64_t offset = 0;
-    if (htud->request_body.body_inspected > htp_state->cfg->request.inspect_min_size) {
-        BUG_ON(htud->request_body.content_len_so_far < htud->request_body.body_inspected);
-        uint64_t inspect_win = htud->request_body.content_len_so_far - htud->request_body.body_inspected;
-        SCLogDebug("inspect_win %"PRIu64, inspect_win);
-        if (inspect_win < htp_state->cfg->request.inspect_window) {
-            uint64_t inspect_short = htp_state->cfg->request.inspect_window - inspect_win;
-            if (htud->request_body.body_inspected < inspect_short)
-                offset = 0;
-            else
-                offset = htud->request_body.body_inspected - inspect_short;
-        } else {
-            offset = htud->request_body.body_inspected - (htp_state->cfg->request.inspect_window / 4);
-        }
-    }
-
-    StreamingBufferGetDataAtOffset(htud->request_body.sb,
-            &det_ctx->hcbd[index].buffer, &det_ctx->hcbd[index].buffer_len,
-            offset);
-    det_ctx->hcbd[index].offset = offset;
-
-    /* move inspected tracker to end of the data. HtpBodyPrune will consider
-     * the window sizes when freeing data */
-    htud->request_body.body_inspected = htud->request_body.content_len_so_far;
-
-    buffer = det_ctx->hcbd[index].buffer;
-    *buffer_len = det_ctx->hcbd[index].buffer_len;
-    *stream_start_offset = det_ctx->hcbd[index].offset;
-
-    SCLogDebug("buffer_len %u (%"PRIu64")", *buffer_len, htud->request_body.content_len_so_far);
- end:
-    return buffer;
-}
-
-/** \brief HTTP Client Body Mpm prefilter callback
- *
- *  \param det_ctx detection engine thread ctx
- *  \param p packet to inspect
- *  \param f flow to inspect
- *  \param txv tx to inspect
- *  \param pectx inspection context
- */
-static void PrefilterTxHttpRequestBody(DetectEngineThreadCtx *det_ctx,
-        const void *pectx,
-        Packet *p, Flow *f, void *txv,
-        const uint64_t idx, const uint8_t flags)
-{
-    SCEnter();
-
-    const MpmCtx *mpm_ctx = (MpmCtx *)pectx;
-    htp_tx_t *tx = (htp_tx_t *)txv;
-    HtpState *htp_state = f->alstate;
-    uint32_t buffer_len = 0;
-    uint32_t stream_start_offset = 0;
-    const uint8_t *buffer = DetectEngineHCBDGetBufferForTX(tx, idx,
-                                                     NULL, det_ctx,
-                                                     f, htp_state,
-                                                     flags,
-                                                     &buffer_len,
-                                                     &stream_start_offset);
-
-    if (buffer_len >= mpm_ctx->minlen) {
-        (void)mpm_table[mpm_ctx->mpm_type].Search(mpm_ctx,
-                &det_ctx->mtcu, &det_ctx->pmq, buffer, buffer_len);
-    }
-}
-
-int PrefilterTxHttpRequestBodyRegister(DetectEngineCtx *de_ctx,
-        SigGroupHead *sgh, MpmCtx *mpm_ctx)
-{
-    SCEnter();
-
-    return PrefilterAppendTxEngine(de_ctx, sgh, PrefilterTxHttpRequestBody,
-        ALPROTO_HTTP, HTP_REQUEST_BODY,
-        mpm_ctx, NULL, "http_client_body");
-}
-
-int DetectEngineInspectHttpClientBody(ThreadVars *tv,
-        DetectEngineCtx *de_ctx, DetectEngineThreadCtx *det_ctx,
-        const Signature *s, const SigMatchData *smd,
-        Flow *f, uint8_t flags, void *alstate, void *tx, uint64_t tx_id)
-{
-    HtpState *htp_state = (HtpState *)alstate;
-    uint32_t buffer_len = 0;
-    uint32_t stream_start_offset = 0;
-    const bool eof = (AppLayerParserGetStateProgress(IPPROTO_TCP, ALPROTO_HTTP, tx, flags) > HTP_REQUEST_BODY);
-    const uint8_t *buffer = DetectEngineHCBDGetBufferForTX(tx, tx_id,
-                                                     de_ctx, det_ctx,
-                                                     f, htp_state,
-                                                     flags,
-                                                     &buffer_len,
-                                                     &stream_start_offset);
-    if (buffer_len == 0)
-        goto end;
-
-    uint8_t ci_flags = eof ? DETECT_CI_FLAGS_END : 0;
-    ci_flags |= (stream_start_offset == 0 ? DETECT_CI_FLAGS_START : 0);
-
-    det_ctx->buffer_offset = 0;
-    det_ctx->discontinue_matching = 0;
-    det_ctx->inspection_recursion_counter = 0;
-    int r = DetectEngineContentInspection(de_ctx, det_ctx, s, smd,
-                                          f,
-                                          (uint8_t *)buffer,
-                                          buffer_len,
-                                          stream_start_offset, ci_flags,
-                                          DETECT_ENGINE_CONTENT_INSPECTION_MODE_STATE, NULL);
-    if (r == 1)
-        return DETECT_ENGINE_INSPECT_SIG_MATCH;
-
-
- end:
-    if (eof)
-        return DETECT_ENGINE_INSPECT_SIG_CANT_MATCH;
-    else
-        return DETECT_ENGINE_INSPECT_SIG_NO_MATCH;
-}
-
-void DetectEngineCleanHCBDBuffers(DetectEngineThreadCtx *det_ctx)
-{
-    if (det_ctx->hcbd_buffers_list_len > 0) {
-        for (int i = 0; i < det_ctx->hcbd_buffers_list_len; i++) {
-            det_ctx->hcbd[i].buffer_len = 0;
-            det_ctx->hcbd[i].offset = 0;
-        }
-    }
-    det_ctx->hcbd_buffers_list_len = 0;
-    det_ctx->hcbd_start_tx_id = 0;
-
-    return;
-}
-
 /***********************************Unittests**********************************/
 
 #ifdef UNITTESTS
@@ -331,12 +80,11 @@ static int RunTest (struct TestSteps *steps, const char *sig, const char *yaml)
 {
     TcpSession ssn;
     Flow f;
-    Packet *p = NULL;
     ThreadVars th_v;
-    DetectEngineCtx *de_ctx = NULL;
     DetectEngineThreadCtx *det_ctx = NULL;
-    int result = 0;
     AppLayerParserThreadCtx *alp_tctx = AppLayerParserThreadCtxAlloc();
+    FAIL_IF_NULL(alp_tctx);
+
     memset(&th_v, 0, sizeof(th_v));
     memset(&f, 0, sizeof(f));
     memset(&ssn, 0, sizeof(ssn));
@@ -352,9 +100,9 @@ static int RunTest (struct TestSteps *steps, const char *sig, const char *yaml)
 
     StreamTcpInitConfig(TRUE);
 
-    de_ctx = DetectEngineCtxInit();
-    if (de_ctx == NULL)
-        goto end;
+    DetectEngineCtx *de_ctx = DetectEngineCtxInit();
+    FAIL_IF_NULL(de_ctx);
+    de_ctx->flags |= DE_QUIET;
 
     FLOW_INITIALIZE(&f);
     f.protoctx = (void *)&ssn;
@@ -363,75 +111,52 @@ static int RunTest (struct TestSteps *steps, const char *sig, const char *yaml)
     f.alproto = ALPROTO_HTTP;
 
     SCLogDebug("sig %s", sig);
-    DetectEngineAppendSig(de_ctx, (char *)sig);
-
-    de_ctx->flags |= DE_QUIET;
-
-    if (de_ctx->sig_list == NULL)
-        goto end;
+    Signature *s = DetectEngineAppendSig(de_ctx, (char *)sig);
+    FAIL_IF_NULL(s);
 
     SigGroupBuild(de_ctx);
     DetectEngineThreadCtxInit(&th_v, (void *)de_ctx, (void *)&det_ctx);
+    FAIL_IF_NULL(det_ctx);
 
     struct TestSteps *b = steps;
     int i = 0;
     while (b->input != NULL) {
         SCLogDebug("chunk %p %d", b, i);
-        p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
-        if (p == NULL)
-            goto end;
+        Packet *p = UTHBuildPacket(NULL, 0, IPPROTO_TCP);
+        FAIL_IF_NULL(p);
         p->flow = &f;
         p->flowflags = (b->direction == STREAM_TOSERVER) ? FLOW_PKT_TOSERVER : FLOW_PKT_TOCLIENT;
         p->flowflags |= FLOW_PKT_ESTABLISHED;
         p->flags |= PKT_HAS_FLOW|PKT_STREAM_EST;
 
-        FLOWLOCK_WRLOCK(&f);
         int r = AppLayerParserParse(NULL, alp_tctx, &f, ALPROTO_HTTP,
                                     b->direction, (uint8_t *)b->input,
                                     b->input_size ? b->input_size : strlen((const char *)b->input));
-        if (r != 0) {
-            printf("toserver chunk %d returned %" PRId32 ", expected 0: ", i+1, r);
-            result = 0;
-            FLOWLOCK_UNLOCK(&f);
-            goto end;
-        }
-        FLOWLOCK_UNLOCK(&f);
+        FAIL_IF_NOT(r == 0);
 
         /* do detect */
         SigMatchSignatures(&th_v, de_ctx, det_ctx, p);
 
         int match = PacketAlertCheck(p, 1);
-        if (b->expect != match) {
-            printf("rule matching mismatch: ");
-            goto end;
-        }
+        FAIL_IF_NOT (b->expect == match);
 
         UTHFreePackets(&p, 1);
-        p = NULL;
         b++;
         i++;
     }
-    result = 1;
 
- end:
-    if (alp_tctx != NULL)
-        AppLayerParserThreadCtxFree(alp_tctx);
-    if (de_ctx != NULL)
-        SigGroupCleanup(de_ctx);
-    if (de_ctx != NULL)
-        SigCleanSignatures(de_ctx);
-    if (de_ctx != NULL)
-        DetectEngineCtxFree(de_ctx);
+    DetectEngineThreadCtxDeinit(&th_v, (void *)det_ctx);
+    AppLayerParserThreadCtxFree(alp_tctx);
+    DetectEngineCtxFree(de_ctx);
 
     StreamTcpFreeConfig(TRUE);
     FLOW_DESTROY(&f);
-    UTHFreePackets(&p, 1);
 
     if (yaml) {
         HtpConfigRestoreBackup();
         ConfRestoreContextBackup();
     }
-    return result;
+    PASS;
 }
 
 static int DetectEngineHttpClientBodyTest01(void)

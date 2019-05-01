@@ -69,7 +69,7 @@
 
 /* the name of our binary */
 #define PROG_NAME "Suricata"
-#define PROG_VER "4.1.3"
+#define PROG_VER "4.1.4"
 
 /* workaround SPlint error (don't know __gnuc_va_list) */
 #ifdef S_SPLINT_S
@@ -86,7 +86,7 @@
 #define DOC_URL "https://suricata.readthedocs.io/en/"
 
 #if defined RELEASE
-#define DOC_VERSION PROG_VER
+#define DOC_VERSION "suricata-" PROG_VER
 #else
 #define DOC_VERSION "latest"
 #endif
@@ -137,7 +137,7 @@ typedef struct SCInstance_ {
     char pcap_dev[128];
     char *sig_file;
     int sig_file_exclusive;
-    const char *pid_filename;
+    char *pid_filename;
     char *regex_arg;
 
     char *keyword_info;
