@@ -41,7 +41,7 @@ Pre-Depends: dpkg (>= 1.15.7.2)
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}, lsb-base (>= 3.0-6)
 Conflicts: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
 Replaces: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
-Recommends: suricata-oinkmaster (=${binary:Version}), python, snort-rules-default
+Recommends: python, snort-rules-default, suricata-update
 Suggests: libtcmalloc-minimal4
 Description: Next Generation Intrusion Detection and Prevention Tool
  Suricata is a network Intrusion Detection System (IDS). It is based on

@@ -1,3 +1,10 @@
+suricata (1:4.1.4-2) unstable; urgency=medium
+
+  * Do not install suricata-update, recommend external pkg instead.
+    Closes: #924096
+
+ -- Sascha Steinbiss <satta@debian.org>  Thu, 02 May 2019 17:15:48 +0200
+
 suricata (1:4.1.4-1) unstable; urgency=medium
 
   * New upstream version 4.1.4
