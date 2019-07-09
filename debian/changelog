@@ -1,3 +1,11 @@
+suricata (1:4.1.4-3) unstable; urgency=medium
+
+  * Fix cross building by including patch that addresses abuse of
+    AC_CHECK_FILE. Thanks to Helmut Grohne for the patch.
+    Closes: #923174
+
+ -- Sascha Steinbiss <satta@debian.org>  Tue, 09 Jul 2019 16:47:49 +0200
+
 suricata (1:4.1.4-2) unstable; urgency=medium
 
   * Do not install suricata-update, recommend external pkg instead.
