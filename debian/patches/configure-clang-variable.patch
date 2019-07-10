@@ -1,0 +1,28 @@
+From: Hilko Bengen <bengen@debian.org>
+Date: Tue, 22 Jan 2019 18:10:47 +0100
+Subject: configure: Introduce CLANG variable
+
+---
+ configure.ac | 9 +++++++++
+ 1 file changed, 9 insertions(+)
+
+diff --git a/configure.ac b/configure.ac
+index b526c4b..09941ba 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -31,6 +31,15 @@
+     AC_LANG_POP([C])
+     AC_MSG_RESULT([${compiler}])
+ 
++    AC_ARG_WITH([clang],
++                [CLANG compiler],
++                [CLANG="$withval"],
++                [AS_IF([test "$compiler" = clang],
++                       [CLANG="$CC"],
++                       [AC_PATH_PROG([CLANG],[clang])])])
++
++    AC_SUBST([CLANG])
++
+     case "$compiler" in
+         clang)
+             CLANG_CFLAGS="-Wextra -Werror-implicit-function-declaration -Wno-error=unused-command-line-argument"

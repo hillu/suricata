@@ -1,0 +1,2289 @@
+From: Hilko Bengen <bengen@debian.org>
+Date: Wed, 10 Jul 2019 13:34:31 +0200
+Subject: Add missing ebpf/*.[ch]
+
+---
+ ebpf/bpf_helpers.h              |  262 ++++++++++
+ ebpf/bypass_filter.c            |  225 +++++++++
+ ebpf/filter.c                   |   58 +++
+ ebpf/hash_func01.h              |   55 +++
+ ebpf/include/linux/bpf.h        | 1027 +++++++++++++++++++++++++++++++++++++++
+ ebpf/include/linux/bpf_common.h |   57 +++
+ ebpf/lb.c                       |  109 +++++
+ ebpf/vlan_filter.c              |   40 ++
+ ebpf/xdp_filter.c               |  377 ++++++++++++++
+ 9 files changed, 2210 insertions(+)
+ create mode 100644 ebpf/bpf_helpers.h
+ create mode 100644 ebpf/bypass_filter.c
+ create mode 100644 ebpf/filter.c
+ create mode 100644 ebpf/hash_func01.h
+ create mode 100644 ebpf/include/linux/bpf.h
+ create mode 100644 ebpf/include/linux/bpf_common.h
+ create mode 100644 ebpf/lb.c
+ create mode 100644 ebpf/vlan_filter.c
+ create mode 100644 ebpf/xdp_filter.c
+
+diff --git a/ebpf/bpf_helpers.h b/ebpf/bpf_helpers.h
+new file mode 100644
+index 0000000..33cb00e
+--- /dev/null
++++ b/ebpf/bpf_helpers.h
+@@ -0,0 +1,262 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++#ifndef __BPF_HELPERS_H
++#define __BPF_HELPERS_H
++
++/* helper macro to place programs, maps, license in
++ * different sections in elf_bpf file. Section names
++ * are interpreted by elf_bpf loader
++ */
++#define SEC(NAME) __attribute__((section(NAME), used))
++
++/* helper functions called from eBPF programs written in C */
++static void *(*bpf_map_lookup_elem)(void *map, void *key) =
++	(void *) BPF_FUNC_map_lookup_elem;
++static int (*bpf_map_update_elem)(void *map, void *key, void *value,
++				  unsigned long long flags) =
++	(void *) BPF_FUNC_map_update_elem;
++static int (*bpf_map_delete_elem)(void *map, void *key) =
++	(void *) BPF_FUNC_map_delete_elem;
++static int (*bpf_probe_read)(void *dst, int size, void *unsafe_ptr) =
++	(void *) BPF_FUNC_probe_read;
++static unsigned long long (*bpf_ktime_get_ns)(void) =
++	(void *) BPF_FUNC_ktime_get_ns;
++static int (*bpf_trace_printk)(const char *fmt, int fmt_size, ...) =
++	(void *) BPF_FUNC_trace_printk;
++static void (*bpf_tail_call)(void *ctx, void *map, int index) =
++	(void *) BPF_FUNC_tail_call;
++static unsigned long long (*bpf_get_smp_processor_id)(void) =
++	(void *) BPF_FUNC_get_smp_processor_id;
++static unsigned long long (*bpf_get_current_pid_tgid)(void) =
++	(void *) BPF_FUNC_get_current_pid_tgid;
++static unsigned long long (*bpf_get_current_uid_gid)(void) =
++	(void *) BPF_FUNC_get_current_uid_gid;
++static int (*bpf_get_current_comm)(void *buf, int buf_size) =
++	(void *) BPF_FUNC_get_current_comm;
++static unsigned long long (*bpf_perf_event_read)(void *map,
++						 unsigned long long flags) =
++	(void *) BPF_FUNC_perf_event_read;
++static int (*bpf_clone_redirect)(void *ctx, int ifindex, int flags) =
++	(void *) BPF_FUNC_clone_redirect;
++static int (*bpf_redirect)(int ifindex, int flags) =
++	(void *) BPF_FUNC_redirect;
++static int (*bpf_redirect_map)(void *map, int key, int flags) =
++	(void *) BPF_FUNC_redirect_map;
++static int (*bpf_perf_event_output)(void *ctx, void *map,
++				    unsigned long long flags, void *data,
++				    int size) =
++	(void *) BPF_FUNC_perf_event_output;
++static int (*bpf_get_stackid)(void *ctx, void *map, int flags) =
++	(void *) BPF_FUNC_get_stackid;
++static int (*bpf_probe_write_user)(void *dst, void *src, int size) =
++	(void *) BPF_FUNC_probe_write_user;
++static int (*bpf_current_task_under_cgroup)(void *map, int index) =
++	(void *) BPF_FUNC_current_task_under_cgroup;
++static int (*bpf_skb_get_tunnel_key)(void *ctx, void *key, int size, int flags) =
++	(void *) BPF_FUNC_skb_get_tunnel_key;
++static int (*bpf_skb_set_tunnel_key)(void *ctx, void *key, int size, int flags) =
++	(void *) BPF_FUNC_skb_set_tunnel_key;
++static int (*bpf_skb_get_tunnel_opt)(void *ctx, void *md, int size) =
++	(void *) BPF_FUNC_skb_get_tunnel_opt;
++static int (*bpf_skb_set_tunnel_opt)(void *ctx, void *md, int size) =
++	(void *) BPF_FUNC_skb_set_tunnel_opt;
++static unsigned long long (*bpf_get_prandom_u32)(void) =
++	(void *) BPF_FUNC_get_prandom_u32;
++static int (*bpf_xdp_adjust_head)(void *ctx, int offset) =
++	(void *) BPF_FUNC_xdp_adjust_head;
++static int (*bpf_xdp_adjust_meta)(void *ctx, int offset) =
++	(void *) BPF_FUNC_xdp_adjust_meta;
++static int (*bpf_setsockopt)(void *ctx, int level, int optname, void *optval,
++			     int optlen) =
++	(void *) BPF_FUNC_setsockopt;
++static int (*bpf_getsockopt)(void *ctx, int level, int optname, void *optval,
++			     int optlen) =
++	(void *) BPF_FUNC_getsockopt;
++static int (*bpf_sk_redirect_map)(void *ctx, void *map, int key, int flags) =
++	(void *) BPF_FUNC_sk_redirect_map;
++static int (*bpf_sock_map_update)(void *map, void *key, void *value,
++				  unsigned long long flags) =
++	(void *) BPF_FUNC_sock_map_update;
++static int (*bpf_perf_event_read_value)(void *map, unsigned long long flags,
++					void *buf, unsigned int buf_size) =
++	(void *) BPF_FUNC_perf_event_read_value;
++static int (*bpf_perf_prog_read_value)(void *ctx, void *buf,
++				       unsigned int buf_size) =
++	(void *) BPF_FUNC_perf_prog_read_value;
++static int (*bpf_override_return)(void *ctx, unsigned long rc) =
++	(void *) BPF_FUNC_override_return;
++
++/* llvm builtin functions that eBPF C program may use to
++ * emit BPF_LD_ABS and BPF_LD_IND instructions
++ */
++struct sk_buff;
++unsigned long long load_byte(void *skb,
++			     unsigned long long off) asm("llvm.bpf.load.byte");
++unsigned long long load_half(void *skb,
++			     unsigned long long off) asm("llvm.bpf.load.half");
++unsigned long long load_word(void *skb,
++			     unsigned long long off) asm("llvm.bpf.load.word");
++
++/* a helper structure used by eBPF C program
++ * to describe map attributes to elf_bpf loader
++ */
++struct bpf_map_def {
++	unsigned int type;
++	unsigned int key_size;
++	unsigned int value_size;
++	unsigned int max_entries;
++	unsigned int map_flags;
++	unsigned int inner_map_idx;
++	unsigned int numa_node;
++};
++
++static int (*bpf_skb_load_bytes)(void *ctx, int off, void *to, int len) =
++	(void *) BPF_FUNC_skb_load_bytes;
++static int (*bpf_skb_store_bytes)(void *ctx, int off, void *from, int len, int flags) =
++	(void *) BPF_FUNC_skb_store_bytes;
++static int (*bpf_l3_csum_replace)(void *ctx, int off, int from, int to, int flags) =
++	(void *) BPF_FUNC_l3_csum_replace;
++static int (*bpf_l4_csum_replace)(void *ctx, int off, int from, int to, int flags) =
++	(void *) BPF_FUNC_l4_csum_replace;
++static int (*bpf_skb_under_cgroup)(void *ctx, void *map, int index) =
++	(void *) BPF_FUNC_skb_under_cgroup;
++static int (*bpf_skb_change_head)(void *, int len, int flags) =
++	(void *) BPF_FUNC_skb_change_head;
++
++/* Scan the ARCH passed in from ARCH env variable (see Makefile) */
++#if defined(__TARGET_ARCH_x86)
++	#define bpf_target_x86
++	#define bpf_target_defined
++#elif defined(__TARGET_ARCH_s930x)
++	#define bpf_target_s930x
++	#define bpf_target_defined
++#elif defined(__TARGET_ARCH_arm64)
++	#define bpf_target_arm64
++	#define bpf_target_defined
++#elif defined(__TARGET_ARCH_mips)
++	#define bpf_target_mips
++	#define bpf_target_defined
++#elif defined(__TARGET_ARCH_powerpc)
++	#define bpf_target_powerpc
++	#define bpf_target_defined
++#elif defined(__TARGET_ARCH_sparc)
++	#define bpf_target_sparc
++	#define bpf_target_defined
++#else
++	#undef bpf_target_defined
++#endif
++
++/* Fall back to what the compiler says */
++#ifndef bpf_target_defined
++#if defined(__x86_64__)
++	#define bpf_target_x86
++#elif defined(__s390x__)
++	#define bpf_target_s930x
++#elif defined(__aarch64__)
++	#define bpf_target_arm64
++#elif defined(__mips__)
++	#define bpf_target_mips
++#elif defined(__powerpc__)
++	#define bpf_target_powerpc
++#elif defined(__sparc__)
++	#define bpf_target_sparc
++#endif
++#endif
++
++#if defined(bpf_target_x86)
++
++#define PT_REGS_PARM1(x) ((x)->di)
++#define PT_REGS_PARM2(x) ((x)->si)
++#define PT_REGS_PARM3(x) ((x)->dx)
++#define PT_REGS_PARM4(x) ((x)->cx)
++#define PT_REGS_PARM5(x) ((x)->r8)
++#define PT_REGS_RET(x) ((x)->sp)
++#define PT_REGS_FP(x) ((x)->bp)
++#define PT_REGS_RC(x) ((x)->ax)
++#define PT_REGS_SP(x) ((x)->sp)
++#define PT_REGS_IP(x) ((x)->ip)
++
++#elif defined(bpf_target_s390x)
++
++#define PT_REGS_PARM1(x) ((x)->gprs[2])
++#define PT_REGS_PARM2(x) ((x)->gprs[3])
++#define PT_REGS_PARM3(x) ((x)->gprs[4])
++#define PT_REGS_PARM4(x) ((x)->gprs[5])
++#define PT_REGS_PARM5(x) ((x)->gprs[6])
++#define PT_REGS_RET(x) ((x)->gprs[14])
++#define PT_REGS_FP(x) ((x)->gprs[11]) /* Works only with CONFIG_FRAME_POINTER */
++#define PT_REGS_RC(x) ((x)->gprs[2])
++#define PT_REGS_SP(x) ((x)->gprs[15])
++#define PT_REGS_IP(x) ((x)->psw.addr)
++
++#elif defined(bpf_target_arm64)
++
++#define PT_REGS_PARM1(x) ((x)->regs[0])
++#define PT_REGS_PARM2(x) ((x)->regs[1])
++#define PT_REGS_PARM3(x) ((x)->regs[2])
++#define PT_REGS_PARM4(x) ((x)->regs[3])
++#define PT_REGS_PARM5(x) ((x)->regs[4])
++#define PT_REGS_RET(x) ((x)->regs[30])
++#define PT_REGS_FP(x) ((x)->regs[29]) /* Works only with CONFIG_FRAME_POINTER */
++#define PT_REGS_RC(x) ((x)->regs[0])
++#define PT_REGS_SP(x) ((x)->sp)
++#define PT_REGS_IP(x) ((x)->pc)
++
++#elif defined(bpf_target_mips)
++
++#define PT_REGS_PARM1(x) ((x)->regs[4])
++#define PT_REGS_PARM2(x) ((x)->regs[5])
++#define PT_REGS_PARM3(x) ((x)->regs[6])
++#define PT_REGS_PARM4(x) ((x)->regs[7])
++#define PT_REGS_PARM5(x) ((x)->regs[8])
++#define PT_REGS_RET(x) ((x)->regs[31])
++#define PT_REGS_FP(x) ((x)->regs[30]) /* Works only with CONFIG_FRAME_POINTER */
++#define PT_REGS_RC(x) ((x)->regs[1])
++#define PT_REGS_SP(x) ((x)->regs[29])
++#define PT_REGS_IP(x) ((x)->cp0_epc)
++
++#elif defined(bpf_target_powerpc)
++
++#define PT_REGS_PARM1(x) ((x)->gpr[3])
++#define PT_REGS_PARM2(x) ((x)->gpr[4])
++#define PT_REGS_PARM3(x) ((x)->gpr[5])
++#define PT_REGS_PARM4(x) ((x)->gpr[6])
++#define PT_REGS_PARM5(x) ((x)->gpr[7])
++#define PT_REGS_RC(x) ((x)->gpr[3])
++#define PT_REGS_SP(x) ((x)->sp)
++#define PT_REGS_IP(x) ((x)->nip)
++
++#elif defined(bpf_target_sparc)
++
++#define PT_REGS_PARM1(x) ((x)->u_regs[UREG_I0])
++#define PT_REGS_PARM2(x) ((x)->u_regs[UREG_I1])
++#define PT_REGS_PARM3(x) ((x)->u_regs[UREG_I2])
++#define PT_REGS_PARM4(x) ((x)->u_regs[UREG_I3])
++#define PT_REGS_PARM5(x) ((x)->u_regs[UREG_I4])
++#define PT_REGS_RET(x) ((x)->u_regs[UREG_I7])
++#define PT_REGS_RC(x) ((x)->u_regs[UREG_I0])
++#define PT_REGS_SP(x) ((x)->u_regs[UREG_FP])
++
++/* Should this also be a bpf_target check for the sparc case? */
++#if defined(__arch64__)
++#define PT_REGS_IP(x) ((x)->tpc)
++#else
++#define PT_REGS_IP(x) ((x)->pc)
++#endif
++
++#endif
++
++#ifdef bpf_target_powerpc
++#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({ (ip) = (ctx)->link; })
++#define BPF_KRETPROBE_READ_RET_IP		BPF_KPROBE_READ_RET_IP
++#elif bpf_target_sparc
++#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({ (ip) = PT_REGS_RET(ctx); })
++#define BPF_KRETPROBE_READ_RET_IP		BPF_KPROBE_READ_RET_IP
++#else
++#define BPF_KPROBE_READ_RET_IP(ip, ctx)		({				\
++		bpf_probe_read(&(ip), sizeof(ip), (void *)PT_REGS_RET(ctx)); })
++#define BPF_KRETPROBE_READ_RET_IP(ip, ctx)	({				\
++		bpf_probe_read(&(ip), sizeof(ip),				\
++				(void *)(PT_REGS_FP(ctx) + sizeof(ip))); })
++#endif
++
++#endif
+diff --git a/ebpf/bypass_filter.c b/ebpf/bypass_filter.c
+new file mode 100644
+index 0000000..be81032
+--- /dev/null
++++ b/ebpf/bypass_filter.c
+@@ -0,0 +1,225 @@
++/* Copyright (C) 2018 Open Information Security Foundation
++ *
++ * You can copy, redistribute or modify this Program under the terms of
++ * the GNU General Public License version 2 as published by the Free
++ * Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * version 2 along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
++ * 02110-1301, USA.
++ */
++
++#include <stddef.h>
++#include <linux/bpf.h>
++
++#include <linux/if_ether.h>
++#include <linux/in.h>
++#include <linux/ip.h>
++#include <linux/in6.h>
++#include <linux/ipv6.h>
++#include <linux/filter.h>
++
++#include "bpf_helpers.h"
++
++#define LINUX_VERSION_CODE 263682
++
++struct flowv4_keys {
++    __be32 src;
++    __be32 dst;
++    union {
++        __be32 ports;
++        __be16 port16[2];
++    };
++    __u32 ip_proto;
++} __attribute__((__aligned__(8)));
++
++struct flowv6_keys {
++    __be32 src[4];
++    __be32 dst[4];
++    union {
++        __be32 ports;
++        __be16 port16[2];
++    };
++    __u32 ip_proto;
++} __attribute__((__aligned__(8)));
++
++struct pair {
++    __u64 time;
++    __u64 packets;
++    __u64 bytes;
++} __attribute__((__aligned__(8)));
++
++struct bpf_map_def SEC("maps") flow_table_v4 = {
++    .type = BPF_MAP_TYPE_PERCPU_HASH,
++    .key_size = sizeof(struct flowv4_keys),
++    .value_size = sizeof(struct pair),
++    .max_entries = 32768,
++};
++
++struct bpf_map_def SEC("maps") flow_table_v6 = {
++    .type = BPF_MAP_TYPE_PERCPU_HASH,
++    .key_size = sizeof(struct flowv6_keys),
++    .value_size = sizeof(struct pair),
++    .max_entries = 32768,
++};
++
++/**
++ * IPv4 filter
++ *
++ * \return 0 to drop packet out and -1 to accept it
++ */
++static __always_inline int ipv4_filter(struct __sk_buff *skb)
++{
++    __u32 nhoff, verlen;
++    struct flowv4_keys tuple;
++    struct pair *value;
++    __u16 port;
++
++    nhoff = skb->cb[0];
++
++    tuple.ip_proto = load_byte(skb, nhoff + offsetof(struct iphdr, protocol));
++    /* only support TCP and UDP for now */
++    switch (tuple.ip_proto) {
++        case IPPROTO_TCP:
++        case IPPROTO_UDP:
++            break;
++        default:
++            return -1;
++    }
++    
++    tuple.src = load_word(skb, nhoff + offsetof(struct iphdr, saddr));
++    tuple.dst = load_word(skb, nhoff + offsetof(struct iphdr, daddr));
++
++    verlen = load_byte(skb, nhoff + 0/*offsetof(struct iphdr, ihl)*/);
++    nhoff += (verlen & 0xF) << 2;
++    tuple.ports = load_word(skb, nhoff);
++    port = tuple.port16[1];
++    tuple.port16[1] = tuple.port16[0];
++    tuple.port16[0] = port;
++
++#if 0
++    if ((tuple.port16[0] == 22) || (tuple.port16[1] == 22))
++    {
++        __u16 sp = tuple.port16[0];
++        //__u16 dp = tuple.port16[1];
++        char fmt[] = "Parsed SSH flow: %u %d -> %u\n";
++        bpf_trace_printk(fmt, sizeof(fmt), tuple.src, sp, tuple.dst);
++    }
++#endif
++    /* Test if src is in hash */
++    value = bpf_map_lookup_elem(&flow_table_v4, &tuple);
++    if (value) {
++#if 0
++        {
++            __u16 sp = tuple.port16[0];
++            //__u16 dp = tuple.port16[1];
++            char bfmt[] = "Found flow: %u %d -> %u\n";
++            bpf_trace_printk(bfmt, sizeof(bfmt), tuple.src, sp, tuple.dst);
++        }
++#endif
++        value->packets++;
++        value->bytes += skb->len;
++        value->time = bpf_ktime_get_ns();
++        return 0;
++    }
++    return -1;
++}
++
++/**
++ * IPv6 filter
++ *
++ * \return 0 to drop packet out and -1 to accept it
++ */
++static __always_inline int ipv6_filter(struct __sk_buff *skb)
++{
++    __u32 nhoff;
++    __u8 nhdr;
++    struct flowv6_keys tuple;
++    struct pair *value;
++    __u16 port;
++
++    nhoff = skb->cb[0];
++
++    /* get next header */
++    nhdr = load_byte(skb, nhoff + offsetof(struct ipv6hdr, nexthdr));
++
++    /* only support direct TCP and UDP for now */
++    switch (nhdr) {
++        case IPPROTO_TCP:
++        case IPPROTO_UDP:
++            break;
++        default:
++            return -1;
++    }
++
++    tuple.src[0] = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr));
++    tuple.src[1] = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 4);
++    tuple.src[2] = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 8);
++    tuple.src[3] = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 12);
++    tuple.dst[0] = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr));
++    tuple.dst[1] = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 4);
++    tuple.dst[2] = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 8);
++    tuple.dst[3] = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 12);
++
++    /* Parse TCP */
++    tuple.ports = load_word(skb, nhoff + 40 /* IPV6_HEADER_LEN */);
++    port = tuple.port16[1];
++    tuple.port16[1] = tuple.port16[0];
++    tuple.port16[0] = port;
++    tuple.ip_proto = nhdr;
++
++    //char fmt[] = "Now Got IPv6 port %u and %u\n";
++    //bpf_trace_printk(fmt, sizeof(fmt), tuple.port16[0], tuple.port16[1]);
++    /* Test if src is in hash */
++    value = bpf_map_lookup_elem(&flow_table_v6, &tuple);
++    if (value) {
++        //char fmt[] = "Got a match IPv6: %u and %u\n";
++        //bpf_trace_printk(fmt, sizeof(fmt), tuple.port16[0], tuple.port16[1]);
++        value->packets++;
++        value->bytes += skb->len;
++        value->time = bpf_ktime_get_ns();
++        return 0;
++    }
++    return -1;
++}
++
++/**
++ * filter function
++ *
++ * It is loaded in kernel by Suricata that uses the section name specified
++ * by the SEC call to find it in the Elf binary object and load it.
++ *
++ * \return 0 to drop packet out and -1 to accept it
++ */
++int SEC("filter") hashfilter(struct __sk_buff *skb) {
++    __u32 nhoff = BPF_LL_OFF + ETH_HLEN;
++
++    skb->cb[0] = nhoff;
++    switch (skb->protocol) {
++        case __constant_htons(ETH_P_IP):
++            return ipv4_filter(skb);
++        case __constant_htons(ETH_P_IPV6):
++            return ipv6_filter(skb);
++        default:
++#if 0
++            {
++                char fmt[] = "Got proto %u\n";
++                bpf_trace_printk(fmt, sizeof(fmt), h_proto);
++                break;
++            }
++#else
++            break;
++#endif
++    }
++    return -1;
++}
++
++char __license[] SEC("license") = "GPL";
++
++__u32 __version SEC("version") = LINUX_VERSION_CODE;
+diff --git a/ebpf/filter.c b/ebpf/filter.c
+new file mode 100644
+index 0000000..4fe95d4
+--- /dev/null
++++ b/ebpf/filter.c
+@@ -0,0 +1,58 @@
++/* Copyright (C) 2018 Open Information Security Foundation
++ *
++ * You can copy, redistribute or modify this Program under the terms of
++ * the GNU General Public License version 2 as published by the Free
++ * Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * version 2 along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
++ * 02110-1301, USA.
++ */
++
++#include <stddef.h>
++#include <linux/bpf.h>
++
++#include <linux/if_ether.h>
++#include <linux/in.h>
++#include <linux/ip.h>
++#include <linux/in6.h>
++#include <linux/ipv6.h>
++#include <linux/filter.h>
++
++#include "bpf_helpers.h"
++
++#define LINUX_VERSION_CODE 263682
++
++int SEC("filter") hashfilter(struct __sk_buff *skb) {
++    __u32 nhoff = BPF_LL_OFF + ETH_HLEN;
++
++    skb->cb[0] = nhoff;
++    switch (skb->protocol) {
++        case __constant_htons(ETH_P_IP):
++            return -1;
++        case __constant_htons(ETH_P_IPV6):
++            return 0;
++        default:
++#if 0
++            {
++                char fmt[] = "Got proto %u\n";
++                bpf_trace_printk(fmt, sizeof(fmt), h_proto);
++                break;
++            }
++#else
++            break;
++#endif
++    }
++    return -1;
++}
++
++
++char __license[] SEC("license") = "GPL";
++
++__u32 __version SEC("version") = LINUX_VERSION_CODE;
+diff --git a/ebpf/hash_func01.h b/ebpf/hash_func01.h
+new file mode 100644
+index 0000000..3825581
+--- /dev/null
++++ b/ebpf/hash_func01.h
+@@ -0,0 +1,55 @@
++/* SPDX-License-Identifier: LGPL-2.1
++ *
++ * Based on Paul Hsieh's (LGPG 2.1) hash function
++ * From: http://www.azillionmonkeys.com/qed/hash.html
++ */
++
++#define get16bits(d) (*((const __u16 *) (d)))
++
++static __always_inline
++__u32 SuperFastHash (const char *data, int len, __u32 initval) {
++	__u32 hash = initval;
++	__u32 tmp;
++	int rem;
++
++	if (len <= 0 || data == NULL) return 0;
++
++	rem = len & 3;
++	len >>= 2;
++
++	/* Main loop */
++#pragma clang loop unroll(full)
++	for (;len > 0; len--) {
++		hash  += get16bits (data);
++		tmp    = (get16bits (data+2) << 11) ^ hash;
++		hash   = (hash << 16) ^ tmp;
++		data  += 2*sizeof (__u16);
++		hash  += hash >> 11;
++	}
++
++	/* Handle end cases */
++	switch (rem) {
++        case 3: hash += get16bits (data);
++                hash ^= hash << 16;
++                hash ^= ((signed char)data[sizeof (__u16)]) << 18;
++                hash += hash >> 11;
++                break;
++        case 2: hash += get16bits (data);
++                hash ^= hash << 11;
++                hash += hash >> 17;
++                break;
++        case 1: hash += (signed char)*data;
++                hash ^= hash << 10;
++                hash += hash >> 1;
++	}
++
++	/* Force "avalanching" of final 127 bits */
++	hash ^= hash << 3;
++	hash += hash >> 5;
++	hash ^= hash << 4;
++	hash += hash >> 17;
++	hash ^= hash << 25;
++	hash += hash >> 6;
++
++	return hash;
++}
+diff --git a/ebpf/include/linux/bpf.h b/ebpf/include/linux/bpf.h
+new file mode 100644
+index 0000000..c308487
+--- /dev/null
++++ b/ebpf/include/linux/bpf.h
+@@ -0,0 +1,1027 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++/* Copyright (c) 2011-2014 PLUMgrid, http://plumgrid.com
++ *
++ * This program is free software; you can redistribute it and/or
++ * modify it under the terms of version 2 of the GNU General Public
++ * License as published by the Free Software Foundation.
++ */
++#ifndef __LINUX_BPF_H__
++#define __LINUX_BPF_H__
++
++#include <linux/types.h>
++#include <linux/bpf_common.h>
++
++/* Extended instruction set based on top of classic BPF */
++
++/* instruction classes */
++#define BPF_ALU64	0x07	/* alu mode in double word width */
++
++/* ld/ldx fields */
++#define BPF_DW		0x18	/* double word (u64) */
++#define BPF_XADD	0xc0	/* exclusive add */
++
++/* alu/jmp fields */
++#define BPF_MOV		0xb0	/* mov reg to reg */
++#define BPF_ARSH	0xc0	/* sign extending arithmetic shift right */
++
++/* change endianness of a register */
++#define BPF_END		0xd0	/* flags for endianness conversion: */
++#define BPF_TO_LE	0x00	/* convert to little-endian */
++#define BPF_TO_BE	0x08	/* convert to big-endian */
++#define BPF_FROM_LE	BPF_TO_LE
++#define BPF_FROM_BE	BPF_TO_BE
++
++/* jmp encodings */
++#define BPF_JNE		0x50	/* jump != */
++#define BPF_JLT		0xa0	/* LT is unsigned, '<' */
++#define BPF_JLE		0xb0	/* LE is unsigned, '<=' */
++#define BPF_JSGT	0x60	/* SGT is signed '>', GT in x86 */
++#define BPF_JSGE	0x70	/* SGE is signed '>=', GE in x86 */
++#define BPF_JSLT	0xc0	/* SLT is signed, '<' */
++#define BPF_JSLE	0xd0	/* SLE is signed, '<=' */
++#define BPF_CALL	0x80	/* function call */
++#define BPF_EXIT	0x90	/* function return */
++
++/* Register numbers */
++enum {
++	BPF_REG_0 = 0,
++	BPF_REG_1,
++	BPF_REG_2,
++	BPF_REG_3,
++	BPF_REG_4,
++	BPF_REG_5,
++	BPF_REG_6,
++	BPF_REG_7,
++	BPF_REG_8,
++	BPF_REG_9,
++	BPF_REG_10,
++	__MAX_BPF_REG,
++};
++
++/* BPF has 10 general purpose 64-bit registers and stack frame. */
++#define MAX_BPF_REG	__MAX_BPF_REG
++
++struct bpf_insn {
++	__u8	code;		/* opcode */
++	__u8	dst_reg:4;	/* dest register */
++	__u8	src_reg:4;	/* source register */
++	__s16	off;		/* signed offset */
++	__s32	imm;		/* signed immediate constant */
++};
++
++/* Key of an a BPF_MAP_TYPE_LPM_TRIE entry */
++struct bpf_lpm_trie_key {
++	__u32	prefixlen;	/* up to 32 for AF_INET, 128 for AF_INET6 */
++	__u8	data[0];	/* Arbitrary size */
++};
++
++/* BPF syscall commands, see bpf(2) man-page for details. */
++enum bpf_cmd {
++	BPF_MAP_CREATE,
++	BPF_MAP_LOOKUP_ELEM,
++	BPF_MAP_UPDATE_ELEM,
++	BPF_MAP_DELETE_ELEM,
++	BPF_MAP_GET_NEXT_KEY,
++	BPF_PROG_LOAD,
++	BPF_OBJ_PIN,
++	BPF_OBJ_GET,
++	BPF_PROG_ATTACH,
++	BPF_PROG_DETACH,
++	BPF_PROG_TEST_RUN,
++	BPF_PROG_GET_NEXT_ID,
++	BPF_MAP_GET_NEXT_ID,
++	BPF_PROG_GET_FD_BY_ID,
++	BPF_MAP_GET_FD_BY_ID,
++	BPF_OBJ_GET_INFO_BY_FD,
++	BPF_PROG_QUERY,
++};
++
++enum bpf_map_type {
++	BPF_MAP_TYPE_UNSPEC,
++	BPF_MAP_TYPE_HASH,
++	BPF_MAP_TYPE_ARRAY,
++	BPF_MAP_TYPE_PROG_ARRAY,
++	BPF_MAP_TYPE_PERF_EVENT_ARRAY,
++	BPF_MAP_TYPE_PERCPU_HASH,
++	BPF_MAP_TYPE_PERCPU_ARRAY,
++	BPF_MAP_TYPE_STACK_TRACE,
++	BPF_MAP_TYPE_CGROUP_ARRAY,
++	BPF_MAP_TYPE_LRU_HASH,
++	BPF_MAP_TYPE_LRU_PERCPU_HASH,
++	BPF_MAP_TYPE_LPM_TRIE,
++	BPF_MAP_TYPE_ARRAY_OF_MAPS,
++	BPF_MAP_TYPE_HASH_OF_MAPS,
++	BPF_MAP_TYPE_DEVMAP,
++	BPF_MAP_TYPE_SOCKMAP,
++	BPF_MAP_TYPE_CPUMAP,
++};
++
++enum bpf_prog_type {
++	BPF_PROG_TYPE_UNSPEC,
++	BPF_PROG_TYPE_SOCKET_FILTER,
++	BPF_PROG_TYPE_KPROBE,
++	BPF_PROG_TYPE_SCHED_CLS,
++	BPF_PROG_TYPE_SCHED_ACT,
++	BPF_PROG_TYPE_TRACEPOINT,
++	BPF_PROG_TYPE_XDP,
++	BPF_PROG_TYPE_PERF_EVENT,
++	BPF_PROG_TYPE_CGROUP_SKB,
++	BPF_PROG_TYPE_CGROUP_SOCK,
++	BPF_PROG_TYPE_LWT_IN,
++	BPF_PROG_TYPE_LWT_OUT,
++	BPF_PROG_TYPE_LWT_XMIT,
++	BPF_PROG_TYPE_SOCK_OPS,
++	BPF_PROG_TYPE_SK_SKB,
++	BPF_PROG_TYPE_CGROUP_DEVICE,
++};
++
++enum bpf_attach_type {
++	BPF_CGROUP_INET_INGRESS,
++	BPF_CGROUP_INET_EGRESS,
++	BPF_CGROUP_INET_SOCK_CREATE,
++	BPF_CGROUP_SOCK_OPS,
++	BPF_SK_SKB_STREAM_PARSER,
++	BPF_SK_SKB_STREAM_VERDICT,
++	BPF_CGROUP_DEVICE,
++	__MAX_BPF_ATTACH_TYPE
++};
++
++#define MAX_BPF_ATTACH_TYPE __MAX_BPF_ATTACH_TYPE
++
++/* cgroup-bpf attach flags used in BPF_PROG_ATTACH command
++ *
++ * NONE(default): No further bpf programs allowed in the subtree.
++ *
++ * BPF_F_ALLOW_OVERRIDE: If a sub-cgroup installs some bpf program,
++ * the program in this cgroup yields to sub-cgroup program.
++ *
++ * BPF_F_ALLOW_MULTI: If a sub-cgroup installs some bpf program,
++ * that cgroup program gets run in addition to the program in this cgroup.
++ *
++ * Only one program is allowed to be attached to a cgroup with
++ * NONE or BPF_F_ALLOW_OVERRIDE flag.
++ * Attaching another program on top of NONE or BPF_F_ALLOW_OVERRIDE will
++ * release old program and attach the new one. Attach flags has to match.
++ *
++ * Multiple programs are allowed to be attached to a cgroup with
++ * BPF_F_ALLOW_MULTI flag. They are executed in FIFO order
++ * (those that were attached first, run first)
++ * The programs of sub-cgroup are executed first, then programs of
++ * this cgroup and then programs of parent cgroup.
++ * When children program makes decision (like picking TCP CA or sock bind)
++ * parent program has a chance to override it.
++ *
++ * A cgroup with MULTI or OVERRIDE flag allows any attach flags in sub-cgroups.
++ * A cgroup with NONE doesn't allow any programs in sub-cgroups.
++ * Ex1:
++ * cgrp1 (MULTI progs A, B) ->
++ *    cgrp2 (OVERRIDE prog C) ->
++ *      cgrp3 (MULTI prog D) ->
++ *        cgrp4 (OVERRIDE prog E) ->
++ *          cgrp5 (NONE prog F)
++ * the event in cgrp5 triggers execution of F,D,A,B in that order.
++ * if prog F is detached, the execution is E,D,A,B
++ * if prog F and D are detached, the execution is E,A,B
++ * if prog F, E and D are detached, the execution is C,A,B
++ *
++ * All eligible programs are executed regardless of return code from
++ * earlier programs.
++ */
++#define BPF_F_ALLOW_OVERRIDE	(1U << 0)
++#define BPF_F_ALLOW_MULTI	(1U << 1)
++
++/* If BPF_F_STRICT_ALIGNMENT is used in BPF_PROG_LOAD command, the
++ * verifier will perform strict alignment checking as if the kernel
++ * has been built with CONFIG_EFFICIENT_UNALIGNED_ACCESS not set,
++ * and NET_IP_ALIGN defined to 2.
++ */
++#define BPF_F_STRICT_ALIGNMENT	(1U << 0)
++
++/* when bpf_ldimm64->src_reg == BPF_PSEUDO_MAP_FD, bpf_ldimm64->imm == fd */
++#define BPF_PSEUDO_MAP_FD	1
++
++/* when bpf_call->src_reg == BPF_PSEUDO_CALL, bpf_call->imm == pc-relative
++ * offset to another bpf function
++ */
++#define BPF_PSEUDO_CALL		1
++
++/* flags for BPF_MAP_UPDATE_ELEM command */
++#define BPF_ANY		0 /* create new element or update existing */
++#define BPF_NOEXIST	1 /* create new element if it didn't exist */
++#define BPF_EXIST	2 /* update existing element */
++
++/* flags for BPF_MAP_CREATE command */
++#define BPF_F_NO_PREALLOC	(1U << 0)
++/* Instead of having one common LRU list in the
++ * BPF_MAP_TYPE_LRU_[PERCPU_]HASH map, use a percpu LRU list
++ * which can scale and perform better.
++ * Note, the LRU nodes (including free nodes) cannot be moved
++ * across different LRU lists.
++ */
++#define BPF_F_NO_COMMON_LRU	(1U << 1)
++/* Specify numa node during map creation */
++#define BPF_F_NUMA_NODE		(1U << 2)
++
++/* flags for BPF_PROG_QUERY */
++#define BPF_F_QUERY_EFFECTIVE	(1U << 0)
++
++#define BPF_OBJ_NAME_LEN 16U
++
++/* Flags for accessing BPF object */
++#define BPF_F_RDONLY		(1U << 3)
++#define BPF_F_WRONLY		(1U << 4)
++
++union bpf_attr {
++	struct { /* anonymous struct used by BPF_MAP_CREATE command */
++		__u32	map_type;	/* one of enum bpf_map_type */
++		__u32	key_size;	/* size of key in bytes */
++		__u32	value_size;	/* size of value in bytes */
++		__u32	max_entries;	/* max number of entries in a map */
++		__u32	map_flags;	/* BPF_MAP_CREATE related
++					 * flags defined above.
++					 */
++		__u32	inner_map_fd;	/* fd pointing to the inner map */
++		__u32	numa_node;	/* numa node (effective only if
++					 * BPF_F_NUMA_NODE is set).
++					 */
++		char	map_name[BPF_OBJ_NAME_LEN];
++	};
++
++	struct { /* anonymous struct used by BPF_MAP_*_ELEM commands */
++		__u32		map_fd;
++		__aligned_u64	key;
++		union {
++			__aligned_u64 value;
++			__aligned_u64 next_key;
++		};
++		__u64		flags;
++	};
++
++	struct { /* anonymous struct used by BPF_PROG_LOAD command */
++		__u32		prog_type;	/* one of enum bpf_prog_type */
++		__u32		insn_cnt;
++		__aligned_u64	insns;
++		__aligned_u64	license;
++		__u32		log_level;	/* verbosity level of verifier */
++		__u32		log_size;	/* size of user buffer */
++		__aligned_u64	log_buf;	/* user supplied buffer */
++		__u32		kern_version;	/* checked when prog_type=kprobe */
++		__u32		prog_flags;
++		char		prog_name[BPF_OBJ_NAME_LEN];
++		__u32		prog_ifindex;	/* ifindex of netdev to prep for */
++	};
++
++	struct { /* anonymous struct used by BPF_OBJ_* commands */
++		__aligned_u64	pathname;
++		__u32		bpf_fd;
++		__u32		file_flags;
++	};
++
++	struct { /* anonymous struct used by BPF_PROG_ATTACH/DETACH commands */
++		__u32		target_fd;	/* container object to attach to */
++		__u32		attach_bpf_fd;	/* eBPF program to attach */
++		__u32		attach_type;
++		__u32		attach_flags;
++	};
++
++	struct { /* anonymous struct used by BPF_PROG_TEST_RUN command */
++		__u32		prog_fd;
++		__u32		retval;
++		__u32		data_size_in;
++		__u32		data_size_out;
++		__aligned_u64	data_in;
++		__aligned_u64	data_out;
++		__u32		repeat;
++		__u32		duration;
++	} test;
++
++	struct { /* anonymous struct used by BPF_*_GET_*_ID */
++		union {
++			__u32		start_id;
++			__u32		prog_id;
++			__u32		map_id;
++		};
++		__u32		next_id;
++		__u32		open_flags;
++	};
++
++	struct { /* anonymous struct used by BPF_OBJ_GET_INFO_BY_FD */
++		__u32		bpf_fd;
++		__u32		info_len;
++		__aligned_u64	info;
++	} info;
++
++	struct { /* anonymous struct used by BPF_PROG_QUERY command */
++		__u32		target_fd;	/* container object to query */
++		__u32		attach_type;
++		__u32		query_flags;
++		__u32		attach_flags;
++		__aligned_u64	prog_ids;
++		__u32		prog_cnt;
++	} query;
++} __attribute__((aligned(8)));
++
++/* BPF helper function descriptions:
++ *
++ * void *bpf_map_lookup_elem(&map, &key)
++ *     Return: Map value or NULL
++ *
++ * int bpf_map_update_elem(&map, &key, &value, flags)
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_map_delete_elem(&map, &key)
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_probe_read(void *dst, int size, void *src)
++ *     Return: 0 on success or negative error
++ *
++ * u64 bpf_ktime_get_ns(void)
++ *     Return: current ktime
++ *
++ * int bpf_trace_printk(const char *fmt, int fmt_size, ...)
++ *     Return: length of buffer written or negative error
++ *
++ * u32 bpf_prandom_u32(void)
++ *     Return: random value
++ *
++ * u32 bpf_raw_smp_processor_id(void)
++ *     Return: SMP processor ID
++ *
++ * int bpf_skb_store_bytes(skb, offset, from, len, flags)
++ *     store bytes into packet
++ *     @skb: pointer to skb
++ *     @offset: offset within packet from skb->mac_header
++ *     @from: pointer where to copy bytes from
++ *     @len: number of bytes to store into packet
++ *     @flags: bit 0 - if true, recompute skb->csum
++ *             other bits - reserved
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_l3_csum_replace(skb, offset, from, to, flags)
++ *     recompute IP checksum
++ *     @skb: pointer to skb
++ *     @offset: offset within packet where IP checksum is located
++ *     @from: old value of header field
++ *     @to: new value of header field
++ *     @flags: bits 0-3 - size of header field
++ *             other bits - reserved
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_l4_csum_replace(skb, offset, from, to, flags)
++ *     recompute TCP/UDP checksum
++ *     @skb: pointer to skb
++ *     @offset: offset within packet where TCP/UDP checksum is located
++ *     @from: old value of header field
++ *     @to: new value of header field
++ *     @flags: bits 0-3 - size of header field
++ *             bit 4 - is pseudo header
++ *             other bits - reserved
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_tail_call(ctx, prog_array_map, index)
++ *     jump into another BPF program
++ *     @ctx: context pointer passed to next program
++ *     @prog_array_map: pointer to map which type is BPF_MAP_TYPE_PROG_ARRAY
++ *     @index: 32-bit index inside array that selects specific program to run
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_clone_redirect(skb, ifindex, flags)
++ *     redirect to another netdev
++ *     @skb: pointer to skb
++ *     @ifindex: ifindex of the net device
++ *     @flags: bit 0 - if set, redirect to ingress instead of egress
++ *             other bits - reserved
++ *     Return: 0 on success or negative error
++ *
++ * u64 bpf_get_current_pid_tgid(void)
++ *     Return: current->tgid << 32 | current->pid
++ *
++ * u64 bpf_get_current_uid_gid(void)
++ *     Return: current_gid << 32 | current_uid
++ *
++ * int bpf_get_current_comm(char *buf, int size_of_buf)
++ *     stores current->comm into buf
++ *     Return: 0 on success or negative error
++ *
++ * u32 bpf_get_cgroup_classid(skb)
++ *     retrieve a proc's classid
++ *     @skb: pointer to skb
++ *     Return: classid if != 0
++ *
++ * int bpf_skb_vlan_push(skb, vlan_proto, vlan_tci)
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_vlan_pop(skb)
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_get_tunnel_key(skb, key, size, flags)
++ * int bpf_skb_set_tunnel_key(skb, key, size, flags)
++ *     retrieve or populate tunnel metadata
++ *     @skb: pointer to skb
++ *     @key: pointer to 'struct bpf_tunnel_key'
++ *     @size: size of 'struct bpf_tunnel_key'
++ *     @flags: room for future extensions
++ *     Return: 0 on success or negative error
++ *
++ * u64 bpf_perf_event_read(map, flags)
++ *     read perf event counter value
++ *     @map: pointer to perf_event_array map
++ *     @flags: index of event in the map or bitmask flags
++ *     Return: value of perf event counter read or error code
++ *
++ * int bpf_redirect(ifindex, flags)
++ *     redirect to another netdev
++ *     @ifindex: ifindex of the net device
++ *     @flags:
++ *	  cls_bpf:
++ *          bit 0 - if set, redirect to ingress instead of egress
++ *          other bits - reserved
++ *	  xdp_bpf:
++ *	    all bits - reserved
++ *     Return: cls_bpf: TC_ACT_REDIRECT on success or TC_ACT_SHOT on error
++ *	       xdp_bfp: XDP_REDIRECT on success or XDP_ABORT on error
++ * int bpf_redirect_map(map, key, flags)
++ *     redirect to endpoint in map
++ *     @map: pointer to dev map
++ *     @key: index in map to lookup
++ *     @flags: --
++ *     Return: XDP_REDIRECT on success or XDP_ABORT on error
++ *
++ * u32 bpf_get_route_realm(skb)
++ *     retrieve a dst's tclassid
++ *     @skb: pointer to skb
++ *     Return: realm if != 0
++ *
++ * int bpf_perf_event_output(ctx, map, flags, data, size)
++ *     output perf raw sample
++ *     @ctx: struct pt_regs*
++ *     @map: pointer to perf_event_array map
++ *     @flags: index of event in the map or bitmask flags
++ *     @data: data on stack to be output as raw data
++ *     @size: size of data
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_get_stackid(ctx, map, flags)
++ *     walk user or kernel stack and return id
++ *     @ctx: struct pt_regs*
++ *     @map: pointer to stack_trace map
++ *     @flags: bits 0-7 - numer of stack frames to skip
++ *             bit 8 - collect user stack instead of kernel
++ *             bit 9 - compare stacks by hash only
++ *             bit 10 - if two different stacks hash into the same stackid
++ *                      discard old
++ *             other bits - reserved
++ *     Return: >= 0 stackid on success or negative error
++ *
++ * s64 bpf_csum_diff(from, from_size, to, to_size, seed)
++ *     calculate csum diff
++ *     @from: raw from buffer
++ *     @from_size: length of from buffer
++ *     @to: raw to buffer
++ *     @to_size: length of to buffer
++ *     @seed: optional seed
++ *     Return: csum result or negative error code
++ *
++ * int bpf_skb_get_tunnel_opt(skb, opt, size)
++ *     retrieve tunnel options metadata
++ *     @skb: pointer to skb
++ *     @opt: pointer to raw tunnel option data
++ *     @size: size of @opt
++ *     Return: option size
++ *
++ * int bpf_skb_set_tunnel_opt(skb, opt, size)
++ *     populate tunnel options metadata
++ *     @skb: pointer to skb
++ *     @opt: pointer to raw tunnel option data
++ *     @size: size of @opt
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_change_proto(skb, proto, flags)
++ *     Change protocol of the skb. Currently supported is v4 -> v6,
++ *     v6 -> v4 transitions. The helper will also resize the skb. eBPF
++ *     program is expected to fill the new headers via skb_store_bytes
++ *     and lX_csum_replace.
++ *     @skb: pointer to skb
++ *     @proto: new skb->protocol type
++ *     @flags: reserved
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_change_type(skb, type)
++ *     Change packet type of skb.
++ *     @skb: pointer to skb
++ *     @type: new skb->pkt_type type
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_under_cgroup(skb, map, index)
++ *     Check cgroup2 membership of skb
++ *     @skb: pointer to skb
++ *     @map: pointer to bpf_map in BPF_MAP_TYPE_CGROUP_ARRAY type
++ *     @index: index of the cgroup in the bpf_map
++ *     Return:
++ *       == 0 skb failed the cgroup2 descendant test
++ *       == 1 skb succeeded the cgroup2 descendant test
++ *        < 0 error
++ *
++ * u32 bpf_get_hash_recalc(skb)
++ *     Retrieve and possibly recalculate skb->hash.
++ *     @skb: pointer to skb
++ *     Return: hash
++ *
++ * u64 bpf_get_current_task(void)
++ *     Returns current task_struct
++ *     Return: current
++ *
++ * int bpf_probe_write_user(void *dst, void *src, int len)
++ *     safely attempt to write to a location
++ *     @dst: destination address in userspace
++ *     @src: source address on stack
++ *     @len: number of bytes to copy
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_current_task_under_cgroup(map, index)
++ *     Check cgroup2 membership of current task
++ *     @map: pointer to bpf_map in BPF_MAP_TYPE_CGROUP_ARRAY type
++ *     @index: index of the cgroup in the bpf_map
++ *     Return:
++ *       == 0 current failed the cgroup2 descendant test
++ *       == 1 current succeeded the cgroup2 descendant test
++ *        < 0 error
++ *
++ * int bpf_skb_change_tail(skb, len, flags)
++ *     The helper will resize the skb to the given new size, to be used f.e.
++ *     with control messages.
++ *     @skb: pointer to skb
++ *     @len: new skb length
++ *     @flags: reserved
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_skb_pull_data(skb, len)
++ *     The helper will pull in non-linear data in case the skb is non-linear
++ *     and not all of len are part of the linear section. Only needed for
++ *     read/write with direct packet access.
++ *     @skb: pointer to skb
++ *     @len: len to make read/writeable
++ *     Return: 0 on success or negative error
++ *
++ * s64 bpf_csum_update(skb, csum)
++ *     Adds csum into skb->csum in case of CHECKSUM_COMPLETE.
++ *     @skb: pointer to skb
++ *     @csum: csum to add
++ *     Return: csum on success or negative error
++ *
++ * void bpf_set_hash_invalid(skb)
++ *     Invalidate current skb->hash.
++ *     @skb: pointer to skb
++ *
++ * int bpf_get_numa_node_id()
++ *     Return: Id of current NUMA node.
++ *
++ * int bpf_skb_change_head()
++ *     Grows headroom of skb and adjusts MAC header offset accordingly.
++ *     Will extends/reallocae as required automatically.
++ *     May change skb data pointer and will thus invalidate any check
++ *     performed for direct packet access.
++ *     @skb: pointer to skb
++ *     @len: length of header to be pushed in front
++ *     @flags: Flags (unused for now)
++ *     Return: 0 on success or negative error
++ *
++ * int bpf_xdp_adjust_head(xdp_md, delta)
++ *     Adjust the xdp_md.data by delta
++ *     @xdp_md: pointer to xdp_md
++ *     @delta: An positive/negative integer to be added to xdp_md.data
++ *     Return: 0 on success or negative on error
++ *
++ * int bpf_probe_read_str(void *dst, int size, const void *unsafe_ptr)
++ *     Copy a NUL terminated string from unsafe address. In case the string
++ *     length is smaller than size, the target is not padded with further NUL
++ *     bytes. In case the string length is larger than size, just count-1
++ *     bytes are copied and the last byte is set to NUL.
++ *     @dst: destination address
++ *     @size: maximum number of bytes to copy, including the trailing NUL
++ *     @unsafe_ptr: unsafe address
++ *     Return:
++ *       > 0 length of the string including the trailing NUL on success
++ *       < 0 error
++ *
++ * u64 bpf_get_socket_cookie(skb)
++ *     Get the cookie for the socket stored inside sk_buff.
++ *     @skb: pointer to skb
++ *     Return: 8 Bytes non-decreasing number on success or 0 if the socket
++ *     field is missing inside sk_buff
++ *
++ * u32 bpf_get_socket_uid(skb)
++ *     Get the owner uid of the socket stored inside sk_buff.
++ *     @skb: pointer to skb
++ *     Return: uid of the socket owner on success or overflowuid if failed.
++ *
++ * u32 bpf_set_hash(skb, hash)
++ *     Set full skb->hash.
++ *     @skb: pointer to skb
++ *     @hash: hash to set
++ *
++ * int bpf_setsockopt(bpf_socket, level, optname, optval, optlen)
++ *     Calls setsockopt. Not all opts are available, only those with
++ *     integer optvals plus TCP_CONGESTION.
++ *     Supported levels: SOL_SOCKET and IPPROTO_TCP
++ *     @bpf_socket: pointer to bpf_socket
++ *     @level: SOL_SOCKET or IPPROTO_TCP
++ *     @optname: option name
++ *     @optval: pointer to option value
++ *     @optlen: length of optval in bytes
++ *     Return: 0 or negative error
++ *
++ * int bpf_getsockopt(bpf_socket, level, optname, optval, optlen)
++ *     Calls getsockopt. Not all opts are available.
++ *     Supported levels: IPPROTO_TCP
++ *     @bpf_socket: pointer to bpf_socket
++ *     @level: IPPROTO_TCP
++ *     @optname: option name
++ *     @optval: pointer to option value
++ *     @optlen: length of optval in bytes
++ *     Return: 0 or negative error
++ *
++ * int bpf_skb_adjust_room(skb, len_diff, mode, flags)
++ *     Grow or shrink room in sk_buff.
++ *     @skb: pointer to skb
++ *     @len_diff: (signed) amount of room to grow/shrink
++ *     @mode: operation mode (enum bpf_adj_room_mode)
++ *     @flags: reserved for future use
++ *     Return: 0 on success or negative error code
++ *
++ * int bpf_sk_redirect_map(map, key, flags)
++ *     Redirect skb to a sock in map using key as a lookup key for the
++ *     sock in map.
++ *     @map: pointer to sockmap
++ *     @key: key to lookup sock in map
++ *     @flags: reserved for future use
++ *     Return: SK_PASS
++ *
++ * int bpf_sock_map_update(skops, map, key, flags)
++ *	@skops: pointer to bpf_sock_ops
++ *	@map: pointer to sockmap to update
++ *	@key: key to insert/update sock in map
++ *	@flags: same flags as map update elem
++ *
++ * int bpf_xdp_adjust_meta(xdp_md, delta)
++ *     Adjust the xdp_md.data_meta by delta
++ *     @xdp_md: pointer to xdp_md
++ *     @delta: An positive/negative integer to be added to xdp_md.data_meta
++ *     Return: 0 on success or negative on error
++ *
++ * int bpf_perf_event_read_value(map, flags, buf, buf_size)
++ *     read perf event counter value and perf event enabled/running time
++ *     @map: pointer to perf_event_array map
++ *     @flags: index of event in the map or bitmask flags
++ *     @buf: buf to fill
++ *     @buf_size: size of the buf
++ *     Return: 0 on success or negative error code
++ *
++ * int bpf_perf_prog_read_value(ctx, buf, buf_size)
++ *     read perf prog attached perf event counter and enabled/running time
++ *     @ctx: pointer to ctx
++ *     @buf: buf to fill
++ *     @buf_size: size of the buf
++ *     Return : 0 on success or negative error code
++ *
++ * int bpf_override_return(pt_regs, rc)
++ *	@pt_regs: pointer to struct pt_regs
++ *	@rc: the return value to set
++ */
++#define __BPF_FUNC_MAPPER(FN)		\
++	FN(unspec),			\
++	FN(map_lookup_elem),		\
++	FN(map_update_elem),		\
++	FN(map_delete_elem),		\
++	FN(probe_read),			\
++	FN(ktime_get_ns),		\
++	FN(trace_printk),		\
++	FN(get_prandom_u32),		\
++	FN(get_smp_processor_id),	\
++	FN(skb_store_bytes),		\
++	FN(l3_csum_replace),		\
++	FN(l4_csum_replace),		\
++	FN(tail_call),			\
++	FN(clone_redirect),		\
++	FN(get_current_pid_tgid),	\
++	FN(get_current_uid_gid),	\
++	FN(get_current_comm),		\
++	FN(get_cgroup_classid),		\
++	FN(skb_vlan_push),		\
++	FN(skb_vlan_pop),		\
++	FN(skb_get_tunnel_key),		\
++	FN(skb_set_tunnel_key),		\
++	FN(perf_event_read),		\
++	FN(redirect),			\
++	FN(get_route_realm),		\
++	FN(perf_event_output),		\
++	FN(skb_load_bytes),		\
++	FN(get_stackid),		\
++	FN(csum_diff),			\
++	FN(skb_get_tunnel_opt),		\
++	FN(skb_set_tunnel_opt),		\
++	FN(skb_change_proto),		\
++	FN(skb_change_type),		\
++	FN(skb_under_cgroup),		\
++	FN(get_hash_recalc),		\
++	FN(get_current_task),		\
++	FN(probe_write_user),		\
++	FN(current_task_under_cgroup),	\
++	FN(skb_change_tail),		\
++	FN(skb_pull_data),		\
++	FN(csum_update),		\
++	FN(set_hash_invalid),		\
++	FN(get_numa_node_id),		\
++	FN(skb_change_head),		\
++	FN(xdp_adjust_head),		\
++	FN(probe_read_str),		\
++	FN(get_socket_cookie),		\
++	FN(get_socket_uid),		\
++	FN(set_hash),			\
++	FN(setsockopt),			\
++	FN(skb_adjust_room),		\
++	FN(redirect_map),		\
++	FN(sk_redirect_map),		\
++	FN(sock_map_update),		\
++	FN(xdp_adjust_meta),		\
++	FN(perf_event_read_value),	\
++	FN(perf_prog_read_value),	\
++	FN(getsockopt),			\
++	FN(override_return),
++
++/* integer value in 'imm' field of BPF_CALL instruction selects which helper
++ * function eBPF program intends to call
++ */
++#define __BPF_ENUM_FN(x) BPF_FUNC_ ## x
++enum bpf_func_id {
++	__BPF_FUNC_MAPPER(__BPF_ENUM_FN)
++	__BPF_FUNC_MAX_ID,
++};
++#undef __BPF_ENUM_FN
++
++/* All flags used by eBPF helper functions, placed here. */
++
++/* BPF_FUNC_skb_store_bytes flags. */
++#define BPF_F_RECOMPUTE_CSUM		(1ULL << 0)
++#define BPF_F_INVALIDATE_HASH		(1ULL << 1)
++
++/* BPF_FUNC_l3_csum_replace and BPF_FUNC_l4_csum_replace flags.
++ * First 4 bits are for passing the header field size.
++ */
++#define BPF_F_HDR_FIELD_MASK		0xfULL
++
++/* BPF_FUNC_l4_csum_replace flags. */
++#define BPF_F_PSEUDO_HDR		(1ULL << 4)
++#define BPF_F_MARK_MANGLED_0		(1ULL << 5)
++#define BPF_F_MARK_ENFORCE		(1ULL << 6)
++
++/* BPF_FUNC_clone_redirect and BPF_FUNC_redirect flags. */
++#define BPF_F_INGRESS			(1ULL << 0)
++
++/* BPF_FUNC_skb_set_tunnel_key and BPF_FUNC_skb_get_tunnel_key flags. */
++#define BPF_F_TUNINFO_IPV6		(1ULL << 0)
++
++/* BPF_FUNC_get_stackid flags. */
++#define BPF_F_SKIP_FIELD_MASK		0xffULL
++#define BPF_F_USER_STACK		(1ULL << 8)
++#define BPF_F_FAST_STACK_CMP		(1ULL << 9)
++#define BPF_F_REUSE_STACKID		(1ULL << 10)
++
++/* BPF_FUNC_skb_set_tunnel_key flags. */
++#define BPF_F_ZERO_CSUM_TX		(1ULL << 1)
++#define BPF_F_DONT_FRAGMENT		(1ULL << 2)
++
++/* BPF_FUNC_perf_event_output, BPF_FUNC_perf_event_read and
++ * BPF_FUNC_perf_event_read_value flags.
++ */
++#define BPF_F_INDEX_MASK		0xffffffffULL
++#define BPF_F_CURRENT_CPU		BPF_F_INDEX_MASK
++/* BPF_FUNC_perf_event_output for sk_buff input context. */
++#define BPF_F_CTXLEN_MASK		(0xfffffULL << 32)
++
++/* Mode for BPF_FUNC_skb_adjust_room helper. */
++enum bpf_adj_room_mode {
++	BPF_ADJ_ROOM_NET,
++};
++
++/* user accessible mirror of in-kernel sk_buff.
++ * new fields can only be added to the end of this structure
++ */
++struct __sk_buff {
++	__u32 len;
++	__u32 pkt_type;
++	__u32 mark;
++	__u32 queue_mapping;
++	__u32 protocol;
++	__u32 vlan_present;
++	__u32 vlan_tci;
++	__u32 vlan_proto;
++	__u32 priority;
++	__u32 ingress_ifindex;
++	__u32 ifindex;
++	__u32 tc_index;
++	__u32 cb[5];
++	__u32 hash;
++	__u32 tc_classid;
++	__u32 data;
++	__u32 data_end;
++	__u32 napi_id;
++
++	/* Accessed by BPF_PROG_TYPE_sk_skb types from here to ... */
++	__u32 family;
++	__u32 remote_ip4;	/* Stored in network byte order */
++	__u32 local_ip4;	/* Stored in network byte order */
++	__u32 remote_ip6[4];	/* Stored in network byte order */
++	__u32 local_ip6[4];	/* Stored in network byte order */
++	__u32 remote_port;	/* Stored in network byte order */
++	__u32 local_port;	/* stored in host byte order */
++	/* ... here. */
++
++	__u32 data_meta;
++};
++
++struct bpf_tunnel_key {
++	__u32 tunnel_id;
++	union {
++		__u32 remote_ipv4;
++		__u32 remote_ipv6[4];
++	};
++	__u8 tunnel_tos;
++	__u8 tunnel_ttl;
++	__u16 tunnel_ext;
++	__u32 tunnel_label;
++};
++
++/* Generic BPF return codes which all BPF program types may support.
++ * The values are binary compatible with their TC_ACT_* counter-part to
++ * provide backwards compatibility with existing SCHED_CLS and SCHED_ACT
++ * programs.
++ *
++ * XDP is handled seprately, see XDP_*.
++ */
++enum bpf_ret_code {
++	BPF_OK = 0,
++	/* 1 reserved */
++	BPF_DROP = 2,
++	/* 3-6 reserved */
++	BPF_REDIRECT = 7,
++	/* >127 are reserved for prog type specific return codes */
++};
++
++struct bpf_sock {
++	__u32 bound_dev_if;
++	__u32 family;
++	__u32 type;
++	__u32 protocol;
++	__u32 mark;
++	__u32 priority;
++};
++
++#define XDP_PACKET_HEADROOM 256
++
++/* User return codes for XDP prog type.
++ * A valid XDP program must return one of these defined values. All other
++ * return codes are reserved for future use. Unknown return codes will
++ * result in packet drops and a warning via bpf_warn_invalid_xdp_action().
++ */
++enum xdp_action {
++	XDP_ABORTED = 0,
++	XDP_DROP,
++	XDP_PASS,
++	XDP_TX,
++	XDP_REDIRECT,
++};
++
++/* user accessible metadata for XDP packet hook
++ * new fields must be added to the end of this structure
++ */
++struct xdp_md {
++	__u32 data;
++	__u32 data_end;
++	__u32 data_meta;
++	/* Below access go through struct xdp_rxq_info */
++	__u32 ingress_ifindex; /* rxq->dev->ifindex */
++	__u32 rx_queue_index;  /* rxq->queue_index  */
++};
++
++enum sk_action {
++	SK_DROP = 0,
++	SK_PASS,
++};
++
++#define BPF_TAG_SIZE	8
++
++struct bpf_prog_info {
++	__u32 type;
++	__u32 id;
++	__u8  tag[BPF_TAG_SIZE];
++	__u32 jited_prog_len;
++	__u32 xlated_prog_len;
++	__aligned_u64 jited_prog_insns;
++	__aligned_u64 xlated_prog_insns;
++	__u64 load_time;	/* ns since boottime */
++	__u32 created_by_uid;
++	__u32 nr_map_ids;
++	__aligned_u64 map_ids;
++	char name[BPF_OBJ_NAME_LEN];
++	__u32 ifindex;
++	__u64 netns_dev;
++	__u64 netns_ino;
++} __attribute__((aligned(8)));
++
++struct bpf_map_info {
++	__u32 type;
++	__u32 id;
++	__u32 key_size;
++	__u32 value_size;
++	__u32 max_entries;
++	__u32 map_flags;
++	char  name[BPF_OBJ_NAME_LEN];
++} __attribute__((aligned(8)));
++
++/* User bpf_sock_ops struct to access socket values and specify request ops
++ * and their replies.
++ * Some of this fields are in network (bigendian) byte order and may need
++ * to be converted before use (bpf_ntohl() defined in samples/bpf/bpf_endian.h).
++ * New fields can only be added at the end of this structure
++ */
++struct bpf_sock_ops {
++	__u32 op;
++	union {
++		__u32 reply;
++		__u32 replylong[4];
++	};
++	__u32 family;
++	__u32 remote_ip4;	/* Stored in network byte order */
++	__u32 local_ip4;	/* Stored in network byte order */
++	__u32 remote_ip6[4];	/* Stored in network byte order */
++	__u32 local_ip6[4];	/* Stored in network byte order */
++	__u32 remote_port;	/* Stored in network byte order */
++	__u32 local_port;	/* stored in host byte order */
++	__u32 is_fullsock;	/* Some TCP fields are only valid if
++				 * there is a full socket. If not, the
++				 * fields read as zero.
++				 */
++	__u32 snd_cwnd;
++	__u32 srtt_us;		/* Averaged RTT << 3 in usecs */
++};
++
++/* List of known BPF sock_ops operators.
++ * New entries can only be added at the end
++ */
++enum {
++	BPF_SOCK_OPS_VOID,
++	BPF_SOCK_OPS_TIMEOUT_INIT,	/* Should return SYN-RTO value to use or
++					 * -1 if default value should be used
++					 */
++	BPF_SOCK_OPS_RWND_INIT,		/* Should return initial advertized
++					 * window (in packets) or -1 if default
++					 * value should be used
++					 */
++	BPF_SOCK_OPS_TCP_CONNECT_CB,	/* Calls BPF program right before an
++					 * active connection is initialized
++					 */
++	BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB,	/* Calls BPF program when an
++						 * active connection is
++						 * established
++						 */
++	BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB,	/* Calls BPF program when a
++						 * passive connection is
++						 * established
++						 */
++	BPF_SOCK_OPS_NEEDS_ECN,		/* If connection's congestion control
++					 * needs ECN
++					 */
++	BPF_SOCK_OPS_BASE_RTT,		/* Get base RTT. The correct value is
++					 * based on the path and may be
++					 * dependent on the congestion control
++					 * algorithm. In general it indicates
++					 * a congestion threshold. RTTs above
++					 * this indicate congestion
++					 */
++};
++
++#define TCP_BPF_IW		1001	/* Set TCP initial congestion window */
++#define TCP_BPF_SNDCWND_CLAMP	1002	/* Set sndcwnd_clamp */
++
++struct bpf_perf_event_value {
++	__u64 counter;
++	__u64 enabled;
++	__u64 running;
++};
++
++#define BPF_DEVCG_ACC_MKNOD	(1ULL << 0)
++#define BPF_DEVCG_ACC_READ	(1ULL << 1)
++#define BPF_DEVCG_ACC_WRITE	(1ULL << 2)
++
++#define BPF_DEVCG_DEV_BLOCK	(1ULL << 0)
++#define BPF_DEVCG_DEV_CHAR	(1ULL << 1)
++
++struct bpf_cgroup_dev_ctx {
++	/* access_type encoded as (BPF_DEVCG_ACC_* << 16) | BPF_DEVCG_DEV_* */
++	__u32 access_type;
++	__u32 major;
++	__u32 minor;
++};
++
++#endif /* __LINUX_BPF_H__ */
+diff --git a/ebpf/include/linux/bpf_common.h b/ebpf/include/linux/bpf_common.h
+new file mode 100644
+index 0000000..8b9c72e
+--- /dev/null
++++ b/ebpf/include/linux/bpf_common.h
+@@ -0,0 +1,57 @@
++/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
++#ifndef __LINUX_BPF_COMMON_H__
++#define __LINUX_BPF_COMMON_H__
++
++/* Instruction classes */
++#define BPF_CLASS(code) ((code) & 0x07)
++#define		BPF_LD		0x00
++#define		BPF_LDX		0x01
++#define		BPF_ST		0x02
++#define		BPF_STX		0x03
++#define		BPF_ALU		0x04
++#define		BPF_JMP		0x05
++#define		BPF_RET		0x06
++#define		BPF_MISC        0x07
++
++/* ld/ldx fields */
++#define BPF_SIZE(code)  ((code) & 0x18)
++#define		BPF_W		0x00 /* u32 */
++#define		BPF_H		0x08 /* u16 */
++#define		BPF_B		0x10 /*  u8 */
++/* eBPF		BPF_DW		0x18    u64 */
++#define BPF_MODE(code)  ((code) & 0xe0)
++#define		BPF_IMM		0x00
++#define		BPF_ABS		0x20
++#define		BPF_IND		0x40
++#define		BPF_MEM		0x60
++#define		BPF_LEN		0x80
++#define		BPF_MSH		0xa0
++
++/* alu/jmp fields */
++#define BPF_OP(code)    ((code) & 0xf0)
++#define		BPF_ADD		0x00
++#define		BPF_SUB		0x10
++#define		BPF_MUL		0x20
++#define		BPF_DIV		0x30
++#define		BPF_OR		0x40
++#define		BPF_AND		0x50
++#define		BPF_LSH		0x60
++#define		BPF_RSH		0x70
++#define		BPF_NEG		0x80
++#define		BPF_MOD		0x90
++#define		BPF_XOR		0xa0
++
++#define		BPF_JA		0x00
++#define		BPF_JEQ		0x10
++#define		BPF_JGT		0x20
++#define		BPF_JGE		0x30
++#define		BPF_JSET        0x40
++#define BPF_SRC(code)   ((code) & 0x08)
++#define		BPF_K		0x00
++#define		BPF_X		0x08
++
++#ifndef BPF_MAXINSNS
++#define BPF_MAXINSNS 4096
++#endif
++
++#endif /* __LINUX_BPF_COMMON_H__ */
+diff --git a/ebpf/lb.c b/ebpf/lb.c
+new file mode 100644
+index 0000000..7551781
+--- /dev/null
++++ b/ebpf/lb.c
+@@ -0,0 +1,109 @@
++/* Copyright (C) 2018 Open Information Security Foundation
++ *
++ * You can copy, redistribute or modify this Program under the terms of
++ * the GNU General Public License version 2 as published by the Free
++ * Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * version 2 along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
++ * 02110-1301, USA.
++ */
++
++#include <stddef.h>
++#include <linux/bpf.h>
++
++#include <linux/if_ether.h>
++#include <linux/in.h>
++#include <linux/ip.h>
++#include <linux/in6.h>
++#include <linux/ipv6.h>
++#include <linux/filter.h>
++
++#include "bpf_helpers.h"
++
++#define LINUX_VERSION_CODE 263682
++
++#ifndef __section
++# define __section(x)  __attribute__((section(x), used))
++#endif
++
++static __always_inline int ipv4_hash(struct __sk_buff *skb)
++{
++    __u32 nhoff;
++    __u32 src, dst;
++
++    nhoff = skb->cb[0];
++    src = load_word(skb, nhoff + offsetof(struct iphdr, saddr));
++    dst = load_word(skb, nhoff + offsetof(struct iphdr, daddr));
++
++#if 0
++    char fmt[] = "Got addr: %u -> %u\n";
++    bpf_trace_printk(fmt, sizeof(fmt), src, dst);
++    char fmt2[] = "Got hash %u\n";
++    bpf_trace_printk(fmt2, sizeof(fmt2), src + dst);
++#endif
++    return  src + dst;
++}
++
++static __always_inline int ipv6_hash(struct __sk_buff *skb)
++{
++    __u32 nhoff;
++    __u32 src, dst, hash;
++
++    nhoff = skb->cb[0];
++    hash = 0;
++    src = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 4 * 0 );
++    dst = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 4 * 0 );
++    hash += src + dst;
++
++    src = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 4 * 1 );
++    dst = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 4 * 1 );
++    hash += src + dst;
++
++    src = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 4 * 2 );
++    dst = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 4 * 2 );
++    hash += src + dst;
++
++    src = load_word(skb, nhoff + offsetof(struct ipv6hdr, saddr) + 4 * 3 );
++    dst = load_word(skb, nhoff + offsetof(struct ipv6hdr, daddr) + 4 * 3 );
++    hash += src + dst;
++
++    return hash;
++}
++
++int  __section("loadbalancer") lb(struct __sk_buff *skb) {
++    __u32 nhoff = BPF_LL_OFF + ETH_HLEN;
++
++    skb->cb[0] = nhoff;
++
++    switch (skb->protocol) {
++        case __constant_htons(ETH_P_IP):
++            return ipv4_hash(skb);
++        case __constant_htons(ETH_P_IPV6):
++            return ipv6_hash(skb);
++        default:
++#if 0
++            {
++                char fmt[] = "Got proto %u\n";
++                bpf_trace_printk(fmt, sizeof(fmt), h_proto);
++                break;
++            }
++#else
++            break;
++#endif
++    }
++    /* hash on proto by default */
++    return skb->protocol;
++}
++
++char __license[] __section("license") = "GPL";
++
++/* libbpf needs version section to check sync of eBPF code and kernel
++ * but socket filter don't need it */
++__u32 __version __section("version") = LINUX_VERSION_CODE;
+diff --git a/ebpf/vlan_filter.c b/ebpf/vlan_filter.c
+new file mode 100644
+index 0000000..d797b94
+--- /dev/null
++++ b/ebpf/vlan_filter.c
+@@ -0,0 +1,40 @@
++/* Copyright (C) 2018 Open Information Security Foundation
++ *
++ * You can copy, redistribute or modify this Program under the terms of
++ * the GNU General Public License version 2 as published by the Free
++ * Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * version 2 along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
++ * 02110-1301, USA.
++ */
++
++#include <stddef.h>
++#include <linux/bpf.h>
++
++#include "bpf_helpers.h"
++
++#define LINUX_VERSION_CODE 263682
++
++int SEC("filter") hashfilter(struct __sk_buff *skb) {
++    __u16 vlan_id = skb->vlan_tci & 0x0fff;
++    /* accept VLAN 2 and 4 and drop the rest */
++    switch (vlan_id) {
++        case 2:
++        case 4:
++            return -1;
++        default:
++            return 0;
++    }
++    return 0;
++}
++
++char __license[] SEC("license") = "GPL";
++
++__u32 __version SEC("version") = LINUX_VERSION_CODE;
+diff --git a/ebpf/xdp_filter.c b/ebpf/xdp_filter.c
+new file mode 100644
+index 0000000..c83a6fa
+--- /dev/null
++++ b/ebpf/xdp_filter.c
+@@ -0,0 +1,377 @@
++/* Copyright (C) 2018 Open Information Security Foundation
++ *
++ * You can copy, redistribute or modify this Program under the terms of
++ * the GNU General Public License version 2 as published by the Free
++ * Software Foundation.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * version 2 along with this program; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
++ * 02110-1301, USA.
++ */
++
++#define KBUILD_MODNAME "foo"
++#include <stddef.h>
++#include <linux/bpf.h>
++
++#include <linux/in.h>
++#include <linux/if_ether.h>
++#include <linux/if_packet.h>
++#include <linux/if_vlan.h>
++#include <linux/ip.h>
++#include <linux/ipv6.h>
++#include <linux/tcp.h>
++#include <linux/udp.h>
++#include "bpf_helpers.h"
++
++#include "hash_func01.h"
++
++#define LINUX_VERSION_CODE 263682
++
++/* Hashing initval */
++#define INITVAL 15485863
++
++/* Set BUILD_CPUMAP to 0 if you want to run XDP bypass on kernel
++ * older than 4.15 */
++#define BUILD_CPUMAP        1
++/* Increase CPUMAP_MAX_CPUS if ever you have more than 64 CPUs */
++#define CPUMAP_MAX_CPUS     64
++
++struct vlan_hdr {
++    __u16	h_vlan_TCI;
++    __u16	h_vlan_encapsulated_proto;
++};
++
++struct flowv4_keys {
++    __u32 src;
++    __u32 dst;
++    union {
++        __u32 ports;
++        __u16 port16[2];
++    };
++    __u32 ip_proto;
++} __attribute__((__aligned__(8)));
++
++struct flowv6_keys {
++    __u32 src[4];
++    __u32 dst[4];
++    union {
++        __u32 ports;
++        __u16 port16[2];
++    };
++    __u32 ip_proto;
++} __attribute__((__aligned__(8)));
++
++struct pair {
++    __u64 time;
++    __u64 packets;
++    __u64 bytes;
++} __attribute__((__aligned__(8)));
++
++struct bpf_map_def SEC("maps") flow_table_v4 = {
++    .type = BPF_MAP_TYPE_PERCPU_HASH,
++    .key_size = sizeof(struct flowv4_keys),
++    .value_size = sizeof(struct pair),
++    .max_entries = 32768,
++};
++
++struct bpf_map_def SEC("maps") flow_table_v6 = {
++    .type = BPF_MAP_TYPE_PERCPU_HASH,
++    .key_size = sizeof(struct flowv6_keys),
++    .value_size = sizeof(struct pair),
++    .max_entries = 32768,
++};
++
++#if BUILD_CPUMAP
++/* Special map type that can XDP_REDIRECT frames to another CPU */
++struct bpf_map_def SEC("maps") cpu_map = {
++	.type		= BPF_MAP_TYPE_CPUMAP,
++	.key_size	= sizeof(__u32),
++	.value_size	= sizeof(__u32),
++	.max_entries	= CPUMAP_MAX_CPUS,
++};
++
++struct bpf_map_def SEC("maps") cpus_available = {
++	.type		= BPF_MAP_TYPE_ARRAY,
++	.key_size	= sizeof(__u32),
++	.value_size	= sizeof(__u32),
++	.max_entries	= CPUMAP_MAX_CPUS,
++};
++
++struct bpf_map_def SEC("maps") cpus_count = {
++	.type		= BPF_MAP_TYPE_ARRAY,
++	.key_size	= sizeof(__u32),
++	.value_size	= sizeof(__u32),
++	.max_entries	= 1,
++};
++#endif
++
++struct bpf_map_def SEC("maps") tx_peer = {
++	.type = BPF_MAP_TYPE_DEVMAP,
++	.key_size = sizeof(int),
++	.value_size = sizeof(int),
++	.max_entries = 1,
++};
++
++struct bpf_map_def SEC("maps") tx_peer_int = {
++	.type = BPF_MAP_TYPE_ARRAY,
++	.key_size = sizeof(int),
++	.value_size = sizeof(int),
++	.max_entries = 1,
++};
++
++static __always_inline int get_sport(void *trans_data, void *data_end,
++        __u8 protocol)
++{
++    struct tcphdr *th;
++    struct udphdr *uh;
++
++    switch (protocol) {
++        case IPPROTO_TCP:
++            th = (struct tcphdr *)trans_data;
++            if ((void *)(th + 1) > data_end)
++                return -1;
++            return th->source;
++        case IPPROTO_UDP:
++            uh = (struct udphdr *)trans_data;
++            if ((void *)(uh + 1) > data_end)
++                return -1;
++            return uh->dest;
++        default:
++            return 0;
++    }
++}
++
++static __always_inline int get_dport(void *trans_data, void *data_end,
++        __u8 protocol)
++{
++    struct tcphdr *th;
++    struct udphdr *uh;
++
++    switch (protocol) {
++        case IPPROTO_TCP:
++            th = (struct tcphdr *)trans_data;
++            if ((void *)(th + 1) > data_end)
++                return -1;
++            return th->dest;
++        case IPPROTO_UDP:
++            uh = (struct udphdr *)trans_data;
++            if ((void *)(uh + 1) > data_end)
++                return -1;
++            return uh->dest;
++        default:
++            return 0;
++    }
++}
++
++static int __always_inline filter_ipv4(void *data, __u64 nh_off, void *data_end)
++{
++    struct iphdr *iph = data + nh_off;
++    int dport;
++    int sport;
++    struct flowv4_keys tuple;
++    struct pair *value;
++    __u32 key0 = 0;
++#if BUILD_CPUMAP
++    __u32 cpu_dest;
++    __u32 *cpu_max = bpf_map_lookup_elem(&cpus_count, &key0);
++    __u32 *cpu_selected;
++    __u32 cpu_hash;
++#endif
++    int *iface_peer;
++    int tx_port = 0;
++
++    if ((void *)(iph + 1) > data_end)
++        return XDP_PASS;
++
++    tuple.ip_proto = (__u32) iph->protocol;
++    tuple.src = iph->saddr;
++    tuple.dst = iph->daddr;
++
++    dport = get_dport(iph + 1, data_end, iph->protocol);
++    if (dport == -1)
++        return XDP_PASS;
++
++    sport = get_sport(iph + 1, data_end, iph->protocol);
++    if (sport == -1)
++        return XDP_PASS;
++
++    tuple.port16[0] = (__u16)sport;
++    tuple.port16[1] = (__u16)dport;
++    value = bpf_map_lookup_elem(&flow_table_v4, &tuple);
++#if 0
++    {
++        char fmt[] = "Current flow src: %u:%d\n";
++        char fmt1[] = "Current flow dst: %u:%d\n";
++        bpf_trace_printk(fmt, sizeof(fmt), tuple.src, tuple.port16[0]);
++        bpf_trace_printk(fmt1, sizeof(fmt1), tuple.dst, tuple.port16[1]);
++    }
++#endif
++    if (value) {
++#if 0
++        char fmt[] = "Found flow v4: %u %d -> %d\n";
++        bpf_trace_printk(fmt, sizeof(fmt), tuple.src, sport, dport);
++        char fmt[] = "Data: t:%lu p:%lu n:%lu\n";
++        bpf_trace_printk(fmt, sizeof(fmt), value->time, value->packets, value->bytes);
++#endif
++        value->time = bpf_ktime_get_ns();
++        value->packets++;
++        value->bytes += data_end - data;
++
++        iface_peer = bpf_map_lookup_elem(&tx_peer_int, &key0);
++        if (!iface_peer) {
++            return XDP_DROP;
++        } else {
++            return bpf_redirect_map(&tx_peer, tx_port, 0);
++        }
++    }
++
++#if BUILD_CPUMAP
++    /* IP-pairs + protocol (UDP/TCP/ICMP) hit same CPU */
++    cpu_hash = tuple.src + tuple.dst;
++    cpu_hash = SuperFastHash((char *)&cpu_hash, 4, INITVAL + iph->protocol);
++
++    if (cpu_max && *cpu_max) {
++        cpu_dest = cpu_hash % *cpu_max;
++        cpu_selected = bpf_map_lookup_elem(&cpus_available, &cpu_dest);
++        if (!cpu_selected)
++            return XDP_ABORTED;
++        cpu_dest = *cpu_selected;
++        return bpf_redirect_map(&cpu_map, cpu_dest, 0);
++    } else {
++        return XDP_PASS;
++    }
++#else
++        return XDP_PASS;
++#endif
++}
++
++static int __always_inline filter_ipv6(void *data, __u64 nh_off, void *data_end)
++{
++    struct ipv6hdr *ip6h = data + nh_off;
++    int dport;
++    int sport;
++    struct flowv6_keys tuple;
++    struct pair *value;
++    __u32 key0 = 0;
++#if BUILD_CPUMAP
++    __u32 cpu_dest;
++    int *cpu_max = bpf_map_lookup_elem(&cpus_count, &key0);
++    __u32 *cpu_selected;
++    __u32 cpu_hash;
++#endif
++    int tx_port = 0;
++    int *iface_peer;
++
++    if ((void *)(ip6h + 1) > data_end)
++        return 0;
++    if (!((ip6h->nexthdr == IPPROTO_UDP) || (ip6h->nexthdr == IPPROTO_TCP)))
++        return XDP_PASS;
++
++    dport = get_dport(ip6h + 1, data_end, ip6h->nexthdr);
++    if (dport == -1)
++        return XDP_PASS;
++
++    sport = get_sport(ip6h + 1, data_end, ip6h->nexthdr);
++    if (sport == -1)
++        return XDP_PASS;
++
++    tuple.ip_proto = ip6h->nexthdr;
++    __builtin_memcpy(tuple.src, ip6h->saddr.s6_addr32, sizeof(tuple.src));
++    __builtin_memcpy(tuple.dst, ip6h->daddr.s6_addr32, sizeof(tuple.dst));
++    tuple.port16[0] = sport;
++    tuple.port16[1] = dport;
++
++    value = bpf_map_lookup_elem(&flow_table_v6, &tuple);
++    if (value) {
++#if 0
++        char fmt6[] = "Found IPv6 flow: %d -> %d\n";
++        bpf_trace_printk(fmt6, sizeof(fmt6), sport, dport);
++#endif
++        value->packets++;
++        value->bytes += data_end - data;
++        value->time = bpf_ktime_get_ns();
++
++        iface_peer = bpf_map_lookup_elem(&tx_peer_int, &key0);
++        if (!iface_peer) {
++            return XDP_DROP;
++        } else {
++            return bpf_redirect_map(&tx_peer, tx_port, 0);
++        }
++    }
++
++#if BUILD_CPUMAP
++    /* IP-pairs + protocol (UDP/TCP/ICMP) hit same CPU */
++    cpu_hash  = tuple.src[0] + tuple.dst[0];
++    cpu_hash += tuple.src[1] + tuple.dst[1];
++    cpu_hash += tuple.src[2] + tuple.dst[2];
++    cpu_hash += tuple.src[3] + tuple.dst[3];
++    cpu_hash = SuperFastHash((char *)&cpu_hash, 4, ip6h->nexthdr);
++
++    if (cpu_max && *cpu_max) {
++        cpu_dest = cpu_hash % *cpu_max;
++        cpu_selected = bpf_map_lookup_elem(&cpus_available, &cpu_dest);
++        if (!cpu_selected)
++            return XDP_ABORTED;
++        cpu_dest = *cpu_selected;
++        return bpf_redirect_map(&cpu_map, cpu_dest, 0);
++    } else {
++        return XDP_PASS;
++    }
++#else
++    return XDP_PASS;
++#endif
++}
++
++int SEC("xdp") xdp_hashfilter(struct xdp_md *ctx)
++{
++    void *data_end = (void *)(long)ctx->data_end;
++    void *data = (void *)(long)ctx->data;
++    struct ethhdr *eth = data;
++    int rc = XDP_PASS;
++    __u16 h_proto;
++    __u64 nh_off;
++
++	nh_off = sizeof(*eth);
++	if (data + nh_off > data_end)
++		return rc;
++
++	h_proto = eth->h_proto;
++
++	if (h_proto == __constant_htons(ETH_P_8021Q) || h_proto == __constant_htons(ETH_P_8021AD)) {
++		struct vlan_hdr *vhdr;
++
++		vhdr = data + nh_off;
++		nh_off += sizeof(struct vlan_hdr);
++		if (data + nh_off > data_end)
++			return rc;
++		h_proto = vhdr->h_vlan_encapsulated_proto;
++	}
++	if (h_proto == __constant_htons(ETH_P_8021Q) || h_proto == __constant_htons(ETH_P_8021AD)) {
++		struct vlan_hdr *vhdr;
++
++		vhdr = data + nh_off;
++		nh_off += sizeof(struct vlan_hdr);
++		if (data + nh_off > data_end)
++			return rc;
++		h_proto = vhdr->h_vlan_encapsulated_proto;
++	}
++
++	if (h_proto == __constant_htons(ETH_P_IP))
++		return filter_ipv4(data, nh_off, data_end);
++	else if (h_proto == __constant_htons(ETH_P_IPV6))
++		return filter_ipv6(data, nh_off, data_end);
++	else
++		rc = XDP_PASS;
++
++    return rc;
++}
++
++char __license[] SEC("license") = "GPL";
++
++__u32 __version SEC("version") = LINUX_VERSION_CODE;

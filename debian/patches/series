@@ -4,3 +4,6 @@ cross.patch
 no-use-gnu.patch
 suricata-common-last.patch
 fix-repeated-builds.patch
+clang-ebpf.patch
+configure-clang-variable.patch
+add-missing-ebpf-programs.patch
