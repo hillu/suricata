@@ -1,0 +1,3 @@
+# these are eBPF files
+suricata: binary-from-other-architecture usr/lib/suricata/ebpf/*
+suricata: unstripped-binary-or-object usr/lib/suricata/ebpf/*
