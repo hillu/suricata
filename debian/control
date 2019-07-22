@@ -39,7 +39,7 @@ Vcs-Git: https://salsa.debian.org/pkg-suricata-team/pkg-suricata.git
 
 Package: suricata
 Architecture: linux-any
-Pre-Depends: dpkg (>= 1.15.7.2)
+Pre-Depends: dpkg (>= 1.15.7.2), ${misc:Pre-Depends}
 Depends: ${misc:Depends}, ${python:Depends}, ${shlibs:Depends}, lsb-base (>= 3.0-6)
 Conflicts: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
 Replaces: libhtp1 (<< 0.5.16), suricata-hyperscan (<< 3.2)
