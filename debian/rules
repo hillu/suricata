@@ -5,6 +5,7 @@ export DH_VERBOSE=1
 
 SURICATA_DESTDIR = $(CURDIR)/debian/suricata
 export DEB_BUILD_MAINT_OPTIONS=hardening=+pie,+bindnow
+export CARGO_HOME = $(CURDIR)/debian/cargohome
 
 include /usr/share/dpkg/architecture.mk
 
@@ -48,6 +49,13 @@ CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-n
 
 override_dh_auto_configure:
 	dh_auto_configure -- $(CONFIGURE_ARGS)
+
+override_dh_auto_build:
+	mkdir -p $(CARGO_HOME)
+	dh_auto_build
+
+override_dh_auto_clean:
+	rm -rf $(CARGO_HOME)
 
 override_dh_auto_install:
 	dh_auto_install

@@ -6,6 +6,8 @@ suricata (1:4.1.4-3) unstable; urgency=medium
   * Enable building with eBPF support.
     Thanks to Hilko Bengen for the patch.
     Closes: #917816
+  * Create temporary CARGO_HOME to allow building with new cargo
+    versions when $HOME is nonexistent.
 
  -- Sascha Steinbiss <satta@debian.org>  Tue, 09 Jul 2019 16:47:49 +0200
 
