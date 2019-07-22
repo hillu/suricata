@@ -37,9 +37,9 @@ Test-Command: suricatasc -c "running-mode"
 Depends: @
 Restrictions: needs-root, isolation-container
 
-Test-Command: suricata-oinkmaster-updater
-Depends: @
-Restrictions: needs-root, isolation-container, allow-stderr
+Tests: suricata-oinkmaster-updater.sh
+Depends: @, curl
+Restrictions: needs-root, isolation-container, allow-stderr, skippable
 
 Tests: systemd-service-test.sh
 Depends: @, systemd, procps

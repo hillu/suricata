@@ -8,6 +8,8 @@ suricata (1:4.1.4-3) unstable; urgency=medium
     Closes: #917816
   * Create temporary CARGO_HOME to allow building with new cargo
     versions when $HOME is nonexistent.
+  * Make autopkgtest more robust when external resources are unavailable.
+    Closes: #932463
 
  -- Sascha Steinbiss <satta@debian.org>  Tue, 09 Jul 2019 16:47:49 +0200
 
