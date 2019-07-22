@@ -10,6 +10,7 @@ suricata (1:4.1.4-3) unstable; urgency=medium
     versions when $HOME is nonexistent.
   * Make autopkgtest more robust when external resources are unavailable.
     Closes: #932463
+  * Bump debhelper and compat to 12.
 
  -- Sascha Steinbiss <satta@debian.org>  Tue, 09 Jul 2019 16:47:49 +0200
 

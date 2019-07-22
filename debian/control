@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Pierre Chifflier <pollux@debian.org>
 Uploaders: Arturo Borrero Gonzalez <arturo@debian.org>,
            Sascha Steinbiss <satta@debian.org>
-Build-Depends: debhelper (>= 11),
+Build-Depends: debhelper (>= 12),
 	       dh-python,
                libbpf-dev [linux-any], clang [linux-any], llvm [linux-any],
                libcap-ng-dev,
