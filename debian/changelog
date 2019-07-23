@@ -1,3 +1,10 @@
+suricata (1:4.1.4-4) UNRELEASED; urgency=medium
+
+  * Patch: add --with-ebpf-includes, point to proper include directory for
+    kernel headers, fixing FTBFS on i386
+
+ -- Hilko Bengen <bengen@debian.org>  Tue, 23 Jul 2019 15:30:32 +0200
+
 suricata (1:4.1.4-3) unstable; urgency=medium
 
   * Fix cross building by including patch that addresses abuse of

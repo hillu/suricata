@@ -31,7 +31,8 @@ ifeq ($(CI),true)
 endif
 
 ifneq (,$(findstring $(DEB_HOST_ARCH_OS),linux))
-	ENABLE_EBPF=--enable-ebpf --enable-ebpf-build
+	ENABLE_EBPF=--enable-ebpf --enable-ebpf-build \
+		--with-ebpf-includes=/usr/include/$(DEB_HOST_MULTIARCH)
 endif
 
 CONFIGURE_ARGS = --enable-af-packet --enable-nfqueue --enable-prelude --enable-nflog \

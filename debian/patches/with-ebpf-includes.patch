@@ -1,0 +1,45 @@
+From: Hilko Bengen <bengen@debian.org>
+Date: Tue, 23 Jul 2019 14:43:21 +0200
+Subject: Add --with-ebpf-includes parameter
+
+---
+ configure.ac     | 4 ++++
+ ebpf/Makefile.am | 3 +--
+ 2 files changed, 5 insertions(+), 2 deletions(-)
+
+diff --git a/configure.ac b/configure.ac
+index b9468d8..2ac7031 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -441,6 +441,10 @@
+                           ])
+                   ],
+                   [AC_MSG_ERROR([clang needed to build ebpf files])])
++            AC_ARG_WITH(ebpf_includes,
++                    [  --with-ebpf-includes=DIR  include directory for building eBPF programs],
++                    [AC_SUBST([ebpf_includes],["$withval"])],
++                    [AC_SUBST([ebpf_includes],["/usr/include/${build_alias}"])])
+           ])
+ 
+   # enable workaround for old barnyard2 for unified alert output
+diff --git a/ebpf/Makefile.am b/ebpf/Makefile.am
+index bc5d7c6..6c33ec9 100644
+--- a/ebpf/Makefile.am
++++ b/ebpf/Makefile.am
+@@ -1,7 +1,7 @@
+ if BUILD_EBPF
+ 
+ # Maintaining a local copy of UAPI linux/bpf.h
+-BPF_CFLAGS = -Iinclude
++BPF_CFLAGS = -Iinclude -I$(ebpf_includes)
+ 
+ BPF_TARGETS  = lb.bpf
+ BPF_TARGETS += filter.bpf
+@@ -16,7 +16,6 @@ EXTRA_DIST= include bypass_filter.c filter.c lb.c vlan_filter.c xdp_filter.c
+ $(BPF_TARGETS): %.bpf: %.c
+ #      From C-code to LLVM-IR format suffix .ll (clang -S -emit-llvm)
+ 	${CLANG} -Wall $(BPF_CFLAGS) -O2 \
+-		-I/usr/include/$(build_cpu)-$(build_os)/ \
+ 		-D__KERNEL__ -D__ASM_SYSREG_H \
+ 		-target bpf -S -emit-llvm $< -o ${@:.bpf=.ll}
+ #      From LLVM-IR to BPF-bytecode in ELF-obj file
