@@ -468,6 +468,11 @@
                     AC_SUBST(LLC)
                   ],
                   [AC_MSG_ERROR([clang needed to build ebpf files])])
+
+            AC_ARG_WITH(ebpf_includes,
+                    [  --with-ebpf-includes=DIR  include directory for building eBPF programs],
+                    [AC_SUBST([ebpf_includes],["$withval"])],
+                    [AC_SUBST([ebpf_includes],["/usr/include/${build_alias}"])])
           ])
 
   # enable workaround for old barnyard2 for unified alert output
